@@ -1,0 +1,274 @@
+openapi: 3.1.0
+info:
+  title: DokoSoko Provider API
+  version: 2026-08-01
+  description: >-
+    Vendor-owned HTTPS contract used by DokoSoko to authorize project and
+    credential operations. DokoSoko authenticates with a server-side service
+    credential, calls /v1/authorize before every mutation, and fails closed.
+servers:
+  - url: https://api.vendor.example.com
+security:
+  - serviceBearer: []
+tags:
+  - name: Authorization
+    description: Independent, fail-closed operation authorization.
+  - name: Projects
+    description: Idempotent environment-scoped project lifecycle.
+  - name: Credentials
+    description: Short-lived credential issuance and explicit revocation.
+paths:
+  /v1/authorize:
+    post:
+      tags: [Authorization]
+      operationId: authorizeProviderOperation
+      summary: Authorize one provider operation
+      description: >-
+        Decide whether the named subject may perform the requested operation.
+        DokoSoko calls this endpoint immediately before every project creation,
+        credential issuance, or credential revocation and treats all failures as denials.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthorizationRequest" }
+            examples:
+              credentialIssue:
+                value:
+                  operation: credential.issue
+                  subject: https://id.vendor.example.com|user_123
+                  vendor_organisation_id: org_customer_42
+                  product_id: prod_dokosoko
+                  details:
+                    environment_id: env_production
+                    project_id: project_local_01
+                    scopes: [api.read, api.write]
+                    ttl_seconds: 3600
+      responses:
+        "200":
+          description: Explicit authorization decision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthorizationDecision" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/projects:
+    post:
+      tags: [Projects]
+      operationId: createProviderProject
+      summary: Create or return an idempotent project
+      description: >-
+        Create a vendor project owned by the supplied subject. Repeating the
+        request with the same product and idempotency key must return the same project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateProjectRequest" }
+            example:
+              product_id: prod_dokosoko
+              environment_id: env_production
+              name: Agent-created project
+              owner:
+                type: user
+                id: https://id.vendor.example.com|user_123
+              idempotency_key: project-setup-01HZX8D5MQ9P
+              ttl_seconds: 3600
+      responses:
+        "200":
+          description: Existing project returned for a repeated idempotency key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectResponse" }
+        "201":
+          description: Project created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/credentials:
+    post:
+      tags: [Credentials]
+      operationId: issueProviderCredential
+      summary: Issue a short-lived credential
+      description: >-
+        Return credential plaintext exactly once with its vendor identifier and
+        expiry. Repeating an idempotency key must never disclose the plaintext again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IssueCredentialRequest" }
+            example:
+              product_id: prod_dokosoko
+              environment_id: env_production
+              project_id: vendor_project_01
+              subject: https://id.vendor.example.com|user_123
+              scopes: [api.read, api.write]
+              idempotency_key: credential-01HZX8EJQ02B
+              ttl_seconds: 3600
+      responses:
+        "201":
+          description: Credential issued. The credential field is one-time secret material.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409":
+          description: The idempotency key was already consumed; credential plaintext is not returned again.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  /v1/credentials/{credential_id}/revoke:
+    parameters:
+      - name: credential_id
+        in: path
+        required: true
+        description: Vendor credential identifier returned during issuance.
+        schema: { type: string, minLength: 1 }
+    post:
+      tags: [Credentials]
+      operationId: revokeProviderCredential
+      summary: Revoke a credential
+      description: Revocation is idempotent; revoking an already revoked credential succeeds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevokeCredentialRequest" }
+            example:
+              product_id: prod_dokosoko
+              subject: https://id.vendor.example.com|user_123
+      responses:
+        "204": { description: Credential revoked or already revoked. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    serviceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Vendor-issued service credential stored encrypted by DokoSoko.
+  responses:
+    Error:
+      description: Structured provider error without secret material.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    Operation:
+      type: string
+      enum: [project.create, credential.issue, credential.revoke]
+    AuthorizationDetails:
+      type: object
+      additionalProperties: false
+      properties:
+        environment_id: { type: string }
+        project_id: { type: string }
+        credential_id: { type: string }
+        scopes:
+          type: array
+          maxItems: 20
+          items: { type: string }
+        ttl_seconds: { type: integer, minimum: 300, maximum: 86400 }
+    AuthorizationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        operation: { $ref: "#/components/schemas/Operation" }
+        subject: { type: string, minLength: 1, description: Stable issuer-qualified vendor subject. }
+        vendor_organisation_id: { type: string }
+        product_id: { type: string, minLength: 1 }
+        details: { $ref: "#/components/schemas/AuthorizationDetails" }
+      required: [operation, subject, vendor_organisation_id, product_id, details]
+    AuthorizationDecision:
+      type: object
+      additionalProperties: false
+      properties:
+        allowed: { type: boolean }
+        reason: { type: string, maxLength: 500, description: Operator-safe reason; do not include secrets. }
+      required: [allowed]
+    Owner:
+      type: object
+      additionalProperties: false
+      properties:
+        type: { const: user }
+        id: { type: string, minLength: 1 }
+      required: [type, id]
+    CreateProjectRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string, minLength: 1 }
+        environment_id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        owner: { $ref: "#/components/schemas/Owner" }
+        idempotency_key: { type: string, minLength: 16 }
+        ttl_seconds: { type: integer, minimum: 300, maximum: 86400 }
+      required: [product_id, environment_id, name, owner, idempotency_key, ttl_seconds]
+    ProjectResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        project_id: { type: string, minLength: 1 }
+        state: { type: string, default: active }
+        expires_at: { type: string, format: date-time }
+      required: [project_id]
+    IssueCredentialRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string, minLength: 1 }
+        environment_id: { type: string, minLength: 1 }
+        project_id: { type: string }
+        subject: { type: string, minLength: 1 }
+        scopes:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items: { type: string }
+        idempotency_key: { type: string, minLength: 16 }
+        ttl_seconds: { type: integer, minimum: 300, maximum: 86400 }
+      required: [product_id, environment_id, project_id, subject, scopes, idempotency_key, ttl_seconds]
+    CredentialResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        credential_id: { type: string, minLength: 1 }
+        credential:
+          type: string
+          minLength: 1
+          readOnly: true
+          description: One-time credential plaintext. Never log or return it on an idempotent replay.
+        expires_at: { type: string, format: date-time }
+      required: [credential_id, credential, expires_at]
+    RevokeCredentialRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string, minLength: 1 }
+        subject: { type: string, minLength: 1 }
+      required: [product_id, subject]
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          properties:
+            code: { type: string }
+            message: { type: string }
+            retryable: { type: boolean, default: false }
+            request_id: { type: string }
+          required: [code, message]
+      required: [error]

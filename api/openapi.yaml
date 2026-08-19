@@ -1,0 +1,1803 @@
+openapi: 3.1.0
+info:
+  title: DokoSoko Control Plane API
+  version: 2.0.0
+  description: >-
+    UI and automation contract for DokoSoko. Cookie-authenticated mutations
+    additionally require the dokosoko_csrf cookie value in X-CSRF-Token and an
+    exact Origin matching the configured public URL. Public MCP is a separate,
+    authentication-free protocol surface and is disabled by default. Every MCP
+    surface and managed upstream bridge is Stateless MCPv2 Only, fixed to the
+    2026-07-28 protocol revision.
+servers:
+  - url: https://dokosoko.example.com
+security:
+  - sessionCookie: []
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      operationId: health
+      responses:
+        "200":
+          description: Service is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { const: ok }
+                required: [status]
+  /readyz:
+    get:
+      security: []
+      operationId: readiness
+      responses:
+        "200":
+          description: Persistence is reachable and migrations are applied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/setup/status:
+    get:
+      security: []
+      operationId: setupStatus
+      responses:
+        "200":
+          description: First-run setup state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  setup_complete: { type: boolean }
+                  requires_mfa: { const: true }
+                required: [setup_complete, requires_mfa]
+  /api/v1/setup/begin:
+    post:
+      security: [{ setupToken: [] }]
+      operationId: beginSetup
+      requestBody: { $ref: "#/components/requestBodies/RootInput" }
+      responses:
+        "201": { $ref: "#/components/responses/MFAEnrollment" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/setup/complete:
+    post:
+      security: []
+      operationId: completeSetup
+      requestBody: { $ref: "#/components/requestBodies/MFACompletion" }
+      responses:
+        "201": { $ref: "#/components/responses/AuthenticatedRoot" }
+  /api/v1/auth/login:
+    post:
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                code: { type: string, description: TOTP or unused recovery code. }
+              required: [email, password, code]
+      responses:
+        "200": { $ref: "#/components/responses/AuthenticatedRoot" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      responses:
+        "204": { description: Session ended and cookies expired. }
+  /api/v1/auth/session:
+    get:
+      operationId: currentSession
+      responses:
+        "200":
+          description: Current root session.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/RootUser" }
+                  expires_at: { type: string, format: date-time }
+                required: [user, expires_at]
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/root/users:
+    get:
+      operationId: listRootUsers
+      responses:
+        "200": { $ref: "#/components/responses/RootList" }
+    post:
+      operationId: beginRootUser
+      requestBody: { $ref: "#/components/requestBodies/RootInput" }
+      responses:
+        "201": { $ref: "#/components/responses/MFAEnrollment" }
+    put:
+      operationId: completeRootUser
+      requestBody: { $ref: "#/components/requestBodies/MFACompletion" }
+      responses:
+        "201": { $ref: "#/components/responses/AuthenticatedRoot" }
+  /api/v1/root/users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: revokeRootUser
+      description: Self-revocation and revocation of the last active root are rejected.
+      responses:
+        "204": { description: Root revoked and active sessions ended. }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/system/doctor:
+    get:
+      operationId: runSystemDoctor
+      responses:
+        "200":
+          description: Redacted, non-destructive system checks.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SystemDoctor" }
+  /api/v1/organisations:
+    get:
+      operationId: listOrganisations
+      responses:
+        "200":
+          description: Organisation list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganisationList" }
+    post:
+      operationId: createOrganisation
+      requestBody: { $ref: "#/components/requestBodies/NamedResource" }
+      responses:
+        "201":
+          description: Organisation created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organisation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/organisations/{organisation_id}/products:
+    parameters:
+      - $ref: "#/components/parameters/OrganisationID"
+    get:
+      operationId: listProducts
+      responses:
+        "200":
+          description: Product list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductList" }
+    post:
+      operationId: createProduct
+      requestBody: { $ref: "#/components/requestBodies/NamedResource" }
+      responses:
+        "201":
+          description: Product created private-first with Public MCP disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+  /api/v1/organisations/{organisation_id}/audit:
+    parameters:
+      - $ref: "#/components/parameters/OrganisationID"
+    get:
+      operationId: listAuditEvents
+      responses:
+        "200":
+          description: Up to 500 newest append-only organisation audit events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEventList" }
+  /api/v1/products/{product_id}/environments:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listEnvironments
+      responses:
+        "200":
+          description: Environment list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnvironmentList" }
+    post:
+      operationId: createEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateEnvironmentRequest" }
+      responses:
+        "201":
+          description: Environment created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/distribution:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getProductDistribution
+      responses:
+        "200":
+          description: MCP and widget distribution configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Distribution" }
+    patch:
+      operationId: updateProductDistribution
+      description: Enabling Public MCP requires acknowledge_public=true. Disabling it does not require acknowledgement and takes effect immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                public_mcp_enabled: { type: boolean }
+                acknowledge_public: { type: boolean, default: false }
+                revision: { type: integer, format: int64, minimum: 1 }
+              required: [public_mcp_enabled, revision]
+      responses:
+        "200":
+          description: Updated product.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "409": { $ref: "#/components/responses/ConfirmationOrRevisionConflict" }
+  /api/v1/products/{product_id}/sources:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listSources
+      responses:
+        "200":
+          description: Product sources.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Source" }
+                required: [items]
+    post:
+      operationId: createSource
+      description: Creates a private, unpublished source.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSourceRequest" }
+      responses:
+        "201":
+          description: Source created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Source" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/sources/{source_id}/crawl:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/SourceID"
+    post:
+      operationId: queueSourceCrawl
+      responses:
+        "202":
+          description: Crawl queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CrawlJob" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/sources/{source_id}/crawls:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/SourceID"
+    get:
+      operationId: listSourceCrawls
+      responses:
+        "200":
+          description: Crawl state, counts, and redacted errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CrawlJobList" }
+  /api/v1/products/{product_id}/sources/{source_id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/SourceID"
+    post:
+      operationId: publishSource
+      description: Atomically publishes the validated revision. Quarantined sources are rejected.
+      requestBody: { $ref: "#/components/requestBodies/Revision" }
+      responses:
+        "200":
+          description: Source published.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Source" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/sources/{source_id}/visibility:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: source_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateSourceVisibility
+      description: A private-to-public transition requires acknowledge_public=true and is audit logged. A public-to-private transition is immediate.
+      requestBody:
+        $ref: "#/components/requestBodies/VisibilityChange"
+      responses:
+        "200":
+          description: Updated source.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Source" }
+        "409": { $ref: "#/components/responses/ConfirmationOrRevisionConflict" }
+        "422":
+          description: The resource is quarantined or otherwise unsafe for anonymous publication.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  /api/v1/products/{product_id}/packages:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listPackages
+      responses:
+        "200":
+          description: Product packages.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Package" }
+                required: [items]
+    post:
+      operationId: createPackage
+      description: Creates a private, unpublished public-link, proxy, or fetch package.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePackageRequest" }
+      responses:
+        "201":
+          description: Package created; supplied credentials were encrypted and omitted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Package" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/packages/{package_id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/PackageID"
+    post:
+      operationId: publishPackage
+      requestBody: { $ref: "#/components/requestBodies/Revision" }
+      responses:
+        "200":
+          description: Package revision published.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Package" }
+  /api/v1/products/{product_id}/packages/{package_id}/visibility:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: package_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updatePackageVisibility
+      description: A private-to-public transition requires acknowledgement, including for credential-backed proxy and fetch packages.
+      requestBody:
+        $ref: "#/components/requestBodies/VisibilityChange"
+      responses:
+        "200":
+          description: Updated package.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Package" }
+        "409": { $ref: "#/components/responses/ConfirmationOrRevisionConflict" }
+  /api/v1/products/{product_id}/tools:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listTools
+      responses:
+        "200":
+          description: Draft and published custom tools; secrets and fixed destinations are redacted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ToolList" }
+    post:
+      operationId: createTool
+      description: Creates a draft one-call HTTP tool with JSON Schemas, a fixed HTTPS destination, encrypted credential, and authorization policy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateToolRequest" }
+      responses:
+        "201":
+          description: Draft tool created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tool" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: tool_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: publishTool
+      requestBody: { $ref: "#/components/requestBodies/Revision" }
+      responses:
+        "200":
+          description: Tool published to authorized Private MCP discovery.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tool" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/mcp-connections:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listMCPConnections
+      description: Lists redacted managed upstreams. Credentials and delegated user grants are never returned.
+      responses:
+        "200":
+          description: Connections plus the immutable Stateless MCPv2 policy and specification link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPConnectionList" }
+    post:
+      operationId: createMCPConnection
+      description: Registers one fixed HTTPS upstream. The protocol is always 2026-07-28 and logical live sessions are unsupported.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMCPConnectionRequest" }
+      responses:
+        "201":
+          description: Redacted connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPConnection" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/mcp-connections/{connection_id}/inspect:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/MCPConnectionID"
+    post:
+      operationId: inspectMCPConnection
+      description: Fetches one complete Stateless MCPv2 tool catalog without importing or publishing anything.
+      responses:
+        "200":
+          description: Untrusted upstream catalog for administrative review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPCatalog" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/mcp-connections/{connection_id}/import:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/MCPConnectionID"
+    post:
+      operationId: importMCPTools
+      description: Explicitly selects, namespaces, normalizes, and schema-pins upstream tools as local drafts. Published schema drift fails closed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportMCPToolsRequest" }
+      responses:
+        "200":
+          description: Import, update, rejection, and drift results.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPImportResult" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/identity:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getVendorIdentity
+      responses:
+        "200":
+          description: Redacted OIDC, entitlement, and operation-authorization configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorIdentity" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: configureVendorIdentity
+      description: Stores OIDC and authorization credentials encrypted; response never includes them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigureVendorIdentityRequest" }
+      responses:
+        "200":
+          description: Vendor identity configuration saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VendorIdentity" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/providers:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProviders
+      responses:
+        "200":
+          description: Redacted Provider API connections.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderList" }
+    post:
+      operationId: createProvider
+      description: Connects the standard remote Provider API using a fixed HTTPS base URL and encrypted service credential.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateProviderRequest" }
+      responses:
+        "201":
+          description: Provider connected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Provider" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/projects:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProjects
+      responses:
+        "200":
+          description: Issued project metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectList" }
+  /api/v1/products/{product_id}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listCredentialLeases
+      responses:
+        "200":
+          description: Credential lease metadata and SHA-256 fingerprints; never credential plaintext.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialLeaseList" }
+  /api/v1/products/{product_id}/llm-profiles:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listLLMProfiles
+      responses:
+        "200":
+          description: Redacted role-based LLM profiles and mandatory hardening policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LLMProfileList" }
+    put:
+      operationId: saveLLMProfile
+      description: Creates or replaces a role profile. Mandatory untrusted-context hardening cannot be disabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveLLMProfileRequest" }
+      responses:
+        "200":
+          description: Profile saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LLMProfile" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/integration-runs:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listIntegrationRuns
+      responses:
+        "200":
+          description: Up to 500 newest product integration runs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntegrationRunList" }
+    post:
+      operationId: startIntegrationRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                environment_id: { type: string }
+                requested_outcome: { type: string, minLength: 1, maxLength: 500 }
+              required: [environment_id, requested_outcome]
+      responses:
+        "201":
+          description: Owner-scoped run started and funnel event recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntegrationRun" }
+  /api/v1/products/{product_id}/integration-runs/{run_id}/complete:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: completeIntegrationRun
+      description: Only the starting principal can complete a run; a deterministic validation result is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reported_success: { type: boolean }
+                validated_success: { type: boolean }
+                failure_code: { type: string, maxLength: 120 }
+              required: [validated_success]
+      responses:
+        "200":
+          description: Run completed and analytics updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntegrationRun" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/analytics:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: days
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+    get:
+      operationId: getAnalytics
+      responses:
+        "200":
+          description: Scoped adoption, channel, funnel, and deterministic success metrics.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnalyticsSummary" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/widgets:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getWidgetSnippets
+      responses:
+        "200":
+          description: Public and private widget snippets. Snippets contain public identifiers only and never a credential.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  public: { $ref: "#/components/schemas/WidgetSnippet" }
+                  private: { $ref: "#/components/schemas/WidgetSnippet" }
+                required: [public, private]
+  /oauth/authorize:
+    get:
+      security: []
+      operationId: oauthAuthorize
+      description: Starts downstream authorization-code OAuth, upstream vendor OIDC, PKCE S256, nonce, and entitlement resolution.
+      parameters:
+        - { name: response_type, in: query, required: true, schema: { const: code } }
+        - { name: product_id, in: query, required: true, schema: { type: string } }
+        - { name: client_id, in: query, required: true, schema: { type: string, description: Must equal product_id. } }
+        - { name: redirect_uri, in: query, required: true, schema: { type: string, format: uri } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge_method, in: query, required: true, schema: { const: S256 } }
+      responses:
+        "302": { description: Redirect to the configured vendor IdP. }
+        "400": { $ref: "#/components/responses/OAuthError" }
+  /oauth/callback/{product_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      security: []
+      operationId: oauthCallback
+      description: Verifies upstream state, nonce and ID token, resolves entitlements fail-closed, then redirects with a one-time code.
+      responses:
+        "302": { description: Exact registered client redirect. }
+        "401": { $ref: "#/components/responses/OAuthError" }
+  /oauth/token:
+    post:
+      security: []
+      operationId: oauthToken
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                grant_type: { const: authorization_code }
+                code: { type: string }
+                code_verifier: { type: string }
+                client_id: { type: string }
+                redirect_uri: { type: string, format: uri }
+              required: [grant_type, code, code_verifier, client_id, redirect_uri]
+      responses:
+        "200":
+          description: Short-lived opaque, product-bound DokoSoko access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthTokenResponse" }
+        "400": { $ref: "#/components/responses/OAuthError" }
+  /artifacts/{product_id}/{package_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/PackageID"
+    get:
+      security:
+        - dokoBearer: []
+        - {}
+      operationId: downloadPackage
+      description: Streams a published package through public-link, proxy, or fetch mode. Anonymous access requires explicit public visibility.
+      responses:
+        "200":
+          description: Size- and checksum-validated artifact stream.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: Attachment filename selected from validated artifact metadata.
+            Content-Length:
+              schema: { type: integer, format: int64, minimum: 0 }
+            X-Checksum-SHA256:
+              schema: { type: string, pattern: "^[a-f0-9]{64}$" }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /widgets/{product_id}/{asset}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: asset
+        in: path
+        required: true
+        schema: { type: string, enum: [public.js, private.js] }
+    get:
+      security: []
+      operationId: widgetLoader
+      responses:
+        "200":
+          description: Secret-free JavaScript loader.
+          content:
+            text/javascript:
+              schema: { type: string }
+        "404": { description: Invalid asset, product missing, or Public MCP disabled for public.js. }
+  /mcp/public/{product_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/MCPProtocolVersion"
+      - $ref: "#/components/parameters/MCPMethod"
+      - $ref: "#/components/parameters/MCPName"
+    post:
+      security: []
+      operationId: publicMCP
+      description: Authentication-less Stateless MCPv2 JSON-RPC endpoint. It exists only while Public MCP is enabled and exposes public read-only tools.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JSONRPCRequest" }
+      responses:
+        "200":
+          description: JSON-RPC result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JSONRPCResponse" }
+        "404":
+          description: Product not found or Public MCP is disabled.
+        "429":
+          description: Anonymous request budget exceeded.
+  /mcp/{product_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/MCPProtocolVersion"
+      - $ref: "#/components/parameters/MCPMethod"
+      - $ref: "#/components/parameters/MCPName"
+    post:
+      security: [{ dokoBearer: [] }]
+      operationId: privateMCP
+      description: Authenticated, policy- and entitlement-scoped Stateless MCPv2 JSON-RPC endpoint. Inbound DokoSoko tokens are never forwarded to a managed upstream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JSONRPCRequest" }
+      responses:
+        "200":
+          description: JSON-RPC result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JSONRPCResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: dokosoko_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Administrator automation token in development only; production uses the root session cookie.
+    setupToken:
+      type: http
+      scheme: bearer
+      description: One-time deployment setup token.
+    dokoBearer:
+      type: http
+      scheme: bearer
+      description: Opaque, short-lived DokoSoko OAuth access token bound to one product.
+  parameters:
+    ProductID:
+      name: product_id
+      in: path
+      required: true
+      schema: { type: string }
+    OrganisationID:
+      name: organisation_id
+      in: path
+      required: true
+      schema: { type: string }
+    SourceID:
+      name: source_id
+      in: path
+      required: true
+      schema: { type: string }
+    PackageID:
+      name: package_id
+      in: path
+      required: true
+      schema: { type: string }
+    MCPConnectionID:
+      name: connection_id
+      in: path
+      required: true
+      schema: { type: string }
+    MCPProtocolVersion:
+      name: MCP-Protocol-Version
+      in: header
+      required: true
+      schema: { type: string, const: "2026-07-28" }
+    MCPMethod:
+      name: Mcp-Method
+      in: header
+      required: true
+      description: Must exactly match the JSON-RPC method.
+      schema: { type: string, enum: [server/discover, tools/list, tools/call] }
+    MCPName:
+      name: Mcp-Name
+      in: header
+      required: false
+      description: Required for tools/call and must exactly match params.name.
+      schema: { type: string }
+  requestBodies:
+    NamedResource:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              name: { type: string, minLength: 1, maxLength: 120 }
+              slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+            required: [name, slug]
+    RootInput:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              email: { type: string, format: email }
+              display_name: { type: string, minLength: 1, maxLength: 120 }
+              password: { type: string, format: password, minLength: 14 }
+            required: [email, display_name, password]
+    MFACompletion:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              enrollment_id: { type: string }
+              code: { type: string }
+            required: [enrollment_id, code]
+    Revision:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              revision: { type: integer, format: int64, minimum: 1 }
+            required: [revision]
+    VisibilityChange:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              visibility: { $ref: "#/components/schemas/Visibility" }
+              acknowledge_public: { type: boolean, default: false }
+              revision: { type: integer, format: int64, minimum: 1 }
+            required: [visibility, revision]
+  responses:
+    Error:
+      description: Structured API error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    OAuthError:
+      description: OAuth 2.0 error response.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              error: { type: string }
+              error_description: { type: string }
+            required: [error, error_description]
+    MFAEnrollment:
+      description: Short-lived MFA enrollment; the TOTP secret is returned only during enrollment.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MFAEnrollment" }
+    AuthenticatedRoot:
+      description: Authenticated root session. Recovery codes are returned only once when a root is created.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              user: { $ref: "#/components/schemas/RootUser" }
+              expires_at: { type: string, format: date-time }
+              csrf_token: { type: string, description: Double-submit CSRF token also set in the dokosoko_csrf cookie. }
+              recovery_codes: { type: array, items: { type: string } }
+            required: [user]
+    RootList:
+      description: Root users without password, TOTP, or recovery-code material.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              items: { type: array, items: { $ref: "#/components/schemas/RootUser" } }
+            required: [items]
+    ConfirmationOrRevisionConflict:
+      description: Public confirmation is required, or the supplied revision is stale.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        status: { const: ok }
+      required: [status]
+    Organisation:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, name, slug, revision, created_at, updated_at]
+    OrganisationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Organisation" }
+      required: [items]
+    ProductList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Product" }
+      required: [items]
+    Environment:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        is_production: { type: boolean }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, name, slug, is_production, revision, created_at, updated_at]
+    EnvironmentList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Environment" }
+      required: [items]
+    CreateEnvironmentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        is_production: { type: boolean, default: false }
+      required: [organisation_id, name, slug]
+    CreateSourceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        kind:
+          type: string
+          enum: [website, openapi, git, upload, sdk, package_metadata]
+        location:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Absolute HTTP(S) URL for website and OpenAPI sources; source-specific locator otherwise.
+      required: [organisation_id, name, kind, location]
+    CrawlJob:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        source_id: { type: string }
+        state:
+          type: string
+          enum: [queued, running, review, succeeded, failed, cancelled]
+        attempt: { type: integer, minimum: 0 }
+        discovered_count: { type: integer, minimum: 0 }
+        fetched_count: { type: integer, minimum: 0 }
+        changed_count: { type: integer, minimum: 0 }
+        error_code: { type: string }
+        error_message: { type: string, description: Redacted operator-safe error message. }
+        queued_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, source_id, state, attempt, discovered_count, fetched_count, changed_count, queued_at]
+    CrawlJobList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CrawlJob" }
+      required: [items]
+    CreatePackageRequest:
+      type: object
+      additionalProperties: false
+      description: Proxy and fetch modes require credential. Public and proxy modes use upstream_url; fetch mode uses fetch_hook_url.
+      properties:
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 240 }
+        ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
+        version: { type: string, minLength: 1, maxLength: 120 }
+        mode: { type: string, enum: [public, proxy, fetch] }
+        upstream_url: { type: string, format: uri, description: Fixed credential-free HTTPS origin for public and proxy modes. }
+        fetch_hook_url: { type: string, format: uri, description: Fixed credential-free HTTPS hook for fetch mode. }
+        credential: { type: string, format: password, writeOnly: true, description: Required for proxy and fetch modes; encrypted before persistence. }
+        checksum_sha256: { type: string, pattern: "^[A-Fa-f0-9]{64}$" }
+        expected_size: { type: integer, format: int64, minimum: 0, maximum: 5000000000 }
+      required: [organisation_id, name, ecosystem, version, mode]
+      allOf:
+        - if:
+            properties:
+              mode: { const: fetch }
+          then:
+            required: [fetch_hook_url, credential]
+          else:
+            required: [upstream_url]
+        - if:
+            properties:
+              mode: { const: proxy }
+          then:
+            required: [credential]
+    JSONSchema:
+      type: object
+      additionalProperties: true
+      description: JSON Schema document accepted by DokoSoko's bounded schema validator.
+    ToolAuthorizationPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        required_entitlements:
+          type: array
+          items: { type: string }
+        confirmation_required: { type: boolean, default: false }
+    CreateToolRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        namespace: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+        name: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+        description: { type: string, minLength: 1, maxLength: 500 }
+        input_schema: { $ref: "#/components/schemas/JSONSchema" }
+        output_schema: { $ref: "#/components/schemas/JSONSchema" }
+        api_hook_url: { type: string, format: uri, description: Fixed credential-free HTTPS URL. }
+        http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        credential: { type: string, format: password, writeOnly: true }
+        authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 10000 }
+      required: [organisation_id, namespace, name, description, input_schema, api_hook_url, http_method]
+    Tool:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        namespace: { type: string }
+        name: { type: string }
+        description: { type: string }
+        input_schema: { $ref: "#/components/schemas/JSONSchema" }
+        output_schema: { $ref: "#/components/schemas/JSONSchema" }
+        state: { type: string, enum: [draft, published] }
+        revision: { type: integer, format: int64, minimum: 1 }
+        http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE, MCP] }
+        authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000 }
+        backend_kind: { type: string, enum: [http, mcp] }
+        mcp_connection_id: { type: string }
+        upstream_tool_name: { type: string }
+        upstream_schema_hash: { type: string, description: SHA-256 pin of the imported upstream name and schemas. }
+        upstream_annotations: { type: object, additionalProperties: true, description: Stored as untrusted metadata and never treated as local policy. }
+        upstream_drifted: { type: boolean, description: When true the tool is removed from discovery and execution fails closed. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, namespace, name, description, input_schema, output_schema, state, revision, http_method, authorization_policy, timeout_ms, created_at, updated_at]
+    ToolList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Tool" }
+      required: [items]
+    CreateMCPConnectionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        namespace: { type: string, pattern: "^[a-z][a-z0-9_]{0,31}$" }
+        endpoint: { type: string, format: uri, description: Fixed HTTPS URL on the default port; query strings and redirects are forbidden. }
+        auth_mode: { type: string, enum: [none, service, delegated_oauth] }
+        credential: { type: string, format: password, writeOnly: true, description: Required only for service mode. }
+        oauth_client_id: { type: string }
+        oauth_client_secret: { type: string, format: password, writeOnly: true }
+        oauth_issuer: { type: string, format: uri, description: Pinned authorization-server issuer required in delegated OAuth mode and matched against the RFC 9207 callback iss value. }
+        authorization_url: { type: string, format: uri }
+        token_url: { type: string, format: uri }
+        scopes:
+          type: array
+          uniqueItems: true
+          items: { type: string, maxLength: 120 }
+      required: [organisation_id, name, namespace, endpoint, auth_mode]
+    MCPConnection:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        name: { type: string }
+        namespace: { type: string }
+        endpoint: { type: string, format: uri }
+        protocol_version: { type: string, const: "2026-07-28" }
+        auth_mode: { type: string, enum: [none, service, delegated_oauth] }
+        oauth_client_id: { type: string }
+        oauth_issuer: { type: string, format: uri }
+        authorization_url: { type: string, format: uri }
+        token_url: { type: string, format: uri }
+        scopes: { type: array, items: { type: string } }
+        state: { type: string, enum: [active, disabled] }
+        last_synced_at: { type: string, format: date-time }
+        last_catalog_hash: { type: string }
+        config: { type: object, additionalProperties: true }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, name, namespace, endpoint, protocol_version, auth_mode, scopes, state, config, revision, created_at, updated_at]
+    MCPConnectionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MCPConnection" } }
+        protocol_policy: { type: string, const: Stateless MCPv2 Only }
+        protocol_version: { type: string, const: "2026-07-28" }
+        specification_url: { type: string, format: uri, const: "https://blog.modelcontextprotocol.io/posts/2026-07-28/" }
+      required: [items, protocol_policy, protocol_version, specification_url]
+    MCPCatalogTool:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        title: { type: string }
+        description: { type: string }
+        input_schema: { $ref: "#/components/schemas/JSONSchema" }
+        output_schema: { $ref: "#/components/schemas/JSONSchema" }
+        annotations: { type: object, additionalProperties: true, description: Untrusted upstream metadata. }
+        schema_hash: { type: string }
+      required: [name, input_schema, schema_hash]
+    MCPCatalog:
+      type: object
+      additionalProperties: false
+      properties:
+        connection: { $ref: "#/components/schemas/MCPConnection" }
+        tools: { type: array, items: { $ref: "#/components/schemas/MCPCatalogTool" } }
+        catalog_hash: { type: string }
+        ttl_ms: { type: integer, format: int64, minimum: 0 }
+      required: [connection, tools, catalog_hash]
+    ImportMCPToolsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        tool_names: { type: array, minItems: 1, uniqueItems: true, items: { type: string } }
+        required_entitlements: { type: array, uniqueItems: true, items: { type: string } }
+        confirmation_required: { type: boolean, default: true }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 15000 }
+      required: [tool_names]
+    MCPImportResult:
+      type: object
+      additionalProperties: false
+      properties:
+        connection: { $ref: "#/components/schemas/MCPConnection" }
+        created: { type: array, items: { $ref: "#/components/schemas/Tool" } }
+        updated: { type: array, items: { $ref: "#/components/schemas/Tool" } }
+        unchanged: { type: array, items: { $ref: "#/components/schemas/Tool" } }
+        drifted: { type: array, items: { $ref: "#/components/schemas/Tool" } }
+        rejected: { type: object, additionalProperties: { type: string } }
+      required: [connection, created, updated, unchanged, drifted, rejected]
+    ConfigureVendorIdentityRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        issuer: { type: string, format: uri, description: Fixed HTTPS OIDC issuer origin. }
+        client_id: { type: string, minLength: 1 }
+        client_secret: { type: string, format: password, writeOnly: true, description: Required for initial configuration; omit or send empty to retain the current encrypted secret. }
+        scopes:
+          type: array
+          items: { type: string }
+          default: [openid, profile, email]
+        audience: { type: string }
+        organisation_claim: { type: string, default: org_id }
+        entitlement_hook_url:
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        authorization_hook_url:
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        authorization_credential: { type: string, format: password, writeOnly: true }
+        allowed_redirect_uris:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: { type: string, format: uri }
+      required: [organisation_id, issuer, client_id, allowed_redirect_uris]
+    VendorIdentity:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        issuer: { type: string, format: uri }
+        client_id: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        audience: { type: string }
+        organisation_claim: { type: string }
+        entitlement_hook_url:
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        authorization_hook_url:
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        allowed_redirect_uris:
+          type: array
+          items: { type: string, format: uri }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, issuer, client_id, scopes, audience, organisation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, revision, created_at, updated_at]
+    CreateProviderRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        base_url: { type: string, format: uri, description: Fixed HTTPS origin on the default port. }
+        credential: { type: string, format: password, minLength: 1, writeOnly: true }
+        required_entitlements:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        max_ttl_seconds: { type: integer, minimum: 300, maximum: 86400, default: 3600 }
+      required: [organisation_id, name, base_url, credential]
+    ProviderConfig:
+      type: object
+      additionalProperties: true
+      properties:
+        contract_version: { type: string, example: "2026-08-01" }
+        authorize_path: { type: string, example: /v1/authorize }
+        project_path: { type: string, example: /v1/projects }
+        credential_path: { type: string, example: /v1/credentials }
+        revoke_path: { type: string, example: "/v1/credentials/{credential_id}/revoke" }
+        required_entitlements:
+          type: array
+          items: { type: string }
+        max_ttl_seconds: { type: integer, minimum: 300, maximum: 86400 }
+    Provider:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [remote, builtin, proxy] }
+        config: { $ref: "#/components/schemas/ProviderConfig" }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, name, kind, config, revision, created_at, updated_at]
+    ProviderList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Provider" }
+      required: [items]
+    Project:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        environment_id: { type: string }
+        provider_id: { type: string }
+        owner_type: { type: string, enum: [user] }
+        owner_id: { type: string }
+        external_id: { type: string }
+        idempotency_key: { type: string, minLength: 16 }
+        state: { type: string }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, environment_id, provider_id, owner_type, owner_id, external_id, idempotency_key, state, created_at, updated_at]
+    ProjectList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Project" }
+      required: [items]
+    CredentialLease:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        environment_id: { type: string }
+        project_id: { type: string }
+        provider_id: { type: string }
+        subject_id: { type: string }
+        external_id: { type: string }
+        idempotency_key: { type: string, minLength: 16 }
+        scopes:
+          type: array
+          items: { type: string }
+        secret_fingerprint: { type: string, pattern: "^[a-f0-9]{64}$" }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, environment_id, provider_id, subject_id, external_id, idempotency_key, scopes, secret_fingerprint, expires_at, created_at]
+    CredentialLeaseList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CredentialLease" }
+      required: [items]
+    SaveLLMProfileRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        role: { type: string, enum: [embedding, extraction, reranking, evaluation, assistant] }
+        provider: { type: string, minLength: 1 }
+        endpoint: { type: string, format: uri, description: Fixed HTTPS origin on the default port. }
+        model: { type: string, minLength: 1 }
+        credential: { type: string, format: password, writeOnly: true, description: Required before enabling a new profile; empty retains an existing encrypted credential. }
+        embedding_dimensions: { type: integer, minimum: 0, maximum: 8192, description: Embedding profiles require a value between 64 and 8192; other roles use 0. }
+        max_input_tokens: { type: integer, minimum: 256, maximum: 1000000 }
+        max_output_tokens: { type: integer, minimum: 1, maximum: 32768 }
+        daily_token_budget: { type: integer, format: int64, minimum: 0, maximum: 10000000000 }
+        enabled: { type: boolean }
+      required: [organisation_id, role, provider, endpoint, model, embedding_dimensions, max_input_tokens, max_output_tokens, daily_token_budget, enabled]
+    LLMHardening:
+      type: object
+      additionalProperties: { type: boolean }
+      properties:
+        context_is_untrusted: { const: true }
+        tool_calls_disabled: { const: true }
+        authorization_disabled: { const: true }
+        require_citations: { const: true }
+        no_answer_on_low_confidence: { const: true }
+      required: [context_is_untrusted, tool_calls_disabled, authorization_disabled, require_citations, no_answer_on_low_confidence]
+    LLMProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        role: { type: string, enum: [embedding, extraction, reranking, evaluation, assistant] }
+        provider: { type: string }
+        model: { type: string }
+        embedding_dimensions: { type: integer, minimum: 64, maximum: 8192 }
+        max_input_tokens: { type: integer, minimum: 256, maximum: 1000000 }
+        max_output_tokens: { type: integer, minimum: 1, maximum: 32768 }
+        daily_token_budget: { type: integer, format: int64, minimum: 0, maximum: 10000000000 }
+        hardening: { $ref: "#/components/schemas/LLMHardening" }
+        enabled: { type: boolean }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, role, provider, model, max_input_tokens, max_output_tokens, daily_token_budget, hardening, enabled, revision, created_at, updated_at]
+    LLMProfileList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LLMProfile" }
+      required: [items]
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        actor_id: { type: string }
+        action: { type: string }
+        target_type: { type: string }
+        target_id: { type: string }
+        prior: { type: object, additionalProperties: true }
+        current: { type: object, additionalProperties: true }
+        request_id: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, organisation_id, actor_id, action, target_type, target_id, request_id, created_at]
+    AuditEventList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/AuditEvent" }
+      required: [items]
+    AnalyticsPoint:
+      type: object
+      additionalProperties: false
+      properties:
+        date: { type: string, format: date }
+        count: { type: integer, format: int64, minimum: 0 }
+      required: [date, count]
+    AnalyticsSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        active_developers: { type: integer, format: int64, minimum: 0 }
+        authorized_users: { type: integer, format: int64, minimum: 0 }
+        mcp_requests: { type: integer, format: int64, minimum: 0 }
+        tool_calls: { type: integer, format: int64, minimum: 0 }
+        package_downloads: { type: integer, format: int64, minimum: 0 }
+        integration_runs: { type: integer, format: int64, minimum: 0 }
+        validated_runs: { type: integer, format: int64, minimum: 0 }
+        validated_success: { type: integer, format: int64, minimum: 0 }
+        first_pass_rate: { type: number, format: double, minimum: 0, maximum: 100, description: Percentage of validated runs that succeeded. }
+        channels: { type: object, additionalProperties: { type: integer, format: int64, minimum: 0 } }
+        funnel: { type: object, additionalProperties: { type: integer, format: int64, minimum: 0 } }
+        daily_requests:
+          type: array
+          items: { $ref: "#/components/schemas/AnalyticsPoint" }
+        since: { type: string, format: date-time }
+        generated_at: { type: string, format: date-time }
+      required: [active_developers, authorized_users, mcp_requests, tool_calls, package_downloads, integration_runs, validated_runs, validated_success, first_pass_rate, channels, funnel, daily_requests, since, generated_at]
+    OAuthTokenResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        access_token: { type: string, description: Opaque product-bound DokoSoko access token. }
+        token_type: { type: string, const: Bearer }
+        expires_in: { type: integer, minimum: 1 }
+        scope: { type: string }
+      required: [access_token, token_type, expires_in, scope]
+    JSONRPCID:
+      type: [string, integer, "null"]
+    JSONRPCToolCallParams:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        arguments: { type: object, additionalProperties: true }
+        _meta:
+          allOf:
+            - { $ref: "#/components/schemas/MCPRequestMeta" }
+            - type: object
+              properties:
+                confirmed: { type: boolean, default: false }
+      required: [name, arguments, _meta]
+    MCPRequestMeta:
+      type: object
+      additionalProperties: true
+      properties:
+        io.modelcontextprotocol/protocolVersion: { type: string, const: "2026-07-28" }
+      required: [io.modelcontextprotocol/protocolVersion]
+    JSONRPCError:
+      type: object
+      additionalProperties: false
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data: {}
+      required: [code, message]
+    JSONRPCResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        jsonrpc: { const: "2.0" }
+        id: { $ref: "#/components/schemas/JSONRPCID" }
+        result: {}
+        error: { $ref: "#/components/schemas/JSONRPCError" }
+      required: [jsonrpc, id]
+      oneOf:
+        - required: [result]
+          not: { required: [error] }
+        - required: [error]
+          not: { required: [result] }
+    IntegrationRunList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/IntegrationRun" }
+      required: [items]
+    RootUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        role: { const: root }
+        revoked_at: { type: [string, "null"], format: date-time }
+      required: [id, email, display_name, role]
+    MFAEnrollment:
+      type: object
+      properties:
+        enrollment_id: { type: string }
+        totp_secret: { type: string }
+        provisioning_uri: { type: string, format: uri }
+        expires_at: { type: string, format: date-time }
+      required: [enrollment_id, totp_secret, provisioning_uri, expires_at]
+    SystemDoctor:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, error] }
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              status: { type: string, enum: [ok, error] }
+              message: { type: string }
+            required: [name, status, message]
+        generated_at: { type: string, format: date-time }
+      required: [status, checks, generated_at]
+    Visibility:
+      type: string
+      enum: [private, public]
+      default: private
+    Product:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        public_mcp_enabled: { type: boolean, default: false }
+        revision: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, name, slug, public_mcp_enabled, revision, created_at, updated_at]
+    Source:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        location: { type: string }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        published: { type: boolean }
+        quarantined: { type: boolean }
+        revision: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, name, kind, location, visibility, published, quarantined, revision, created_at, updated_at]
+    Package:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        name: { type: string }
+        ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
+        version: { type: string }
+        mode: { type: string, enum: [public, proxy, fetch] }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        published: { type: boolean }
+        revision: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, name, ecosystem, version, mode, visibility, published, revision, created_at, updated_at]
+    IntegrationRun:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        environment_id: { type: string }
+        user_id: { type: string }
+        requested_outcome: { type: string }
+        state: { type: string, enum: [running, succeeded, failed] }
+        reported_success: { type: [boolean, "null"] }
+        validated_success: { type: [boolean, "null"] }
+        failure_code: { type: [string, "null"] }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+      required: [id, organisation_id, product_id, environment_id, requested_outcome, state, started_at]
+    Distribution:
+      type: object
+      additionalProperties: false
+      properties:
+        product: { $ref: "#/components/schemas/Product" }
+        public_mcp_endpoint: { type: string, format: uri }
+        private_mcp_endpoint: { type: string, format: uri }
+        public_sources: { type: integer, minimum: 0 }
+        public_packages: { type: integer, minimum: 0 }
+      required: [product, public_mcp_endpoint, private_mcp_endpoint, public_sources, public_packages]
+    WidgetSnippet:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        snippet: { type: string }
+        contains_secret: { const: false }
+      required: [enabled, snippet, contains_secret]
+    JSONRPCRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        jsonrpc: { const: "2.0" }
+        id: { $ref: "#/components/schemas/JSONRPCID" }
+        method: { type: string, enum: [server/discover, tools/list, tools/call] }
+        params:
+          type: object
+          additionalProperties: true
+          properties:
+            _meta: { $ref: "#/components/schemas/MCPRequestMeta" }
+          required: [_meta]
+      required: [jsonrpc, method, params]
+      allOf:
+        - if:
+            properties:
+              method: { const: tools/call }
+          then:
+            properties:
+              params: { $ref: "#/components/schemas/JSONRPCToolCallParams" }
+            required: [params]
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: [object, "null"], additionalProperties: true }
+          required: [code, message]
+      required: [error]

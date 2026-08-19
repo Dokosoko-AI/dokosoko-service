@@ -1,0 +1,13 @@
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
+
+WORKDIR /app
+RUN corepack enable && (id -u 65532 >/dev/null 2>&1 || useradd --system --uid 65532 --create-home crawler)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile --ignore-scripts
+COPY crawler ./crawler
+COPY tsconfig.json ./
+RUN mkdir -p /data && chown -R 65532:65532 /app /data
+
+USER 65532
+ENV DOKOSOKO_DATA_DIR=/data NODE_ENV=production
+CMD ["./node_modules/.bin/tsx", "crawler/index.ts"]

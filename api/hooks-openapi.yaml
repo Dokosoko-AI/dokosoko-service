@@ -1,0 +1,208 @@
+openapi: 3.1.0
+info:
+  title: DokoSoko Vendor Hooks API
+  version: 2026-08-01
+  description: >-
+    Reference contract for the vendor endpoints DokoSoko calls to resolve
+    entitlements, authorize custom-tool execution, and obtain short-lived
+    package URLs. The paths in this document are examples: DokoSoko stores a
+    fixed full HTTPS URL for each hook, so vendors may choose different paths.
+servers:
+  - url: https://hooks.vendor.example.com
+tags:
+  - name: Identity policy
+  - name: Tool policy
+  - name: Package delivery
+paths:
+  /entitlements:
+    post:
+      tags: [Identity policy]
+      operationId: resolveEntitlements
+      summary: Resolve product entitlements for a vendor identity
+      description: >-
+        Called during DokoSoko OAuth authorization. The bearer token is the
+        vendor access token obtained from the configured OIDC provider. Any
+        network, HTTP, or response-validation failure denies authorization.
+      security: [{ vendorAccessToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EntitlementRequest" }
+            example:
+              subject: user_123
+              vendor_organisation_id: org_customer_42
+              product_id: prod_dokosoko
+      responses:
+        "200":
+          description: Stable entitlement identifiers and their current enabled state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntitlementResponse" }
+              example:
+                entitlements:
+                  developer.pro: true
+                  projects.create: true
+                  production.write: false
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /authorize-tool:
+    post:
+      tags: [Tool policy]
+      operationId: authorizeToolExecution
+      summary: Authorize one custom-tool execution
+      description: >-
+        Called after local schema, entitlement, and confirmation checks but
+        before the fixed tool hook executes. Argument values and the inbound
+        DokoSoko access token are deliberately excluded. Failures deny execution.
+      security: [{ serviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ToolAuthorizationRequest" }
+            example:
+              operation: tool.execute
+              tool: billing.create_invoice
+              product_id: prod_dokosoko
+              subject: https://id.vendor.example.com|user_123
+              vendor_organisation_id: org_customer_42
+              argument_keys: [account_id, amount, currency]
+      responses:
+        "200":
+          description: Explicit execution decision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthorizationDecision" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /package-fetch:
+    post:
+      tags: [Package delivery]
+      operationId: createPackageDownload
+      summary: Create a short-lived package download
+      description: >-
+        Used only by fetch-mode packages. Return a short-lived HTTPS URL and
+        integrity metadata. DokoSoko revalidates the destination, downloads the
+        artifact without forwarding this hook credential, and enforces the
+        returned checksum and size when provided.
+      security: [{ serviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackageFetchRequest" }
+            example:
+              package_id: pkg_01
+              ecosystem: npm
+              name: "@vendor/sdk"
+              version: 2.4.1
+      responses:
+        "200":
+          description: Short-lived, credential-free artifact location.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackageFetchResponse" }
+              example:
+                url: https://downloads.vendor.example.com/leases/download_01
+                sha256: 81b637d8f6d2c6b1f4e9d349a442e980a84161f96ea101da2c96cf86723bb7ef
+                size: 184320
+                expires_at: "2026-08-19T12:05:00Z"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    vendorAccessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: End-user vendor token obtained by DokoSoko during upstream OIDC authorization.
+    serviceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Vendor-issued server credential stored encrypted by DokoSoko.
+  responses:
+    Error:
+      description: Structured error without tokens, credentials, or argument values.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    EntitlementRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        subject: { type: string, minLength: 1 }
+        vendor_organisation_id: { type: string }
+        product_id: { type: string, minLength: 1 }
+      required: [subject, vendor_organisation_id, product_id]
+    EntitlementResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        entitlements:
+          type: object
+          additionalProperties: { type: boolean }
+      required: [entitlements]
+    ToolAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        operation: { const: tool.execute }
+        tool: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}\.[a-z][a-z0-9_]{0,63}$' }
+        product_id: { type: string, minLength: 1 }
+        subject: { type: string, minLength: 1 }
+        vendor_organisation_id: { type: string }
+        argument_keys:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+          description: Sorted property names only; argument values are never included.
+      required: [operation, tool, product_id, subject, vendor_organisation_id, argument_keys]
+    AuthorizationDecision:
+      type: object
+      additionalProperties: false
+      properties:
+        allowed: { type: boolean }
+        reason: { type: string, maxLength: 500 }
+      required: [allowed]
+    PackageFetchRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        package_id: { type: string, minLength: 1 }
+        ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
+        name: { type: string, minLength: 1 }
+        version: { type: string, minLength: 1 }
+      required: [package_id, ecosystem, name, version]
+    PackageFetchResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        url: { type: string, format: uri, description: Short-lived credential-free HTTPS artifact URL. }
+        sha256:
+          oneOf:
+            - { type: string, pattern: "^[A-Fa-f0-9]{64}$" }
+            - { const: "" }
+          description: Empty disables checksum comparison; a SHA-256 digest is strongly recommended.
+        size: { type: integer, format: int64, minimum: 0, description: Zero means unknown; a positive size is enforced exactly. }
+        expires_at: { type: string, format: date-time }
+      required: [url, sha256, size, expires_at]
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          properties:
+            code: { type: string }
+            message: { type: string }
+            retryable: { type: boolean, default: false }
+            request_id: { type: string }
+          required: [code, message]
+      required: [error]

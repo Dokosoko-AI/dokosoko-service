@@ -1,0 +1,63 @@
+name: dokosoko-v2
+
+services:
+  dokosoko:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DOKOSOKO_DATABASE_URL: postgres://dokosoko:${DOKOSOKO_DATABASE_PASSWORD:?set DOKOSOKO_DATABASE_PASSWORD}@postgres:5432/dokosoko?sslmode=disable
+      DOKOSOKO_MASTER_KEY: ${DOKOSOKO_MASTER_KEY:?set DOKOSOKO_MASTER_KEY}
+      DOKOSOKO_PUBLIC_URL: ${DOKOSOKO_PUBLIC_URL:-http://localhost:8080}
+      DOKOSOKO_SETUP_TOKEN: ${DOKOSOKO_SETUP_TOKEN:?set DOKOSOKO_SETUP_TOKEN}
+    ports:
+      - "8080:8080"
+    volumes:
+      - dokosoko-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    environment:
+      DOKOSOKO_DATABASE_URL: postgres://dokosoko:${DOKOSOKO_DATABASE_PASSWORD:?set DOKOSOKO_DATABASE_PASSWORD}@postgres:5432/dokosoko?sslmode=disable
+      DOKOSOKO_DATA_DIR: /data
+      DOKOSOKO_CRAWLER_MAX_PAGES: ${DOKOSOKO_CRAWLER_MAX_PAGES:-500}
+      DOKOSOKO_CRAWLER_MAX_BYTES: ${DOKOSOKO_CRAWLER_MAX_BYTES:-5000000}
+    volumes:
+      - dokosoko-data:/data
+    depends_on:
+      dokosoko:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    shm_size: 256mb
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: dokosoko
+      POSTGRES_USER: dokosoko
+      POSTGRES_PASSWORD: ${DOKOSOKO_DATABASE_PASSWORD:?set DOKOSOKO_DATABASE_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dokosoko -d dokosoko"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  dokosoko-data:
+  postgres-data:

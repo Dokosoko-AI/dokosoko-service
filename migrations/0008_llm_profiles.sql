@@ -1,0 +1,20 @@
+CREATE TABLE llm_profiles (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    organisation_id uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+    product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    role text NOT NULL CHECK (role IN ('embedding','extraction','reranking','evaluation','assistant')),
+    provider text NOT NULL,
+    endpoint text NOT NULL,
+    model text NOT NULL,
+    credential_secret_id uuid REFERENCES secrets(id) ON DELETE RESTRICT,
+    embedding_dimensions integer,
+    max_input_tokens integer NOT NULL CHECK (max_input_tokens BETWEEN 256 AND 1000000),
+    max_output_tokens integer NOT NULL CHECK (max_output_tokens BETWEEN 1 AND 32768),
+    daily_token_budget bigint NOT NULL CHECK (daily_token_budget BETWEEN 0 AND 10000000000),
+    hardening jsonb NOT NULL DEFAULT '{"context_is_untrusted":true,"tool_calls_disabled":true,"authorization_disabled":true,"require_citations":true,"no_answer_on_low_confidence":true}'::jsonb,
+    enabled boolean NOT NULL DEFAULT false,
+    revision bigint NOT NULL DEFAULT 1,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (product_id, role)
+);
