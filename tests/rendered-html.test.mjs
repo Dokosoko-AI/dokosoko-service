@@ -100,3 +100,20 @@ test("ships the private vendor-proxied usage report configuration", async () => 
   assert.match(client, /usage_hook_url/);
   assert.match(client, /usage_credential/);
 });
+
+test("ships consent-gated support reporting configuration and inbox", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(source, /Support reporting/);
+  assert.match(source, /support\.report_bug/);
+  assert.match(source, /support\.submit_feedback/);
+  assert.match(source, /encrypted holding/);
+  assert.match(source, /Submission inbox/);
+  assert.match(source, />View<\/Button>/);
+  assert.match(source, />Retry<\/Button>/);
+  assert.match(source, /Fixed agent policy/);
+  assert.match(client, /report-submissions/);
+  assert.match(client, /configureReporting/);
+  assert.match(client, /retryReportSubmission/);
+});

@@ -36,6 +36,8 @@ type Memory struct {
 	projects                 map[string]map[string]model.Project
 	leases                   map[string]map[string]model.CredentialLease
 	integrationRuns          map[string]map[string]model.IntegrationRun
+	reportingConfigs         map[string]model.ReportingConfig
+	reportSubmissions        map[string]map[string]model.ReportSubmission
 	llmProfiles              map[string]map[string]model.LLMProfile
 	knowledge                map[string][]model.KnowledgeRecord
 	crawls                   map[string][]model.CrawlJob
@@ -84,6 +86,8 @@ func NewMemory() *Memory {
 		projects:                 map[string]map[string]model.Project{product.ID: {}},
 		leases:                   map[string]map[string]model.CredentialLease{product.ID: {}},
 		integrationRuns:          map[string]map[string]model.IntegrationRun{product.ID: {}},
+		reportingConfigs:         make(map[string]model.ReportingConfig),
+		reportSubmissions:        map[string]map[string]model.ReportSubmission{product.ID: {}},
 		llmProfiles:              map[string]map[string]model.LLMProfile{product.ID: {}},
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
@@ -174,6 +178,7 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 	m.projects[value.ID] = make(map[string]model.Project)
 	m.leases[value.ID] = make(map[string]model.CredentialLease)
 	m.integrationRuns[value.ID] = make(map[string]model.IntegrationRun)
+	m.reportSubmissions[value.ID] = make(map[string]model.ReportSubmission)
 	m.llmProfiles[value.ID] = make(map[string]model.LLMProfile)
 	return value, nil
 }
@@ -1222,6 +1227,187 @@ func (m *Memory) CompleteIntegrationRun(_ context.Context, productID, id string,
 	}
 	m.integrationRuns[productID][id] = value
 	return value, nil
+}
+
+func cloneReportSubmission(value model.ReportSubmission) model.ReportSubmission {
+	value.IdempotencyDigest = append([]byte(nil), value.IdempotencyDigest...)
+	value.PayloadCiphertext = append([]byte(nil), value.PayloadCiphertext...)
+	value.PayloadNonce = append([]byte(nil), value.PayloadNonce...)
+	return value
+}
+
+func (m *Memory) ReportingConfig(_ context.Context, productID string) (model.ReportingConfig, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.reportingConfigs[productID]
+	if !ok {
+		return model.ReportingConfig{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (m *Memory) SaveReportingConfig(_ context.Context, value model.ReportingConfig, expectedRevision int64) (model.ReportingConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.products[value.ProductID]; !ok {
+		return model.ReportingConfig{}, ErrNotFound
+	}
+	current, exists := m.reportingConfigs[value.ProductID]
+	if exists && current.Revision != expectedRevision {
+		return model.ReportingConfig{}, ErrConflict
+	}
+	if !exists && expectedRevision != 0 {
+		return model.ReportingConfig{}, ErrConflict
+	}
+	now := time.Now().UTC()
+	if exists {
+		value.ID, value.CreatedAt, value.Revision = current.ID, current.CreatedAt, current.Revision+1
+	} else {
+		value.Revision, value.CreatedAt = 1, now
+	}
+	value.UpdatedAt = now
+	m.reportingConfigs[value.ProductID] = value
+	return value, nil
+}
+
+func (m *Memory) ReportSubmissions(_ context.Context, productID string, limit int) ([]model.ReportSubmission, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values, ok := m.reportSubmissions[productID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]model.ReportSubmission, 0, len(values))
+	for _, value := range values {
+		result = append(result, cloneReportSubmission(value))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (m *Memory) ReportSubmission(_ context.Context, productID, id string) (model.ReportSubmission, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.reportSubmissions[productID][id]
+	if !ok {
+		return model.ReportSubmission{}, ErrNotFound
+	}
+	return cloneReportSubmission(value), nil
+}
+
+func (m *Memory) CreateReportSubmission(_ context.Context, value model.ReportSubmission) (model.ReportSubmission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.reportSubmissions[value.ProductID]
+	if !ok {
+		return model.ReportSubmission{}, ErrNotFound
+	}
+	for _, current := range values {
+		if current.ActorPseudonym == value.ActorPseudonym && current.Kind == value.Kind && hex.EncodeToString(current.IdempotencyDigest) == hex.EncodeToString(value.IdempotencyDigest) {
+			return cloneReportSubmission(current), nil
+		}
+	}
+	if _, exists := values[value.ID]; exists {
+		return model.ReportSubmission{}, ErrConflict
+	}
+	now := time.Now().UTC()
+	value.CreatedAt, value.UpdatedAt = now, now
+	values[value.ID] = cloneReportSubmission(value)
+	return cloneReportSubmission(value), nil
+}
+
+func (m *Memory) ActivateHeldReportSubmissions(_ context.Context, productID, kind string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.reportSubmissions[productID]
+	if !ok {
+		return ErrNotFound
+	}
+	for id, value := range values {
+		if value.Kind == kind && value.State == "held" && value.ExpiresAt.After(now) {
+			value.State, value.NextAttemptAt, value.UpdatedAt = "pending", &now, now
+			values[id] = value
+		}
+	}
+	return nil
+}
+
+func (m *Memory) ClaimReportSubmissions(_ context.Context, now time.Time, limit int) ([]model.ReportSubmission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 {
+		limit = 25
+	}
+	stale := now.Add(-5 * time.Minute)
+	result := make([]model.ReportSubmission, 0, limit)
+	for productID, values := range m.reportSubmissions {
+		for id, value := range values {
+			ready := value.State == "pending" && (value.NextAttemptAt == nil || !value.NextAttemptAt.After(now))
+			recoverable := value.State == "delivering" && value.DeliveryStartedAt != nil && value.DeliveryStartedAt.Before(stale)
+			if (!ready && !recoverable) || !value.ExpiresAt.After(now) || len(result) >= limit {
+				continue
+			}
+			value.State, value.DeliveryStartedAt, value.UpdatedAt = "delivering", &now, now
+			value.Attempts++
+			m.reportSubmissions[productID][id] = value
+			result = append(result, cloneReportSubmission(value))
+		}
+	}
+	return result, nil
+}
+
+func (m *Memory) UpdateReportSubmissionDelivery(_ context.Context, value model.ReportSubmission) (model.ReportSubmission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.reportSubmissions[value.ProductID][value.ID]
+	if !ok {
+		return model.ReportSubmission{}, ErrNotFound
+	}
+	current.State = value.State
+	current.Attempts = value.Attempts
+	current.NextAttemptAt = value.NextAttemptAt
+	current.DeliveryStartedAt = value.DeliveryStartedAt
+	current.LastError = value.LastError
+	current.ExternalID = value.ExternalID
+	current.ExternalURL = value.ExternalURL
+	current.DeliveredAt = value.DeliveredAt
+	current.UpdatedAt = time.Now().UTC()
+	m.reportSubmissions[value.ProductID][value.ID] = current
+	return cloneReportSubmission(current), nil
+}
+
+func (m *Memory) RetryReportSubmission(_ context.Context, productID, id string, now time.Time) (model.ReportSubmission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.reportSubmissions[productID][id]
+	if !ok {
+		return model.ReportSubmission{}, ErrNotFound
+	}
+	if (value.State != "held" && value.State != "failed") || !value.ExpiresAt.After(now) {
+		return model.ReportSubmission{}, ErrConflict
+	}
+	value.State, value.NextAttemptAt, value.DeliveryStartedAt = "pending", &now, nil
+	value.LastError, value.UpdatedAt = "", now
+	m.reportSubmissions[productID][id] = value
+	return cloneReportSubmission(value), nil
+}
+
+func (m *Memory) DeleteExpiredReportSubmissions(_ context.Context, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var deleted int64
+	for _, values := range m.reportSubmissions {
+		for id, value := range values {
+			if !value.ExpiresAt.After(now) {
+				delete(values, id)
+				deleted++
+			}
+		}
+	}
+	return deleted, nil
 }
 
 func (m *Memory) LLMProfiles(_ context.Context, productID string) ([]model.LLMProfile, error) {

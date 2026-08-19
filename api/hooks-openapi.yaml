@@ -4,8 +4,8 @@ info:
   version: 2026-08-19
   description: >-
     Reference contract for the vendor endpoints DokoSoko calls to resolve
-    entitlements, proxy customer usage reports, authorize custom-tool
-    execution, and obtain short-lived package URLs. The paths in this document
+    entitlements, proxy customer usage reports, deliver consented bug reports
+    and feedback, authorize custom-tool execution, and obtain short-lived package URLs. The paths in this document
     are examples: DokoSoko stores a fixed full HTTPS URL for each hook, so
     vendors may choose different paths.
 servers:
@@ -13,6 +13,7 @@ servers:
 tags:
   - name: Identity policy
   - name: Account usage
+  - name: Support reporting
   - name: Tool policy
   - name: Package delivery
 paths:
@@ -120,6 +121,79 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /bug-reports:
+    post:
+      tags: [Support reporting]
+      operationId: deliverBugReport
+      summary: Accept one consented connector bug report
+      description: >-
+        Called by the durable reporting outbox after an authenticated agent has
+        previewed the exact report and supplied explicit user-confirmation
+        metadata. The bearer token is the dedicated encrypted bug-hook
+        credential. The submission ID is also sent as both Idempotency-Key and
+        X-DokoSoko-Submission-ID; vendors must create at most one external
+        ticket for that ID.
+      security: [{ serviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportDeliveryRequest" }
+      responses:
+        "200":
+          description: Accepted with optional external ticket metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDeliveryResponse" }
+        "201":
+          description: External ticket created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDeliveryResponse" }
+        "202":
+          description: Accepted for asynchronous processing with optional external metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDeliveryResponse" }
+        "204": { description: Accepted without external ticket metadata. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /feedback:
+    post:
+      tags: [Support reporting]
+      operationId: deliverFeedback
+      summary: Accept one consented connector feedback submission
+      description: >-
+        Uses the same durable, idempotent delivery envelope as bug reporting
+        with a separate fixed URL and encrypted credential. User contact fields
+        are omitted unless the user explicitly allowed follow-up.
+      security: [{ serviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportDeliveryRequest" }
+      responses:
+        "200":
+          description: Accepted with optional external ticket metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDeliveryResponse" }
+        "201":
+          description: External feedback record created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDeliveryResponse" }
+        "202":
+          description: Accepted for asynchronous processing with optional external metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDeliveryResponse" }
+        "204": { description: Accepted without external record metadata. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /package-fetch:
     post:
       tags: [Package delivery]
@@ -259,6 +333,96 @@ components:
         allowed: { type: boolean }
         reason: { type: string, maxLength: 500 }
       required: [allowed]
+    ReportDeliveryRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        submission_id: { type: string, minLength: 1 }
+        created_at: { type: string, format: date-time }
+        report: { $ref: "#/components/schemas/ReportEnvelope" }
+      required: [submission_id, created_at, report]
+    ReportEnvelope:
+      type: object
+      additionalProperties: false
+      properties:
+        schema_version: { const: "2026-08-19" }
+        kind: { type: string, enum: [bug, feedback] }
+        bug: { $ref: "#/components/schemas/BugReport" }
+        feedback: { $ref: "#/components/schemas/FeedbackReport" }
+        reporter: { $ref: "#/components/schemas/ReportReporterContext" }
+        product: { $ref: "#/components/schemas/ReportProductContext" }
+        source: { const: private_mcp }
+        confirmed_at: { type: string, format: date-time }
+        request_id: { type: string }
+      required: [schema_version, kind, reporter, product, source, confirmed_at, request_id]
+      oneOf:
+        - properties: { kind: { const: bug } }
+          required: [bug]
+        - properties: { kind: { const: feedback } }
+          required: [feedback]
+    ReportReporterContext:
+      type: object
+      additionalProperties: false
+      properties:
+        subject: { type: string, minLength: 1 }
+        display_name: { type: string, description: Present only when allow_contact is true. }
+        email: { type: string, format: email, description: Present only when allow_contact is true. }
+        vendor_organisation_id: { type: string }
+        installation_id: { type: string }
+        allow_contact: { type: boolean }
+      required: [subject, allow_contact]
+    ReportProductContext:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string, minLength: 1 }
+        product_name: { type: string, minLength: 1 }
+        product_version_id: { type: string }
+        product_version: { type: string }
+        manifest_hash: { type: string }
+        catalog_revision: { type: integer, format: int64 }
+        selection_source: { type: string }
+        environment_id: { type: string }
+        installation_id: { type: string }
+      required: [product_id, product_name]
+    BugReport:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, minLength: 1, maxLength: 10000 }
+        reproduction_steps:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 1000 }
+        expected_behavior: { type: string, maxLength: 4000 }
+        actual_behavior: { type: string, maxLength: 4000 }
+        error_code: { type: string, maxLength: 120 }
+        error_message: { type: string, maxLength: 8000 }
+        stack_trace: { type: string, maxLength: 16000 }
+        diagnostic_context: { type: string, maxLength: 20000 }
+        related_tool: { type: string, maxLength: 160 }
+        integration_run_id: { type: string, maxLength: 160 }
+        severity: { type: string, enum: [unknown, low, medium, high, critical] }
+        allow_contact: { type: boolean }
+      required: [summary, description]
+    FeedbackReport:
+      type: object
+      additionalProperties: false
+      properties:
+        message: { type: string, minLength: 1, maxLength: 10000 }
+        category: { type: string, enum: [general, usability, documentation, performance, feature_request, other] }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        related_tool: { type: string, maxLength: 160 }
+        integration_run_id: { type: string, maxLength: 160 }
+        allow_contact: { type: boolean }
+      required: [message]
+    ReportDeliveryResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        external_id: { type: string, maxLength: 200 }
+        external_url: { type: string, format: uri, pattern: '^https://', maxLength: 2000, description: Optional HTTPS link to the external ticket or feedback record. }
     PackageFetchRequest:
       type: object
       additionalProperties: false

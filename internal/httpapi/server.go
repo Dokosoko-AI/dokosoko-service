@@ -24,6 +24,7 @@ import (
 	packagegateway "github.com/dokosoko/dokosoko-service/internal/packages"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
+	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
@@ -42,6 +43,7 @@ type Server struct {
 	usageReporter   identity.UsageReporter
 	providerRuntime *providerruntime.Runtime
 	mcpBridge       *mcpbridge.Manager
+	reporting       *reporting.Service
 	baseURL         string
 	allowDemoTokens bool
 	secureCookies   bool
@@ -59,6 +61,7 @@ type Options struct {
 	UsageReporter   identity.UsageReporter
 	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
+	Reporting       *reporting.Service
 	AllowDemoTokens bool
 }
 
@@ -86,7 +89,7 @@ func NewWithUI(service *platform.Service, baseURL, uiDirectory string) http.Hand
 
 func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	baseURL := strings.TrimRight(options.BaseURL, "/")
-	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, usageReporter: options.UsageReporter, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
+	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, usageReporter: options.UsageReporter, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -910,6 +913,14 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.importMCPConnection(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "identity":
 		s.vendorIdentity(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "reporting":
+		s.reportingConfig(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "report-submissions" && r.Method == http.MethodGet:
+		s.reportSubmissions(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "report-submissions" && r.Method == http.MethodGet:
+		s.reportSubmission(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "report-submissions" && parts[6] == "retry" && r.Method == http.MethodPost:
+		s.retryReportSubmission(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "analytics" && r.Method == http.MethodGet:
 		s.analytics(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "integration-runs":
@@ -929,6 +940,112 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "Route not found.", nil)
 	}
+}
+
+func (s *Server) reportingConfig(w http.ResponseWriter, r *http.Request, productID string) {
+	if s.reporting == nil {
+		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		value, err := s.reporting.Config(r.Context(), productID)
+		if errors.Is(err, reporting.ErrNotConfigured) {
+			product, productErr := s.service.Store().Product(r.Context(), productID)
+			if productErr != nil {
+				s.storeError(w, productErr)
+				return
+			}
+			writeJSON(w, http.StatusOK, model.ReportingConfig{OrganisationID: product.OrganisationID, ProductID: productID, RetentionDays: 30})
+			return
+		}
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	case http.MethodPut:
+		var input struct {
+			BugReportsEnabled      bool   `json:"bug_reports_enabled"`
+			FeedbackEnabled        bool   `json:"feedback_enabled"`
+			BugHookURL             string `json:"bug_hook_url"`
+			BugHookCredential      string `json:"bug_hook_credential"`
+			FeedbackHookURL        string `json:"feedback_hook_url"`
+			FeedbackHookCredential string `json:"feedback_hook_credential"`
+			RetentionDays          int    `json:"retention_days"`
+			Revision               int64  `json:"revision"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		currentActor := actor(r)
+		value, err := s.reporting.Configure(r.Context(), productID, reporting.ConfigInput{BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BugHookURL: input.BugHookURL, BugHookCredential: input.BugHookCredential, FeedbackHookURL: input.FeedbackHookURL, FeedbackHookCredential: input.FeedbackHookCredential, RetentionDays: input.RetentionDays, Revision: input.Revision}, currentActor.ID, currentActor.RequestID)
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, "revision_conflict", "Reporting configuration changed; reload and try again.", nil)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_reporting_config", err.Error(), nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) reportSubmissions(w http.ResponseWriter, r *http.Request, productID string) {
+	if s.reporting == nil {
+		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
+		return
+	}
+	values, err := s.reporting.Submissions(r.Context(), productID, 200)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
+func (s *Server) reportSubmission(w http.ResponseWriter, r *http.Request, productID, submissionID string) {
+	if s.reporting == nil {
+		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
+		return
+	}
+	value, err := s.reporting.Submission(r.Context(), productID, submissionID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) retryReportSubmission(w http.ResponseWriter, r *http.Request, productID, submissionID string) {
+	if s.reporting == nil {
+		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
+		return
+	}
+	value, err := s.reporting.Retry(r.Context(), productID, submissionID)
+	if errors.Is(err, reporting.ErrHookUnavailable) {
+		writeError(w, http.StatusConflict, "reporting_hook_unavailable", "Configure the corresponding delivery hook before retrying.", nil)
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "submission_not_retryable", "Only unexpired held or failed submissions can be retried.", nil)
+		return
+	}
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	if product, productErr := s.service.Store().Product(r.Context(), productID); productErr == nil {
+		currentActor := actor(r)
+		requestID, _ := r.Context().Value(requestIDKey).(string)
+		_ = s.service.Store().AppendAudit(r.Context(), model.AuditEvent{ID: "audit_" + strconv.FormatInt(time.Now().UnixNano(), 10), OrganisationID: product.OrganisationID, ProductID: productID, ActorID: currentActor.ID, Action: "reporting.submission_retried", TargetType: "report_submission", TargetID: submissionID, Current: map[string]any{"kind": value.Kind, "state": value.State}, RequestID: requestID, CreatedAt: time.Now().UTC()})
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) productSettings(w http.ResponseWriter, r *http.Request, productID string) {
@@ -1748,6 +1865,77 @@ func usageToolDefinition() map[string]any {
 	}
 }
 
+const reportingAgentInstructions = " When a likely connector-specific defect is found, offer to prepare a bug report but do not submit automatically. Before using a support reporting tool, show the user a concise preview of what will be shared and obtain explicit approval. Explain that DokoSoko adds the authenticated subject, account or installation, current product and version, and request metadata; contact name and email are added only when allow_contact is approved. Submit only relevant, sanitized context; never include credentials, tokens, unrelated conversation, complete files, or unapproved personal data. For feedback, preserve the user's meaning and never invent ratings, sentiment, or claims."
+
+func reportOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"submission_id": map[string]any{"type": "string"},
+			"status":        map[string]any{"type": "string", "enum": []string{"held", "pending", "delivering", "delivered", "failed"}},
+			"external_id":   map[string]any{"type": "string"},
+			"external_url":  map[string]any{"type": "string", "format": "uri"},
+		},
+		"required": []string{"submission_id", "status"},
+	}
+}
+
+func bugReportToolDefinition() map[string]any {
+	return map[string]any{
+		"name":        "support.report_bug",
+		"description": "Prepare and submit a connector bug report only after explicit user confirmation. First show the user a concise preview of the exact report content and disclose that trusted authenticated-account, installation, product-version, and request metadata will be added. Contact details are added only when allow_contact is approved. Include relevant reproduction details and sanitized diagnostics only; never include secrets, credentials, unrelated conversation, complete files, or unapproved personal data.",
+		"inputSchema": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"summary":            map[string]any{"type": "string", "minLength": 1, "maxLength": 160, "description": "A concise user-approved title for the defect."},
+				"description":        map[string]any{"type": "string", "minLength": 1, "maxLength": 10000, "description": "What happened and why it appears related to this connector."},
+				"reproduction_steps": map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 1000}},
+				"expected_behavior":  map[string]any{"type": "string", "maxLength": 4000},
+				"actual_behavior":    map[string]any{"type": "string", "maxLength": 4000},
+				"error_code":         map[string]any{"type": "string", "maxLength": 120},
+				"error_message":      map[string]any{"type": "string", "maxLength": 8000},
+				"stack_trace":        map[string]any{"type": "string", "maxLength": 16000, "description": "Sanitized relevant stack frames only."},
+				"diagnostic_context": map[string]any{"type": "string", "maxLength": 20000, "description": "A bounded, sanitized context summary; do not send full files or conversations."},
+				"related_tool":       map[string]any{"type": "string", "pattern": `^[A-Za-z0-9_.-]{1,160}$`},
+				"integration_run_id": map[string]any{"type": "string", "maxLength": 160},
+				"severity":           map[string]any{"type": "string", "enum": []string{"unknown", "low", "medium", "high", "critical"}, "default": "unknown"},
+				"allow_contact":      map[string]any{"type": "boolean", "default": false, "description": "Share the authenticated user's contact details for follow-up only when explicitly approved."},
+				"idempotency_key":    map[string]any{"type": "string", "minLength": 16, "maxLength": 200, "description": "A stable unique key for this exact approved report."},
+			},
+			"required": []string{"summary", "description", "idempotency_key"},
+		},
+		"outputSchema": reportOutputSchema(),
+		"annotations":  map[string]any{"readOnlyHint": false, "idempotentHint": true, "destructiveHint": false, "openWorldHint": true},
+		"_meta":        map[string]any{"com.dokosoko/confirmationRequired": true, "com.dokosoko/dataHandling": "encrypted-held-sanitized-user-approved"},
+	}
+}
+
+func feedbackToolDefinition() map[string]any {
+	return map[string]any{
+		"name":        "support.submit_feedback",
+		"description": "Submit connector feedback expressed by the user only after explicit confirmation. First show the user a concise preview and disclose that trusted authenticated-account, installation, product-version, and request metadata will be added. Contact details are added only when allow_contact is approved. Preserve the user's meaning and distinguish it from agent-generated context; never invent ratings, sentiment, claims, or personal details.",
+		"inputSchema": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"message":            map[string]any{"type": "string", "minLength": 1, "maxLength": 10000, "description": "The user's feedback, faithfully summarized or quoted with approval."},
+				"category":           map[string]any{"type": "string", "enum": []string{"general", "usability", "documentation", "performance", "feature_request", "other"}, "default": "general"},
+				"rating":             map[string]any{"type": "integer", "minimum": 1, "maximum": 5, "description": "Include only when the user explicitly supplied or approved the rating."},
+				"related_tool":       map[string]any{"type": "string", "pattern": `^[A-Za-z0-9_.-]{1,160}$`},
+				"integration_run_id": map[string]any{"type": "string", "maxLength": 160},
+				"allow_contact":      map[string]any{"type": "boolean", "default": false, "description": "Share the authenticated user's contact details for follow-up only when explicitly approved."},
+				"idempotency_key":    map[string]any{"type": "string", "minLength": 16, "maxLength": 200, "description": "A stable unique key for this exact approved feedback."},
+			},
+			"required": []string{"message", "idempotency_key"},
+		},
+		"outputSchema": reportOutputSchema(),
+		"annotations":  map[string]any{"readOnlyHint": false, "idempotentHint": true, "destructiveHint": false, "openWorldHint": true},
+		"_meta":        map[string]any{"com.dokosoko/confirmationRequired": true, "com.dokosoko/dataHandling": "encrypted-held-sanitized-user-approved"},
+	}
+}
+
 func (s *Server) publicMCP(w http.ResponseWriter, r *http.Request) {
 	productID := r.PathValue("productID")
 	product, err := s.service.Store().Product(r.Context(), productID)
@@ -1857,7 +2045,13 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		if public {
 			cacheScope = "public"
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": "Use the effective DokoSoko product version and capability releases returned in product discovery. Authenticated installation, environment, and customer pins override default product channels in that order.", "ttlMs": 30000, "cacheScope": cacheScope})
+		instructions := "Use the effective DokoSoko product version and capability releases returned in product discovery. Authenticated installation, environment, and customer pins override default product channels in that order."
+		if !public && s.reporting != nil {
+			if config, configErr := s.reporting.Config(r.Context(), productID); configErr == nil && (config.BugReportsEnabled || config.FeedbackEnabled) {
+				instructions += reportingAgentInstructions
+			}
+		}
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/list":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Product discovery failed")
@@ -1880,6 +2074,16 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				config, err := s.service.Store().VendorIdentity(r.Context(), productID)
 				if err == nil && config.UsageHookURL != "" {
 					tools = append(tools, usageToolDefinition())
+				}
+			}
+			if s.reporting != nil {
+				if config, err := s.reporting.Config(r.Context(), productID); err == nil {
+					if config.BugReportsEnabled {
+						tools = append(tools, bugReportToolDefinition())
+					}
+					if config.FeedbackEnabled {
+						tools = append(tools, feedbackToolDefinition())
+					}
 				}
 			}
 			if s.mcpBridge != nil {
@@ -1927,7 +2131,12 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			versionMeta["deprecated"] = productManifest.EffectiveVersion.Deprecated
 		}
 		for _, definition := range tools {
-			definition["_meta"] = map[string]any{"com.dokosoko/productVersion": versionMeta}
+			metadata, _ := definition["_meta"].(map[string]any)
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata["com.dokosoko/productVersion"] = versionMeta
+			definition["_meta"] = metadata
 		}
 		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/call":
@@ -2014,6 +2223,68 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			return
 		}
 		writeToolResult(w, request.ID, map[string]any{"product_id": productManifest.ProductID, "catalog_revision": productManifest.CatalogRevision, "manifest_hash": productManifest.ManifestHash, "effective_version": productManifest.EffectiveVersion, "selection_source": productManifest.SelectionSource, "available_versions": productManifest.AvailableVersions, "operational_warnings": productManifest.OperationalWarnings})
+	case "support.report_bug":
+		if public || s.reporting == nil {
+			writeRPCError(w, request.ID, -32601, "Tool is not available")
+			return
+		}
+		if !params.Meta.Confirmed {
+			writeRPCError(w, request.ID, -32003, "Explicit user confirmation is required after previewing the exact bug report")
+			return
+		}
+		if !s.allowFixedWindow("support-reporting|"+productID+"|"+principal.Issuer+"|"+principal.Subject, 30, time.Now().UTC()) {
+			w.Header().Set("Retry-After", "60")
+			writeRPCError(w, request.ID, -32029, "Support reporting request limit exceeded")
+			return
+		}
+		if manifestErr != nil {
+			writeRPCError(w, request.ID, -32603, "Trusted product context is unavailable")
+			return
+		}
+		var input reporting.BugInput
+		if err := decodeArguments(params.Arguments, &input); err != nil {
+			writeRPCError(w, request.ID, -32602, "Bug report arguments are invalid")
+			return
+		}
+		requestID, _ := ctx.Value(requestIDKey).(string)
+		value, err := s.reporting.SubmitBug(ctx, input, reporting.SubmitContext{Principal: principal, ActorPseudonym: actorID, Product: reportProductContext(productManifest), RequestID: requestID})
+		if err != nil {
+			reportingRPCError(w, request.ID, err)
+			return
+		}
+		s.recordAnalytics(ctx, productID, "support.bug_reported", "vendor_user", actorID, map[string]any{"channel": "private_mcp", "state": value.State})
+		writeToolResult(w, request.ID, reportToolResult(value))
+	case "support.submit_feedback":
+		if public || s.reporting == nil {
+			writeRPCError(w, request.ID, -32601, "Tool is not available")
+			return
+		}
+		if !params.Meta.Confirmed {
+			writeRPCError(w, request.ID, -32003, "Explicit user confirmation is required after previewing the exact feedback")
+			return
+		}
+		if !s.allowFixedWindow("support-reporting|"+productID+"|"+principal.Issuer+"|"+principal.Subject, 30, time.Now().UTC()) {
+			w.Header().Set("Retry-After", "60")
+			writeRPCError(w, request.ID, -32029, "Support reporting request limit exceeded")
+			return
+		}
+		if manifestErr != nil {
+			writeRPCError(w, request.ID, -32603, "Trusted product context is unavailable")
+			return
+		}
+		var input reporting.FeedbackInput
+		if err := decodeArguments(params.Arguments, &input); err != nil {
+			writeRPCError(w, request.ID, -32602, "Feedback arguments are invalid")
+			return
+		}
+		requestID, _ := ctx.Value(requestIDKey).(string)
+		value, err := s.reporting.SubmitFeedback(ctx, input, reporting.SubmitContext{Principal: principal, ActorPseudonym: actorID, Product: reportProductContext(productManifest), RequestID: requestID})
+		if err != nil {
+			reportingRPCError(w, request.ID, err)
+			return
+		}
+		s.recordAnalytics(ctx, productID, "support.feedback_submitted", "vendor_user", actorID, map[string]any{"channel": "private_mcp", "state": value.State})
+		writeToolResult(w, request.ID, reportToolResult(value))
 	case "usage.get":
 		if public || s.usageReporter == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
@@ -2265,6 +2536,39 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			}
 		}
 		writeRPCError(w, request.ID, -32601, "Tool not found")
+	}
+}
+
+func reportProductContext(manifest model.ProductManifest) reporting.ProductContext {
+	value := reporting.ProductContext{ProductID: manifest.ProductID, ProductName: manifest.ProductName, ManifestHash: manifest.ManifestHash, CatalogRevision: manifest.CatalogRevision, SelectionSource: manifest.SelectionSource, EnvironmentID: manifest.EnvironmentID, InstallationID: manifest.InstallationID}
+	if manifest.EffectiveVersion != nil {
+		value.ProductVersionID = manifest.EffectiveVersion.ID
+		value.ProductVersion = manifest.EffectiveVersion.Version
+	}
+	return value
+}
+
+func reportToolResult(value reporting.SubmissionView) map[string]any {
+	result := map[string]any{"submission_id": value.ID, "status": value.State}
+	if value.ExternalID != "" {
+		result["external_id"] = value.ExternalID
+	}
+	if value.ExternalURL != "" {
+		result["external_url"] = value.ExternalURL
+	}
+	return result
+}
+
+func reportingRPCError(w http.ResponseWriter, id any, err error) {
+	switch {
+	case errors.Is(err, reporting.ErrSensitiveContent):
+		writeRPCError(w, id, -32602, "Potential credential or secret detected; redact it and ask the user to approve the revised report")
+	case errors.Is(err, reporting.ErrInvalidReport):
+		writeRPCError(w, id, -32602, err.Error())
+	case errors.Is(err, reporting.ErrDisabled), errors.Is(err, reporting.ErrNotConfigured):
+		writeRPCError(w, id, -32601, "Reporting tool is not enabled for this product")
+	default:
+		writeRPCError(w, id, -32603, "The report could not be held safely")
 	}
 }
 

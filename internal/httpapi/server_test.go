@@ -19,6 +19,8 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
+	"github.com/dokosoko/dokosoko-service/internal/reporting"
+	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
@@ -91,7 +93,12 @@ func request(t *testing.T, handler http.Handler, method, path, token, body strin
 			params = map[string]any{}
 			envelope["params"] = params
 		}
-		params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": "2026-07-28"}
+		meta, _ := params["_meta"].(map[string]any)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["io.modelcontextprotocol/protocolVersion"] = "2026-07-28"
+		params["_meta"] = meta
 		mcpName, _ = params["name"].(string)
 		encoded, err := json.Marshal(envelope)
 		if err != nil {
@@ -451,6 +458,72 @@ func TestUsageToolIsHiddenUntilHookIsConfigured(t *testing.T) {
 	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if strings.Contains(w.Body.String(), `"name":"usage.get"`) {
 		t.Fatalf("unconfigured usage tool was listed: %s", w.Body.String())
+	}
+}
+
+func TestSupportReportingToolsRequireConsentHoldEncryptedReportsAndStayPrivate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x39}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter := reporting.New(memory, vault)
+	if _, err := reporter.Configure(ctx, "prod_acme", reporting.ConfigInput{BugReportsEnabled: true, FeedbackEnabled: true, RetentionDays: 30}, "root-test", "req-config"); err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, Reporting: reporter})
+
+	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "do not submit automatically") || !strings.Contains(w.Body.String(), "obtain explicit approval") {
+		t.Fatalf("reporting agent policy missing from discovery: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"support.report_bug"`) || !strings.Contains(w.Body.String(), `"name":"support.submit_feedback"`) || !strings.Contains(w.Body.String(), `"com.dokosoko/confirmationRequired":true`) || !strings.Contains(w.Body.String(), "never invent ratings") {
+		t.Fatalf("support reporting definitions missing: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	bugArgs := `"summary":"Connector failure","description":"The connector returned an unexpected result.","related_tool":"projects.create","idempotency_key":"bug-report-idempotency-http-1"`
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`}}}`)
+	if !strings.Contains(w.Body.String(), "Explicit user confirmation is required") {
+		t.Fatalf("unconfirmed report was not denied: %s", w.Body.String())
+	}
+	values, err := memory.ReportSubmissions(ctx, "prod_acme", 10)
+	if err != nil || len(values) != 0 {
+		t.Fatalf("unconfirmed report was persisted: values=%#v err=%v", values, err)
+	}
+
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`},"_meta":{"confirmed":true}}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"held"`) || !strings.Contains(w.Body.String(), `"submission_id"`) || strings.Contains(w.Body.String(), "unexpected result") {
+		t.Fatalf("confirmed bug was not held safely: status=%d body=%s", w.Code, w.Body.String())
+	}
+	values, err = memory.ReportSubmissions(ctx, "prod_acme", 10)
+	if err != nil || len(values) != 1 || values[0].State != "held" || bytes.Contains(values[0].PayloadCiphertext, []byte("Connector failure")) {
+		t.Fatalf("encrypted held bug missing: values=%#v err=%v", values, err)
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/report-submissions", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Connector failure") || strings.Contains(w.Body.String(), "unexpected result") || strings.Contains(w.Body.String(), `"content"`) {
+		t.Fatalf("inbox list did not limit decrypted content: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/report-submissions/"+values[0].ID, "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "unexpected result") || !strings.Contains(w.Body.String(), `"content"`) {
+		t.Fatalf("on-demand report detail missing: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"support.submit_feedback","arguments":{"message":"The connector workflow was excellent.","category":"usability","idempotency_key":"feedback-idempotency-http-1"},"_meta":{"confirmed":true}}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"held"`) {
+		t.Fatalf("confirmed feedback was not held: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	product, _ := memory.Product(ctx, "prod_acme")
+	product.PublicMCPEnabled = true
+	if _, err := memory.UpdateProduct(ctx, product, product.Revision); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}`)
+	if strings.Contains(w.Body.String(), "support.report_bug") || strings.Contains(w.Body.String(), "support.submit_feedback") {
+		t.Fatalf("support reporting tools leaked to Public MCP: %s", w.Body.String())
 	}
 }
 

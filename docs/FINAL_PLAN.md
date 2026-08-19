@@ -30,6 +30,7 @@ This repository now contains an executable v2 baseline, not only a design docume
 - OAuth authorization-code + PKCE brokerage through the vendor OIDC provider, exact redirect allowlists, nonce/ID-token validation, login-time entitlement resolution, opaque product-bound DokoSoko tokens, and separate per-operation authorization;
 - standard Provider API hooks for authorize, project create, credential issue, and revoke, with idempotency and one-time credential delivery;
 - Private MCP, default-off/read-only Public MCP, secret-free widget loaders, package delivery, owner-scoped integration runs, deterministic success analytics, and append-only audit;
+- consent-gated bug-report and feedback tools on Private MCP, with fixed safe-use instructions, explicit runtime confirmation, encrypted durable holding, bounded retention, separate idempotent delivery hooks, and an administrative inbox;
 - mandatory LLM/knowledge hardening: content has no authority, model tool calls and authorization are disabled, retrieval is scoped before ranking, citations are required, low confidence returns no answer, and suspicious sources are quarantined.
 
 The executable API contract is [`api/openapi.yaml`](../api/openapi.yaml); deployment and vendor integration instructions are in [`README.md`](../README.md).
@@ -87,6 +88,7 @@ The minimum bootstrap configuration is the database URL, master encryption key o
 - Tools
 - MCP & widgets
 - Integration runs
+- Support reporting
 - Analytics
 - Activity & audit
 - Organisation settings

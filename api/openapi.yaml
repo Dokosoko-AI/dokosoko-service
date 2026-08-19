@@ -913,6 +913,83 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/VendorIdentity" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/reporting:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getReportingConfig
+      summary: Get the product support-reporting policy
+      responses:
+        "200":
+          description: Redacted bug-report and feedback tool, holding, hook, and retention configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportingConfig" }
+    put:
+      operationId: configureReporting
+      summary: Configure consent-gated Private MCP support reporting
+      description: Enables either built-in reporting tool independently and stores hook credentials encrypted. A tool may be enabled without a hook, in which case approved submissions remain held until a hook is configured.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigureReportingRequest" }
+      responses:
+        "200":
+          description: Redacted reporting configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportingConfig" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/report-submissions:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listReportSubmissions
+      summary: List decrypted support submissions for the administrative inbox
+      description: The database stores report content encrypted. This authenticated root-only response decrypts only the bounded summary and routing context needed by the inbox; full content is fetched separately on demand.
+      responses:
+        "200":
+          description: Newest support submissions first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportSubmissionList" }
+  /api/v1/products/{product_id}/report-submissions/{submission_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: submission_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getReportSubmission
+      summary: Decrypt one support submission for administrative review
+      responses:
+        "200":
+          description: Full schema-bounded report content and delivery metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportSubmission" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/report-submissions/{submission_id}/retry:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: submission_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: retryReportSubmission
+      summary: Queue a held or failed report for another idempotent delivery attempt
+      responses:
+        "200":
+          description: Updated submission metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportSubmission" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/providers:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1761,6 +1838,89 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       required: [id, organisation_id, product_id, issuer, client_id, scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, usage_hook_url, revision, created_at, updated_at]
+    ConfigureReportingRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        bug_reports_enabled: { type: boolean, default: false }
+        feedback_enabled: { type: boolean, default: false }
+        bug_hook_url:
+          description: Optional fixed HTTPS endpoint. When empty, approved bug reports remain encrypted and held.
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        bug_hook_credential: { type: string, format: password, writeOnly: true, description: Dedicated service credential; required when initially configuring the bug hook and encrypted before persistence. }
+        feedback_hook_url:
+          description: Optional fixed HTTPS endpoint. When empty, approved feedback remains encrypted and held.
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        feedback_hook_credential: { type: string, format: password, writeOnly: true, description: Dedicated service credential; required when initially configuring the feedback hook and encrypted before persistence. }
+        retention_days: { type: integer, minimum: 1, maximum: 365, default: 30 }
+        revision: { type: integer, format: int64, minimum: 0, description: Zero creates the first configuration; subsequent writes require the current revision. }
+      required: [bug_reports_enabled, feedback_enabled, bug_hook_url, feedback_hook_url, retention_days, revision]
+    ReportingConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        bug_reports_enabled: { type: boolean }
+        feedback_enabled: { type: boolean }
+        bug_hook_url: { type: string }
+        feedback_hook_url: { type: string }
+        retention_days: { type: integer, minimum: 1, maximum: 365 }
+        revision: { type: integer, format: int64, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [organisation_id, product_id, bug_reports_enabled, feedback_enabled, bug_hook_url, feedback_hook_url, retention_days, revision]
+    ReportProductContext:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string }
+        product_name: { type: string }
+        product_version_id: { type: string }
+        product_version: { type: string }
+        manifest_hash: { type: string }
+        catalog_revision: { type: integer, format: int64 }
+        selection_source: { type: string }
+        environment_id: { type: string }
+        installation_id: { type: string }
+      required: [product_id, product_name]
+    ReportSubmission:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [bug, feedback] }
+        state: { type: string, enum: [held, pending, delivering, delivered, failed] }
+        summary: { type: string }
+        category: { type: string }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        related_tool: { type: string }
+        attempts: { type: integer, minimum: 0 }
+        last_error: { type: string, description: Sanitized delivery error without response bodies or credentials. }
+        external_id: { type: string }
+        external_url: { type: string, format: uri }
+        created_at: { type: string, format: date-time }
+        delivered_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        content:
+          type: object
+          additionalProperties: true
+          description: Decrypted, schema-bounded user-approved report content. Available only to authenticated administrators.
+        trusted_context: { $ref: "#/components/schemas/ReportProductContext" }
+      required: [id, kind, state, summary, attempts, created_at, expires_at, trusted_context]
+    ReportSubmissionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ReportSubmission" }
+      required: [items]
     CreateProviderRequest:
       type: object
       additionalProperties: false

@@ -534,6 +534,52 @@ type IntegrationRun struct {
 	FinishedAt       *time.Time `json:"finished_at,omitempty"`
 }
 
+// ReportingConfig controls the two product-owned Private MCP reporting tools.
+// Hook credentials are referenced by ID and are never serialized to an API or
+// MCP client.
+type ReportingConfig struct {
+	ID                       string    `json:"id"`
+	OrganisationID           string    `json:"organisation_id"`
+	ProductID                string    `json:"product_id"`
+	BugReportsEnabled        bool      `json:"bug_reports_enabled"`
+	FeedbackEnabled          bool      `json:"feedback_enabled"`
+	BugHookURL               string    `json:"bug_hook_url"`
+	BugHookCredentialID      string    `json:"-"`
+	FeedbackHookURL          string    `json:"feedback_hook_url"`
+	FeedbackHookCredentialID string    `json:"-"`
+	RetentionDays            int       `json:"retention_days"`
+	Revision                 int64     `json:"revision"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
+}
+
+// ReportSubmission is the durable outbox record. PayloadCiphertext contains
+// both user-authored content and trusted reporter/product context. Only routing
+// and delivery state are stored in plaintext.
+type ReportSubmission struct {
+	ID                 string     `json:"id"`
+	OrganisationID     string     `json:"organisation_id"`
+	ProductID          string     `json:"product_id"`
+	Kind               string     `json:"kind"`
+	State              string     `json:"state"`
+	ActorPseudonym     string     `json:"actor_pseudonym"`
+	IdempotencyDigest  []byte     `json:"-"`
+	PayloadCiphertext  []byte     `json:"-"`
+	PayloadNonce       []byte     `json:"-"`
+	PayloadKeyVersion  int        `json:"-"`
+	PayloadFingerprint string     `json:"-"`
+	Attempts           int        `json:"attempts"`
+	NextAttemptAt      *time.Time `json:"next_attempt_at,omitempty"`
+	DeliveryStartedAt  *time.Time `json:"delivery_started_at,omitempty"`
+	LastError          string     `json:"last_error,omitempty"`
+	ExternalID         string     `json:"external_id,omitempty"`
+	ExternalURL        string     `json:"external_url,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	DeliveredAt        *time.Time `json:"delivered_at,omitempty"`
+	ExpiresAt          time.Time  `json:"expires_at"`
+}
+
 type LLMProfile struct {
 	ID                  string          `json:"id"`
 	OrganisationID      string          `json:"organisation_id"`

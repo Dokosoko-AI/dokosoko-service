@@ -6,6 +6,7 @@ import {
   BarChart3,
   BookOpen,
   Bot,
+  Bug,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -21,6 +22,7 @@ import {
   LockKeyhole,
   LogOut,
   MoreHorizontal,
+  MessageSquareText,
   Package as PackageIcon,
   Plus,
   Radio,
@@ -37,10 +39,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAnalytics, APIAuditEvent, APICredentialLease, APIEnvironment, APIError, APIIdentity, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIProject, APIProvider, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
+import { APIAnalytics, APIAuditEvent, APICredentialLease, APIEnvironment, APIError, APIIdentity, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIProject, APIProvider, APIReportingConfig, APIReportSubmission, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
-type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "distribution" | "runs" | "analytics" | "activity" | "settings";
+type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 type Visibility = "private" | "public";
 
 type Source = {
@@ -86,6 +88,7 @@ const nav: Array<{ id: Section; label: string; icon: typeof LayoutDashboard }> =
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "distribution", label: "MCP & widgets", icon: Radio },
   { id: "runs", label: "Integration runs", icon: Activity },
+  { id: "reporting", label: "Support reporting", icon: Bug },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
   { id: "activity", label: "Activity & audit", icon: ShieldCheck },
 ];
@@ -280,6 +283,19 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	  const [toolBusy, setToolBusy] = useState(false);
 	  const [analytics, setAnalytics] = useState<APIAnalytics | null>(null);
 	  const [identityConfig, setIdentityConfig] = useState<APIIdentity | null>(null);
+	  const [reportingConfig, setReportingConfig] = useState<APIReportingConfig | null>(null);
+	  const [reportSubmissions, setReportSubmissions] = useState<APIReportSubmission[]>([]);
+	  const [reportingOpen, setReportingOpen] = useState(false);
+	  const [reportingBusy, setReportingBusy] = useState(false);
+	  const [reportDetail, setReportDetail] = useState<APIReportSubmission | null>(null);
+	  const [reportDetailBusy, setReportDetailBusy] = useState(false);
+	  const [bugReportsEnabled, setBugReportsEnabled] = useState(false);
+	  const [feedbackEnabled, setFeedbackEnabled] = useState(false);
+	  const [bugHookURL, setBugHookURL] = useState("");
+	  const [bugHookCredential, setBugHookCredential] = useState("");
+	  const [feedbackHookURL, setFeedbackHookURL] = useState("");
+	  const [feedbackHookCredential, setFeedbackHookCredential] = useState("");
+	  const [reportRetentionDays, setReportRetentionDays] = useState("30");
 	  const [rootUsers, setRootUsers] = useState<APIUser[]>(currentUser ? [currentUser] : []);
 	  const [identityOpen, setIdentityOpen] = useState(false);
 	  const [identityBusy, setIdentityBusy] = useState(false);
@@ -423,6 +439,16 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	      if (cancelled) return;
 	      setIdentityConfig(value);
 	      setIDPIssuer(value.issuer); setIDPClientID(value.client_id); setIDPScopes(value.scopes.join(", ")); setIDPAudience(value.audience); setIDPOrganisationClaim(value.organisation_claim); setIDPInstallationClaim(value.installation_claim); setIDPEntitlementHook(value.entitlement_hook_url); setIDPAuthorizationHook(value.authorization_hook_url); setIDPUsageHook(value.usage_hook_url); setIDPRedirects(value.allowed_redirect_uris.join("\n"));
+	    }).catch(() => {});
+	    Promise.all([api.reporting(product.id), api.reportSubmissions(product.id)]).then(([config, submissions]) => {
+	      if (cancelled) return;
+	      setReportingConfig(config);
+	      setReportSubmissions(submissions);
+	      setBugReportsEnabled(config.bug_reports_enabled);
+	      setFeedbackEnabled(config.feedback_enabled);
+	      setBugHookURL(config.bug_hook_url);
+	      setFeedbackHookURL(config.feedback_hook_url);
+	      setReportRetentionDays(String(config.retention_days));
 	    }).catch(() => {});
 	    api.rootUsers().then((value) => { if (!cancelled) setRootUsers(value); }).catch(() => {});
 	    Promise.all([api.providers(product.id), api.projects(product.id), api.credentials(product.id)]).then(([providerValues, projectValues, credentialValues]) => { if (!cancelled) { setProviders(providerValues); setProjects(projectValues); setCredentialLeases(credentialValues); } }).catch(() => {});
@@ -996,6 +1022,67 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
     }
   }
 
+  function openReportingConfig() {
+	setBugReportsEnabled(reportingConfig?.bug_reports_enabled ?? false);
+	setFeedbackEnabled(reportingConfig?.feedback_enabled ?? false);
+	setBugHookURL(reportingConfig?.bug_hook_url ?? "");
+	setFeedbackHookURL(reportingConfig?.feedback_hook_url ?? "");
+	setBugHookCredential("");
+	setFeedbackHookCredential("");
+	setReportRetentionDays(String(reportingConfig?.retention_days ?? 30));
+	setReportingOpen(true);
+  }
+
+  async function saveReporting() {
+	setReportingBusy(true);
+	try {
+	  const input = {
+		bug_reports_enabled: bugReportsEnabled,
+		feedback_enabled: feedbackEnabled,
+		bug_hook_url: bugHookURL.trim(),
+		bug_hook_credential: bugHookCredential,
+		feedback_hook_url: feedbackHookURL.trim(),
+		feedback_hook_credential: feedbackHookCredential,
+		retention_days: Number(reportRetentionDays),
+		revision: reportingConfig?.revision ?? 0,
+	  };
+	  const value = apiConnected ? await api.configureReporting(product.id, input) : { id: "reporting_preview", organisation_id: product.organisation_id, product_id: product.id, bug_reports_enabled: input.bug_reports_enabled, feedback_enabled: input.feedback_enabled, bug_hook_url: input.bug_hook_url, feedback_hook_url: input.feedback_hook_url, retention_days: input.retention_days, revision: (reportingConfig?.revision ?? 0) + 1 } as APIReportingConfig;
+	  setReportingConfig(value);
+	  setBugHookCredential("");
+	  setFeedbackHookCredential("");
+	  setReportingOpen(false);
+	  showToast("Private MCP bug and feedback reporting policy saved.");
+	} catch (error) {
+	  showToast(error instanceof APIError ? error.message : "Could not configure support reporting.");
+	} finally {
+	  setReportingBusy(false);
+	}
+  }
+
+  async function retryReportSubmission(submission: APIReportSubmission) {
+	try {
+	  const value = apiConnected ? await api.retryReportSubmission(product.id, submission.id) : { ...submission, state: "pending" as const, last_error: undefined };
+	  setReportSubmissions((items) => items.map((item) => item.id === value.id ? value : item));
+	  showToast("Submission queued for another delivery attempt.");
+	} catch (error) {
+	  showToast(error instanceof APIError ? error.message : "Could not retry this submission.");
+	}
+  }
+
+  async function openReportSubmission(submission: APIReportSubmission) {
+	setReportDetail(submission);
+	if (!apiConnected) return;
+	setReportDetailBusy(true);
+	try {
+	  setReportDetail(await api.reportSubmission(product.id, submission.id));
+	} catch (error) {
+	  showToast(error instanceof APIError ? error.message : "Could not decrypt this submission.");
+	  setReportDetail(null);
+	} finally {
+	  setReportDetailBusy(false);
+	}
+  }
+
   async function beginRootUser() {
     setRootBusy(true);
     try {
@@ -1161,6 +1248,7 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
           {section === "overview" && <OverviewView productName={product.name} sourceCount={sources.length} publishedSourceCount={sources.filter((source) => source.published).length} packageCount={packages.length} credentialPackageCount={packages.filter((pkg) => pkg.mode !== "public").length} publicResourceCount={publicResourceCount} analytics={analytics} onNavigate={setSection} onStartRun={() => setRunOpen(true)} />}
           {section === "tools" && <ToolsView tools={tools} onAdd={() => setAddToolOpen(true)} onPublish={publishTool} />}
           {section === "runs" && <IntegrationRunsView runs={integrationRuns} environments={environments} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} />}
+          {section === "reporting" && <ReportingView config={reportingConfig} submissions={reportSubmissions} onConfigure={openReportingConfig} onView={openReportSubmission} onRetry={retryReportSubmission} />}
           {section === "analytics" && <AnalyticsView publicEnabled={publicMCPEnabled} analytics={analytics} />}
           {section === "activity" && <ActivityView events={auditEvents} />}
           {section === "settings" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} identity={identityConfig} llmProfiles={llmProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onConfigureIdentity={() => setIdentityOpen(true)} onConfigureLLM={() => setLLMOpen(true)} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} />}
@@ -1382,6 +1470,32 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
       </Dialog>
 
       <Dialog
+		open={reportingOpen}
+		onClose={setReportingOpen}
+		title="Configure support reporting"
+		description="Enable consent-gated Private MCP tools, encrypted holding, retention, and optional ticket-delivery hooks."
+		actions={<><Button outline onClick={() => setReportingOpen(false)}>Cancel</Button><Button color="indigo" disabled={reportingBusy || Number(reportRetentionDays) < 1 || Number(reportRetentionDays) > 365 || (Boolean(bugHookURL.trim()) && bugHookURL.trim() !== (reportingConfig?.bug_hook_url ?? "") && !bugHookCredential.trim()) || (Boolean(feedbackHookURL.trim()) && feedbackHookURL.trim() !== (reportingConfig?.feedback_hook_url ?? "") && !feedbackHookCredential.trim())} onClick={saveReporting}>{reportingBusy ? "Encrypting…" : "Save reporting"}</Button></>}
+	  >
+		<div className="auth-form compact-form">
+		  <div className="two-fields"><Switch checked={bugReportsEnabled} onChange={setBugReportsEnabled} label="Enable support.report_bug" /><Switch checked={feedbackEnabled} onChange={setFeedbackEnabled} label="Enable support.submit_feedback" /></div>
+		  <div className="two-fields"><label className="auth-field"><span>Bug delivery hook (optional)</span><input type="url" value={bugHookURL} onChange={(event) => setBugHookURL(event.target.value)} placeholder="https://support.vendor.com/dokosoko/bugs" /><small>Without a hook, approved reports remain safely held in the inbox.</small></label><label className="auth-field"><span>{reportingConfig?.bug_hook_url ? "Rotate bug hook credential" : "Bug hook credential"}</span><input type="password" autoComplete="off" value={bugHookCredential} onChange={(event) => setBugHookCredential(event.target.value)} /></label></div>
+		  <div className="two-fields"><label className="auth-field"><span>Feedback delivery hook (optional)</span><input type="url" value={feedbackHookURL} onChange={(event) => setFeedbackHookURL(event.target.value)} placeholder="https://support.vendor.com/dokosoko/feedback" /><small>Bug and feedback hooks may target different ticketing workflows.</small></label><label className="auth-field"><span>{reportingConfig?.feedback_hook_url ? "Rotate feedback hook credential" : "Feedback hook credential"}</span><input type="password" autoComplete="off" value={feedbackHookCredential} onChange={(event) => setFeedbackHookCredential(event.target.value)} /></label></div>
+		  <label className="auth-field"><span>Encrypted report retention (days)</span><input type="number" min={1} max={365} value={reportRetentionDays} onChange={(event) => setReportRetentionDays(event.target.value)} /><small>Expired held and delivery records are deleted automatically.</small></label>
+		  <div className="private-default-note"><ShieldCheck />Agents must preview the exact sanitized report and obtain explicit user approval. The server also requires confirmation metadata, rejects likely secrets, and never exposes these tools on Public MCP.</div>
+		</div>
+	  </Dialog>
+
+	  <Dialog
+		open={Boolean(reportDetail)}
+		onClose={(open) => { if (!open) setReportDetail(null); }}
+		title={reportDetail?.kind === "bug" ? "Bug report" : "Feedback submission"}
+		description="Decrypted on demand for this authenticated administrative review."
+		actions={<Button color="indigo" onClick={() => setReportDetail(null)}>Close</Button>}
+	  >
+		{reportDetailBusy ? <div className="empty-row">Decrypting submission…</div> : reportDetail && <div className="report-detail"><div className="report-detail-meta"><span><small>Status</small><Badge color={reportDetail.state === "delivered" ? "green" : reportDetail.state === "failed" ? "red" : reportDetail.state === "held" ? "amber" : "blue"}>{reportDetail.state}</Badge></span><span><small>Product version</small><code>{reportDetail.trusted_context.product_version || "Unversioned"}</code></span><span><small>Created</small><strong>{new Date(reportDetail.created_at).toLocaleString()}</strong></span></div><pre>{JSON.stringify(reportDetail.content ?? { summary: reportDetail.summary }, null, 2)}</pre>{reportDetail.external_url && <a className="report-external-detail" href={reportDetail.external_url} target="_blank" rel="noreferrer"><ExternalLink />Open {reportDetail.external_id || "external ticket"}</a>}</div>}
+	  </Dialog>
+
+      <Dialog
         open={rootOpen}
         onClose={setRootOpen}
         title="Add root administrator"
@@ -1543,6 +1657,22 @@ function IntegrationRunsView({ runs, environments, onStart, onComplete }: { runs
   const completed = runs.filter((run) => run.finished_at);
   const validatedSuccess = completed.filter((run) => run.validated_success).length;
   return <><PageHeading eyebrow="Outcomes" title="Integration runs" description="Track requested outcomes and close each run with deterministic validation." action={<Button onClick={onStart}><Plus data-slot="icon" />Start run</Button>} /><div className="metrics-grid"><Metric label="Runs" value={String(runs.length)} detail={`${runs.filter((run) => run.state === "running").length} active`} /><Metric label="Validated" value={String(completed.length)} detail="Completed with evidence" /><Metric label="Successful" value={String(validatedSuccess)} detail="Validated outcomes" positive={validatedSuccess > 0} /><Metric label="First-pass rate" value={completed.length ? `${(validatedSuccess * 100 / completed.length).toFixed(1)}%` : "—"} detail="Feeds Analytics" /></div><section className="panel"><div className="panel-heading"><div><h2>Recent runs</h2><p>Requested outcome text is visible only to administrators and the owning principal.</p></div><Badge color="violet">Private only</Badge></div>{runs.map((run) => <div className="root-row run-row" key={run.id}><span className="settings-icon">{run.state === "running" ? <Clock3 /> : run.validated_success ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{run.requested_outcome}</strong><small>{environmentName(run.environment_id)} · started {new Date(run.started_at).toLocaleString()}{run.failure_code ? ` · ${run.failure_code}` : ""}</small></span><Badge color={run.state === "running" ? "blue" : run.validated_success ? "green" : "red"}>{run.state}</Badge>{run.state === "running" ? <span className="run-actions"><Button outline onClick={() => onComplete(run, false)}>Failed</Button><Button color="indigo" onClick={() => onComplete(run, true)}>Validated</Button></span> : <span />}</div>)}{runs.length === 0 && <div className="empty-row">No integration runs yet. Start one from this page or Private MCP.</div>}</section></>;
+}
+
+function ReportingView({ config, submissions, onConfigure, onView, onRetry }: { config: APIReportingConfig | null; submissions: APIReportSubmission[]; onConfigure: () => void; onView: (submission: APIReportSubmission) => void; onRetry: (submission: APIReportSubmission) => void }) {
+  const bugCount = submissions.filter((submission) => submission.kind === "bug").length;
+  const feedbackCount = submissions.filter((submission) => submission.kind === "feedback").length;
+  const pendingCount = submissions.filter((submission) => submission.state === "pending" || submission.state === "delivering").length;
+  const failedCount = submissions.filter((submission) => submission.state === "failed").length;
+  const statusColor = (state: APIReportSubmission["state"]): "zinc" | "blue" | "green" | "red" | "amber" => state === "delivered" ? "green" : state === "failed" ? "red" : state === "held" ? "amber" : "blue";
+  const hasHook = (submission: APIReportSubmission) => submission.kind === "bug" ? Boolean(config?.bug_hook_url) : Boolean(config?.feedback_hook_url);
+  return <>
+    <PageHeading eyebrow="Support" title="Bug reports & feedback" description="Consent-gated Private MCP submissions, encrypted holding, and durable ticket delivery." action={<Button onClick={onConfigure}><Settings data-slot="icon" />Configure reporting</Button>} />
+    <div className="notice"><ShieldCheck /><span><strong>Fixed agent policy.</strong> Agents must preview the exact sanitized report and obtain explicit approval. Server confirmation, schema limits, secret detection, encryption, and Private MCP isolation are enforced independently.</span></div>
+    <div className="metrics-grid"><Metric label="Bug reports" value={String(bugCount)} detail={config?.bug_reports_enabled ? (config.bug_hook_url ? "Enabled · delivery hook configured" : "Enabled · held locally") : "Tool disabled"} /><Metric label="Feedback" value={String(feedbackCount)} detail={config?.feedback_enabled ? (config.feedback_hook_url ? "Enabled · delivery hook configured" : "Enabled · held locally") : "Tool disabled"} /><Metric label="In delivery" value={String(pendingCount)} detail="Idempotent retry outbox" /><Metric label="Needs attention" value={String(failedCount)} detail={`${config?.retention_days ?? 30}-day encrypted retention`} positive={failedCount === 0} /></div>
+    <section className="panel reporting-policy"><div className="panel-heading"><div><h2>Agent-facing tools</h2><p>These built-ins appear only on authenticated Private MCP when enabled.</p></div><Badge color={config?.bug_reports_enabled || config?.feedback_enabled ? "green" : "zinc"}>{config?.bug_reports_enabled || config?.feedback_enabled ? "Available" : "Disabled"}</Badge></div><div className="reporting-tool-grid"><span><Bug /><strong>support.report_bug</strong><small>{config?.bug_reports_enabled ? "Consent required" : "Disabled"}</small></span><span><MessageSquareText /><strong>support.submit_feedback</strong><small>{config?.feedback_enabled ? "Consent required" : "Disabled"}</small></span></div></section>
+    <section className="panel report-inbox"><div className="panel-heading"><div><h2>Submission inbox</h2><p>Only administrators can open decrypted content. Delivery metadata never contains the report body.</p></div><Badge color="violet">Encrypted at rest</Badge></div><div className="resource-table"><div className="table-head report-columns"><span>Submission</span><span>Context</span><span>Delivery</span><span /></div>{submissions.map((submission) => <div className="table-row report-columns" key={submission.id}><span className="resource-name"><span className="resource-icon">{submission.kind === "bug" ? <Bug /> : <MessageSquareText />}</span><span><strong title={submission.summary}>{submission.summary}</strong><small>{submission.kind} · {new Date(submission.created_at).toLocaleString()}</small></span></span><span><strong className="cell-value">{submission.related_tool || submission.trusted_context.product_version || "Product"}</strong><small className="cell-note">{submission.trusted_context.environment_id || submission.trusted_context.selection_source || "Authenticated account"}</small></span><span><Badge color={statusColor(submission.state)}>{submission.state}</Badge><small className="cell-note">{submission.external_id || (submission.attempts ? `${submission.attempts} attempt${submission.attempts === 1 ? "" : "s"}` : "Not delivered")}</small></span><span className="table-actions"><Button outline onClick={() => onView(submission)}>View</Button>{submission.external_url && <a className="report-ticket-link" href={submission.external_url} target="_blank" rel="noreferrer" aria-label="Open external ticket"><ExternalLink /></a>}{(submission.state === "failed" || submission.state === "held") && hasHook(submission) && <Button outline onClick={() => onRetry(submission)}><RefreshCw data-slot="icon" />Retry</Button>}</span></div>)}{submissions.length === 0 && <div className="empty-row">Approved bug reports and feedback will appear here.</div>}</div></section>
+  </>;
 }
 
 function ActivityView({ events }: { events: APIAuditEvent[] }) {

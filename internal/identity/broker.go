@@ -314,6 +314,13 @@ func (h *HookEntitlements) clientFor(ctx context.Context, parsed *url.URL) (*htt
 	return &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 
+// SafeHookClient returns the same DNS-pinned, redirect-disabled HTTPS client
+// used by identity hooks. Product-level hook integrations use this helper so
+// they cannot weaken the shared SSRF boundary.
+func SafeHookClient(ctx context.Context, parsed *url.URL, client *http.Client, resolver IPResolver) (*http.Client, error) {
+	return (&HookEntitlements{Client: client, Resolver: resolver}).clientFor(ctx, parsed)
+}
+
 func (h *HookEntitlements) Resolve(ctx context.Context, config VendorConfig, claims Claims, vendorAccessToken string) (map[string]bool, error) {
 	if config.EntitlementHookURL == "" {
 		return map[string]bool{}, nil

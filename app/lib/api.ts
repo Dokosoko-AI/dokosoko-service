@@ -360,6 +360,47 @@ export type APIIdentity = {
   revision: number;
 };
 
+export type APIReportingConfig = {
+  id?: string;
+  organisation_id: string;
+  product_id: string;
+  bug_reports_enabled: boolean;
+  feedback_enabled: boolean;
+  bug_hook_url: string;
+  feedback_hook_url: string;
+  retention_days: number;
+  revision: number;
+};
+
+export type APIReportSubmission = {
+  id: string;
+  kind: "bug" | "feedback";
+  state: "held" | "pending" | "delivering" | "delivered" | "failed";
+  summary: string;
+  category?: string;
+  rating?: number;
+  related_tool?: string;
+  attempts: number;
+  last_error?: string;
+  external_id?: string;
+  external_url?: string;
+  created_at: string;
+  delivered_at?: string;
+  expires_at: string;
+  content?: Record<string, unknown>;
+  trusted_context: {
+    product_id: string;
+    product_name: string;
+    product_version_id?: string;
+    product_version?: string;
+    manifest_hash?: string;
+    catalog_revision?: number;
+    selection_source?: string;
+    environment_id?: string;
+    installation_id?: string;
+  };
+};
+
 export type APIAnalytics = {
   active_developers: number;
   authorized_users: number;
@@ -566,6 +607,11 @@ export const api = {
   widgets: (productID: string) => request<APIWidgetSnippets>(`${productPath(productID)}/widgets`),
   identity: (productID: string) => request<APIIdentity>(`${productPath(productID)}/identity`),
   configureIdentity: (productID: string, input: { organisation_id: string; issuer: string; client_id: string; client_secret: string; scopes: string[]; audience: string; organisation_claim: string; installation_claim: string; entitlement_hook_url: string; authorization_hook_url: string; authorization_credential: string; usage_hook_url: string; usage_credential: string; allowed_redirect_uris: string[] }) => request<APIIdentity>(`${productPath(productID)}/identity`, { method: "PUT", body: JSON.stringify(input) }),
+  reporting: (productID: string) => request<APIReportingConfig>(`${productPath(productID)}/reporting`),
+  configureReporting: (productID: string, input: { bug_reports_enabled: boolean; feedback_enabled: boolean; bug_hook_url: string; bug_hook_credential: string; feedback_hook_url: string; feedback_hook_credential: string; retention_days: number; revision: number }) => request<APIReportingConfig>(`${productPath(productID)}/reporting`, { method: "PUT", body: JSON.stringify(input) }),
+  reportSubmissions: async (productID: string) => (await request<{ items: APIReportSubmission[] }>(`${productPath(productID)}/report-submissions`)).items,
+  reportSubmission: (productID: string, submissionID: string) => request<APIReportSubmission>(`${productPath(productID)}/report-submissions/${encodeURIComponent(submissionID)}`),
+  retryReportSubmission: (productID: string, submissionID: string) => request<APIReportSubmission>(`${productPath(productID)}/report-submissions/${encodeURIComponent(submissionID)}/retry`, { method: "POST", body: JSON.stringify({}) }),
   analytics: (productID: string, days = 30) => request<APIAnalytics>(`${productPath(productID)}/analytics?days=${days}`),
   integrationRuns: async (productID: string) => (await request<{ items: APIIntegrationRun[] }>(`${productPath(productID)}/integration-runs`)).items,
   startIntegrationRun: (productID: string, environmentID: string, requestedOutcome: string) => request<APIIntegrationRun>(`${productPath(productID)}/integration-runs`, { method: "POST", body: JSON.stringify({ environment_id: environmentID, requested_outcome: requestedOutcome }) }),
