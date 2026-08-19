@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base32"
 	"encoding/json"
 	"fmt"
@@ -15,10 +16,24 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
+	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
+
+type usageReporterStub struct {
+	report    identity.UsageReport
+	err       error
+	principal identity.Principal
+	calls     int
+}
+
+func (s *usageReporterStub) Report(_ context.Context, _ string, principal identity.Principal) (identity.UsageReport, error) {
+	s.calls++
+	s.principal = principal
+	return s.report, s.err
+}
 
 func newServer() http.Handler {
 	return httpapi.New(platform.New(store.NewMemory()), "https://dokosoko.example")
@@ -193,7 +208,7 @@ func TestMCPDiscoversTheEffectiveDokosokoProductVersion(t *testing.T) {
 	handler := httpapi.New(service, "https://dokosoko.example")
 
 	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"product_name":"Acme Platform"`) || !strings.Contains(w.Body.String(), `"version":"2026.8"`) || !strings.Contains(w.Body.String(), `"release":"v3"`) || !strings.Contains(w.Body.String(), `"release":"v2"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"product_name":"Acme Platform"`) || !strings.Contains(w.Body.String(), `"version":"2026.8"`) || !strings.Contains(w.Body.String(), `"release":"v3"`) || !strings.Contains(w.Body.String(), `"release":"v2"`) || !strings.Contains(w.Body.String(), `"catalogRevision":`) || !strings.Contains(w.Body.String(), `"manifestHash":"sha256:`) {
 		t.Fatalf("discover status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
@@ -236,11 +251,20 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 		t.Fatalf("version status = %d, body = %s", w.Code, w.Body.String())
 	}
 	var version struct {
-		ID      string `json:"id"`
-		Version string `json:"version"`
+		ID           string `json:"id"`
+		Version      string `json:"version"`
+		ManifestHash string `json:"manifest_hash"`
+		Revision     int64  `json:"revision"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &version); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.HasPrefix(version.ManifestHash, "sha256:") {
+		t.Fatalf("manifest hash = %q", version.ManifestHash)
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/versions/"+version.ID+"/diff", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"summary":"Initial product release"`) {
+		t.Fatalf("diff status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", fmt.Sprintf(`{"customer_id":"contoso","product_version_id":%q,"reason":"Production stability"}`, version.ID))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_id":"contoso"`) || !strings.Contains(w.Body.String(), `"product_version":"2026.8"`) {
@@ -253,6 +277,22 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_id":"contoso"`) {
 		t.Fatalf("pins status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/version-pins/history", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"action":"created"`) || !strings.Contains(w.Body.String(), `"scope":"customer"`) {
+		t.Fatalf("pin history status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/installations", "doko_admin_demo", `{"customer_id":"contoso","environment_id":"env_prod","external_id":"contoso-prod","name":"Contoso production","state":"active","revision":0}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"external_id":"contoso-prod"`) {
+		t.Fatalf("installation status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/versions/"+version.ID+"/impact", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_pins":1`) {
+		t.Fatalf("impact status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/versions/"+version.ID+"/reconcile", "doko_admin_demo", fmt.Sprintf(`{"revision":%d}`, version.Revision))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"drift_status":"healthy"`) {
+		t.Fatalf("reconcile status = %d, body = %s", w.Code, w.Body.String())
 	}
 }
 
@@ -359,6 +399,58 @@ func TestPrivateMCPRequiresAuthentication(t *testing.T) {
 	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "search_knowledge") {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUsageToolIsPrivateConfiguredAndProxiesStructuredReport(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	_, err := memory.SaveVendorIdentity(ctx, identity.VendorConfig{ID: "idp-usage", OrganisationID: "org_acme", ProductID: "prod_acme", Issuer: "https://identity.vendor.example", ClientID: "vendor-client", Scopes: []string{"openid"}, AllowedRedirectURIs: []string{"https://client.example/callback"}, UsageHookURL: "https://hooks.vendor.example/usage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter := &usageReporterStub{report: identity.UsageReport{AsOf: "2026-08-19T05:30:00Z", Items: []identity.UsageItem{{Key: "used", Label: "Used", Value: 720, Format: "number", Unit: "credits"}, {Key: "next_renewal", Label: "Next renewal", Value: "2026-09-01T00:00:00Z", Format: "datetime"}}}}
+	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, UsageReporter: reporter})
+
+	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"usage.get"`) || !strings.Contains(w.Body.String(), `"readOnlyHint":true`) || !strings.Contains(w.Body.String(), `"outputSchema"`) {
+		t.Fatalf("private usage tool definition missing: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"usage.get","arguments":{"subject":"other-user"}}}`)
+	if !strings.Contains(w.Body.String(), "Invalid params") || reporter.calls != 0 {
+		t.Fatalf("caller-controlled usage identity was accepted: calls=%d body=%s", reporter.calls, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"usage.get","arguments":{}}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"structuredContent":{"as_of":"2026-08-19T05:30:00Z"`) || !strings.Contains(w.Body.String(), `"key":"next_renewal"`) {
+		t.Fatalf("usage report was not proxied: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if reporter.calls != 1 || reporter.principal.Subject != "private_mcp_demo" {
+		t.Fatalf("usage reporter calls=%d principal=%#v", reporter.calls, reporter.principal)
+	}
+
+	product, _ := memory.Product(ctx, "prod_acme")
+	product.PublicMCPEnabled = true
+	if _, err := memory.UpdateProduct(ctx, product, product.Revision); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+	if strings.Contains(w.Body.String(), `"name":"usage.get"`) {
+		t.Fatalf("usage tool leaked to Public MCP: %s", w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"usage.get","arguments":{}}}`)
+	if !strings.Contains(w.Body.String(), "Tool is not available") || reporter.calls != 1 {
+		t.Fatalf("public usage call was not denied: calls=%d body=%s", reporter.calls, w.Body.String())
+	}
+}
+
+func TestUsageToolIsHiddenUntilHookIsConfigured(t *testing.T) {
+	t.Parallel()
+	reporter := &usageReporterStub{}
+	handler := httpapi.NewWithOptions(platform.New(store.NewMemory()), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, UsageReporter: reporter})
+	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if strings.Contains(w.Body.String(), `"name":"usage.get"`) {
+		t.Fatalf("unconfigured usage tool was listed: %s", w.Body.String())
 	}
 }
 

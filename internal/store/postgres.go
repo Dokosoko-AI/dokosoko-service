@@ -44,11 +44,11 @@ func databaseError(err error) error {
 
 func scanProduct(row pgx.Row) (model.Product, error) {
 	var value model.Product
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.DefaultVersionPolicy, &value.PublicMCPEnabled, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.DefaultVersionPolicy, &value.CatalogRevision, &value.RequirePromotionApproval, &value.PublicMCPEnabled, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const productSelect = `SELECT id::text, organisation_id::text, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at FROM products`
+const productSelect = `SELECT id::text, organisation_id::text, name, slug, description, default_version_policy, catalog_revision, require_promotion_approval, public_mcp_enabled, revision, created_at, updated_at FROM products`
 
 func scanOrganisation(row interface{ Scan(...any) error }) (model.Organisation, error) {
 	var value model.Organisation
@@ -95,7 +95,7 @@ func (p *Postgres) Products(ctx context.Context, organisationID string) ([]model
 }
 
 func (p *Postgres) CreateProduct(ctx context.Context, value model.Product) (model.Product, error) {
-	return scanProduct(p.pool.QueryRow(ctx, `INSERT INTO products(id, organisation_id, name, slug, description, default_version_policy) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text, organisation_id::text, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.DefaultVersionPolicy))
+	return scanProduct(p.pool.QueryRow(ctx, `INSERT INTO products(id, organisation_id, name, slug, description, default_version_policy, require_promotion_approval) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id::text, organisation_id::text, name, slug, description, default_version_policy, catalog_revision, require_promotion_approval, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.DefaultVersionPolicy, value.RequirePromotionApproval))
 }
 
 func scanEnvironment(row interface{ Scan(...any) error }) (model.Environment, error) {
@@ -130,7 +130,7 @@ func (p *Postgres) Product(ctx context.Context, id string) (model.Product, error
 }
 
 func (p *Postgres) UpdateProduct(ctx context.Context, value model.Product, expected int64) (model.Product, error) {
-	updated, err := scanProduct(p.pool.QueryRow(ctx, `UPDATE products SET description=$2, default_version_policy=$3, public_mcp_enabled=$4, revision=revision+1, updated_at=now() WHERE id=$1 AND revision=$5 RETURNING id::text, organisation_id::text, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.Description, value.DefaultVersionPolicy, value.PublicMCPEnabled, expected))
+	updated, err := scanProduct(p.pool.QueryRow(ctx, `UPDATE products SET description=$2, default_version_policy=$3, require_promotion_approval=$4, public_mcp_enabled=$5, revision=revision+1, catalog_revision=catalog_revision+1, updated_at=now() WHERE id=$1 AND revision=$6 RETURNING id::text, organisation_id::text, name, slug, description, default_version_policy, catalog_revision, require_promotion_approval, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.Description, value.DefaultVersionPolicy, value.RequirePromotionApproval, value.PublicMCPEnabled, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.Product(ctx, value.ID); lookupErr == nil {
 			return model.Product{}, ErrConflict
@@ -139,20 +139,33 @@ func (p *Postgres) UpdateProduct(ctx context.Context, value model.Product, expec
 	return updated, err
 }
 
+func (p *Postgres) BumpProductCatalogRevision(ctx context.Context, productID string) (int64, error) {
+	var revision int64
+	err := p.pool.QueryRow(ctx, `UPDATE products SET catalog_revision=catalog_revision+1, updated_at=now() WHERE id=$1 RETURNING catalog_revision`, productID).Scan(&revision)
+	return revision, databaseError(err)
+}
+
 func scanProductVersion(row interface{ Scan(...any) error }) (model.ProductVersion, error) {
 	var value model.ProductVersion
-	var manifest []byte
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Version, &value.ProfileID, &value.ProfileName, &value.DefinitionRevision, &value.IsLatest, &value.IsLTS, &value.DeprecatedAt, &value.DeprecationMessage, &value.ReplacementVersion, &value.SunsetAt, &value.Revision, &value.PublishedAt, &value.CreatedAt, &value.UpdatedAt, &manifest)
+	var manifest, releaseDiff, driftDetails []byte
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Version, &value.ProfileID, &value.ProfileName, &value.DefinitionRevision, &value.ManifestHash, &releaseDiff, &value.ReleaseStage, &value.RolloutPercentage, &value.PromotionState, &value.PromotionNote, &value.RequestedLatest, &value.RequestedLTS, &value.PublisherActorID, &value.PromotionRequestedBy, &value.ApprovedBy, &value.ApprovedAt, &value.DriftStatus, &driftDetails, &value.DriftCheckedAt, &value.IsLatest, &value.IsLTS, &value.DeprecatedAt, &value.DeprecationMessage, &value.ReplacementVersion, &value.SunsetAt, &value.Revision, &value.PublishedAt, &value.CreatedAt, &value.UpdatedAt, &manifest)
 	if err != nil {
 		return model.ProductVersion{}, databaseError(err)
 	}
 	if err := json.Unmarshal(manifest, &value.Manifest); err != nil {
 		return model.ProductVersion{}, err
 	}
+	if err := json.Unmarshal(releaseDiff, &value.Diff); err != nil {
+		return model.ProductVersion{}, err
+	}
+	if err := json.Unmarshal(driftDetails, &value.DriftDetails); err != nil {
+		return model.ProductVersion{}, err
+	}
 	return value, nil
 }
 
-const productVersionSelect = `SELECT id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest FROM connector_releases`
+const productVersionColumns = `id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, manifest_hash, release_diff, release_stage, rollout_percentage, promotion_state, promotion_note, requested_latest, requested_lts, publisher_actor_id, promotion_requested_by, approved_by, approved_at, drift_status, drift_details, drift_checked_at, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest`
+const productVersionSelect = `SELECT ` + productVersionColumns + ` FROM connector_releases`
 
 func (p *Postgres) ProductVersions(ctx context.Context, productID string) ([]model.ProductVersion, error) {
 	rows, err := p.pool.Query(ctx, productVersionSelect+` WHERE product_id=$1 AND state='published' ORDER BY published_at DESC, created_at DESC`, productID)
@@ -180,6 +193,14 @@ func (p *Postgres) CreateProductVersion(ctx context.Context, value model.Product
 	if err != nil {
 		return model.ProductVersion{}, err
 	}
+	releaseDiff, err := json.Marshal(value.Diff)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
+	driftDetails, err := json.Marshal(value.DriftDetails)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return model.ProductVersion{}, err
@@ -193,7 +214,7 @@ func (p *Postgres) CreateProductVersion(ctx context.Context, value model.Product
 			return model.ProductVersion{}, databaseError(err)
 		}
 	}
-	created, err := scanProductVersion(tx.QueryRow(ctx, `INSERT INTO connector_releases(id,organisation_id,product_id,version,state,manifest,published_at,display_version,profile_id,profile_name,definition_revision,is_latest,is_lts,deprecated_at,deprecation_message,replacement_version,sunset_at) SELECT $1,$2,$3,coalesce(max(version),0)+1,'published',$4,now(),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 FROM connector_releases WHERE product_id=$3 RETURNING id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest`, value.ID, value.OrganisationID, value.ProductID, manifest, value.Version, value.ProfileID, value.ProfileName, value.DefinitionRevision, value.IsLatest, value.IsLTS, value.DeprecatedAt, value.DeprecationMessage, value.ReplacementVersion, value.SunsetAt))
+	created, err := scanProductVersion(tx.QueryRow(ctx, `INSERT INTO connector_releases(id,organisation_id,product_id,version,state,manifest,published_at,display_version,profile_id,profile_name,definition_revision,manifest_hash,release_diff,release_stage,rollout_percentage,promotion_state,promotion_note,requested_latest,requested_lts,publisher_actor_id,promotion_requested_by,approved_by,approved_at,drift_status,drift_details,drift_checked_at,is_latest,is_lts,deprecated_at,deprecation_message,replacement_version,sunset_at) SELECT $1,$2,$3,coalesce(max(version),0)+1,'published',$4,now(),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29 FROM connector_releases WHERE product_id=$3 RETURNING `+productVersionColumns, value.ID, value.OrganisationID, value.ProductID, manifest, value.Version, value.ProfileID, value.ProfileName, value.DefinitionRevision, value.ManifestHash, releaseDiff, value.ReleaseStage, value.RolloutPercentage, value.PromotionState, value.PromotionNote, value.RequestedLatest, value.RequestedLTS, value.PublisherActorID, value.PromotionRequestedBy, value.ApprovedBy, value.ApprovedAt, value.DriftStatus, driftDetails, value.DriftCheckedAt, value.IsLatest, value.IsLTS, value.DeprecatedAt, value.DeprecationMessage, value.ReplacementVersion, value.SunsetAt))
 	if err != nil {
 		return model.ProductVersion{}, databaseError(err)
 	}
@@ -204,6 +225,14 @@ func (p *Postgres) CreateProductVersion(ctx context.Context, value model.Product
 }
 
 func (p *Postgres) UpdateProductVersion(ctx context.Context, value model.ProductVersion, expected int64) (model.ProductVersion, error) {
+	releaseDiff, err := json.Marshal(value.Diff)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
+	driftDetails, err := json.Marshal(value.DriftDetails)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return model.ProductVersion{}, err
@@ -217,7 +246,7 @@ func (p *Postgres) UpdateProductVersion(ctx context.Context, value model.Product
 			return model.ProductVersion{}, databaseError(err)
 		}
 	}
-	updated, err := scanProductVersion(tx.QueryRow(ctx, `UPDATE connector_releases SET is_latest=$3,is_lts=$4,deprecated_at=$5,deprecation_message=$6,replacement_version=$7,sunset_at=$8,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$9 AND state='published' RETURNING id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest`, value.ProductID, value.ID, value.IsLatest, value.IsLTS, value.DeprecatedAt, value.DeprecationMessage, value.ReplacementVersion, value.SunsetAt, expected))
+	updated, err := scanProductVersion(tx.QueryRow(ctx, `UPDATE connector_releases SET release_diff=$3,release_stage=$4,rollout_percentage=$5,promotion_state=$6,promotion_note=$7,requested_latest=$8,requested_lts=$9,promotion_requested_by=$10,approved_by=$11,approved_at=$12,drift_status=$13,drift_details=$14,drift_checked_at=$15,is_latest=$16,is_lts=$17,deprecated_at=$18,deprecation_message=$19,replacement_version=$20,sunset_at=$21,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$22 AND state='published' RETURNING `+productVersionColumns, value.ProductID, value.ID, releaseDiff, value.ReleaseStage, value.RolloutPercentage, value.PromotionState, value.PromotionNote, value.RequestedLatest, value.RequestedLTS, value.PromotionRequestedBy, value.ApprovedBy, value.ApprovedAt, value.DriftStatus, driftDetails, value.DriftCheckedAt, value.IsLatest, value.IsLTS, value.DeprecatedAt, value.DeprecationMessage, value.ReplacementVersion, value.SunsetAt, expected))
 	if err != nil {
 		return model.ProductVersion{}, databaseError(err)
 	}
@@ -229,14 +258,14 @@ func (p *Postgres) UpdateProductVersion(ctx context.Context, value model.Product
 
 func scanProductVersionPin(row interface{ Scan(...any) error }) (model.ProductVersionPin, error) {
 	var value model.ProductVersionPin
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.CustomerID, &value.ProductVersionID, &value.ProductVersion, &value.Reason, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Scope, &value.ScopeID, &value.CustomerID, &value.EnvironmentID, &value.InstallationID, &value.ProductVersionID, &value.ProductVersion, &value.Reason, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const productVersionPinSelect = `SELECT p.id::text,p.organisation_id::text,p.product_id::text,p.customer_id,p.connector_release_id::text,r.display_version,p.reason,p.revision,p.created_at,p.updated_at FROM product_version_pins p JOIN connector_releases r ON r.id=p.connector_release_id`
+const productVersionPinSelect = `SELECT p.id::text,p.organisation_id::text,p.product_id::text,p.scope,p.scope_id,p.customer_id,coalesce(p.environment_id::text,''),coalesce(p.installation_id::text,''),p.connector_release_id::text,r.display_version,p.reason,p.revision,p.created_at,p.updated_at FROM product_version_pins p JOIN connector_releases r ON r.id=p.connector_release_id`
 
 func (p *Postgres) ProductVersionPins(ctx context.Context, productID string) ([]model.ProductVersionPin, error) {
-	rows, err := p.pool.Query(ctx, productVersionPinSelect+` WHERE p.product_id=$1 ORDER BY p.customer_id`, productID)
+	rows, err := p.pool.Query(ctx, productVersionPinSelect+` WHERE p.product_id=$1 ORDER BY p.scope,p.scope_id`, productID)
 	if err != nil {
 		return nil, databaseError(err)
 	}
@@ -252,16 +281,22 @@ func (p *Postgres) ProductVersionPins(ctx context.Context, productID string) ([]
 	return values, rows.Err()
 }
 
-func (p *Postgres) ProductVersionPin(ctx context.Context, productID, customerID string) (model.ProductVersionPin, error) {
-	return scanProductVersionPin(p.pool.QueryRow(ctx, productVersionPinSelect+` WHERE p.product_id=$1 AND p.customer_id=$2`, productID, customerID))
+func (p *Postgres) ProductVersionPin(ctx context.Context, productID, scope, scopeID string) (model.ProductVersionPin, error) {
+	return scanProductVersionPin(p.pool.QueryRow(ctx, productVersionPinSelect+` WHERE p.product_id=$1 AND p.scope=$2 AND p.scope_id=$3`, productID, scope, scopeID))
 }
 
-func (p *Postgres) SaveProductVersionPin(ctx context.Context, value model.ProductVersionPin) (model.ProductVersionPin, error) {
-	_, err := p.pool.Exec(ctx, `INSERT INTO product_version_pins(id,organisation_id,product_id,customer_id,connector_release_id,reason) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(product_id,customer_id) DO UPDATE SET connector_release_id=excluded.connector_release_id,reason=excluded.reason,revision=product_version_pins.revision+1,updated_at=now()`, value.ID, value.OrganisationID, value.ProductID, value.CustomerID, value.ProductVersionID, value.Reason)
-	if err != nil {
-		return model.ProductVersionPin{}, databaseError(err)
+func (p *Postgres) SaveProductVersionPin(ctx context.Context, value model.ProductVersionPin, expected int64) (model.ProductVersionPin, error) {
+	if expected == 0 {
+		created, err := scanProductVersionPin(p.pool.QueryRow(ctx, `INSERT INTO product_version_pins(id,organisation_id,product_id,scope,scope_id,customer_id,environment_id,installation_id,connector_release_id,reason) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,nullif($8,'')::uuid,$9,$10) RETURNING id::text,organisation_id::text,product_id::text,scope,scope_id,customer_id,coalesce(environment_id::text,''),coalesce(installation_id::text,''),connector_release_id::text,(SELECT display_version FROM connector_releases WHERE id=product_version_pins.connector_release_id),reason,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Scope, value.ScopeID, value.CustomerID, value.EnvironmentID, value.InstallationID, value.ProductVersionID, value.Reason))
+		return created, err
 	}
-	return p.ProductVersionPin(ctx, value.ProductID, value.CustomerID)
+	updated, err := scanProductVersionPin(p.pool.QueryRow(ctx, `UPDATE product_version_pins SET connector_release_id=$4,reason=$5,revision=revision+1,updated_at=now() WHERE product_id=$1 AND scope=$2 AND scope_id=$3 AND revision=$6 RETURNING id::text,organisation_id::text,product_id::text,scope,scope_id,customer_id,coalesce(environment_id::text,''),coalesce(installation_id::text,''),connector_release_id::text,(SELECT display_version FROM connector_releases WHERE id=product_version_pins.connector_release_id),reason,revision,created_at,updated_at`, value.ProductID, value.Scope, value.ScopeID, value.ProductVersionID, value.Reason, expected))
+	if errors.Is(err, ErrNotFound) {
+		if _, lookupErr := p.ProductVersionPin(ctx, value.ProductID, value.Scope, value.ScopeID); lookupErr == nil {
+			return model.ProductVersionPin{}, ErrConflict
+		}
+	}
+	return updated, err
 }
 
 func (p *Postgres) DeleteProductVersionPin(ctx context.Context, productID, id string) error {
@@ -273,6 +308,80 @@ func (p *Postgres) DeleteProductVersionPin(ctx context.Context, productID, id st
 		return ErrNotFound
 	}
 	return nil
+}
+
+func scanProductVersionPinHistory(row interface{ Scan(...any) error }) (model.ProductVersionPinHistory, error) {
+	var value model.ProductVersionPinHistory
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.PinID, &value.Scope, &value.ScopeID, &value.PriorVersion, &value.ProductVersion, &value.Action, &value.Reason, &value.ActorID, &value.CreatedAt)
+	return value, databaseError(err)
+}
+
+func (p *Postgres) ProductVersionPinHistory(ctx context.Context, productID string) ([]model.ProductVersionPinHistory, error) {
+	rows, err := p.pool.Query(ctx, `SELECT id::text,organisation_id::text,product_id::text,pin_id::text,scope,scope_id,prior_version,product_version,action,reason,actor_id,created_at FROM product_version_pin_history WHERE product_id=$1 ORDER BY created_at DESC LIMIT 500`, productID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.ProductVersionPinHistory, 0)
+	for rows.Next() {
+		value, scanErr := scanProductVersionPinHistory(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (p *Postgres) AppendProductVersionPinHistory(ctx context.Context, value model.ProductVersionPinHistory) error {
+	_, err := p.pool.Exec(ctx, `INSERT INTO product_version_pin_history(id,organisation_id,product_id,pin_id,scope,scope_id,prior_version,product_version,action,reason,actor_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, value.ID, value.OrganisationID, value.ProductID, value.PinID, value.Scope, value.ScopeID, value.PriorVersion, value.ProductVersion, value.Action, value.Reason, value.ActorID, value.CreatedAt)
+	return databaseError(err)
+}
+
+func scanProductInstallation(row interface{ Scan(...any) error }) (model.ProductInstallation, error) {
+	var value model.ProductInstallation
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.CustomerID, &value.EnvironmentID, &value.ExternalID, &value.Name, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	return value, databaseError(err)
+}
+
+const productInstallationSelect = `SELECT id::text,organisation_id::text,product_id::text,customer_id,environment_id::text,external_id,name,state,revision,created_at,updated_at FROM product_installations`
+
+func (p *Postgres) ProductInstallations(ctx context.Context, productID string) ([]model.ProductInstallation, error) {
+	rows, err := p.pool.Query(ctx, productInstallationSelect+` WHERE product_id=$1 ORDER BY name`, productID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.ProductInstallation, 0)
+	for rows.Next() {
+		value, scanErr := scanProductInstallation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (p *Postgres) ProductInstallation(ctx context.Context, productID, id string) (model.ProductInstallation, error) {
+	return scanProductInstallation(p.pool.QueryRow(ctx, productInstallationSelect+` WHERE product_id=$1 AND id=$2`, productID, id))
+}
+
+func (p *Postgres) ProductInstallationByExternalID(ctx context.Context, productID, externalID string) (model.ProductInstallation, error) {
+	return scanProductInstallation(p.pool.QueryRow(ctx, productInstallationSelect+` WHERE product_id=$1 AND external_id=$2`, productID, externalID))
+}
+
+func (p *Postgres) SaveProductInstallation(ctx context.Context, value model.ProductInstallation, expected int64) (model.ProductInstallation, error) {
+	if expected == 0 {
+		return scanProductInstallation(p.pool.QueryRow(ctx, `INSERT INTO product_installations(id,organisation_id,product_id,customer_id,environment_id,external_id,name,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,organisation_id::text,product_id::text,customer_id,environment_id::text,external_id,name,state,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.CustomerID, value.EnvironmentID, value.ExternalID, value.Name, value.State))
+	}
+	updated, err := scanProductInstallation(p.pool.QueryRow(ctx, `UPDATE product_installations SET customer_id=$3,environment_id=$4,external_id=$5,name=$6,state=$7,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$8 RETURNING id::text,organisation_id::text,product_id::text,customer_id,environment_id::text,external_id,name,state,revision,created_at,updated_at`, value.ProductID, value.ID, value.CustomerID, value.EnvironmentID, value.ExternalID, value.Name, value.State, expected))
+	if errors.Is(err, ErrNotFound) {
+		if _, lookupErr := p.ProductInstallation(ctx, value.ProductID, value.ID); lookupErr == nil {
+			return model.ProductInstallation{}, ErrConflict
+		}
+	}
+	return updated, err
 }
 
 func scanProductDefinition(row interface{ Scan(...any) error }) (model.ProductDefinition, error) {
@@ -903,18 +1012,18 @@ func (p *Postgres) SaveLLMProfile(ctx context.Context, value model.LLMProfile) (
 
 func scanVendorIdentity(row interface{ Scan(...any) error }) (identity.VendorConfig, error) {
 	var value identity.VendorConfig
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Issuer, &value.ClientID, &value.ClientSecretID, &value.Scopes, &value.Audience, &value.OrganisationClaim, &value.EntitlementHookURL, &value.AllowedRedirectURIs, &value.AuthorizationHookURL, &value.AuthorizationCredentialID, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Issuer, &value.ClientID, &value.ClientSecretID, &value.Scopes, &value.Audience, &value.OrganisationClaim, &value.InstallationClaim, &value.EntitlementHookURL, &value.AllowedRedirectURIs, &value.AuthorizationHookURL, &value.AuthorizationCredentialID, &value.UsageHookURL, &value.UsageCredentialID, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const vendorIdentitySelect = `SELECT id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, organisation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, coalesce(authorization_credential_id::text,''), revision, created_at, updated_at FROM vendor_identity_providers`
+const vendorIdentitySelect = `SELECT id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, coalesce(authorization_credential_id::text,''), usage_hook_url, coalesce(usage_credential_id::text,''), revision, created_at, updated_at FROM vendor_identity_providers`
 
 func (p *Postgres) VendorIdentity(ctx context.Context, productID string) (identity.VendorConfig, error) {
 	return scanVendorIdentity(p.pool.QueryRow(ctx, vendorIdentitySelect+` WHERE product_id = $1`, productID))
 }
 
 func (p *Postgres) SaveVendorIdentity(ctx context.Context, value identity.VendorConfig) (identity.VendorConfig, error) {
-	return scanVendorIdentity(p.pool.QueryRow(ctx, `INSERT INTO vendor_identity_providers(id, organisation_id, product_id, issuer, client_id, client_secret_id, scopes, audience, organisation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, authorization_credential_id) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,nullif($13,'')::uuid) ON CONFLICT (product_id) WHERE product_id IS NOT NULL DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret_id=excluded.client_secret_id, scopes=excluded.scopes, audience=excluded.audience, organisation_claim=excluded.organisation_claim, entitlement_hook_url=excluded.entitlement_hook_url, allowed_redirect_uris=excluded.allowed_redirect_uris, authorization_hook_url=excluded.authorization_hook_url, authorization_credential_id=excluded.authorization_credential_id, revision=vendor_identity_providers.revision+1, updated_at=now() RETURNING id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, organisation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, coalesce(authorization_credential_id::text,''), revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Issuer, value.ClientID, value.ClientSecretID, value.Scopes, value.Audience, value.OrganisationClaim, value.EntitlementHookURL, value.AllowedRedirectURIs, value.AuthorizationHookURL, value.AuthorizationCredentialID))
+	return scanVendorIdentity(p.pool.QueryRow(ctx, `INSERT INTO vendor_identity_providers(id, organisation_id, product_id, issuer, client_id, client_secret_id, scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, authorization_credential_id, usage_hook_url, usage_credential_id) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,$13,nullif($14,'')::uuid,$15,nullif($16,'')::uuid) ON CONFLICT (product_id) WHERE product_id IS NOT NULL DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret_id=excluded.client_secret_id, scopes=excluded.scopes, audience=excluded.audience, organisation_claim=excluded.organisation_claim, installation_claim=excluded.installation_claim, entitlement_hook_url=excluded.entitlement_hook_url, allowed_redirect_uris=excluded.allowed_redirect_uris, authorization_hook_url=excluded.authorization_hook_url, authorization_credential_id=excluded.authorization_credential_id, usage_hook_url=excluded.usage_hook_url, usage_credential_id=excluded.usage_credential_id, revision=vendor_identity_providers.revision+1, updated_at=now() RETURNING id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, coalesce(authorization_credential_id::text,''), usage_hook_url, coalesce(usage_credential_id::text,''), revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Issuer, value.ClientID, value.ClientSecretID, value.Scopes, value.Audience, value.OrganisationClaim, value.InstallationClaim, value.EntitlementHookURL, value.AllowedRedirectURIs, value.AuthorizationHookURL, value.AuthorizationCredentialID, value.UsageHookURL, value.UsageCredentialID))
 }
 
 func (p *Postgres) CreateOAuthState(ctx context.Context, value identity.OAuthState) error {
@@ -934,14 +1043,14 @@ func (p *Postgres) ConsumeOAuthState(ctx context.Context, digest []byte) (identi
 
 func (p *Postgres) CreateOAuthCode(ctx context.Context, value identity.OAuthCode) error {
 	entitlements, _ := json.Marshal(value.Entitlements)
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_authorization_codes(code_digest, product_id, client_id, redirect_uri, downstream_challenge, issuer, subject, email, display_name, vendor_organisation_id, entitlements, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.DownstreamChallenge, value.Issuer, value.Subject, value.Email, value.DisplayName, value.VendorOrganisation, entitlements, value.ExpiresAt)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_authorization_codes(code_digest, product_id, client_id, redirect_uri, downstream_challenge, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.DownstreamChallenge, value.Issuer, value.Subject, value.Email, value.DisplayName, value.VendorOrganisation, value.InstallationID, entitlements, value.ExpiresAt)
 	return databaseError(err)
 }
 
 func scanOAuthCode(row pgx.Row) (identity.OAuthCode, error) {
 	var value identity.OAuthCode
 	var entitlements []byte
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.DownstreamChallenge, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.VendorOrganisation, &entitlements, &value.ExpiresAt)
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.DownstreamChallenge, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.VendorOrganisation, &value.InstallationID, &entitlements, &value.ExpiresAt)
 	if err == nil {
 		err = json.Unmarshal(entitlements, &value.Entitlements)
 	}
@@ -949,19 +1058,19 @@ func scanOAuthCode(row pgx.Row) (identity.OAuthCode, error) {
 }
 
 func (p *Postgres) ConsumeOAuthCode(ctx context.Context, digest []byte) (identity.OAuthCode, error) {
-	return scanOAuthCode(p.pool.QueryRow(ctx, `DELETE FROM oauth_authorization_codes WHERE code_digest = $1 RETURNING code_digest, product_id::text, client_id, redirect_uri, downstream_challenge, issuer, subject, email, display_name, vendor_organisation_id, entitlements, expires_at`, digest))
+	return scanOAuthCode(p.pool.QueryRow(ctx, `DELETE FROM oauth_authorization_codes WHERE code_digest = $1 RETURNING code_digest, product_id::text, client_id, redirect_uri, downstream_challenge, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, expires_at`, digest))
 }
 
 func (p *Postgres) CreateAccessToken(ctx context.Context, value identity.AccessToken) error {
 	entitlements, _ := json.Marshal(value.Entitlements)
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_access_tokens(token_digest, product_id, client_id, issuer, subject, email, display_name, vendor_organisation_id, entitlements, scopes, expires_at, created_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, value.Digest, value.ProductID, value.ClientID, value.Issuer, value.Subject, value.Email, value.DisplayName, value.VendorOrganisation, entitlements, value.Scopes, value.ExpiresAt, value.CreatedAt, value.RevokedAt)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_access_tokens(token_digest, product_id, client_id, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, scopes, expires_at, created_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, value.Digest, value.ProductID, value.ClientID, value.Issuer, value.Subject, value.Email, value.DisplayName, value.VendorOrganisation, value.InstallationID, entitlements, value.Scopes, value.ExpiresAt, value.CreatedAt, value.RevokedAt)
 	return databaseError(err)
 }
 
 func scanAccessToken(row pgx.Row) (identity.AccessToken, error) {
 	var value identity.AccessToken
 	var entitlements []byte
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.VendorOrganisation, &entitlements, &value.Scopes, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.VendorOrganisation, &value.InstallationID, &entitlements, &value.Scopes, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
 	if err == nil {
 		err = json.Unmarshal(entitlements, &value.Entitlements)
 	}
@@ -969,7 +1078,7 @@ func scanAccessToken(row pgx.Row) (identity.AccessToken, error) {
 }
 
 func (p *Postgres) AccessTokenByDigest(ctx context.Context, digest []byte) (identity.AccessToken, error) {
-	return scanAccessToken(p.pool.QueryRow(ctx, `SELECT token_digest, product_id::text, client_id, issuer, subject, email, display_name, vendor_organisation_id, entitlements, scopes, expires_at, created_at, revoked_at FROM oauth_access_tokens WHERE token_digest = $1`, digest))
+	return scanAccessToken(p.pool.QueryRow(ctx, `SELECT token_digest, product_id::text, client_id, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, scopes, expires_at, created_at, revoked_at FROM oauth_access_tokens WHERE token_digest = $1`, digest))
 }
 
 func (p *Postgres) PublicKnowledge(ctx context.Context, productID, query string) ([]model.KnowledgeRecord, error) {
@@ -1016,8 +1125,20 @@ func (p *Postgres) AppendAnalytics(ctx context.Context, event model.AnalyticsEve
 	return databaseError(err)
 }
 
+func (p *Postgres) ProductVersionActivity(ctx context.Context, productID, versionID string, since time.Time) (model.ProductVersionActivity, error) {
+	var value model.ProductVersionActivity
+	err := p.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called') FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND dimensions->>'product_version_id'=$3`, productID, since, versionID).Scan(&value.Requests, &value.ToolCalls)
+	return value, databaseError(err)
+}
+
+func (p *Postgres) LLMTokensUsed(ctx context.Context, productID, role string, since time.Time) (int64, error) {
+	var total int64
+	err := p.pool.QueryRow(ctx, `SELECT coalesce(sum(value),0)::bigint FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='llm.tokens' AND dimensions->>'role'=$3`, productID, since, role).Scan(&total)
+	return total, databaseError(err)
+}
+
 func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
-	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "package_acquired": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "package_acquired": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
 	err := p.pool.QueryRow(ctx, `SELECT count(DISTINCT actor_pseudonym) FILTER (WHERE actor_pseudonym IS NOT NULL), count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called'), count(*) FILTER (WHERE event_name='package.downloaded') FROM analytics_events WHERE product_id=$1 AND created_at >= $2`, productID, since).Scan(&value.ActiveDevelopers, &value.MCPRequests, &value.ToolCalls, &value.PackageDownloads)
 	if err != nil {
 		return value, databaseError(err)
@@ -1043,6 +1164,20 @@ func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since
 			return value, err
 		}
 		value.Channels[channel] = count
+	}
+	rows.Close()
+	rows, err = p.pool.Query(ctx, `SELECT dimensions->>'product_version', count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='mcp.request' AND coalesce(dimensions->>'product_version','')<>'' GROUP BY 1`, productID, since)
+	if err != nil {
+		return value, databaseError(err)
+	}
+	for rows.Next() {
+		var version string
+		var count int64
+		if err := rows.Scan(&version, &count); err != nil {
+			rows.Close()
+			return value, err
+		}
+		value.Versions[version] = count
 	}
 	rows.Close()
 	rows, err = p.pool.Query(ctx, `SELECT event_name, count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name = ANY($3) GROUP BY event_name`, productID, since, []string{"connector_authorized", "run_started", "capability_resolved", "package_acquired", "credentials_issued", "implementation_validated", "success_reported"})

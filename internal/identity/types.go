@@ -12,10 +12,13 @@ type VendorConfig struct {
 	Scopes                    []string  `json:"scopes"`
 	Audience                  string    `json:"audience"`
 	OrganisationClaim         string    `json:"organisation_claim"`
+	InstallationClaim         string    `json:"installation_claim"`
 	EntitlementHookURL        string    `json:"entitlement_hook_url"`
 	AllowedRedirectURIs       []string  `json:"allowed_redirect_uris"`
 	AuthorizationHookURL      string    `json:"authorization_hook_url"`
 	AuthorizationCredentialID string    `json:"-"`
+	UsageHookURL              string    `json:"usage_hook_url"`
+	UsageCredentialID         string    `json:"-"`
 	Revision                  int64     `json:"revision"`
 	CreatedAt                 time.Time `json:"created_at"`
 	UpdatedAt                 time.Time `json:"updated_at"`
@@ -44,6 +47,7 @@ type OAuthCode struct {
 	Email               string
 	DisplayName         string
 	VendorOrganisation  string
+	InstallationID      string
 	Entitlements        map[string]bool
 	ExpiresAt           time.Time
 }
@@ -57,6 +61,7 @@ type AccessToken struct {
 	Email              string
 	DisplayName        string
 	VendorOrganisation string
+	InstallationID     string
 	Entitlements       map[string]bool
 	Scopes             []string
 	ExpiresAt          time.Time
@@ -72,6 +77,7 @@ type Principal struct {
 	Email              string
 	DisplayName        string
 	VendorOrganisation string
+	InstallationID     string
 	Entitlements       map[string]bool
 	Scopes             []string
 }
@@ -82,4 +88,5 @@ type Claims struct {
 	Email              string
 	DisplayName        string
 	VendorOrganisation string
+	InstallationID     string
 }

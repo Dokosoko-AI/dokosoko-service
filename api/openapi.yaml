@@ -213,8 +213,9 @@ paths:
               properties:
                 description: { type: string, minLength: 1, maxLength: 1000 }
                 default_version_policy: { type: string, enum: [latest, lts] }
+                require_promotion_approval: { type: boolean, default: false }
                 revision: { type: integer, format: int64, minimum: 1 }
-              required: [description, default_version_policy, revision]
+              required: [description, default_version_policy, require_promotion_approval, revision]
       responses:
         "200":
           description: Updated product discovery settings.
@@ -276,6 +277,8 @@ paths:
                 profile_id: { type: string }
                 is_latest: { type: boolean, default: false }
                 is_lts: { type: boolean, default: false }
+                release_stage: { type: string, enum: [preview, active], default: active }
+                rollout_percentage: { type: integer, minimum: 1, maximum: 100, default: 100 }
               required: [version, profile_id]
       responses:
         "201":
@@ -308,11 +311,86 @@ paths:
                 deprecation_message: { type: string, maxLength: 500 }
                 replacement_version: { type: string }
                 sunset_at: { type: [string, "null"], format: date-time }
+                rollout_percentage: { type: integer, minimum: 1, maximum: 100 }
+                acknowledge_impact: { type: boolean, default: false }
                 revision: { type: integer, format: int64, minimum: 1 }
-              required: [is_latest, is_lts, deprecated, revision]
+              required: [is_latest, is_lts, deprecated, rollout_percentage, acknowledge_impact, revision]
       responses:
         "200":
           description: Updated product-version lifecycle metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersion" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/versions/{version_id}/diff:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/ProductVersionID"
+    get:
+      operationId: getProductVersionDiff
+      description: Returns the immutable structural diff generated automatically when the product version was published.
+      responses:
+        "200":
+          description: Generated release diff within this product. Incompatible API lines are modeled as separate products.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersionDiff" }
+  /api/v1/products/{product_id}/versions/{version_id}/impact:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/ProductVersionID"
+    get:
+      operationId: getProductVersionImpact
+      responses:
+        "200":
+          description: Scoped assignments and 30-day product-version activity affected by deprecation or sunset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersionImpact" }
+  /api/v1/products/{product_id}/versions/{version_id}/reconcile:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/ProductVersionID"
+    post:
+      operationId: reconcileProductVersionArtifacts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                revision: { type: integer, format: int64, minimum: 1 }
+              required: [revision]
+      responses:
+        "200":
+          description: Product version with refreshed operational drift status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersion" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/versions/{version_id}/promotion:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/ProductVersionID"
+    post:
+      operationId: changeProductVersionPromotion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                action: { type: string, enum: [request, approve, reject] }
+                note: { type: string, maxLength: 500 }
+                revision: { type: integer, format: int64, minimum: 1 }
+              required: [action, note, revision]
+      responses:
+        "200":
+          description: Updated promotion state. Approval rechecks drift and enforces separation of duties when configured.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProductVersion" }
@@ -324,13 +402,13 @@ paths:
       operationId: listProductVersionPins
       responses:
         "200":
-          description: Exact customer product-version pins.
+          description: Exact customer, environment, and installation product-version pins.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProductVersionPinList" }
     post:
       operationId: saveProductVersionPin
-      description: Creates or replaces the exact pin for a vendor-organisation claim. New pins cannot target deprecated versions.
+      description: Creates or replaces an optimistic-concurrency protected scoped pin. New pins cannot target deprecated versions.
       requestBody:
         required: true
         content:
@@ -339,10 +417,13 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                customer_id: { type: string, minLength: 1, maxLength: 200 }
+                scope: { type: string, enum: [customer, environment, installation] }
+                scope_id: { type: string, minLength: 1, maxLength: 200 }
+                customer_id: { type: string, maxLength: 200 }
                 product_version_id: { type: string }
                 reason: { type: string, maxLength: 500 }
-              required: [customer_id, product_version_id]
+                revision: { type: integer, format: int64, minimum: 0 }
+              required: [scope, scope_id, product_version_id, revision]
       responses:
         "200":
           description: Saved customer pin.
@@ -350,6 +431,17 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProductVersionPin" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/version-pins/history:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProductVersionPinHistory
+      responses:
+        "200":
+          description: Immutable scoped pin assignment history.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersionPinHistoryList" }
   /api/v1/products/{product_id}/version-pins/{pin_id}:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -359,10 +451,46 @@ paths:
         schema: { type: string }
     delete:
       operationId: deleteProductVersionPin
-      description: Removes the exact customer pin so future discovery follows the configured default channel.
+      description: Removes the exact scoped pin so future discovery follows the next resolution level.
       responses:
-        "204": { description: Customer pin removed. }
+        "204": { description: Scoped pin removed. }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/installations:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProductInstallations
+      responses:
+        "200":
+          description: Registered integration installations used for authenticated scoped resolution.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductInstallationList" }
+    post:
+      operationId: saveProductInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                id: { type: string }
+                customer_id: { type: string, minLength: 1, maxLength: 200 }
+                environment_id: { type: string }
+                external_id: { type: string, minLength: 1, maxLength: 200 }
+                name: { type: string, minLength: 1, maxLength: 120 }
+                state: { type: string, enum: [active, paused] }
+                revision: { type: integer, format: int64, minimum: 0 }
+              required: [customer_id, environment_id, external_id, name, state, revision]
+      responses:
+        "200":
+          description: Saved installation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductInstallation" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/environments:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1118,6 +1246,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ProductVersionID:
+      name: version_id
+      in: path
+      required: true
+      schema: { type: string }
     OrganisationID:
       name: organisation_id
       in: path
@@ -1571,6 +1704,7 @@ components:
           default: [openid, profile, email]
         audience: { type: string }
         organisation_claim: { type: string, default: org_id }
+        installation_claim: { type: string, default: installation_id, description: Optional trusted OIDC claim matched to a registered product installation. }
         entitlement_hook_url:
           oneOf:
             - { type: string, format: uri }
@@ -1580,6 +1714,12 @@ components:
             - { type: string, format: uri }
             - { const: "" }
         authorization_credential: { type: string, format: password, writeOnly: true }
+        usage_hook_url:
+          description: Fixed vendor endpoint called by the Private MCP usage.get tool.
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        usage_credential: { type: string, format: password, writeOnly: true, description: Dedicated service credential; required when initially enabling the usage hook and encrypted before persistence. }
         allowed_redirect_uris:
           type: array
           minItems: 1
@@ -1601,11 +1741,16 @@ components:
           items: { type: string }
         audience: { type: string }
         organisation_claim: { type: string }
+        installation_claim: { type: string }
         entitlement_hook_url:
           oneOf:
             - { type: string, format: uri }
             - { const: "" }
         authorization_hook_url:
+          oneOf:
+            - { type: string, format: uri }
+            - { const: "" }
+        usage_hook_url:
           oneOf:
             - { type: string, format: uri }
             - { const: "" }
@@ -1615,7 +1760,7 @@ components:
         revision: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, product_id, issuer, client_id, scopes, audience, organisation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, revision, created_at, updated_at]
+      required: [id, organisation_id, product_id, issuer, client_id, scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, usage_hook_url, revision, created_at, updated_at]
     CreateProviderRequest:
       type: object
       additionalProperties: false
@@ -1820,13 +1965,17 @@ components:
         validated_success: { type: integer, format: int64, minimum: 0 }
         first_pass_rate: { type: number, format: double, minimum: 0, maximum: 100, description: Percentage of validated runs that succeeded. }
         channels: { type: object, additionalProperties: { type: integer, format: int64, minimum: 0 } }
+        versions:
+          type: object
+          additionalProperties: { type: integer, format: int64, minimum: 0 }
+          description: MCP request counts keyed by the selected immutable product-version identifier.
         funnel: { type: object, additionalProperties: { type: integer, format: int64, minimum: 0 } }
         daily_requests:
           type: array
           items: { $ref: "#/components/schemas/AnalyticsPoint" }
         since: { type: string, format: date-time }
         generated_at: { type: string, format: date-time }
-      required: [active_developers, authorized_users, mcp_requests, tool_calls, package_downloads, integration_runs, validated_runs, validated_success, first_pass_rate, channels, funnel, daily_requests, since, generated_at]
+      required: [active_developers, authorized_users, mcp_requests, tool_calls, package_downloads, integration_runs, validated_runs, validated_success, first_pass_rate, channels, versions, funnel, daily_requests, since, generated_at]
     OAuthTokenResponse:
       type: object
       additionalProperties: false
@@ -1934,11 +2083,13 @@ components:
         slug: { type: string }
         description: { type: string, maxLength: 1000 }
         default_version_policy: { type: string, enum: [latest, lts] }
+        catalog_revision: { type: integer, format: int64, minimum: 1 }
+        require_promotion_approval: { type: boolean }
         public_mcp_enabled: { type: boolean, default: false }
         revision: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at]
+      required: [id, organisation_id, name, slug, description, default_version_policy, catalog_revision, require_promotion_approval, public_mcp_enabled, revision, created_at, updated_at]
     ProductVersion:
       type: object
       additionalProperties: false
@@ -1950,6 +2101,21 @@ components:
         profile_id: { type: string }
         profile_name: { type: string }
         definition_revision: { type: integer, format: int64 }
+        manifest_hash: { type: string, pattern: "^sha256:" }
+        diff: { $ref: "#/components/schemas/ProductVersionDiff" }
+        release_stage: { type: string, enum: [preview, active] }
+        rollout_percentage: { type: integer, minimum: 1, maximum: 100 }
+        promotion_state: { type: string, enum: [not_required, pending, approved, rejected] }
+        promotion_note: { type: string }
+        requested_latest: { type: boolean }
+        requested_lts: { type: boolean }
+        publisher_actor_id: { type: string }
+        promotion_requested_by: { type: string }
+        approved_by: { type: string }
+        approved_at: { type: string, format: date-time }
+        drift_status: { type: string, enum: [unchecked, healthy, drifted] }
+        drift_details: { type: array, items: { $ref: "#/components/schemas/ProductArtifactDrift" } }
+        drift_checked_at: { type: string, format: date-time }
         is_latest: { type: boolean }
         is_lts: { type: boolean }
         deprecated_at: { type: string, format: date-time }
@@ -1960,7 +2126,55 @@ components:
         published_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, product_id, version, profile_id, profile_name, definition_revision, is_latest, is_lts, revision, published_at, created_at, updated_at]
+      required: [id, organisation_id, product_id, version, profile_id, profile_name, definition_revision, manifest_hash, diff, release_stage, rollout_percentage, promotion_state, requested_latest, requested_lts, drift_status, drift_details, is_latest, is_lts, revision, published_at, created_at, updated_at]
+    ProductVersionChange:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string }
+        path: { type: string }
+        before: { type: string }
+        after: { type: string }
+      required: [kind, path]
+    ProductVersionDiff:
+      type: object
+      additionalProperties: false
+      properties:
+        from_version_id: { type: string }
+        from_version: { type: string }
+        generated_at: { type: string, format: date-time }
+        summary: { type: string }
+        added: { type: array, items: { $ref: "#/components/schemas/ProductVersionChange" } }
+        removed: { type: array, items: { $ref: "#/components/schemas/ProductVersionChange" } }
+        changed: { type: array, items: { $ref: "#/components/schemas/ProductVersionChange" } }
+      required: [generated_at, summary, added, removed, changed]
+    ProductArtifactDrift:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string }
+        reference_id: { type: string }
+        name: { type: string }
+        expected: { type: string }
+        observed: { type: string }
+        status: { type: string }
+        message: { type: string }
+      required: [kind, name, status, message]
+    ProductVersionImpact:
+      type: object
+      additionalProperties: false
+      properties:
+        product_version_id: { type: string }
+        product_version: { type: string }
+        customer_pins: { type: integer, minimum: 0 }
+        environment_pins: { type: integer, minimum: 0 }
+        installation_pins: { type: integer, minimum: 0 }
+        affected_customers: { type: array, items: { type: string } }
+        affected_environments: { type: array, items: { type: string } }
+        affected_installations: { type: array, items: { type: string } }
+        requests_30_days: { type: integer, format: int64, minimum: 0 }
+        tool_calls_30_days: { type: integer, format: int64, minimum: 0 }
+      required: [product_version_id, product_version, customer_pins, environment_pins, installation_pins, affected_customers, affected_environments, affected_installations, requests_30_days, tool_calls_30_days]
     ProductVersionList:
       type: object
       additionalProperties: false
@@ -1974,19 +2188,68 @@ components:
         id: { type: string }
         organisation_id: { type: string }
         product_id: { type: string }
+        scope: { type: string, enum: [customer, environment, installation] }
+        scope_id: { type: string }
         customer_id: { type: string }
+        environment_id: { type: string }
+        installation_id: { type: string }
         product_version_id: { type: string }
         product_version: { type: string }
         reason: { type: string }
         revision: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, product_id, customer_id, product_version_id, product_version, revision, created_at, updated_at]
+      required: [id, organisation_id, product_id, scope, scope_id, customer_id, product_version_id, product_version, revision, created_at, updated_at]
     ProductVersionPinList:
       type: object
       additionalProperties: false
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/ProductVersionPin" } }
+      required: [items]
+    ProductVersionPinHistory:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        pin_id: { type: string }
+        scope: { type: string, enum: [customer, environment, installation] }
+        scope_id: { type: string }
+        prior_version: { type: string }
+        product_version: { type: string }
+        action: { type: string, enum: [created, updated, deleted] }
+        reason: { type: string }
+        actor_id: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, pin_id, scope, scope_id, action, actor_id, created_at]
+    ProductVersionPinHistoryList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ProductVersionPinHistory" } }
+      required: [items]
+    ProductInstallation:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        customer_id: { type: string }
+        environment_id: { type: string }
+        external_id: { type: string }
+        name: { type: string }
+        state: { type: string, enum: [active, paused] }
+        revision: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, customer_id, environment_id, external_id, name, state, revision, created_at, updated_at]
+    ProductInstallationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ProductInstallation" } }
       required: [items]
     ProductBinding:
       type: object

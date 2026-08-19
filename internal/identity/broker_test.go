@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -175,5 +176,104 @@ func TestOperationAuthorizationUsesServiceCredentialAndRedactsValues(t *testing.
 	err = hook.Authorize(ctx, "prod_acme", model.Tool{Namespace: "projects", Name: "create"}, map[string]any{"api_key": "sensitive-value", "region": "nz"}, toolruntime.Principal{Subject: "issuer|subject", VendorOrganisation: "vendor-org"})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUsageHookProxiesCustomerDefinedScalarValues(t *testing.T) {
+	ctx := context.Background()
+	memory := configuredMemory(t)
+	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
+	encrypted, _ := vault.Encrypt([]byte("usage-service-secret"), "org_acme:usage:usage-secret")
+	_, err := memory.CreateSecret(ctx, model.Secret{ID: "usage-secret", OrganisationID: "org_acme", Name: "usage-secret", Purpose: "vendor_usage", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _ := memory.VendorIdentity(ctx, "prod_acme")
+	config.UsageHookURL = "https://hooks.example/usage"
+	config.UsageCredentialID = "usage-secret"
+	if _, err := memory.SaveVendorIdentity(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(request.Body)
+		requestBody := string(body)
+		if request.Header.Get("Authorization") != "Bearer usage-service-secret" ||
+			!strings.Contains(requestBody, `"product_id":"prod_acme"`) ||
+			!strings.Contains(requestBody, `"subject":"https://idp.example|vendor-user-42"`) ||
+			!strings.Contains(requestBody, `"vendor_organisation_id":"vendor-org-7"`) {
+			t.Fatalf("unexpected usage request: headers=%v body=%s", request.Header, body)
+		}
+		response := `{"as_of":"2026-08-19T05:30:00Z","items":[{"key":"credits_used","label":"Used","value":720,"format":"number","unit":"credits"},{"key":"next_renewal","label":"Next renewal","value":"2026-09-01T00:00:00Z","format":"datetime"},{"key":"trial_active","label":"Trial active","value":true}]}`
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
+	})}
+	hook := identity.NewHookUsage(memory, vault)
+	hook.Client = client
+	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
+	report, err := hook.Report(ctx, "prod_acme", identity.Principal{Issuer: "https://idp.example", Subject: "vendor-user-42", VendorOrganisation: "vendor-org-7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(report)
+	if len(report.Items) != 3 || !strings.Contains(string(encoded), `"value":720`) || !strings.Contains(string(encoded), `"value":true`) {
+		t.Fatalf("usage report was not proxied: %s", encoded)
+	}
+}
+
+func TestUsageHookRejectsInvalidReportsAndDenial(t *testing.T) {
+	ctx := context.Background()
+	memory := configuredMemory(t)
+	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
+	encrypted, _ := vault.Encrypt([]byte("usage-service-secret"), "org_acme:usage:usage-secret")
+	_, _ = memory.CreateSecret(ctx, model.Secret{ID: "usage-secret", OrganisationID: "org_acme", Name: "usage-secret", Purpose: "vendor_usage", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
+	config, _ := memory.VendorIdentity(ctx, "prod_acme")
+	config.UsageHookURL, config.UsageCredentialID = "https://hooks.example/usage", "usage-secret"
+	_, _ = memory.SaveVendorIdentity(ctx, config)
+
+	for name, response := range map[string]string{
+		"duplicate keys": `{"as_of":"2026-08-19T05:30:00Z","items":[{"key":"used","label":"Used","value":1},{"key":"used","label":"Again","value":2}]}`,
+		"nested value":   `{"as_of":"2026-08-19T05:30:00Z","items":[{"key":"used","label":"Used","value":{"raw":1}}]}`,
+		"unknown field":  `{"as_of":"2026-08-19T05:30:00Z","items":[],"account_secret":"must-not-pass"}`,
+		"invalid time":   `{"as_of":"today","items":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			hook := identity.NewHookUsage(memory, vault)
+			hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
+			})}
+			hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
+			if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageUpstream) {
+				t.Fatalf("error = %v, want ErrUsageUpstream", err)
+			}
+		})
+	}
+
+	hook := identity.NewHookUsage(memory, vault)
+	hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Status: "403 Forbidden", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"denied"}`))}, nil
+	})}
+	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
+	if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageDenied) {
+		t.Fatalf("error = %v, want ErrUsageDenied", err)
+	}
+
+	hook = identity.NewHookUsage(memory, vault)
+	hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("usage request reached a privately resolved destination")
+		return nil, nil
+	})}
+	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	})
+	if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageUpstream) {
+		t.Fatalf("private destination error = %v, want ErrUsageUpstream", err)
+	}
+
+	hook = identity.NewHookUsage(memory, vault)
+	hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(strings.Repeat(" ", (1<<20)+1)))}, nil
+	})}
+	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
+	if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageUpstream) {
+		t.Fatalf("oversized response error = %v, want ErrUsageUpstream", err)
 	}
 }

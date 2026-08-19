@@ -37,7 +37,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAnalytics, APIAuditEvent, APICredentialLease, APIEnvironment, APIError, APIIdentity, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProductVersion, APIProductVersionPin, APIProject, APIProvider, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
+import { APIAnalytics, APIAuditEvent, APICredentialLease, APIEnvironment, APIError, APIIdentity, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIProject, APIProvider, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
 type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "distribution" | "runs" | "analytics" | "activity" | "settings";
@@ -108,7 +108,7 @@ const initialTools: APITool[] = [
   { id: "tool_incidents", organisation_id: "org_acme", product_id: "prod_acme", namespace: "support", name: "create_incident", description: "Create a support incident", input_schema: {}, output_schema: {}, state: "published", revision: 2, http_method: "MCP", authorization_policy: { required_entitlements: ["support.write"] }, timeout_ms: 10000, backend_kind: "mcp", mcp_connection_id: "mcp_support", upstream_tool_name: "incidents.create", upstream_schema_hash: "sha256:8f44e6" },
 ];
 
-const fixtureProduct: APIProduct = { id: "prod_acme", organisation_id: "org_acme", name: "Acme Platform", slug: "acme", description: "Build reliable voice and messaging experiences with versioned APIs, SDKs, documentation, and managed tools.", default_version_policy: "latest", public_mcp_enabled: false, revision: 1 };
+const fixtureProduct: APIProduct = { id: "prod_acme", organisation_id: "org_acme", name: "Acme Platform", slug: "acme", description: "Build reliable voice and messaging experiences with versioned APIs, SDKs, documentation, and managed tools.", default_version_policy: "latest", catalog_revision: 12, require_promotion_approval: true, public_mcp_enabled: false, revision: 1 };
 const fixtureEnvironment: APIEnvironment = { id: "env_prod", organisation_id: "org_acme", product_id: "prod_acme", name: "Production", slug: "production", is_production: true, revision: 1 };
 const fixtureMCPConnections: APIMCPConnection[] = [{ id: "mcp_support", organisation_id: "org_acme", product_id: "prod_acme", name: "Support operations", namespace: "support", endpoint: "https://mcp.support.example/v2", protocol_version: "2026-07-28", auth_mode: "delegated_oauth", oauth_client_id: "dokosoko-production", oauth_issuer: "https://identity.support.example", authorization_url: "https://identity.support.example/oauth/authorize", token_url: "https://identity.support.example/oauth/token", scopes: ["incidents.read", "incidents.write"], state: "active", last_synced_at: "2026-08-19T11:48:00Z", last_catalog_hash: "sha256:48f2a81d", revision: 2 }];
 
@@ -179,15 +179,18 @@ const fixtureProductBuild: APIProductBuild = {
   completed_at: "2026-08-19T12:00:08Z",
 };
 
+const fixtureDiff: APIProductVersionDiff = { from_version_id: "version_2026_05", from_version: "2026.5", generated_at: "2026-08-19T12:20:00Z", summary: "1 added, 0 removed, 2 changed", added: [{ kind: "artifact", path: "capability/voice/artifact/tool/voice.calls.transfer", after: "v3" }], removed: [], changed: [{ kind: "artifact", path: "capability/voice/artifact/package/@acme/voice-node", before: "7.1.0", after: "7.2.1" }, { kind: "artifact", path: "capability/messages/artifact/package/@acme/messages", before: "5.0.8", after: "5.1.3" }] };
 const fixtureProductVersions: APIProductVersion[] = [
-  { id: "version_2026_08", organisation_id: "org_acme", product_id: "prod_acme", version: "2026.8", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, is_latest: true, is_lts: false, revision: 2, published_at: "2026-08-19T12:20:00Z" },
-  { id: "version_2026_05", organisation_id: "org_acme", product_id: "prod_acme", version: "2026.5", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, is_latest: false, is_lts: true, revision: 3, published_at: "2026-05-10T09:00:00Z" },
-  { id: "version_2025_11", organisation_id: "org_acme", product_id: "prod_acme", version: "2025.11", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, is_latest: false, is_lts: false, deprecated_at: "2026-08-01T00:00:00Z", deprecation_message: "Move to 2026.5 LTS or 2026.8 latest.", replacement_version: "2026.5", sunset_at: "2026-12-01T00:00:00Z", revision: 4, published_at: "2025-11-12T09:00:00Z" },
+  { id: "version_2026_08", organisation_id: "org_acme", product_id: "prod_acme", version: "2026.8", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, manifest_hash: "sha256:81f4…b9c2", diff: fixtureDiff, release_stage: "active", rollout_percentage: 25, promotion_state: "approved", requested_latest: true, requested_lts: false, approved_by: "root_approver", approved_at: "2026-08-19T12:19:00Z", drift_status: "healthy", drift_details: [], drift_checked_at: "2026-08-19T12:19:30Z", is_latest: true, is_lts: false, revision: 2, published_at: "2026-08-19T12:20:00Z" },
+  { id: "version_2026_05", organisation_id: "org_acme", product_id: "prod_acme", version: "2026.5", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, manifest_hash: "sha256:17bd…81a0", diff: { ...fixtureDiff, from_version_id: undefined, from_version: undefined, summary: "Initial product release", added: [], changed: [] }, release_stage: "active", rollout_percentage: 100, promotion_state: "approved", requested_latest: false, requested_lts: true, drift_status: "healthy", drift_details: [], is_latest: false, is_lts: true, revision: 3, published_at: "2026-05-10T09:00:00Z" },
+  { id: "version_2025_11", organisation_id: "org_acme", product_id: "prod_acme", version: "2025.11", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, manifest_hash: "sha256:02aa…4d31", diff: { ...fixtureDiff, summary: "0 added, 1 removed, 1 changed" }, release_stage: "active", rollout_percentage: 100, promotion_state: "approved", requested_latest: false, requested_lts: false, drift_status: "healthy", drift_details: [], is_latest: false, is_lts: false, deprecated_at: "2026-08-01T00:00:00Z", deprecation_message: "Move to 2026.5 LTS or 2026.8 latest.", replacement_version: "2026.5", sunset_at: "2026-12-01T00:00:00Z", revision: 4, published_at: "2025-11-12T09:00:00Z" },
 ];
 
 const fixtureProductPins: APIProductVersionPin[] = [
-  { id: "pin_contoso", organisation_id: "org_acme", product_id: "prod_acme", customer_id: "contoso", product_version_id: "version_2026_05", product_version: "2026.5", reason: "Production stability window", revision: 1, created_at: "2026-08-19T12:30:00Z", updated_at: "2026-08-19T12:30:00Z" },
+  { id: "pin_contoso", organisation_id: "org_acme", product_id: "prod_acme", scope: "customer", scope_id: "contoso", customer_id: "contoso", product_version_id: "version_2026_05", product_version: "2026.5", reason: "Production stability window", revision: 1, created_at: "2026-08-19T12:30:00Z", updated_at: "2026-08-19T12:30:00Z" },
 ];
+
+const fixtureInstallations: APIProductInstallation[] = [{ id: "installation_contoso_voice", organisation_id: "org_acme", product_id: "prod_acme", customer_id: "contoso", environment_id: "env_prod", external_id: "contoso-voice-prod", name: "Contoso voice production", state: "active", revision: 1, created_at: "2026-08-19T12:24:00Z", updated_at: "2026-08-19T12:24:00Z" }];
 
 function CopyButton({ text, label, disabled = false, onCopied }: { text: string; label: string; disabled?: boolean; onCopied: (label: string) => void }) {
   async function copy() {
@@ -286,9 +289,12 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	  const [idpScopes, setIDPScopes] = useState("openid, profile, email");
 	  const [idpAudience, setIDPAudience] = useState("");
 	  const [idpOrganisationClaim, setIDPOrganisationClaim] = useState("org_id");
+	  const [idpInstallationClaim, setIDPInstallationClaim] = useState("installation_id");
 	  const [idpEntitlementHook, setIDPEntitlementHook] = useState("");
 	  const [idpAuthorizationHook, setIDPAuthorizationHook] = useState("");
 	  const [idpAuthorizationCredential, setIDPAuthorizationCredential] = useState("");
+	  const [idpUsageHook, setIDPUsageHook] = useState("");
+	  const [idpUsageCredential, setIDPUsageCredential] = useState("");
 	  const [idpRedirects, setIDPRedirects] = useState("");
 	  const [rootOpen, setRootOpen] = useState(false);
 	  const [rootBusy, setRootBusy] = useState(false);
@@ -332,12 +338,18 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	  const [productCatalogBusy, setProductCatalogBusy] = useState(false);
 	  const [productDescription, setProductDescription] = useState(product.description);
 	  const [defaultVersionPolicy, setDefaultVersionPolicy] = useState<"latest" | "lts">(product.default_version_policy);
+	  const [requirePromotionApproval, setRequirePromotionApproval] = useState(product.require_promotion_approval);
 	  const [productVersions, setProductVersions] = useState<APIProductVersion[]>(fixtureProductVersions);
 	  const [productVersionPins, setProductVersionPins] = useState<APIProductVersionPin[]>(fixtureProductPins);
+	  const [productInstallations, setProductInstallations] = useState<APIProductInstallation[]>(fixtureInstallations);
+	  const [pinHistory, setPinHistory] = useState<APIProductVersionPinHistory[]>([]);
 	  const [newProductVersion, setNewProductVersion] = useState("");
 	  const [newProductProfile, setNewProductProfile] = useState(fixtureDefinition.profiles[0]?.id ?? "");
 	  const [newVersionLatest, setNewVersionLatest] = useState(true);
 	  const [newVersionLTS, setNewVersionLTS] = useState(false);
+	  const [newVersionStage, setNewVersionStage] = useState<"preview" | "active">("active");
+	  const [newVersionRollout, setNewVersionRollout] = useState(100);
+	  const [pinScope, setPinScope] = useState<"customer" | "environment" | "installation">("customer");
 	  const [pinCustomerID, setPinCustomerID] = useState("");
 	  const [pinVersionID, setPinVersionID] = useState(fixtureProductVersions[0]?.id ?? "");
 	  const [pinReason, setPinReason] = useState("");
@@ -349,6 +361,13 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	  const [lifecycleMessage, setLifecycleMessage] = useState("");
 	  const [lifecycleReplacement, setLifecycleReplacement] = useState("");
 	  const [lifecycleSunset, setLifecycleSunset] = useState("");
+	  const [lifecycleRollout, setLifecycleRollout] = useState(100);
+	  const [lifecycleImpact, setLifecycleImpact] = useState<APIProductVersionImpact | null>(null);
+	  const [lifecycleImpactAcknowledged, setLifecycleImpactAcknowledged] = useState(false);
+	  const [installationName, setInstallationName] = useState("");
+	  const [installationExternalID, setInstallationExternalID] = useState("");
+	  const [installationCustomerID, setInstallationCustomerID] = useState("");
+	  const [installationEnvironmentID, setInstallationEnvironmentID] = useState(fixtureEnvironment.id);
 
   useEffect(() => {
     const fixturePreview = process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("preview") === "fixtures";
@@ -403,7 +422,7 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	    api.identity(product.id).then((value) => {
 	      if (cancelled) return;
 	      setIdentityConfig(value);
-	      setIDPIssuer(value.issuer); setIDPClientID(value.client_id); setIDPScopes(value.scopes.join(", ")); setIDPAudience(value.audience); setIDPOrganisationClaim(value.organisation_claim); setIDPEntitlementHook(value.entitlement_hook_url); setIDPAuthorizationHook(value.authorization_hook_url); setIDPRedirects(value.allowed_redirect_uris.join("\n"));
+	      setIDPIssuer(value.issuer); setIDPClientID(value.client_id); setIDPScopes(value.scopes.join(", ")); setIDPAudience(value.audience); setIDPOrganisationClaim(value.organisation_claim); setIDPInstallationClaim(value.installation_claim); setIDPEntitlementHook(value.entitlement_hook_url); setIDPAuthorizationHook(value.authorization_hook_url); setIDPUsageHook(value.usage_hook_url); setIDPRedirects(value.allowed_redirect_uris.join("\n"));
 	    }).catch(() => {});
 	    api.rootUsers().then((value) => { if (!cancelled) setRootUsers(value); }).catch(() => {});
 	    Promise.all([api.providers(product.id), api.projects(product.id), api.credentials(product.id)]).then(([providerValues, projectValues, credentialValues]) => { if (!cancelled) { setProviders(providerValues); setProjects(projectValues); setCredentialLeases(credentialValues); } }).catch(() => {});
@@ -412,6 +431,7 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	    api.productBuilds(product.id).then((values) => { if (!cancelled) setLatestProductBuild(values[0] ?? null); }).catch(() => {});
 	    api.productVersions(product.id).then((values) => { if (!cancelled) { setProductVersions(values); setPinVersionID(values.find((value) => value.is_latest)?.id ?? values[0]?.id ?? ""); } }).catch(() => {});
 	    api.productVersionPins(product.id).then((values) => { if (!cancelled) setProductVersionPins(values); }).catch(() => {});
+	    Promise.all([api.productInstallations(product.id), api.productVersionPinHistory(product.id)]).then(([installationValues, historyValues]) => { if (!cancelled) { setProductInstallations(installationValues); setPinHistory(historyValues); } }).catch(() => {});
 	    Promise.all([api.environments(product.id), api.integrationRuns(product.id), api.auditEvents(product.organisation_id)]).then(([environmentValues, runValues, eventValues]) => {
 	      if (cancelled) return;
 	      setEnvironments(environmentValues);
@@ -439,6 +459,7 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
   function openProductCatalog() {
     setProductDescription(product.description);
     setDefaultVersionPolicy(product.default_version_policy);
+	setRequirePromotionApproval(product.require_promotion_approval);
     setNewProductProfile(productDefinition?.profiles[0]?.id ?? "");
     setProductCatalogOpen(true);
   }
@@ -447,8 +468,8 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
     setProductCatalogBusy(true);
     try {
       const value = apiConnected
-        ? await api.updateProductSettings(product.id, productDescription, defaultVersionPolicy, product.revision)
-        : { ...product, description: productDescription.trim(), default_version_policy: defaultVersionPolicy, revision: product.revision + 1 };
+		? await api.updateProductSettings(product.id, productDescription, defaultVersionPolicy, requirePromotionApproval, product.revision)
+		: { ...product, description: productDescription.trim(), default_version_policy: defaultVersionPolicy, require_promotion_approval: requirePromotionApproval, catalog_revision: product.catalog_revision + 1, revision: product.revision + 1 };
       setProduct(value);
       setProductRevision(value.revision);
       setProductDescription(value.description);
@@ -482,14 +503,16 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
       const now = new Date().toISOString();
       const profile = productDefinition?.profiles.find((candidate) => candidate.id === newProductProfile);
       const value = apiConnected
-        ? await api.createProductVersion(product.id, { version: newProductVersion.trim(), profile_id: newProductProfile, is_latest: newVersionLatest, is_lts: newVersionLTS })
-        : { id: `version_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, version: newProductVersion.trim(), profile_id: newProductProfile, profile_name: profile?.name ?? "Compatibility profile", definition_revision: productDefinition?.revision ?? 1, is_latest: newVersionLatest || productVersions.length === 0, is_lts: newVersionLTS, revision: 1, published_at: now };
+		? await api.createProductVersion(product.id, { version: newProductVersion.trim(), profile_id: newProductProfile, is_latest: newVersionLatest, is_lts: newVersionLTS, release_stage: newVersionStage, rollout_percentage: newVersionRollout })
+		: { id: `version_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, version: newProductVersion.trim(), profile_id: newProductProfile, profile_name: profile?.name ?? "Compatibility profile", definition_revision: productDefinition?.revision ?? 1, manifest_hash: `sha256:preview-${Date.now()}`, diff: fixtureDiff, release_stage: requirePromotionApproval ? "preview" as const : newVersionStage, rollout_percentage: newVersionRollout, promotion_state: requirePromotionApproval ? "pending" as const : "not_required" as const, requested_latest: newVersionLatest, requested_lts: newVersionLTS, drift_status: "healthy" as const, drift_details: [], is_latest: requirePromotionApproval ? false : newVersionLatest || productVersions.length === 0, is_lts: requirePromotionApproval ? false : newVersionLTS, revision: 1, published_at: now };
       if (apiConnected) setProductVersions(await api.productVersions(product.id));
       else setProductVersions((current) => [value, ...current.map((candidate) => value.is_latest ? { ...candidate, is_latest: false } : candidate)]);
       setPinVersionID(value.id);
       setNewProductVersion("");
       setNewVersionLatest(false);
-      setNewVersionLTS(false);
+	  setNewVersionLTS(false);
+	  setNewVersionStage("active");
+	  setNewVersionRollout(100);
       showToast(`Product version ${value.version} published as an immutable compatibility snapshot.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "The product version could not be published.");
@@ -506,6 +529,11 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
     setLifecycleMessage(version.deprecation_message ?? "");
     setLifecycleReplacement(version.replacement_version ?? "");
     setLifecycleSunset(version.sunset_at?.slice(0, 10) ?? "");
+	setLifecycleRollout(version.rollout_percentage);
+	setLifecycleImpact(null);
+	setLifecycleImpactAcknowledged(false);
+	if (apiConnected) api.productVersionImpact(product.id, version.id).then(setLifecycleImpact).catch(() => {});
+	else setLifecycleImpact({ product_version_id: version.id, product_version: version.version, customer_pins: productVersionPins.filter((pin) => pin.scope === "customer" && pin.product_version_id === version.id).length, environment_pins: productVersionPins.filter((pin) => pin.scope === "environment" && pin.product_version_id === version.id).length, installation_pins: productVersionPins.filter((pin) => pin.scope === "installation" && pin.product_version_id === version.id).length, affected_customers: [], affected_environments: [], affected_installations: [], requests_30_days: 1842, tool_calls_30_days: 327 });
     setVersionLifecycleOpen(true);
   }
 
@@ -513,14 +541,14 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
     if (!editingProductVersion) return;
     setProductCatalogBusy(true);
     try {
-      const input = { is_latest: lifecycleDeprecated ? false : lifecycleLatest, is_lts: lifecycleDeprecated ? false : lifecycleLTS, deprecated: lifecycleDeprecated, deprecation_message: lifecycleDeprecated ? lifecycleMessage : "", replacement_version: lifecycleDeprecated ? lifecycleReplacement : "", sunset_at: lifecycleDeprecated && lifecycleSunset ? new Date(`${lifecycleSunset}T00:00:00Z`).toISOString() : undefined, revision: editingProductVersion.revision };
+	  const input = { is_latest: lifecycleDeprecated ? false : lifecycleLatest, is_lts: lifecycleDeprecated ? false : lifecycleLTS, deprecated: lifecycleDeprecated, deprecation_message: lifecycleDeprecated ? lifecycleMessage : "", replacement_version: lifecycleDeprecated ? lifecycleReplacement : "", sunset_at: lifecycleDeprecated && lifecycleSunset ? new Date(`${lifecycleSunset}T00:00:00Z`).toISOString() : undefined, rollout_percentage: lifecycleRollout, acknowledge_impact: lifecycleImpactAcknowledged, revision: editingProductVersion.revision };
       const value = apiConnected
         ? await api.updateProductVersion(product.id, editingProductVersion.id, input)
-        : { ...editingProductVersion, is_latest: input.is_latest, is_lts: input.is_lts, deprecated_at: input.deprecated ? editingProductVersion.deprecated_at ?? new Date().toISOString() : undefined, deprecation_message: input.deprecation_message || undefined, replacement_version: input.replacement_version || undefined, sunset_at: input.sunset_at, revision: editingProductVersion.revision + 1 };
+		: { ...editingProductVersion, is_latest: input.is_latest, is_lts: input.is_lts, rollout_percentage: input.rollout_percentage, deprecated_at: input.deprecated ? editingProductVersion.deprecated_at ?? new Date().toISOString() : undefined, deprecation_message: input.deprecation_message || undefined, replacement_version: input.replacement_version || undefined, sunset_at: input.sunset_at, revision: editingProductVersion.revision + 1 };
       if (apiConnected) setProductVersions(await api.productVersions(product.id));
       else setProductVersions((current) => current.map((candidate) => candidate.id === value.id ? value : value.is_latest ? { ...candidate, is_latest: false } : candidate));
       setVersionLifecycleOpen(false);
-      showToast(`Lifecycle metadata for ${value.version} updated.`);
+	      showToast(value.promotion_state === "pending" ? `${value.version} channel promotion is awaiting independent approval.` : `Lifecycle metadata for ${value.version} updated.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Version lifecycle settings could not be saved.");
     } finally {
@@ -534,18 +562,56 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
     try {
       const selected = productVersions.find((version) => version.id === pinVersionID);
       const now = new Date().toISOString();
-      const value = apiConnected
-        ? await api.saveProductVersionPin(product.id, pinCustomerID.trim(), pinVersionID, pinReason.trim())
-        : { id: `pin_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, customer_id: pinCustomerID.trim(), product_version_id: pinVersionID, product_version: selected?.version ?? "", reason: pinReason.trim(), revision: 1, created_at: now, updated_at: now };
-      setProductVersionPins((current) => [value, ...current.filter((pin) => pin.customer_id !== value.customer_id)]);
+	  const existing = productVersionPins.find((pin) => pin.scope === pinScope && pin.scope_id === pinCustomerID.trim());
+	  const installation = pinScope === "installation" ? productInstallations.find((item) => item.id === pinCustomerID) : undefined;
+	  const value = apiConnected
+		? await api.saveProductVersionPin(product.id, { scope: pinScope, scope_id: pinCustomerID.trim(), customer_id: installation?.customer_id, product_version_id: pinVersionID, reason: pinReason.trim(), revision: existing?.revision ?? 0 })
+		: { id: existing?.id ?? `pin_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, scope: pinScope, scope_id: pinCustomerID.trim(), customer_id: pinScope === "customer" ? pinCustomerID.trim() : installation?.customer_id ?? "", environment_id: pinScope === "environment" ? pinCustomerID.trim() : installation?.environment_id, installation_id: installation?.id, product_version_id: pinVersionID, product_version: selected?.version ?? "", reason: pinReason.trim(), revision: (existing?.revision ?? 0) + 1, created_at: existing?.created_at ?? now, updated_at: now };
+	  setProductVersionPins((current) => [value, ...current.filter((pin) => !(pin.scope === value.scope && pin.scope_id === value.scope_id))]);
       setPinCustomerID("");
       setPinReason("");
-      showToast(`${value.customer_id} pinned to ${value.product_version}.`);
+	  showToast(`${value.scope} ${value.scope_id} pinned to ${value.product_version}.`);
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "The customer version pin could not be saved.");
+      showToast(error instanceof APIError ? error.message : "The scoped version pin could not be saved.");
     } finally {
       setProductCatalogBusy(false);
     }
+  }
+
+  async function saveInstallation() {
+	if (!installationName.trim() || !installationExternalID.trim() || !installationCustomerID.trim() || !installationEnvironmentID) return;
+	setProductCatalogBusy(true);
+	try {
+	  const now = new Date().toISOString();
+	  const value = apiConnected ? await api.saveProductInstallation(product.id, { customer_id: installationCustomerID.trim(), environment_id: installationEnvironmentID, external_id: installationExternalID.trim(), name: installationName.trim(), state: "active", revision: 0 }) : { id: `installation_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, customer_id: installationCustomerID.trim(), environment_id: installationEnvironmentID, external_id: installationExternalID.trim(), name: installationName.trim(), state: "active" as const, revision: 1, created_at: now, updated_at: now };
+	  setProductInstallations((current) => [value, ...current]);
+	  setInstallationName(""); setInstallationExternalID(""); setInstallationCustomerID("");
+	  showToast(`${value.name} is now available for installation-scoped version resolution.`);
+	} catch (error) { showToast(error instanceof APIError ? error.message : "The installation could not be saved."); }
+	finally { setProductCatalogBusy(false); }
+  }
+
+  async function reconcileVersion(version: APIProductVersion) {
+	setProductCatalogBusy(true);
+	try {
+	  const value = apiConnected ? await api.reconcileProductVersion(product.id, version.id, version.revision) : { ...version, drift_status: "healthy" as const, drift_details: [], drift_checked_at: new Date().toISOString(), revision: version.revision + 1 };
+	  setProductVersions((current) => current.map((item) => item.id === value.id ? value : item));
+	  setEditingProductVersion(value);
+	  showToast(`Artifact health for ${value.version}: ${value.drift_status}.`);
+	} catch (error) { showToast(error instanceof APIError ? error.message : "Artifact health could not be checked."); }
+	finally { setProductCatalogBusy(false); }
+  }
+
+  async function promoteVersion(version: APIProductVersion, action: "request" | "approve" | "reject") {
+	setProductCatalogBusy(true);
+	try {
+	  const note = action === "approve" ? "Generated diff and artifact health reviewed." : action === "reject" ? "Promotion rejected after review." : "Ready for independent review.";
+	  const value = apiConnected ? await api.promoteProductVersion(product.id, version.id, action, note, version.revision) : { ...version, promotion_state: action === "approve" ? "approved" as const : action === "reject" ? "rejected" as const : "pending" as const, release_stage: action === "approve" ? "active" as const : "preview" as const, is_latest: action === "approve" ? version.requested_latest : false, is_lts: action === "approve" ? version.requested_lts : false, revision: version.revision + 1 };
+	  setProductVersions((current) => current.map((item) => item.id === value.id ? value : value.is_latest ? { ...item, is_latest: false } : item));
+	  setEditingProductVersion(value);
+	  showToast(`${value.version} promotion is ${value.promotion_state}.`);
+	} catch (error) { showToast(error instanceof APIError ? error.message : "Promotion state could not be changed."); }
+	finally { setProductCatalogBusy(false); }
   }
 
   async function removeProductVersionPin(pin: APIProductVersionPin) {
@@ -553,9 +619,9 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
     try {
       if (apiConnected) await api.deleteProductVersionPin(product.id, pin.id);
       setProductVersionPins((current) => current.filter((candidate) => candidate.id !== pin.id));
-      showToast(`${pin.customer_id} will now follow the product default policy.`);
+	  showToast(`${pin.scope} ${pin.scope_id} will now follow the next resolution level.`);
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "The customer version pin could not be removed.");
+      showToast(error instanceof APIError ? error.message : "The scoped version pin could not be removed.");
     } finally {
       setProductCatalogBusy(false);
     }
@@ -603,7 +669,7 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
           };
       setProductDefinition(value);
       setLatestProductBuild({ ...latestProductBuild, state: "published", proposal: value });
-      showToast("Product definition published. Existing customer version pins were not changed.");
+      showToast("Product definition published. Existing scoped version pins were not changed.");
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "The product definition could not be published.");
     } finally {
@@ -907,16 +973,20 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
         client_secret: idpClientSecret,
         scopes: idpScopes.split(",").map((value) => value.trim()).filter(Boolean),
         audience: idpAudience,
-        organisation_claim: idpOrganisationClaim,
+		organisation_claim: idpOrganisationClaim,
+		installation_claim: idpInstallationClaim,
         entitlement_hook_url: idpEntitlementHook,
 		authorization_hook_url: idpAuthorizationHook,
 		authorization_credential: idpAuthorizationCredential,
+		usage_hook_url: idpUsageHook,
+		usage_credential: idpUsageCredential,
         allowed_redirect_uris: idpRedirects.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
       };
       const value = apiConnected ? await api.configureIdentity(product.id, input) : { id: "idp_preview", product_id: product.id, revision: 1, ...input } as APIIdentity;
       setIdentityConfig(value);
       setIDPClientSecret("");
 	  setIDPAuthorizationCredential("");
+	  setIDPUsageCredential("");
       setIdentityOpen(false);
       showToast("Vendor identity and entitlement resolution are configured.");
     } catch (error) {
@@ -1134,14 +1204,15 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
         open={productCatalogOpen}
         onClose={setProductCatalogOpen}
         title="Product discovery & versions"
-        description="Control the exact product description, release channel, compatibility snapshot, and customer pin that agents receive."
+		description="Control the product catalog, immutable release integrity, staged rollout, and scoped version resolution that agents receive."
         actions={<><Button outline onClick={() => setProductCatalogOpen(false)}>Close</Button><Button color="indigo" disabled={productCatalogBusy || !productDescription.trim()} onClick={saveProductDiscoverySettings}>{productCatalogBusy ? "Saving…" : "Save discovery settings"}</Button></>}
       >
         <div className="product-catalog-settings">
           <section className="catalog-settings-section">
             <div className="catalog-settings-heading"><span><strong>Agent-facing product</strong><small>This description is returned verbatim during product discovery.</small></span><Button outline disabled={productCatalogBusy || !productDescription.trim()} onClick={rewriteDescriptionWithAI}><Sparkles data-slot="icon" />Rewrite for agents</Button></div>
             <label className="auth-field"><span>Product description</span><textarea maxLength={1000} value={productDescription} onChange={(event) => setProductDescription(event.target.value)} placeholder="What does this product enable, for whom, and within what boundaries?" /><small>{productDescription.length}/1000 · AI produces an editable draft and never saves automatically.</small></label>
-            <label className="auth-field"><span>Unpinned customer default</span><select value={defaultVersionPolicy} onChange={(event) => setDefaultVersionPolicy(event.target.value as "latest" | "lts")}><option value="latest">Latest channel</option><option value="lts">LTS channel</option></select><small>Resolution order is exact customer pin, configured channel, then the newest non-deprecated fallback.</small></label>
+			<div className="two-fields"><label className="auth-field"><span>Unpinned customer default</span><select value={defaultVersionPolicy} onChange={(event) => setDefaultVersionPolicy(event.target.value as "latest" | "lts")}><option value="latest">Latest channel</option><option value="lts">LTS channel</option></select><small>Resolution: installation → environment → customer → channel → healthy fallback.</small></label><label className="auth-field"><span>Catalog revision</span><input value={`r${product.catalog_revision}`} readOnly /><small>Agents compare this revision and the effective manifest hash to invalidate cached discovery.</small></label></div>
+			<label className="compact-check"><input type="checkbox" checked={requirePromotionApproval} onChange={(event) => setRequirePromotionApproval(event.target.checked)} /><span>Require a different administrator to approve active/Latest/LTS promotion</span></label>
           </section>
 
           <section className="catalog-settings-section">
@@ -1149,26 +1220,36 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
             <div className="product-version-create">
               <label className="auth-field"><span>Version</span><input value={newProductVersion} onChange={(event) => setNewProductVersion(event.target.value)} placeholder="2026.8" /></label>
               <label className="auth-field"><span>Compatibility profile</span><select value={newProductProfile} onChange={(event) => setNewProductProfile(event.target.value)}><option value="">Select profile</option>{productDefinition?.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
-              <label className="compact-check"><input type="checkbox" checked={newVersionLatest} onChange={(event) => setNewVersionLatest(event.target.checked)} /><span>Latest</span></label>
-              <label className="compact-check"><input type="checkbox" checked={newVersionLTS} onChange={(event) => setNewVersionLTS(event.target.checked)} /><span>LTS</span></label>
+			  <label className="auth-field"><span>Stage</span><select value={newVersionStage} onChange={(event) => setNewVersionStage(event.target.value as "preview" | "active")}><option value="active">Active</option><option value="preview">Preview</option></select></label>
+			  <label className="auth-field"><span>Latest rollout</span><input type="number" min={1} max={100} value={newVersionRollout} onChange={(event) => setNewVersionRollout(Number(event.target.value))} /><small>Deterministic % by installation/customer.</small></label>
+			  <label className="compact-check"><input type="checkbox" checked={newVersionLatest} onChange={(event) => setNewVersionLatest(event.target.checked)} /><span>Latest</span></label>
+			  <label className="compact-check"><input type="checkbox" checked={newVersionLTS} onChange={(event) => setNewVersionLTS(event.target.checked)} /><span>LTS</span></label>
               <Button color="indigo" disabled={productCatalogBusy || !newProductVersion.trim() || !newProductProfile} onClick={publishProductVersion}>Publish version</Button>
             </div>
             <div className="product-version-list">
-              {productVersions.map((version) => <article className="product-version-row" key={version.id}><span className="version-name"><strong>{version.version}</strong><small>{version.profile_name} · definition r{version.definition_revision}</small></span><span className="version-labels">{version.is_latest && <Badge color="blue">Latest</Badge>}{version.is_lts && <Badge color="violet">LTS</Badge>}{version.deprecated_at && <Badge color="red">Deprecated</Badge>}{!version.is_latest && !version.is_lts && !version.deprecated_at && <Badge color="zinc">Supported</Badge>}</span><Button outline onClick={() => editProductVersion(version)}>Edit lifecycle</Button></article>)}
+			  {productVersions.map((version) => <article className="product-version-row" key={version.id}><span className="version-name"><strong>{version.version}</strong><small>{version.profile_name} · {version.diff.summary}</small><code>{version.manifest_hash}</code></span><span className="version-labels">{version.is_latest && <Badge color="blue">Latest · {version.rollout_percentage}%</Badge>}{version.is_lts && <Badge color="violet">LTS</Badge>}{version.release_stage === "preview" && <Badge color="amber">Preview</Badge>}{version.promotion_state === "pending" && <Badge color="amber">Approval pending</Badge>}{version.drift_status === "healthy" ? <Badge color="green">Healthy</Badge> : <Badge color="red">Drifted</Badge>}{version.deprecated_at && <Badge color="red">Deprecated</Badge>}</span><Button outline onClick={() => editProductVersion(version)}>Review release</Button></article>)}
               {productVersions.length === 0 && <div className="empty-row">Publish the Product Definition, add a description, then create the first product version.</div>}
             </div>
           </section>
 
           <section className="catalog-settings-section">
-            <div className="catalog-settings-heading"><span><strong>Customer version pins</strong><small>Customer ID must equal the vendor-organisation claim used by identity.</small></span></div>
-            <div className="product-pin-create">
-              <label className="auth-field"><span>Customer ID</span><input value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)} placeholder="contoso" /></label>
+			<div className="catalog-settings-heading"><span><strong>Scoped version pins</strong><small>Use the narrowest scope. Authenticated installation identity wins over environment and customer assignments.</small></span></div>
+			<div className="product-pin-create">
+			  <label className="auth-field"><span>Scope</span><select value={pinScope} onChange={(event) => { setPinScope(event.target.value as typeof pinScope); setPinCustomerID(""); }}><option value="customer">Customer</option><option value="environment">Environment</option><option value="installation">Installation</option></select></label>
+			  {pinScope === "customer" ? <label className="auth-field"><span>Vendor organisation ID</span><input value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)} placeholder="contoso" /></label> : <label className="auth-field"><span>{pinScope === "environment" ? "Environment" : "Installation"}</span><select value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)}><option value="">Select {pinScope}</option>{pinScope === "environment" ? environments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : productInstallations.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.customer_id}</option>)}</select></label>}
               <label className="auth-field"><span>Product version</span><select value={pinVersionID} onChange={(event) => setPinVersionID(event.target.value)}><option value="">Select version</option>{productVersions.filter((version) => !version.deprecated_at).map((version) => <option key={version.id} value={version.id}>{version.version}{version.is_lts ? " · LTS" : version.is_latest ? " · Latest" : ""}</option>)}</select></label>
               <label className="auth-field"><span>Reason</span><input value={pinReason} onChange={(event) => setPinReason(event.target.value)} placeholder="Production stability window" /></label>
               <Button color="indigo" disabled={productCatalogBusy || !pinCustomerID.trim() || !pinVersionID} onClick={pinCustomerVersion}>Save pin</Button>
             </div>
-            <div className="product-pin-list">{productVersionPins.map((pin) => <article key={pin.id}><span><strong>{pin.customer_id}</strong><small>{pin.reason || "Explicit customer assignment"}</small></span><Badge color="violet">{pin.product_version}</Badge><Button outline onClick={() => removeProductVersionPin(pin)}>Remove</Button></article>)}{productVersionPins.length === 0 && <div className="empty-row">No exact customer pins. Unpinned customers follow the {defaultVersionPolicy.toUpperCase()} channel.</div>}</div>
-          </section>
+			<div className="product-pin-list">{productVersionPins.map((pin) => <article key={pin.id}><span><strong>{pin.scope}: {pin.scope_id}</strong><small>{pin.reason || "Explicit compatibility assignment"} · revision {pin.revision}</small></span><Badge color="violet">{pin.product_version}</Badge><Button outline onClick={() => removeProductVersionPin(pin)}>Remove</Button></article>)}{productVersionPins.length === 0 && <div className="empty-row">No exact pins. Resolution follows the {defaultVersionPolicy.toUpperCase()} channel.</div>}</div>
+			{pinHistory.length > 0 && <small className="catalog-history-note">{pinHistory.length} immutable pin change{pinHistory.length === 1 ? "" : "s"} recorded in assignment history.</small>}
+		  </section>
+
+		  <section className="catalog-settings-section">
+			<div className="catalog-settings-heading"><span><strong>Integration installations</strong><small>Register the authenticated installation claim and bind it to one customer and environment.</small></span></div>
+			<div className="product-pin-create"><label className="auth-field"><span>Name</span><input value={installationName} onChange={(event) => setInstallationName(event.target.value)} placeholder="Contoso voice production" /></label><label className="auth-field"><span>Authenticated external ID</span><input value={installationExternalID} onChange={(event) => setInstallationExternalID(event.target.value)} placeholder="contoso-voice-prod" /></label><label className="auth-field"><span>Customer ID</span><input value={installationCustomerID} onChange={(event) => setInstallationCustomerID(event.target.value)} placeholder="contoso" /></label><label className="auth-field"><span>Environment</span><select value={installationEnvironmentID} onChange={(event) => setInstallationEnvironmentID(event.target.value)}>{environments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Button color="indigo" disabled={productCatalogBusy || !installationName.trim() || !installationExternalID.trim() || !installationCustomerID.trim()} onClick={saveInstallation}>Add installation</Button></div>
+			<div className="product-pin-list">{productInstallations.map((item) => <article key={item.id}><span><strong>{item.name}</strong><small>{item.external_id} · {item.customer_id} · {environments.find((environment) => environment.id === item.environment_id)?.name ?? item.environment_id}</small></span><Badge color={item.state === "active" ? "green" : "zinc"}>{item.state}</Badge></article>)}</div>
+		  </section>
         </div>
       </Dialog>
 
@@ -1176,13 +1257,18 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
         open={versionLifecycleOpen}
         onClose={setVersionLifecycleOpen}
         title={`Lifecycle for ${editingProductVersion?.version ?? "product version"}`}
-        description="Lifecycle changes affect discovery and default resolution. Existing exact customer pins remain fixed."
-        actions={<><Button outline onClick={() => setVersionLifecycleOpen(false)}>Cancel</Button><Button color="indigo" disabled={productCatalogBusy || (lifecycleDeprecated && !lifecycleMessage.trim())} onClick={saveProductVersionLifecycle}>Save lifecycle</Button></>}
+		description="Review the generated release diff, integrity, artifact health, promotion, rollout, and deprecation impact."
+		actions={<><Button outline onClick={() => setVersionLifecycleOpen(false)}>Close</Button>{editingProductVersion?.release_stage === "preview" && editingProductVersion.promotion_state !== "pending" && <Button outline disabled={productCatalogBusy} onClick={() => promoteVersion(editingProductVersion, "request")}>Request promotion</Button>}{editingProductVersion?.promotion_state === "pending" && <Button color="indigo" disabled={productCatalogBusy} onClick={() => promoteVersion(editingProductVersion, "approve")}>Approve promotion</Button>}<Button color="indigo" disabled={productCatalogBusy || (lifecycleDeprecated && (!lifecycleMessage.trim() || Boolean(lifecycleImpact && !lifecycleImpactAcknowledged)))} onClick={saveProductVersionLifecycle}>Save lifecycle</Button></>}
       >
-        <div className="version-lifecycle-form">
-          <div className="lifecycle-toggles"><label className="compact-check"><input type="checkbox" disabled={lifecycleDeprecated} checked={lifecycleLatest} onChange={(event) => setLifecycleLatest(event.target.checked)} /><span>Latest</span></label><label className="compact-check"><input type="checkbox" disabled={lifecycleDeprecated} checked={lifecycleLTS} onChange={(event) => setLifecycleLTS(event.target.checked)} /><span>LTS</span></label><label className="compact-check danger"><input type="checkbox" checked={lifecycleDeprecated} onChange={(event) => { setLifecycleDeprecated(event.target.checked); if (event.target.checked) { setLifecycleLatest(false); setLifecycleLTS(false); } }} /><span>Deprecated</span></label></div>
-          {lifecycleDeprecated && <><label className="auth-field"><span>Agent migration guidance</span><textarea maxLength={500} value={lifecycleMessage} onChange={(event) => setLifecycleMessage(event.target.value)} placeholder="Explain why this version is deprecated and what the agent should use instead." /></label><div className="two-fields"><label className="auth-field"><span>Replacement version</span><select value={lifecycleReplacement} onChange={(event) => setLifecycleReplacement(event.target.value)}><option value="">No replacement</option>{productVersions.filter((version) => version.id !== editingProductVersion?.id && !version.deprecated_at).map((version) => <option key={version.id} value={version.version}>{version.version}</option>)}</select></label><label className="auth-field"><span>Sunset date</span><input type="date" value={lifecycleSunset} onChange={(event) => setLifecycleSunset(event.target.value)} /></label></div></>}
-          <div className="builder-magic-note"><ShieldCheck /><span><strong>No silent migration.</strong> Deprecation changes recommendations and warnings; it never rewrites an existing customer pin.</span></div>
+		<div className="version-lifecycle-form">
+		  {editingProductVersion && <div className="release-integrity-card"><span><small>Immutable manifest</small><code>{editingProductVersion.manifest_hash}</code></span><span><small>Generated diff from {editingProductVersion.diff.from_version || "initial release"}</small><strong>{editingProductVersion.diff.summary}</strong></span><span><small>Artifact health</small><Badge color={editingProductVersion.drift_status === "healthy" ? "green" : "red"}>{editingProductVersion.drift_status}</Badge></span><Button outline disabled={productCatalogBusy} onClick={() => reconcileVersion(editingProductVersion)}><RefreshCw data-slot="icon" />Recheck artifacts</Button></div>}
+		  {editingProductVersion && (editingProductVersion.diff.added.length + editingProductVersion.diff.removed.length + editingProductVersion.diff.changed.length > 0) && <div className="release-diff-list">{editingProductVersion.diff.added.map((change) => <span key={`a-${change.path}`}><Badge color="green">Added</Badge><code>{change.path}</code><small>{change.after}</small></span>)}{editingProductVersion.diff.removed.map((change) => <span key={`r-${change.path}`}><Badge color="red">Removed</Badge><code>{change.path}</code><small>{change.before}</small></span>)}{editingProductVersion.diff.changed.map((change) => <span key={`c-${change.path}`}><Badge color="amber">Changed</Badge><code>{change.path}</code><small>{change.before || "—"} → {change.after || "—"}</small></span>)}</div>}
+		  {editingProductVersion?.promotion_state === "pending" && <div className="builder-magic-note"><ShieldCheck /><span><strong>Independent approval required.</strong> The publishing administrator cannot approve this preview. Approval rechecks artifact health before activating the requested channel labels.</span></div>}
+		  <div className="lifecycle-toggles"><label className="compact-check"><input type="checkbox" disabled={lifecycleDeprecated} checked={lifecycleLatest} onChange={(event) => setLifecycleLatest(event.target.checked)} /><span>Latest</span></label><label className="compact-check"><input type="checkbox" disabled={lifecycleDeprecated} checked={lifecycleLTS} onChange={(event) => setLifecycleLTS(event.target.checked)} /><span>LTS</span></label><label className="compact-check danger"><input type="checkbox" checked={lifecycleDeprecated} onChange={(event) => { setLifecycleDeprecated(event.target.checked); if (event.target.checked) { setLifecycleLatest(false); setLifecycleLTS(false); } }} /><span>Deprecated</span></label></div>
+		  <label className="auth-field"><span>Latest rollout percentage</span><input type="range" min={1} max={100} value={lifecycleRollout} onChange={(event) => setLifecycleRollout(Number(event.target.value))} /><small>{lifecycleRollout}% of deterministic installation/customer buckets; the rest remain on the prior healthy release.</small></label>
+		  {lifecycleDeprecated && <><label className="auth-field"><span>Agent migration guidance</span><textarea maxLength={500} value={lifecycleMessage} onChange={(event) => setLifecycleMessage(event.target.value)} placeholder="Explain why this version is deprecated and what the agent should use instead." /></label><div className="two-fields"><label className="auth-field"><span>Replacement version</span><select value={lifecycleReplacement} onChange={(event) => setLifecycleReplacement(event.target.value)}><option value="">No replacement</option>{productVersions.filter((version) => version.id !== editingProductVersion?.id && !version.deprecated_at).map((version) => <option key={version.id} value={version.version}>{version.version}</option>)}</select></label><label className="auth-field"><span>Sunset date</span><input type="date" value={lifecycleSunset} onChange={(event) => setLifecycleSunset(event.target.value)} /></label></div></>}
+		  {lifecycleDeprecated && lifecycleImpact && <div className="deprecation-impact"><strong>30-day impact</strong><span>{lifecycleImpact.customer_pins} customer · {lifecycleImpact.environment_pins} environment · {lifecycleImpact.installation_pins} installation pins</span><span>{lifecycleImpact.requests_30_days.toLocaleString()} MCP requests · {lifecycleImpact.tool_calls_30_days.toLocaleString()} tool calls</span><label className="compact-check danger"><input type="checkbox" checked={lifecycleImpactAcknowledged} onChange={(event) => setLifecycleImpactAcknowledged(event.target.checked)} /><span>I reviewed affected assignments and migration guidance.</span></label></div>}
+		  <div className="builder-magic-note"><ShieldCheck /><span><strong>No silent migration.</strong> Deprecation changes recommendations and warnings; it never rewrites an existing scoped pin.</span></div>
         </div>
       </Dialog>
 
@@ -1279,17 +1365,19 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
         onClose={setIdentityOpen}
         title="Vendor identity & entitlements"
         description={`DokoSoko brokers OAuth for this product. The downstream OAuth client_id is the product ID: ${product.id}`}
-        actions={<><Button outline onClick={() => setIdentityOpen(false)}>Cancel</Button><Button color="indigo" disabled={identityBusy || !idpIssuer.trim() || !idpClientID.trim() || (!identityConfig && !idpClientSecret.trim()) || !idpRedirects.trim()} onClick={saveIdentity}>{identityBusy ? "Verifying…" : "Save identity"}</Button></>}
+        actions={<><Button outline onClick={() => setIdentityOpen(false)}>Cancel</Button><Button color="indigo" disabled={identityBusy || !idpIssuer.trim() || !idpClientID.trim() || (!identityConfig && !idpClientSecret.trim()) || !idpRedirects.trim() || (Boolean(idpUsageHook.trim()) && !identityConfig?.usage_hook_url && !idpUsageCredential.trim())} onClick={saveIdentity}>{identityBusy ? "Verifying…" : "Save identity"}</Button></>}
       >
         <div className="auth-form compact-form">
           <label className="auth-field"><span>OIDC issuer</span><input type="url" value={idpIssuer} onChange={(event) => setIDPIssuer(event.target.value)} placeholder="https://identity.vendor.com" /></label>
           <div className="two-fields"><label className="auth-field"><span>OIDC client ID</span><input value={idpClientID} onChange={(event) => setIDPClientID(event.target.value)} /></label><label className="auth-field"><span>{identityConfig ? "Rotate client secret (optional)" : "OIDC client secret"}</span><input type="password" autoComplete="off" value={idpClientSecret} onChange={(event) => setIDPClientSecret(event.target.value)} /></label></div>
           <label className="auth-field"><span>Scopes</span><input value={idpScopes} onChange={(event) => setIDPScopes(event.target.value)} /></label>
-          <div className="two-fields"><label className="auth-field"><span>Audience (optional)</span><input value={idpAudience} onChange={(event) => setIDPAudience(event.target.value)} /></label><label className="auth-field"><span>Organisation claim</span><input value={idpOrganisationClaim} onChange={(event) => setIDPOrganisationClaim(event.target.value)} /></label></div>
+		  <div className="two-fields"><label className="auth-field"><span>Audience (optional)</span><input value={idpAudience} onChange={(event) => setIDPAudience(event.target.value)} /></label><label className="auth-field"><span>Organisation claim</span><input value={idpOrganisationClaim} onChange={(event) => setIDPOrganisationClaim(event.target.value)} /></label></div>
+		  <label className="auth-field"><span>Installation claim (optional)</span><input value={idpInstallationClaim} onChange={(event) => setIDPInstallationClaim(event.target.value)} placeholder="installation_id" /><small>When present, this authenticated claim selects a registered installation. DokoSoko never trusts an MCP tool argument for installation identity.</small></label>
           <label className="auth-field"><span>Entitlement hook</span><input type="url" value={idpEntitlementHook} onChange={(event) => setIDPEntitlementHook(event.target.value)} placeholder="https://api.vendor.com/dokosoko/entitlements" /><small>The vendor returns enabled and disabled feature keys during login. Hook errors deny private access.</small></label>
           <div className="two-fields"><label className="auth-field"><span>Per-operation authorization hook</span><input type="url" value={idpAuthorizationHook} onChange={(event) => setIDPAuthorizationHook(event.target.value)} placeholder="https://api.vendor.com/dokosoko/authorize" /></label><label className="auth-field"><span>{identityConfig?.authorization_hook_url ? "Rotate authorization credential" : "Authorization credential"}</span><input type="password" autoComplete="off" value={idpAuthorizationCredential} onChange={(event) => setIDPAuthorizationCredential(event.target.value)} /></label></div>
+          <div className="two-fields"><label className="auth-field"><span>Usage report hook</span><input type="url" value={idpUsageHook} onChange={(event) => setIDPUsageHook(event.target.value)} placeholder="https://api.vendor.com/dokosoko/usage" /><small>Enables the read-only usage.get tool on Private MCP. Returned values are proxied without storage.</small></label><label className="auth-field"><span>{identityConfig?.usage_hook_url ? "Rotate usage credential" : "Usage credential"}</span><input type="password" autoComplete="off" value={idpUsageCredential} onChange={(event) => setIDPUsageCredential(event.target.value)} /></label></div>
           <label className="auth-field"><span>Allowed downstream redirect URIs</span><textarea value={idpRedirects} onChange={(event) => setIDPRedirects(event.target.value)} placeholder={"https://developer.vendor.com/dokosoko/callback\nhttp://localhost:3000/oauth/callback"} /><small>One exact URI per line. Wildcards are not accepted.</small></label>
-          <div className="private-default-note"><ShieldCheck />Login-time entitlements control discovery; the per-operation hook reauthorizes custom tool execution. Both fail closed without exposing credentials.</div>
+          <div className="private-default-note"><ShieldCheck />Login-time entitlements control discovery, operation hooks reauthorize execution, and usage values remain an ephemeral vendor proxy. Credentials stay server-side.</div>
         </div>
       </Dialog>
 
@@ -1492,7 +1580,7 @@ function ProductDefinitionView({ product, versions, definition, build, busy, onB
     <PageHeading eyebrow="Auto-magic" title="Product definition" description="One product catalog with independently versioned APIs and evidence-backed bindings." action={<span className="heading-actions"><Button outline onClick={onConfigure}><Settings data-slot="icon" />Discovery settings</Button><Button outline onClick={onBuild}><Sparkles data-slot="icon" />{reviewing ? "Rebuild automatically" : "Scan for changes"}</Button></span>} />
     <section className={`ai-build-banner ${reviewing ? "reviewing" : "published"}`}>
       <span className="ai-build-icon">{reviewing ? <Bot /> : <CheckCircle2 />}</span>
-      <span className="ai-build-copy"><strong>{reviewing ? "Product draft built automatically" : "Product definition published"}</strong><small>{reviewing ? `${build.inputs.length} sources analyzed · ${activeDefinition.components.length} APIs · ${bindingCount} relationships` : `Revision ${activeDefinition.revision} · customer version pins remain unchanged`}</small></span>
+      <span className="ai-build-copy"><strong>{reviewing ? "Product draft built automatically" : "Product definition published"}</strong><small>{reviewing ? `${build.inputs.length} sources analyzed · ${activeDefinition.components.length} APIs · ${bindingCount} relationships` : `Revision ${activeDefinition.revision} · scoped version pins remain unchanged`}</small></span>
       <Badge color={reviewing ? (blocking ? "red" : unresolved.length ? "amber" : "green") : "green"}>{reviewing ? (blocking ? "Blocked" : unresolved.length ? `${unresolved.length} to review` : "Ready to publish") : "Published"}</Badge>
       {reviewing && <Button color="indigo" disabled={busy || blocking} onClick={onPublish}>{busy ? "Publishing…" : "Publish definition"}</Button>}
     </section>
@@ -1579,7 +1667,7 @@ function AnalyticsView({ publicEnabled, analytics }: { publicEnabled: boolean; a
 
 function SettingsView({ product, versions, pins, identity, llmProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onConfigureIdentity, onConfigureLLM, onAddRoot, onRevokeRoot }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; identity: APIIdentity | null; llmProfiles: APILLMProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onConfigureIdentity: () => void; onConfigureLLM: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void }) {
   const activeRoots = rootUsers.filter((user) => !user.revoked_at);
-  return <><PageHeading eyebrow="Administration" title="Platform settings" description="Configure deployment, storage, AI, identity, security, and operations." action={<Button outline onClick={onDoctor}><Activity data-slot="icon" />Run System Doctor</Button>} /><div className="settings-grid"><button type="button" className="settings-button" onClick={onConfigureProduct}><SettingsCard icon={<GitBranch />} title="Product discovery & versions" detail={`${versions.length} published version${versions.length === 1 ? "" : "s"} · ${pins.length} customer pin${pins.length === 1 ? "" : "s"} · default ${product.default_version_policy.toUpperCase()}`} status={product.description ? "Discoverable" : "Required"} /></button><SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted local object storage" status="Healthy" /><button type="button" className="settings-button" onClick={onConfigureLLM}><SettingsCard icon={<Bot />} title="LLM profiles & hardening" detail={`${llmProfiles.length} optional profile${llmProfiles.length === 1 ? "" : "s"} · model authority disabled`} status="Enforced" /></button><button type="button" className="settings-button" onClick={onConfigureIdentity}><SettingsCard icon={<Users />} title="Vendor identity" detail={identity ? `${identity.issuer} · ${identity.allowed_redirect_uris.length} redirect URI(s)` : "Configure OIDC and entitlement resolution"} status={identity ? "Configured" : "Required"} /></button><SettingsCard icon={<ShieldCheck />} title="Root users & audit" detail={`${activeRoots.length} MFA-protected root administrator${activeRoots.length === 1 ? "" : "s"} · append-only audit`} status="Secure" /></div><section className="panel identity-contract"><div className="panel-heading"><div><h2>OAuth contract</h2><p>MCP or widget → DokoSoko → vendor IdP → vendor entitlements → product-bound DokoSoko token</p></div><Button onClick={onConfigureIdentity}>{identity ? "Edit identity" : "Configure identity"}</Button></div><div className="contract-grid"><span><small>Downstream client ID</small><code>{identity?.product_id ?? "Product ID"}</code></span><span><small>Vendor issuer</small><code>{identity?.issuer ?? "Not configured"}</code></span><span><small>Entitlement hook</small><code>{identity?.entitlement_hook_url || "No hook configured"}</code></span></div></section><section className="panel root-management"><div className="panel-heading"><div><h2>Root administrators</h2><p>Root access is independent from vendor identities and always requires MFA.</p></div><Button onClick={onAddRoot}><Plus data-slot="icon" />Add root</Button></div>{rootUsers.map((user) => <div className="root-row" key={user.id}><span className="avatar">{user.display_name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><span><strong>{user.display_name}</strong><small>{user.email}</small></span><Badge color={user.revoked_at ? "zinc" : "green"}>{user.revoked_at ? "Revoked" : "MFA active"}</Badge>{!user.revoked_at && user.id !== currentUser?.id ? <Button outline onClick={() => onRevokeRoot(user)}>Revoke</Button> : <span />}</div>)}</section></>;
+  return <><PageHeading eyebrow="Administration" title="Platform settings" description="Configure deployment, storage, AI, identity, security, and operations." action={<Button outline onClick={onDoctor}><Activity data-slot="icon" />Run System Doctor</Button>} /><div className="settings-grid"><button type="button" className="settings-button" onClick={onConfigureProduct}><SettingsCard icon={<GitBranch />} title="Product discovery & versions" detail={`${versions.length} published version${versions.length === 1 ? "" : "s"} · ${pins.length} scoped pin${pins.length === 1 ? "" : "s"} · default ${product.default_version_policy.toUpperCase()}`} status={product.description ? "Discoverable" : "Required"} /></button><SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted local object storage" status="Healthy" /><button type="button" className="settings-button" onClick={onConfigureLLM}><SettingsCard icon={<Bot />} title="LLM profiles & hardening" detail={`${llmProfiles.length} optional profile${llmProfiles.length === 1 ? "" : "s"} · model authority disabled`} status="Enforced" /></button><button type="button" className="settings-button" onClick={onConfigureIdentity}><SettingsCard icon={<Users />} title="Vendor identity" detail={identity ? `${identity.issuer} · ${identity.allowed_redirect_uris.length} redirect URI(s)` : "Configure OIDC and entitlement resolution"} status={identity ? "Configured" : "Required"} /></button><SettingsCard icon={<ShieldCheck />} title="Root users & audit" detail={`${activeRoots.length} MFA-protected root administrator${activeRoots.length === 1 ? "" : "s"} · append-only audit`} status="Secure" /></div><section className="panel identity-contract"><div className="panel-heading"><div><h2>OAuth and account hooks</h2><p>MCP or widget → DokoSoko → vendor identity, entitlements, policy, and ephemeral usage</p></div><Button onClick={onConfigureIdentity}>{identity ? "Edit identity" : "Configure identity"}</Button></div><div className="contract-grid"><span><small>Downstream client ID</small><code>{identity?.product_id ?? "Product ID"}</code></span><span><small>Vendor issuer</small><code>{identity?.issuer ?? "Not configured"}</code></span><span><small>Installation claim</small><code>{identity?.installation_claim || "Not configured"}</code></span><span><small>Entitlement hook</small><code>{identity?.entitlement_hook_url || "No hook configured"}</code></span><span><small>Usage hook</small><code>{identity?.usage_hook_url || "No hook configured"}</code></span></div></section><section className="panel root-management"><div className="panel-heading"><div><h2>Root administrators</h2><p>Root access is independent from vendor identities and always requires MFA.</p></div><Button onClick={onAddRoot}><Plus data-slot="icon" />Add root</Button></div>{rootUsers.map((user) => <div className="root-row" key={user.id}><span className="avatar">{user.display_name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><span><strong>{user.display_name}</strong><small>{user.email}</small></span><Badge color={user.revoked_at ? "zinc" : "green"}>{user.revoked_at ? "Revoked" : "MFA active"}</Badge>{!user.revoked_at && user.id !== currentUser?.id ? <Button outline onClick={() => onRevokeRoot(user)}>Revoke</Button> : <span />}</div>)}</section></>;
 }
 
 function WarningContent({ children }: { children: React.ReactNode }) { return <div className="warning-content"><div className="warning-icon"><TriangleAlert /></div><div>{children}</div></div>; }

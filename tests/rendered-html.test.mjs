@@ -75,7 +75,11 @@ test("ships product-version discovery, lifecycle, pinning, and AI rewrite contro
   assert.match(source, /Product discovery & versions/);
   assert.match(source, /Rewrite for agents/);
   assert.match(source, /Publish product version/);
-  assert.match(source, /Customer version pins/);
+  assert.match(source, /Scoped version pins/);
+  assert.match(source, /immutable release integrity/);
+  assert.match(source, /Integration installations/);
+  assert.match(source, /generated release diff/);
+  assert.match(source, /Independent approval required/);
   assert.match(source, /No silent migration/);
   assert.match(source, /Latest/);
   assert.match(source, /LTS/);
@@ -83,4 +87,16 @@ test("ships product-version discovery, lifecycle, pinning, and AI rewrite contro
   assert.match(client, /description\/rewrite/);
   assert.match(client, /version-pins/);
   assert.match(client, /productVersions/);
+});
+
+test("ships the private vendor-proxied usage report configuration", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(source, /Usage report hook/);
+  assert.match(source, /read-only usage\.get tool on Private MCP/);
+  assert.match(source, /Returned values are proxied without storage/);
+  assert.match(source, /Rotate usage credential/);
+  assert.match(client, /usage_hook_url/);
+  assert.match(client, /usage_credential/);
 });

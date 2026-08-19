@@ -38,50 +38,127 @@ type Environment struct {
 }
 
 type Product struct {
-	ID                   string    `json:"id"`
-	OrganisationID       string    `json:"organisation_id"`
-	Name                 string    `json:"name"`
-	Slug                 string    `json:"slug"`
-	Description          string    `json:"description"`
-	DefaultVersionPolicy string    `json:"default_version_policy"`
-	PublicMCPEnabled     bool      `json:"public_mcp_enabled"`
-	Revision             int64     `json:"revision"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                       string    `json:"id"`
+	OrganisationID           string    `json:"organisation_id"`
+	Name                     string    `json:"name"`
+	Slug                     string    `json:"slug"`
+	Description              string    `json:"description"`
+	DefaultVersionPolicy     string    `json:"default_version_policy"`
+	CatalogRevision          int64     `json:"catalog_revision"`
+	RequirePromotionApproval bool      `json:"require_promotion_approval"`
+	PublicMCPEnabled         bool      `json:"public_mcp_enabled"`
+	Revision                 int64     `json:"revision"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 type ProductVersion struct {
-	ID                 string            `json:"id"`
-	OrganisationID     string            `json:"organisation_id"`
-	ProductID          string            `json:"product_id"`
-	Version            string            `json:"version"`
-	ProfileID          string            `json:"profile_id"`
-	ProfileName        string            `json:"profile_name"`
-	DefinitionRevision int64             `json:"definition_revision"`
-	IsLatest           bool              `json:"is_latest"`
-	IsLTS              bool              `json:"is_lts"`
-	DeprecatedAt       *time.Time        `json:"deprecated_at,omitempty"`
-	DeprecationMessage string            `json:"deprecation_message,omitempty"`
-	ReplacementVersion string            `json:"replacement_version,omitempty"`
-	SunsetAt           *time.Time        `json:"sunset_at,omitempty"`
-	Revision           int64             `json:"revision"`
-	PublishedAt        time.Time         `json:"published_at"`
-	CreatedAt          time.Time         `json:"created_at"`
-	UpdatedAt          time.Time         `json:"updated_at"`
-	Manifest           ProductDefinition `json:"-"`
+	ID                   string                 `json:"id"`
+	OrganisationID       string                 `json:"organisation_id"`
+	ProductID            string                 `json:"product_id"`
+	Version              string                 `json:"version"`
+	ProfileID            string                 `json:"profile_id"`
+	ProfileName          string                 `json:"profile_name"`
+	DefinitionRevision   int64                  `json:"definition_revision"`
+	ManifestHash         string                 `json:"manifest_hash"`
+	Diff                 ProductVersionDiff     `json:"diff"`
+	ReleaseStage         string                 `json:"release_stage"`
+	RolloutPercentage    int                    `json:"rollout_percentage"`
+	PromotionState       string                 `json:"promotion_state"`
+	PromotionNote        string                 `json:"promotion_note,omitempty"`
+	RequestedLatest      bool                   `json:"requested_latest"`
+	RequestedLTS         bool                   `json:"requested_lts"`
+	PublisherActorID     string                 `json:"publisher_actor_id,omitempty"`
+	PromotionRequestedBy string                 `json:"promotion_requested_by,omitempty"`
+	ApprovedBy           string                 `json:"approved_by,omitempty"`
+	ApprovedAt           *time.Time             `json:"approved_at,omitempty"`
+	DriftStatus          string                 `json:"drift_status"`
+	DriftDetails         []ProductArtifactDrift `json:"drift_details"`
+	DriftCheckedAt       *time.Time             `json:"drift_checked_at,omitempty"`
+	IsLatest             bool                   `json:"is_latest"`
+	IsLTS                bool                   `json:"is_lts"`
+	DeprecatedAt         *time.Time             `json:"deprecated_at,omitempty"`
+	DeprecationMessage   string                 `json:"deprecation_message,omitempty"`
+	ReplacementVersion   string                 `json:"replacement_version,omitempty"`
+	SunsetAt             *time.Time             `json:"sunset_at,omitempty"`
+	Revision             int64                  `json:"revision"`
+	PublishedAt          time.Time              `json:"published_at"`
+	CreatedAt            time.Time              `json:"created_at"`
+	UpdatedAt            time.Time              `json:"updated_at"`
+	Manifest             ProductDefinition      `json:"-"`
 }
 
 type ProductVersionPin struct {
 	ID               string    `json:"id"`
 	OrganisationID   string    `json:"organisation_id"`
 	ProductID        string    `json:"product_id"`
+	Scope            string    `json:"scope"`
+	ScopeID          string    `json:"scope_id"`
 	CustomerID       string    `json:"customer_id"`
+	EnvironmentID    string    `json:"environment_id,omitempty"`
+	InstallationID   string    `json:"installation_id,omitempty"`
 	ProductVersionID string    `json:"product_version_id"`
 	ProductVersion   string    `json:"product_version"`
 	Reason           string    `json:"reason,omitempty"`
 	Revision         int64     `json:"revision"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type ProductInstallation struct {
+	ID             string    `json:"id"`
+	OrganisationID string    `json:"organisation_id"`
+	ProductID      string    `json:"product_id"`
+	CustomerID     string    `json:"customer_id"`
+	EnvironmentID  string    `json:"environment_id"`
+	ExternalID     string    `json:"external_id"`
+	Name           string    `json:"name"`
+	State          string    `json:"state"`
+	Revision       int64     `json:"revision"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type ProductVersionPinHistory struct {
+	ID             string    `json:"id"`
+	OrganisationID string    `json:"organisation_id"`
+	ProductID      string    `json:"product_id"`
+	PinID          string    `json:"pin_id"`
+	Scope          string    `json:"scope"`
+	ScopeID        string    `json:"scope_id"`
+	PriorVersion   string    `json:"prior_version,omitempty"`
+	ProductVersion string    `json:"product_version,omitempty"`
+	Action         string    `json:"action"`
+	Reason         string    `json:"reason,omitempty"`
+	ActorID        string    `json:"actor_id"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type ProductVersionChange struct {
+	Kind   string `json:"kind"`
+	Path   string `json:"path"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+}
+
+type ProductVersionDiff struct {
+	FromVersionID string                 `json:"from_version_id,omitempty"`
+	FromVersion   string                 `json:"from_version,omitempty"`
+	GeneratedAt   time.Time              `json:"generated_at"`
+	Summary       string                 `json:"summary"`
+	Added         []ProductVersionChange `json:"added"`
+	Removed       []ProductVersionChange `json:"removed"`
+	Changed       []ProductVersionChange `json:"changed"`
+}
+
+type ProductArtifactDrift struct {
+	Kind        string `json:"kind"`
+	ReferenceID string `json:"reference_id,omitempty"`
+	Name        string `json:"name"`
+	Expected    string `json:"expected,omitempty"`
+	Observed    string `json:"observed,omitempty"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
 }
 
 type ProductManifestArtifact struct {
@@ -101,6 +178,11 @@ type ProductVersionSummary struct {
 	ID                 string     `json:"id"`
 	Version            string     `json:"version"`
 	ProfileName        string     `json:"profile_name"`
+	ManifestHash       string     `json:"manifest_hash"`
+	ReleaseStage       string     `json:"release_stage"`
+	RolloutPercentage  int        `json:"rollout_percentage"`
+	PromotionState     string     `json:"promotion_state"`
+	DriftStatus        string     `json:"drift_status"`
 	IsLatest           bool       `json:"is_latest"`
 	IsLTS              bool       `json:"is_lts"`
 	Deprecated         bool       `json:"deprecated"`
@@ -115,11 +197,42 @@ type ProductManifest struct {
 	ProductName          string                      `json:"product_name"`
 	Description          string                      `json:"description"`
 	DefaultVersionPolicy string                      `json:"default_version_policy"`
+	CatalogRevision      int64                       `json:"catalog_revision"`
+	ManifestHash         string                      `json:"manifest_hash,omitempty"`
 	DefinitionRevision   int64                       `json:"definition_revision,omitempty"`
 	EffectiveVersion     *ProductVersionSummary      `json:"effective_version,omitempty"`
 	SelectionSource      string                      `json:"selection_source"`
+	CustomerID           string                      `json:"customer_id,omitempty"`
+	EnvironmentID        string                      `json:"environment_id,omitempty"`
+	InstallationID       string                      `json:"installation_id,omitempty"`
+	OperationalWarnings  []string                    `json:"operational_warnings"`
+	Artifacts            []ProductManifestArtifact   `json:"artifacts"`
 	Capabilities         []ProductManifestCapability `json:"capabilities"`
 	AvailableVersions    []ProductVersionSummary     `json:"available_versions"`
+}
+
+type ProductSelectionContext struct {
+	CustomerID     string
+	EnvironmentID  string
+	InstallationID string
+}
+
+type ProductVersionImpact struct {
+	ProductVersionID      string   `json:"product_version_id"`
+	ProductVersion        string   `json:"product_version"`
+	CustomerPins          int      `json:"customer_pins"`
+	EnvironmentPins       int      `json:"environment_pins"`
+	InstallationPins      int      `json:"installation_pins"`
+	AffectedCustomers     []string `json:"affected_customers"`
+	AffectedEnvironments  []string `json:"affected_environments"`
+	AffectedInstallations []string `json:"affected_installations"`
+	Requests30Days        int64    `json:"requests_30_days"`
+	ToolCalls30Days       int64    `json:"tool_calls_30_days"`
+}
+
+type ProductVersionActivity struct {
+	Requests  int64
+	ToolCalls int64
 }
 
 type ProductBinding struct {
@@ -494,6 +607,7 @@ type AnalyticsSummary struct {
 	ValidatedSuccess int64            `json:"validated_success"`
 	FirstPassRate    float64          `json:"first_pass_rate"`
 	Channels         map[string]int64 `json:"channels"`
+	Versions         map[string]int64 `json:"versions"`
 	Funnel           map[string]int64 `json:"funnel"`
 	DailyRequests    []AnalyticsPoint `json:"daily_requests"`
 	Since            time.Time        `json:"since"`

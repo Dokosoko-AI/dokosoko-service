@@ -251,7 +251,7 @@ func bindingForInput(input model.ProductBuildInput, referenceID, scope string, c
 		Scope:       scope,
 		Confidence:  confidence,
 		Evidence:    evidence,
-		Verified:    explicit || input.Kind == "openapi" || input.Kind == "mcp" || input.Kind == "tool",
+		Verified:    explicit || strings.TrimSpace(input.Version) != "" || input.Kind == "openapi" || input.Kind == "mcp" || input.Kind == "tool",
 	}
 }
 

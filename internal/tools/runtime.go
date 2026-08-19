@@ -35,6 +35,7 @@ type Store interface {
 type Principal struct {
 	Subject            string
 	VendorOrganisation string
+	InstallationID     string
 	Entitlements       map[string]bool
 	Confirmed          bool
 	RequestID          string

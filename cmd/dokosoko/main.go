@@ -87,12 +87,13 @@ func run() error {
 	toolProxy := toolruntime.NewRuntime(persistence, vault, nil, nil)
 	mcpBridge := mcpbridge.New(persistence, vault, baseURL, nil, nil)
 	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil)
+	usageReporter := identity.NewHookUsage(persistence, vault)
 	toolProxy.SetAuthorizer(identity.NewHookAuthorization(persistence, vault))
 	toolProxy.SetMCPExecutor(mcpBridge)
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
 	handler := httpapi.NewWithOptions(platform.NewWithVault(persistence, vault), httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), PackageGateway: packageGateway, ToolRuntime: toolProxy, IdentityBroker: identityBroker, ProviderRuntime: providerProxy, MCPBridge: mcpBridge,
+		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), PackageGateway: packageGateway, ToolRuntime: toolProxy, IdentityBroker: identityBroker, UsageReporter: usageReporter, ProviderRuntime: providerProxy, MCPBridge: mcpBridge,
 	})
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("DokoSoko listening on %s", address)

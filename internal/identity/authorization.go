@@ -54,7 +54,7 @@ func (h *HookAuthorization) Authorize(ctx context.Context, productID string, too
 		argumentKeys = append(argumentKeys, key)
 	}
 	sort.Strings(argumentKeys)
-	body, _ := json.Marshal(map[string]any{"operation": "tool.execute", "tool": tool.Namespace + "." + tool.Name, "product_id": productID, "subject": principal.Subject, "vendor_organisation_id": principal.VendorOrganisation, "argument_keys": argumentKeys})
+	body, _ := json.Marshal(map[string]any{"operation": "tool.execute", "tool": tool.Namespace + "." + tool.Name, "product_id": productID, "subject": principal.Subject, "vendor_organisation_id": principal.VendorOrganisation, "installation_id": principal.InstallationID, "argument_keys": argumentKeys})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), strings.NewReader(string(body)))
 	if err != nil {
 		return err

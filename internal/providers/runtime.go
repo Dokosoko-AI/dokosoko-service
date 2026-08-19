@@ -59,6 +59,7 @@ type Runtime struct {
 type Principal struct {
 	Subject            string
 	VendorOrganisation string
+	InstallationID     string
 	Entitlements       map[string]bool
 	RequestID          string
 }
@@ -252,7 +253,7 @@ func (r *Runtime) authorize(ctx context.Context, provider model.Provider, cfg pr
 		Allowed bool   `json:"allowed"`
 		Reason  string `json:"reason"`
 	}
-	err := r.post(ctx, provider, cfg.AuthorizePath, map[string]any{"operation": operation, "subject": principal.Subject, "vendor_organisation_id": principal.VendorOrganisation, "product_id": provider.ProductID, "details": details}, &response)
+	err := r.post(ctx, provider, cfg.AuthorizePath, map[string]any{"operation": operation, "subject": principal.Subject, "vendor_organisation_id": principal.VendorOrganisation, "installation_id": principal.InstallationID, "product_id": provider.ProductID, "details": details}, &response)
 	if err != nil || !response.Allowed {
 		return ErrDenied
 	}

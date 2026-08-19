@@ -66,10 +66,13 @@ type IdentityInput struct {
 	Scopes                  []string
 	Audience                string
 	OrganisationClaim       string
+	InstallationClaim       string
 	EntitlementHookURL      string
 	AllowedRedirectURIs     []string
 	AuthorizationHookURL    string
 	AuthorizationCredential string
+	UsageHookURL            string
+	UsageCredential         string
 }
 
 func validHTTPSOrigin(raw string) bool {
@@ -88,8 +91,9 @@ func validOAuthRedirect(raw string) bool {
 func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, actor Actor) (identity.VendorConfig, error) {
 	input.OrganisationID, input.ProductID = strings.TrimSpace(input.OrganisationID), strings.TrimSpace(input.ProductID)
 	input.Issuer, input.ClientID, input.ClientSecret = strings.TrimRight(strings.TrimSpace(input.Issuer), "/"), strings.TrimSpace(input.ClientID), strings.TrimSpace(input.ClientSecret)
-	input.Audience, input.OrganisationClaim, input.EntitlementHookURL = strings.TrimSpace(input.Audience), strings.TrimSpace(input.OrganisationClaim), strings.TrimSpace(input.EntitlementHookURL)
+	input.Audience, input.OrganisationClaim, input.InstallationClaim, input.EntitlementHookURL = strings.TrimSpace(input.Audience), strings.TrimSpace(input.OrganisationClaim), strings.TrimSpace(input.InstallationClaim), strings.TrimSpace(input.EntitlementHookURL)
 	input.AuthorizationHookURL, input.AuthorizationCredential = strings.TrimSpace(input.AuthorizationHookURL), strings.TrimSpace(input.AuthorizationCredential)
+	input.UsageHookURL, input.UsageCredential = strings.TrimSpace(input.UsageHookURL), strings.TrimSpace(input.UsageCredential)
 	if input.OrganisationID == "" || input.ProductID == "" || input.ClientID == "" || !validHTTPSOrigin(input.Issuer) {
 		return identity.VendorConfig{}, errors.New("organisation, product, HTTPS OIDC issuer, and client ID are required")
 	}
@@ -98,6 +102,9 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 	}
 	if input.AuthorizationHookURL != "" && !validHTTPSOrigin(input.AuthorizationHookURL) {
 		return identity.VendorConfig{}, errors.New("authorization hook must be a fixed HTTPS URL on the default port")
+	}
+	if input.UsageHookURL != "" && !validHTTPSOrigin(input.UsageHookURL) {
+		return identity.VendorConfig{}, errors.New("usage hook must be a fixed HTTPS URL on the default port")
 	}
 	if input.OrganisationClaim == "" {
 		input.OrganisationClaim = "org_id"
@@ -133,9 +140,9 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 		}
 	}
 	current, currentErr := s.store.VendorIdentity(ctx, input.ProductID)
-	config := identity.VendorConfig{OrganisationID: input.OrganisationID, ProductID: input.ProductID, Issuer: input.Issuer, ClientID: input.ClientID, Scopes: scopes, Audience: input.Audience, OrganisationClaim: input.OrganisationClaim, EntitlementHookURL: input.EntitlementHookURL, AllowedRedirectURIs: redirects, AuthorizationHookURL: input.AuthorizationHookURL}
+	config := identity.VendorConfig{OrganisationID: input.OrganisationID, ProductID: input.ProductID, Issuer: input.Issuer, ClientID: input.ClientID, Scopes: scopes, Audience: input.Audience, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, EntitlementHookURL: input.EntitlementHookURL, AllowedRedirectURIs: redirects, AuthorizationHookURL: input.AuthorizationHookURL, UsageHookURL: input.UsageHookURL}
 	if currentErr == nil {
-		config.ID, config.ClientSecretID, config.AuthorizationCredentialID = current.ID, current.ClientSecretID, current.AuthorizationCredentialID
+		config.ID, config.ClientSecretID, config.AuthorizationCredentialID, config.UsageCredentialID = current.ID, current.ClientSecretID, current.AuthorizationCredentialID, current.UsageCredentialID
 	} else {
 		var err error
 		config.ID, err = randomUUID()
@@ -185,11 +192,33 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 	if input.AuthorizationHookURL != "" && config.AuthorizationCredentialID == "" {
 		return identity.VendorConfig{}, errors.New("authorization hook credential is required")
 	}
+	if input.UsageHookURL == "" {
+		config.UsageCredentialID = ""
+	} else if input.UsageCredential != "" {
+		if s.vault == nil {
+			return identity.VendorConfig{}, errors.New("usage credential encryption is not configured")
+		}
+		usageSecretID, err := randomUUID()
+		if err != nil {
+			return identity.VendorConfig{}, err
+		}
+		encrypted, err := s.vault.Encrypt([]byte(input.UsageCredential), input.OrganisationID+":usage:"+usageSecretID)
+		if err != nil {
+			return identity.VendorConfig{}, err
+		}
+		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: usageSecretID, OrganisationID: input.OrganisationID, Name: "vendor-usage-" + usageSecretID, Purpose: "vendor_usage", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
+			return identity.VendorConfig{}, err
+		}
+		config.UsageCredentialID = usageSecretID
+	}
+	if input.UsageHookURL != "" && config.UsageCredentialID == "" {
+		return identity.VendorConfig{}, errors.New("usage hook credential is required")
+	}
 	updated, err := s.store.SaveVendorIdentity(ctx, config)
 	if err != nil {
 		return identity.VendorConfig{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "identity.vendor.configured", TargetType: "vendor_identity_provider", TargetID: updated.ID, Current: map[string]any{"issuer": updated.Issuer, "scopes": updated.Scopes, "redirect_count": len(updated.AllowedRedirectURIs), "entitlement_hook": updated.EntitlementHookURL != "", "authorization_hook": updated.AuthorizationHookURL != "", "credential_rotated": input.ClientSecret != "", "authorization_credential_rotated": input.AuthorizationCredential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "identity.vendor.configured", TargetType: "vendor_identity_provider", TargetID: updated.ID, Current: map[string]any{"issuer": updated.Issuer, "scopes": updated.Scopes, "organisation_claim": updated.OrganisationClaim, "installation_claim": updated.InstallationClaim, "redirect_count": len(updated.AllowedRedirectURIs), "entitlement_hook": updated.EntitlementHookURL != "", "authorization_hook": updated.AuthorizationHookURL != "", "usage_hook": updated.UsageHookURL != "", "credential_rotated": input.ClientSecret != "", "authorization_credential_rotated": input.AuthorizationCredential != "", "usage_credential_rotated": input.UsageCredential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return updated, nil
 }
 

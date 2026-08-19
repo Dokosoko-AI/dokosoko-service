@@ -39,6 +39,7 @@ type Server struct {
 	packageGateway  *packagegateway.Gateway
 	toolRuntime     *toolruntime.Runtime
 	identityBroker  *identity.Broker
+	usageReporter   identity.UsageReporter
 	providerRuntime *providerruntime.Runtime
 	mcpBridge       *mcpbridge.Manager
 	baseURL         string
@@ -55,6 +56,7 @@ type Options struct {
 	PackageGateway  *packagegateway.Gateway
 	ToolRuntime     *toolruntime.Runtime
 	IdentityBroker  *identity.Broker
+	UsageReporter   identity.UsageReporter
 	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
 	AllowDemoTokens bool
@@ -84,7 +86,7 @@ func NewWithUI(service *platform.Service, baseURL, uiDirectory string) http.Hand
 
 func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	baseURL := strings.TrimRight(options.BaseURL, "/")
-	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
+	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, usageReporter: options.UsageReporter, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -580,16 +582,19 @@ func (s *Server) vendorIdentity(w http.ResponseWriter, r *http.Request, productI
 			Scopes                  []string `json:"scopes"`
 			Audience                string   `json:"audience"`
 			OrganisationClaim       string   `json:"organisation_claim"`
+			InstallationClaim       string   `json:"installation_claim"`
 			EntitlementHookURL      string   `json:"entitlement_hook_url"`
 			AllowedRedirectURIs     []string `json:"allowed_redirect_uris"`
 			AuthorizationHookURL    string   `json:"authorization_hook_url"`
 			AuthorizationCredential string   `json:"authorization_credential"`
+			UsageHookURL            string   `json:"usage_hook_url"`
+			UsageCredential         string   `json:"usage_credential"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.ConfigureIdentity(r.Context(), platform.IdentityInput{OrganisationID: input.OrganisationID, ProductID: productID, Issuer: input.Issuer, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: input.Scopes, Audience: input.Audience, OrganisationClaim: input.OrganisationClaim, EntitlementHookURL: input.EntitlementHookURL, AllowedRedirectURIs: input.AllowedRedirectURIs, AuthorizationHookURL: input.AuthorizationHookURL, AuthorizationCredential: input.AuthorizationCredential}, actor(r))
+		value, err := s.service.ConfigureIdentity(r.Context(), platform.IdentityInput{OrganisationID: input.OrganisationID, ProductID: productID, Issuer: input.Issuer, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: input.Scopes, Audience: input.Audience, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, EntitlementHookURL: input.EntitlementHookURL, AllowedRedirectURIs: input.AllowedRedirectURIs, AuthorizationHookURL: input.AuthorizationHookURL, AuthorizationCredential: input.AuthorizationCredential, UsageHookURL: input.UsageHookURL, UsageCredential: input.UsageCredential}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -849,10 +854,22 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.productVersions(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "versions" && r.Method == http.MethodPatch:
 		s.productVersionLifecycle(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "versions" && parts[6] == "impact" && r.Method == http.MethodGet:
+		s.productVersionImpact(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "versions" && parts[6] == "diff" && r.Method == http.MethodGet:
+		s.productVersionDiff(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "versions" && parts[6] == "reconcile" && r.Method == http.MethodPost:
+		s.reconcileProductVersion(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "versions" && parts[6] == "promotion" && r.Method == http.MethodPost:
+		s.promoteProductVersion(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "version-pins":
 		s.productVersionPins(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "version-pins" && parts[5] == "history" && r.Method == http.MethodGet:
+		s.productVersionPinHistory(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "version-pins" && r.Method == http.MethodDelete:
 		s.deleteProductVersionPin(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "installations":
+		s.productInstallations(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "organisations" && parts[4] == "audit" && r.Method == http.MethodGet:
 		s.auditEvents(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "environments":
@@ -916,15 +933,16 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) productSettings(w http.ResponseWriter, r *http.Request, productID string) {
 	var input struct {
-		Description          string `json:"description"`
-		DefaultVersionPolicy string `json:"default_version_policy"`
-		Revision             int64  `json:"revision"`
+		Description              string `json:"description"`
+		DefaultVersionPolicy     string `json:"default_version_policy"`
+		RequirePromotionApproval bool   `json:"require_promotion_approval"`
+		Revision                 int64  `json:"revision"`
 	}
 	if err := decodeJSON(r.Body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	value, err := s.service.UpdateProductSettings(r.Context(), productID, input.Description, input.DefaultVersionPolicy, input.Revision, actor(r))
+	value, err := s.service.UpdateProductSettingsWithApproval(r.Context(), productID, input.Description, input.DefaultVersionPolicy, input.RequirePromotionApproval, input.Revision, actor(r))
 	if err != nil {
 		s.productCatalogError(w, err)
 		return
@@ -959,16 +977,18 @@ func (s *Server) productVersions(w http.ResponseWriter, r *http.Request, product
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			Version   string `json:"version"`
-			ProfileID string `json:"profile_id"`
-			IsLatest  bool   `json:"is_latest"`
-			IsLTS     bool   `json:"is_lts"`
+			Version           string `json:"version"`
+			ProfileID         string `json:"profile_id"`
+			IsLatest          bool   `json:"is_latest"`
+			IsLTS             bool   `json:"is_lts"`
+			ReleaseStage      string `json:"release_stage"`
+			RolloutPercentage int    `json:"rollout_percentage"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateProductVersion(r.Context(), productID, platform.ProductVersionInput{Version: input.Version, ProfileID: input.ProfileID, IsLatest: input.IsLatest, IsLTS: input.IsLTS}, actor(r))
+		value, err := s.service.CreateProductVersion(r.Context(), productID, platform.ProductVersionInput{Version: input.Version, ProfileID: input.ProfileID, IsLatest: input.IsLatest, IsLTS: input.IsLTS, ReleaseStage: input.ReleaseStage, RolloutPercentage: input.RolloutPercentage}, actor(r))
 		if err != nil {
 			s.productCatalogError(w, err)
 			return
@@ -988,13 +1008,15 @@ func (s *Server) productVersionLifecycle(w http.ResponseWriter, r *http.Request,
 		DeprecationMessage string     `json:"deprecation_message"`
 		ReplacementVersion string     `json:"replacement_version"`
 		SunsetAt           *time.Time `json:"sunset_at"`
+		RolloutPercentage  int        `json:"rollout_percentage"`
+		AcknowledgeImpact  bool       `json:"acknowledge_impact"`
 		Revision           int64      `json:"revision"`
 	}
 	if err := decodeJSON(r.Body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	value, err := s.service.UpdateProductVersionLifecycle(r.Context(), productID, versionID, platform.ProductVersionLifecycleInput{IsLatest: input.IsLatest, IsLTS: input.IsLTS, Deprecated: input.Deprecated, DeprecationMessage: input.DeprecationMessage, ReplacementVersion: input.ReplacementVersion, SunsetAt: input.SunsetAt, Revision: input.Revision}, actor(r))
+	value, err := s.service.UpdateProductVersionLifecycle(r.Context(), productID, versionID, platform.ProductVersionLifecycleInput{IsLatest: input.IsLatest, IsLTS: input.IsLTS, Deprecated: input.Deprecated, DeprecationMessage: input.DeprecationMessage, ReplacementVersion: input.ReplacementVersion, SunsetAt: input.SunsetAt, RolloutPercentage: input.RolloutPercentage, AcknowledgeImpact: input.AcknowledgeImpact, Revision: input.Revision}, actor(r))
 	if err != nil {
 		s.productCatalogError(w, err)
 		return
@@ -1013,15 +1035,23 @@ func (s *Server) productVersionPins(w http.ResponseWriter, r *http.Request, prod
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
+			Scope            string `json:"scope"`
+			ScopeID          string `json:"scope_id"`
 			CustomerID       string `json:"customer_id"`
+			EnvironmentID    string `json:"environment_id"`
+			InstallationID   string `json:"installation_id"`
 			ProductVersionID string `json:"product_version_id"`
 			Reason           string `json:"reason"`
+			Revision         int64  `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.SaveProductVersionPin(r.Context(), productID, input.CustomerID, input.ProductVersionID, input.Reason, actor(r))
+		if input.Scope == "" {
+			input.Scope, input.ScopeID = "customer", input.CustomerID
+		}
+		value, err := s.service.SaveScopedProductVersionPin(r.Context(), productID, platform.ProductVersionPinInput{Scope: input.Scope, ScopeID: input.ScopeID, CustomerID: input.CustomerID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: input.ProductVersionID, Reason: input.Reason, Revision: input.Revision}, actor(r))
 		if err != nil {
 			s.productCatalogError(w, err)
 			return
@@ -1031,6 +1061,102 @@ func (s *Server) productVersionPins(w http.ResponseWriter, r *http.Request, prod
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) productVersionPinHistory(w http.ResponseWriter, r *http.Request, productID string) {
+	values, err := s.service.Store().ProductVersionPinHistory(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
+func (s *Server) productInstallations(w http.ResponseWriter, r *http.Request, productID string) {
+	switch r.Method {
+	case http.MethodGet:
+		values, err := s.service.Store().ProductInstallations(r.Context(), productID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": values})
+	case http.MethodPost:
+		var input struct {
+			ID            string `json:"id"`
+			CustomerID    string `json:"customer_id"`
+			EnvironmentID string `json:"environment_id"`
+			ExternalID    string `json:"external_id"`
+			Name          string `json:"name"`
+			State         string `json:"state"`
+			Revision      int64  `json:"revision"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.service.SaveProductInstallation(r.Context(), productID, platform.ProductInstallationInput{ID: input.ID, CustomerID: input.CustomerID, EnvironmentID: input.EnvironmentID, ExternalID: input.ExternalID, Name: input.Name, State: input.State, Revision: input.Revision}, actor(r))
+		if err != nil {
+			s.productCatalogError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) productVersionImpact(w http.ResponseWriter, r *http.Request, productID, versionID string) {
+	value, err := s.service.ProductVersionImpact(r.Context(), productID, versionID)
+	if err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) productVersionDiff(w http.ResponseWriter, r *http.Request, productID, versionID string) {
+	value, err := s.service.Store().ProductVersion(r.Context(), productID, versionID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value.Diff)
+}
+
+func (s *Server) reconcileProductVersion(w http.ResponseWriter, r *http.Request, productID, versionID string) {
+	var input struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.ReconcileProductVersion(r.Context(), productID, versionID, input.Revision, actor(r))
+	if err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) promoteProductVersion(w http.ResponseWriter, r *http.Request, productID, versionID string) {
+	var input struct {
+		Action   string `json:"action"`
+		Note     string `json:"note"`
+		Revision int64  `json:"revision"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.PromoteProductVersion(r.Context(), productID, versionID, platform.ProductVersionPromotionInput{Action: input.Action, Note: input.Note, Revision: input.Revision}, actor(r))
+	if err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) deleteProductVersionPin(w http.ResponseWriter, r *http.Request, productID, pinID string) {
@@ -1268,6 +1394,12 @@ func (s *Server) productCatalogError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "product_version_deprecated", err.Error(), nil)
 	case errors.Is(err, platform.ErrProductVersionLifecycle):
 		writeError(w, http.StatusUnprocessableEntity, "invalid_product_version_lifecycle", err.Error(), nil)
+	case errors.Is(err, platform.ErrProductVersionDrifted):
+		writeError(w, http.StatusConflict, "product_version_drifted", err.Error(), nil)
+	case errors.Is(err, platform.ErrPromotionApprovalRequired), errors.Is(err, platform.ErrPromotionSeparationOfDuties):
+		writeError(w, http.StatusConflict, "promotion_approval_required", err.Error(), nil)
+	case errors.Is(err, platform.ErrProductVersionImpact):
+		writeError(w, http.StatusConflict, "product_version_impact_acknowledgement_required", err.Error(), nil)
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_product_catalog", err.Error(), nil)
 	}
@@ -1584,6 +1716,38 @@ type rpcRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
+func usageToolDefinition() map[string]any {
+	valueSchema := map[string]any{"oneOf": []map[string]any{{"type": "string", "maxLength": 500}, {"type": "number"}, {"type": "boolean"}, {"type": "null"}}}
+	itemSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"key":         map[string]any{"type": "string", "pattern": `^[a-z][a-z0-9_.-]{0,63}$`},
+			"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": 80},
+			"value":       valueSchema,
+			"format":      map[string]any{"type": "string", "enum": []string{"text", "number", "percentage", "date", "datetime", "duration", "currency"}},
+			"unit":        map[string]any{"type": "string", "maxLength": 32},
+			"description": map[string]any{"type": "string", "maxLength": 500},
+		},
+		"required": []string{"key", "label", "value"},
+	}
+	return map[string]any{
+		"name":        "usage.get",
+		"description": "Return the current vendor-provided usage report for the authenticated account. DokoSoko does not calculate or store these values.",
+		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}},
+		"outputSchema": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"as_of": map[string]any{"type": "string", "format": "date-time"},
+				"items": map[string]any{"type": "array", "maxItems": 50, "items": itemSchema},
+			},
+			"required": []string{"as_of", "items"},
+		},
+		"annotations": map[string]any{"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false},
+	}
+}
+
 func (s *Server) publicMCP(w http.ResponseWriter, r *http.Request) {
 	productID := r.PathValue("productID")
 	product, err := s.service.Store().Product(r.Context(), productID)
@@ -1663,14 +1827,26 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	channel, actorKind, actorID := "public_mcp", "anonymous", ""
-	customerID := ""
+	selection := model.ProductSelectionContext{}
 	if !public {
 		principal, _ := r.Context().Value(principalKey).(identity.Principal)
 		channel, actorKind, actorID = "private_mcp", "vendor_user", pseudonym(productID, principal)
-		customerID = principal.VendorOrganisation
+		selection.CustomerID, selection.InstallationID = principal.VendorOrganisation, principal.InstallationID
 	}
-	productManifest, manifestErr := s.service.ProductManifest(r.Context(), productID, customerID)
-	s.recordAnalytics(r.Context(), productID, "mcp.request", actorKind, actorID, map[string]any{"channel": channel, "method": request.Method})
+	productManifest, manifestErr := s.service.ProductManifestFor(r.Context(), productID, selection)
+	analyticsDimensions := map[string]any{"channel": channel, "method": request.Method}
+	if manifestErr == nil {
+		analyticsDimensions["catalog_revision"] = productManifest.CatalogRevision
+		analyticsDimensions["selection_source"] = productManifest.SelectionSource
+		analyticsDimensions["environment_id"] = productManifest.EnvironmentID
+		analyticsDimensions["installation_id"] = productManifest.InstallationID
+		if productManifest.EffectiveVersion != nil {
+			analyticsDimensions["product_version_id"] = productManifest.EffectiveVersion.ID
+			analyticsDimensions["product_version"] = productManifest.EffectiveVersion.Version
+			analyticsDimensions["manifest_hash"] = productManifest.ManifestHash
+		}
+	}
+	s.recordAnalytics(r.Context(), productID, "mcp.request", actorKind, actorID, analyticsDimensions)
 	switch request.Method {
 	case "server/discover":
 		if manifestErr != nil {
@@ -1681,7 +1857,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		if public {
 			cacheScope = "public"
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "product": productManifest, "instructions": "Use the effective DokoSoko product version and capability releases returned in product discovery. Customer pins override default product channels.", "ttlMs": 300000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": "Use the effective DokoSoko product version and capability releases returned in product discovery. Authenticated installation, environment, and customer pins override default product channels in that order.", "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/list":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Product discovery failed")
@@ -1700,6 +1876,12 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				map[string]any{"name": "integration_runs.start", "description": "Start an environment-scoped integration outcome run.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"environment_id": map[string]any{"type": "string"}, "requested_outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"environment_id", "requested_outcome"}}},
 				map[string]any{"name": "integration_runs.complete", "description": "Complete a run with a deterministic validation result.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"run_id": map[string]any{"type": "string"}, "reported_success": map[string]any{"type": "boolean"}, "validated_success": map[string]any{"type": "boolean"}, "failure_code": map[string]any{"type": "string", "maxLength": 120}}, "required": []string{"run_id", "validated_success"}}},
 			)
+			if s.usageReporter != nil {
+				config, err := s.service.Store().VendorIdentity(r.Context(), productID)
+				if err == nil && config.UsageHookURL != "" {
+					tools = append(tools, usageToolDefinition())
+				}
+			}
 			if s.mcpBridge != nil {
 				connections, _ := s.service.Store().MCPConnections(r.Context(), productID)
 				for _, connection := range connections {
@@ -1720,7 +1902,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				custom, err := s.toolRuntime.Available(r.Context(), productID, principal.Entitlements)
 				if err == nil {
 					for _, item := range custom {
-						_, allowed, allowErr := s.service.ProductVersionAllowsTool(r.Context(), productID, customerID, item)
+						_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(r.Context(), productID, selection, item)
 						if allowErr != nil || !allowed {
 							continue
 						}
@@ -1737,7 +1919,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		if public {
 			cacheScope = "public"
 		}
-		versionMeta := map[string]any{"product_id": productManifest.ProductID, "definition_revision": productManifest.DefinitionRevision, "selection_source": productManifest.SelectionSource}
+		versionMeta := map[string]any{"product_id": productManifest.ProductID, "catalog_revision": productManifest.CatalogRevision, "manifest_hash": productManifest.ManifestHash, "definition_revision": productManifest.DefinitionRevision, "selection_source": productManifest.SelectionSource, "environment_id": productManifest.EnvironmentID, "installation_id": productManifest.InstallationID}
 		if productManifest.EffectiveVersion != nil {
 			versionMeta["version"] = productManifest.EffectiveVersion.Version
 			versionMeta["is_latest"] = productManifest.EffectiveVersion.IsLatest
@@ -1747,9 +1929,9 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		for _, definition := range tools {
 			definition["_meta"] = map[string]any{"com.dokosoko/productVersion": versionMeta}
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "product": productManifest, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/call":
-		s.callTool(r.Context(), w, request, productID, public)
+		s.callTool(r.Context(), w, request, productID, public, productManifest, manifestErr)
 	default:
 		writeRPCError(w, request.ID, -32601, "Method not found")
 	}
@@ -1789,7 +1971,7 @@ func (s *Server) validateStatelessMCPv2(r *http.Request, request rpcRequest) err
 	return nil
 }
 
-func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rpcRequest, productID string, public bool) {
+func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rpcRequest, productID string, public bool, productManifest model.ProductManifest, manifestErr error) {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -1806,30 +1988,52 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 	if !public {
 		actorKind, actorID, channel = "vendor_user", pseudonym(productID, principal), "private_mcp"
 	}
-	s.recordAnalytics(ctx, productID, "tool.called", actorKind, actorID, map[string]any{"channel": channel, "tool": params.Name})
+	selection := model.ProductSelectionContext{}
+	if !public {
+		selection.CustomerID, selection.InstallationID = principal.VendorOrganisation, principal.InstallationID
+	}
+	dimensions := map[string]any{"channel": channel, "tool": params.Name}
+	if manifestErr == nil {
+		dimensions["catalog_revision"], dimensions["selection_source"] = productManifest.CatalogRevision, productManifest.SelectionSource
+		dimensions["environment_id"], dimensions["installation_id"] = productManifest.EnvironmentID, productManifest.InstallationID
+		if productManifest.EffectiveVersion != nil {
+			dimensions["product_version_id"], dimensions["product_version"], dimensions["manifest_hash"] = productManifest.EffectiveVersion.ID, productManifest.EffectiveVersion.Version, productManifest.ManifestHash
+		}
+	}
+	s.recordAnalytics(ctx, productID, "tool.called", actorKind, actorID, dimensions)
 	switch params.Name {
 	case "product.get_manifest":
-		customerID := ""
-		if !public {
-			customerID = principal.VendorOrganisation
-		}
-		value, err := s.service.ProductManifest(ctx, productID, customerID)
-		if err != nil {
+		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Product discovery failed")
 			return
 		}
-		writeToolResult(w, request.ID, value)
+		writeToolResult(w, request.ID, productManifest)
 	case "product.versions.list":
-		customerID := ""
-		if !public {
-			customerID = principal.VendorOrganisation
-		}
-		value, err := s.service.ProductManifest(ctx, productID, customerID)
-		if err != nil {
+		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Product version discovery failed")
 			return
 		}
-		writeToolResult(w, request.ID, map[string]any{"product_id": value.ProductID, "effective_version": value.EffectiveVersion, "selection_source": value.SelectionSource, "available_versions": value.AvailableVersions})
+		writeToolResult(w, request.ID, map[string]any{"product_id": productManifest.ProductID, "catalog_revision": productManifest.CatalogRevision, "manifest_hash": productManifest.ManifestHash, "effective_version": productManifest.EffectiveVersion, "selection_source": productManifest.SelectionSource, "available_versions": productManifest.AvailableVersions, "operational_warnings": productManifest.OperationalWarnings})
+	case "usage.get":
+		if public || s.usageReporter == nil {
+			writeRPCError(w, request.ID, -32601, "Tool is not available")
+			return
+		}
+		if len(params.Arguments) != 0 {
+			writeRPCError(w, request.ID, -32602, "Invalid params")
+			return
+		}
+		value, err := s.usageReporter.Report(ctx, productID, principal)
+		if err != nil {
+			if errors.Is(err, identity.ErrUsageDenied) {
+				writeRPCError(w, request.ID, -32003, "Usage report is unavailable for this identity")
+				return
+			}
+			writeRPCError(w, request.ID, -32603, "Usage report could not be retrieved")
+			return
+		}
+		s.recordAnalytics(ctx, productID, "usage.retrieved", "vendor_user", pseudonym(productID, principal), map[string]any{"channel": "private_mcp"})
+		writeToolResult(w, request.ID, value)
 	case "mcp_connections.authorize":
 		if public || s.mcpBridge == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
@@ -1837,7 +2041,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		connectionID, _ := params.Arguments["connection_id"].(string)
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, Entitlements: principal.Entitlements, RequestID: requestID})
+		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID})
 		if err != nil {
 			writeRPCError(w, request.ID, -32003, "Upstream user authorization could not be started")
 			return
@@ -1945,7 +2149,21 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 				writeRPCError(w, request.ID, -32603, "Search failed")
 				return
 			}
-			writeToolResult(w, request.ID, items)
+			filtered := make([]model.KnowledgeRecord, 0, len(items))
+			for _, item := range items {
+				allowed := false
+				for _, kind := range []string{"docs", "openapi", "git"} {
+					managed, candidateAllowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, kind, item.SourceID, "", "")
+					if allowErr == nil && (!managed || candidateAllowed) {
+						allowed = true
+						break
+					}
+				}
+				if allowed {
+					filtered = append(filtered, item)
+				}
+			}
+			writeToolResult(w, request.ID, filtered)
 			return
 		}
 		if principal.ProductID != productID {
@@ -1957,7 +2175,21 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32603, "Search failed")
 			return
 		}
-		writeToolResult(w, request.ID, items)
+		filtered := make([]model.KnowledgeRecord, 0, len(items))
+		for _, item := range items {
+			allowed := false
+			for _, kind := range []string{"docs", "openapi", "git"} {
+				managed, candidateAllowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, kind, item.SourceID, "", "")
+				if allowErr == nil && (!managed || candidateAllowed) {
+					allowed = true
+					break
+				}
+			}
+			if allowed {
+				filtered = append(filtered, item)
+			}
+		}
+		writeToolResult(w, request.ID, filtered)
 	case "find_package":
 		packages, err := s.service.Store().Packages(ctx, productID)
 		if err != nil {
@@ -1970,6 +2202,10 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			if public && (!item.Published || item.Visibility != model.VisibilityPublic) {
 				continue
 			}
+			managed, allowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, "package", item.ID, item.Name, item.Version)
+			if allowErr != nil || (managed && !allowed) {
+				continue
+			}
 			if query == "" || strings.Contains(strings.ToLower(item.Name), strings.ToLower(query)) {
 				items = append(items, item)
 			}
@@ -1980,6 +2216,11 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		item, err := s.service.Store().Package(ctx, productID, id)
 		if err != nil || (public && (!item.Published || item.Visibility != model.VisibilityPublic)) {
 			writeToolResult(w, request.ID, map[string]any{"error": "package_not_found"})
+			return
+		}
+		managed, allowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, "package", item.ID, item.Name, item.Version)
+		if allowErr != nil || (managed && !allowed) {
+			writeToolResult(w, request.ID, map[string]any{"error": "package_not_in_effective_product_version"})
 			return
 		}
 		writeToolResult(w, request.ID, item)
@@ -1997,7 +2238,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 					if candidate.Namespace+"."+candidate.Name != params.Name {
 						continue
 					}
-					_, allowed, allowErr := s.service.ProductVersionAllowsTool(ctx, productID, principal.VendorOrganisation, candidate)
+					_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(ctx, productID, selection, candidate)
 					if allowErr != nil || !allowed {
 						writeRPCError(w, request.ID, -32003, "Tool is not included in the effective product version")
 						return
@@ -2005,7 +2246,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 					break
 				}
 			}
-			value, err := s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, Entitlements: principal.Entitlements, Confirmed: params.Meta.Confirmed, RequestID: requestID})
+			value, err := s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, Confirmed: params.Meta.Confirmed, RequestID: requestID})
 			if err == nil {
 				if upstream, ok := value.(toolruntime.MCPCallResult); ok {
 					writeRPC(w, request.ID, upstream.Result)
@@ -2039,7 +2280,7 @@ func decodeArguments(arguments map[string]any, destination any) error {
 
 func providerPrincipal(principal identity.Principal, ctx context.Context) providerruntime.Principal {
 	requestID, _ := ctx.Value(requestIDKey).(string)
-	return providerruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, Entitlements: principal.Entitlements, RequestID: requestID}
+	return providerruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID}
 }
 
 func providerRPCError(w http.ResponseWriter, id any, err error) {

@@ -23,14 +23,22 @@ type Store interface {
 	CreateEnvironment(context.Context, model.Environment) (model.Environment, error)
 	Product(context.Context, string) (model.Product, error)
 	UpdateProduct(context.Context, model.Product, int64) (model.Product, error)
+	BumpProductCatalogRevision(context.Context, string) (int64, error)
 	ProductVersions(context.Context, string) ([]model.ProductVersion, error)
 	ProductVersion(context.Context, string, string) (model.ProductVersion, error)
 	CreateProductVersion(context.Context, model.ProductVersion) (model.ProductVersion, error)
 	UpdateProductVersion(context.Context, model.ProductVersion, int64) (model.ProductVersion, error)
 	ProductVersionPins(context.Context, string) ([]model.ProductVersionPin, error)
-	ProductVersionPin(context.Context, string, string) (model.ProductVersionPin, error)
-	SaveProductVersionPin(context.Context, model.ProductVersionPin) (model.ProductVersionPin, error)
+	ProductVersionPin(context.Context, string, string, string) (model.ProductVersionPin, error)
+	SaveProductVersionPin(context.Context, model.ProductVersionPin, int64) (model.ProductVersionPin, error)
 	DeleteProductVersionPin(context.Context, string, string) error
+	ProductVersionPinHistory(context.Context, string) ([]model.ProductVersionPinHistory, error)
+	AppendProductVersionPinHistory(context.Context, model.ProductVersionPinHistory) error
+	ProductInstallations(context.Context, string) ([]model.ProductInstallation, error)
+	ProductInstallation(context.Context, string, string) (model.ProductInstallation, error)
+	ProductInstallationByExternalID(context.Context, string, string) (model.ProductInstallation, error)
+	SaveProductInstallation(context.Context, model.ProductInstallation, int64) (model.ProductInstallation, error)
+	ProductVersionActivity(context.Context, string, string, time.Time) (model.ProductVersionActivity, error)
 	ProductDefinition(context.Context, string) (model.ProductDefinition, error)
 	SaveProductDefinition(context.Context, model.ProductDefinition, int64) (model.ProductDefinition, error)
 	ProductBuilds(context.Context, string) ([]model.ProductBuild, error)
@@ -93,6 +101,7 @@ type Store interface {
 	PrivateKnowledge(context.Context, string, string) ([]model.KnowledgeRecord, error)
 	AppendAnalytics(context.Context, model.AnalyticsEvent) error
 	AnalyticsSummary(context.Context, string, time.Time) (model.AnalyticsSummary, error)
+	LLMTokensUsed(context.Context, string, string, time.Time) (int64, error)
 	AppendAudit(context.Context, model.AuditEvent) error
 	AuditEvents(context.Context, string) ([]model.AuditEvent, error)
 }

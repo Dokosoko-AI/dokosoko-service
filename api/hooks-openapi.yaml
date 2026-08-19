@@ -1,16 +1,18 @@
 openapi: 3.1.0
 info:
   title: DokoSoko Vendor Hooks API
-  version: 2026-08-01
+  version: 2026-08-19
   description: >-
     Reference contract for the vendor endpoints DokoSoko calls to resolve
-    entitlements, authorize custom-tool execution, and obtain short-lived
-    package URLs. The paths in this document are examples: DokoSoko stores a
-    fixed full HTTPS URL for each hook, so vendors may choose different paths.
+    entitlements, proxy customer usage reports, authorize custom-tool
+    execution, and obtain short-lived package URLs. The paths in this document
+    are examples: DokoSoko stores a fixed full HTTPS URL for each hook, so
+    vendors may choose different paths.
 servers:
   - url: https://hooks.vendor.example.com
 tags:
   - name: Identity policy
+  - name: Account usage
   - name: Tool policy
   - name: Package delivery
 paths:
@@ -32,6 +34,7 @@ paths:
             example:
               subject: user_123
               vendor_organisation_id: org_customer_42
+              installation_id: install_customer_42_prod
               product_id: prod_dokosoko
       responses:
         "200":
@@ -44,6 +47,44 @@ paths:
                   developer.pro: true
                   projects.create: true
                   production.write: false
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /usage:
+    post:
+      tags: [Account usage]
+      operationId: getUsageReport
+      summary: Return customer-defined usage values for a vendor identity
+      description: >-
+        Called on demand by the authenticated Private MCP usage.get tool. The
+        bearer token is a dedicated encrypted service credential. DokoSoko
+        supplies the authenticated subject and vendor organisation, validates
+        the bounded response envelope, and proxies it without calculating,
+        caching, or persisting any returned value.
+      security: [{ serviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UsageRequest" }
+            example:
+              product_id: prod_dokosoko
+              subject: https://id.vendor.example.com|user_123
+              vendor_organisation_id: org_customer_42
+              installation_id: install_customer_42_prod
+      responses:
+        "200":
+          description: Ordered, vendor-defined scalar usage values.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageReport" }
+              example:
+                as_of: "2026-08-19T05:30:00Z"
+                items:
+                  - { key: credits_used, label: Used, value: 720, format: number, unit: credits }
+                  - { key: credits_available, label: Available, value: 280, format: number, unit: credits }
+                  - { key: next_renewal, label: Next renewal, value: "2026-09-01T00:00:00Z", format: datetime }
+                  - { key: trial_completion, label: Trial completes, value: "2026-08-31T23:59:59Z", format: datetime }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -68,6 +109,7 @@ paths:
               product_id: prod_dokosoko
               subject: https://id.vendor.example.com|user_123
               vendor_organisation_id: org_customer_42
+              installation_id: install_customer_42_prod
               argument_keys: [account_id, amount, currency]
       responses:
         "200":
@@ -138,6 +180,9 @@ components:
       properties:
         subject: { type: string, minLength: 1 }
         vendor_organisation_id: { type: string }
+        installation_id:
+          type: string
+          description: Stable installation identifier copied from the configured OIDC claim, when present.
         product_id: { type: string, minLength: 1 }
       required: [subject, vendor_organisation_id, product_id]
     EntitlementResponse:
@@ -148,6 +193,47 @@ components:
           type: object
           additionalProperties: { type: boolean }
       required: [entitlements]
+    UsageRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string, minLength: 1 }
+        subject: { type: string, minLength: 1 }
+        vendor_organisation_id: { type: string }
+        installation_id:
+          type: string
+          description: Stable installation identifier copied from the authenticated DokoSoko principal, when present.
+      required: [product_id, subject, vendor_organisation_id]
+    UsageReport:
+      type: object
+      additionalProperties: false
+      properties:
+        as_of: { type: string, format: date-time }
+        items:
+          type: array
+          maxItems: 50
+          description: Ordered customer-defined values; keys must be unique within a report.
+          items: { $ref: "#/components/schemas/UsageItem" }
+      required: [as_of, items]
+    UsageItem:
+      type: object
+      additionalProperties: false
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_.-]{0,63}$' }
+        label: { type: string, minLength: 1, maxLength: 80 }
+        value:
+          description: Vendor-provided scalar value. Null means currently unavailable.
+          oneOf:
+            - { type: string, maxLength: 500 }
+            - { type: number }
+            - { type: boolean }
+            - { type: "null" }
+        format:
+          type: string
+          enum: [text, number, percentage, date, datetime, duration, currency]
+        unit: { type: string, maxLength: 32 }
+        description: { type: string, maxLength: 500 }
+      required: [key, label, value]
     ToolAuthorizationRequest:
       type: object
       additionalProperties: false
@@ -157,6 +243,9 @@ components:
         product_id: { type: string, minLength: 1 }
         subject: { type: string, minLength: 1 }
         vendor_organisation_id: { type: string }
+        installation_id:
+          type: string
+          description: Stable installation identifier copied from the authenticated DokoSoko principal, when present.
         argument_keys:
           type: array
           uniqueItems: true

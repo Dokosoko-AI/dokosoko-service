@@ -158,7 +158,7 @@ func (b *Broker) Callback(ctx context.Context, productID, rawState, code string)
 	if err != nil {
 		return CallbackResult{}, err
 	}
-	if err := b.repository.CreateOAuthCode(ctx, OAuthCode{Digest: digest(rawCode), ProductID: productID, ClientID: state.ClientID, RedirectURI: state.RedirectURI, DownstreamChallenge: state.DownstreamChallenge, Issuer: claims.Issuer, Subject: claims.Subject, Email: claims.Email, DisplayName: claims.DisplayName, VendorOrganisation: claims.VendorOrganisation, Entitlements: entitlements, ExpiresAt: b.now().Add(5 * time.Minute)}); err != nil {
+	if err := b.repository.CreateOAuthCode(ctx, OAuthCode{Digest: digest(rawCode), ProductID: productID, ClientID: state.ClientID, RedirectURI: state.RedirectURI, DownstreamChallenge: state.DownstreamChallenge, Issuer: claims.Issuer, Subject: claims.Subject, Email: claims.Email, DisplayName: claims.DisplayName, VendorOrganisation: claims.VendorOrganisation, InstallationID: claims.InstallationID, Entitlements: entitlements, ExpiresAt: b.now().Add(5 * time.Minute)}); err != nil {
 		return CallbackResult{}, err
 	}
 	redirect, _ := url.Parse(state.RedirectURI)
@@ -180,11 +180,11 @@ func (b *Broker) Exchange(ctx context.Context, rawCode, verifier, clientID, redi
 	}
 	now := b.now()
 	scopes := []string{"mcp:private"}
-	record := AccessToken{Digest: digest(rawToken), ProductID: code.ProductID, ClientID: code.ClientID, Issuer: code.Issuer, Subject: code.Subject, Email: code.Email, DisplayName: code.DisplayName, VendorOrganisation: code.VendorOrganisation, Entitlements: code.Entitlements, Scopes: scopes, ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+	record := AccessToken{Digest: digest(rawToken), ProductID: code.ProductID, ClientID: code.ClientID, Issuer: code.Issuer, Subject: code.Subject, Email: code.Email, DisplayName: code.DisplayName, VendorOrganisation: code.VendorOrganisation, InstallationID: code.InstallationID, Entitlements: code.Entitlements, Scopes: scopes, ExpiresAt: now.Add(time.Hour), CreatedAt: now}
 	if err := b.repository.CreateAccessToken(ctx, record); err != nil {
 		return TokenResult{}, err
 	}
-	return TokenResult{AccessToken: "doko_at_" + rawToken, TokenType: "Bearer", ExpiresIn: 3600, Scope: strings.Join(scopes, " "), Principal: Principal{ProductID: record.ProductID, ClientID: record.ClientID, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, VendorOrganisation: record.VendorOrganisation, Entitlements: record.Entitlements, Scopes: record.Scopes}}, nil
+	return TokenResult{AccessToken: "doko_at_" + rawToken, TokenType: "Bearer", ExpiresIn: 3600, Scope: strings.Join(scopes, " "), Principal: Principal{ProductID: record.ProductID, ClientID: record.ClientID, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, VendorOrganisation: record.VendorOrganisation, InstallationID: record.InstallationID, Entitlements: record.Entitlements, Scopes: record.Scopes}}, nil
 }
 
 func (b *Broker) Authenticate(ctx context.Context, token string) (Principal, error) {
@@ -195,7 +195,7 @@ func (b *Broker) Authenticate(ctx context.Context, token string) (Principal, err
 	if err != nil || record.RevokedAt != nil || b.now().After(record.ExpiresAt) {
 		return Principal{}, ErrInvalidOAuth
 	}
-	return Principal{ProductID: record.ProductID, ClientID: record.ClientID, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, VendorOrganisation: record.VendorOrganisation, Entitlements: record.Entitlements, Scopes: record.Scopes}, nil
+	return Principal{ProductID: record.ProductID, ClientID: record.ClientID, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, VendorOrganisation: record.VendorOrganisation, InstallationID: record.InstallationID, Entitlements: record.Entitlements, Scopes: record.Scopes}, nil
 }
 
 type OIDCUpstream struct {
@@ -253,9 +253,10 @@ func (u *OIDCUpstream) ExchangeAndVerify(ctx context.Context, config VendorConfi
 		return Claims{}, "", err
 	}
 	organisation, _ := claims[config.OrganisationClaim].(string)
+	installation, _ := claims[config.InstallationClaim].(string)
 	name, _ := claims["name"].(string)
 	email, _ := claims["email"].(string)
-	return Claims{Issuer: idToken.Issuer, Subject: idToken.Subject, Email: email, DisplayName: name, VendorOrganisation: organisation}, token.AccessToken, nil
+	return Claims{Issuer: idToken.Issuer, Subject: idToken.Subject, Email: email, DisplayName: name, VendorOrganisation: organisation, InstallationID: installation}, token.AccessToken, nil
 }
 
 type IPResolver interface {
@@ -321,7 +322,7 @@ func (h *HookEntitlements) Resolve(ctx context.Context, config VendorConfig, cla
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
 		return nil, errors.New("unsafe entitlement hook URL")
 	}
-	encoded, err := json.Marshal(map[string]string{"subject": claims.Subject, "vendor_organisation_id": claims.VendorOrganisation, "product_id": config.ProductID})
+	encoded, err := json.Marshal(map[string]string{"subject": claims.Subject, "vendor_organisation_id": claims.VendorOrganisation, "installation_id": claims.InstallationID, "product_id": config.ProductID})
 	if err != nil {
 		return nil, err
 	}

@@ -15,44 +15,46 @@ import (
 )
 
 type Memory struct {
-	mu                 sync.RWMutex
-	orgs               map[string]model.Organisation
-	products           map[string]model.Product
-	productVersions    map[string]map[string]model.ProductVersion
-	productVersionPins map[string]map[string]model.ProductVersionPin
-	productDefinitions map[string]model.ProductDefinition
-	productBuilds      map[string]map[string]model.ProductBuild
-	envs               map[string]map[string]model.Environment
-	sources            map[string]map[string]model.Source
-	packages           map[string]map[string]model.Package
-	secrets            map[string]model.Secret
-	tools              map[string]map[string]model.Tool
-	mcpConnections     map[string]map[string]model.MCPConnection
-	mcpGrants          map[string]map[string]model.MCPUserGrant
-	mcpAuthStates      map[string]model.MCPAuthorizationState
-	providers          map[string]map[string]model.Provider
-	projects           map[string]map[string]model.Project
-	leases             map[string]map[string]model.CredentialLease
-	integrationRuns    map[string]map[string]model.IntegrationRun
-	llmProfiles        map[string]map[string]model.LLMProfile
-	knowledge          map[string][]model.KnowledgeRecord
-	crawls             map[string][]model.CrawlJob
-	audit              []model.AuditEvent
-	analytics          []model.AnalyticsEvent
-	setupDone          bool
-	roots              map[string]auth.RootAccount
-	rootEmail          map[string]string
-	sessions           map[string]auth.SessionRecord
-	idps               map[string]identity.VendorConfig
-	oauthState         map[string]identity.OAuthState
-	oauthCodes         map[string]identity.OAuthCode
-	accessTokens       map[string]identity.AccessToken
+	mu                       sync.RWMutex
+	orgs                     map[string]model.Organisation
+	products                 map[string]model.Product
+	productVersions          map[string]map[string]model.ProductVersion
+	productVersionPins       map[string]map[string]model.ProductVersionPin
+	productVersionPinHistory map[string][]model.ProductVersionPinHistory
+	productInstallations     map[string]map[string]model.ProductInstallation
+	productDefinitions       map[string]model.ProductDefinition
+	productBuilds            map[string]map[string]model.ProductBuild
+	envs                     map[string]map[string]model.Environment
+	sources                  map[string]map[string]model.Source
+	packages                 map[string]map[string]model.Package
+	secrets                  map[string]model.Secret
+	tools                    map[string]map[string]model.Tool
+	mcpConnections           map[string]map[string]model.MCPConnection
+	mcpGrants                map[string]map[string]model.MCPUserGrant
+	mcpAuthStates            map[string]model.MCPAuthorizationState
+	providers                map[string]map[string]model.Provider
+	projects                 map[string]map[string]model.Project
+	leases                   map[string]map[string]model.CredentialLease
+	integrationRuns          map[string]map[string]model.IntegrationRun
+	llmProfiles              map[string]map[string]model.LLMProfile
+	knowledge                map[string][]model.KnowledgeRecord
+	crawls                   map[string][]model.CrawlJob
+	audit                    []model.AuditEvent
+	analytics                []model.AnalyticsEvent
+	setupDone                bool
+	roots                    map[string]auth.RootAccount
+	rootEmail                map[string]string
+	sessions                 map[string]auth.SessionRecord
+	idps                     map[string]identity.VendorConfig
+	oauthState               map[string]identity.OAuthState
+	oauthCodes               map[string]identity.OAuthCode
+	accessTokens             map[string]identity.AccessToken
 }
 
 func NewMemory() *Memory {
 	now := time.Now().UTC()
 	organisation := model.Organisation{ID: "org_acme", Name: "Acme", Slug: "acme", Revision: 1, CreatedAt: now, UpdatedAt: now}
-	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Description: "Build voice and messaging integrations with Acme APIs, SDKs, documentation, and managed tools.", DefaultVersionPolicy: "latest", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Description: "Build voice and messaging integrations with Acme APIs, SDKs, documentation, and managed tools.", DefaultVersionPolicy: "latest", CatalogRevision: 1, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	environment := model.Environment{ID: "env_prod", OrganisationID: organisation.ID, ProductID: product.ID, Name: "Production", Slug: "production", IsProduction: true, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	sources := map[string]model.Source{
 		"src_docs": {ID: "src_docs", OrganisationID: "org_acme", ProductID: product.ID, Name: "Developer documentation", Kind: "website", Location: "https://docs.acme.dev", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
@@ -62,25 +64,27 @@ func NewMemory() *Memory {
 		"pkg_node": {ID: "pkg_node", OrganisationID: "org_acme", ProductID: product.ID, Name: "@acme/node", Ecosystem: "npm", Version: "2.4.1", Mode: "proxy", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
 	}
 	return &Memory{
-		orgs:               map[string]model.Organisation{organisation.ID: organisation},
-		products:           map[string]model.Product{product.ID: product},
-		productVersions:    map[string]map[string]model.ProductVersion{product.ID: {}},
-		productVersionPins: map[string]map[string]model.ProductVersionPin{product.ID: {}},
-		productDefinitions: make(map[string]model.ProductDefinition),
-		productBuilds:      map[string]map[string]model.ProductBuild{product.ID: {}},
-		envs:               map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
-		sources:            map[string]map[string]model.Source{product.ID: sources},
-		packages:           map[string]map[string]model.Package{product.ID: packages},
-		secrets:            make(map[string]model.Secret),
-		tools:              map[string]map[string]model.Tool{product.ID: {}},
-		mcpConnections:     map[string]map[string]model.MCPConnection{product.ID: {}},
-		mcpGrants:          make(map[string]map[string]model.MCPUserGrant),
-		mcpAuthStates:      make(map[string]model.MCPAuthorizationState),
-		providers:          map[string]map[string]model.Provider{product.ID: {}},
-		projects:           map[string]map[string]model.Project{product.ID: {}},
-		leases:             map[string]map[string]model.CredentialLease{product.ID: {}},
-		integrationRuns:    map[string]map[string]model.IntegrationRun{product.ID: {}},
-		llmProfiles:        map[string]map[string]model.LLMProfile{product.ID: {}},
+		orgs:                     map[string]model.Organisation{organisation.ID: organisation},
+		products:                 map[string]model.Product{product.ID: product},
+		productVersions:          map[string]map[string]model.ProductVersion{product.ID: {}},
+		productVersionPins:       map[string]map[string]model.ProductVersionPin{product.ID: {}},
+		productVersionPinHistory: map[string][]model.ProductVersionPinHistory{product.ID: {}},
+		productInstallations:     map[string]map[string]model.ProductInstallation{product.ID: {}},
+		productDefinitions:       make(map[string]model.ProductDefinition),
+		productBuilds:            map[string]map[string]model.ProductBuild{product.ID: {}},
+		envs:                     map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
+		sources:                  map[string]map[string]model.Source{product.ID: sources},
+		packages:                 map[string]map[string]model.Package{product.ID: packages},
+		secrets:                  make(map[string]model.Secret),
+		tools:                    map[string]map[string]model.Tool{product.ID: {}},
+		mcpConnections:           map[string]map[string]model.MCPConnection{product.ID: {}},
+		mcpGrants:                make(map[string]map[string]model.MCPUserGrant),
+		mcpAuthStates:            make(map[string]model.MCPAuthorizationState),
+		providers:                map[string]map[string]model.Provider{product.ID: {}},
+		projects:                 map[string]map[string]model.Project{product.ID: {}},
+		leases:                   map[string]map[string]model.CredentialLease{product.ID: {}},
+		integrationRuns:          map[string]map[string]model.IntegrationRun{product.ID: {}},
+		llmProfiles:              map[string]map[string]model.LLMProfile{product.ID: {}},
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},
@@ -149,11 +153,16 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 		}
 	}
 	value.Revision = 1
+	if value.CatalogRevision == 0 {
+		value.CatalogRevision = 1
+	}
 	value.CreatedAt = time.Now().UTC()
 	value.UpdatedAt = value.CreatedAt
 	m.products[value.ID] = value
 	m.productVersions[value.ID] = make(map[string]model.ProductVersion)
 	m.productVersionPins[value.ID] = make(map[string]model.ProductVersionPin)
+	m.productVersionPinHistory[value.ID] = nil
+	m.productInstallations[value.ID] = make(map[string]model.ProductInstallation)
 	m.productBuilds[value.ID] = make(map[string]model.ProductBuild)
 	m.sources[value.ID] = make(map[string]model.Source)
 	m.packages[value.ID] = make(map[string]model.Package)
@@ -223,10 +232,24 @@ func (m *Memory) UpdateProduct(_ context.Context, value model.Product, expected 
 		return model.Product{}, ErrConflict
 	}
 	value.Revision = current.Revision + 1
+	value.CatalogRevision = current.CatalogRevision + 1
 	value.CreatedAt = current.CreatedAt
 	value.UpdatedAt = time.Now().UTC()
 	m.products[value.ID] = value
 	return value, nil
+}
+
+func (m *Memory) BumpProductCatalogRevision(_ context.Context, productID string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.products[productID]
+	if !ok {
+		return 0, ErrNotFound
+	}
+	value.CatalogRevision++
+	value.UpdatedAt = time.Now().UTC()
+	m.products[productID] = value
+	return value.CatalogRevision, nil
 }
 
 func (m *Memory) ProductVersions(_ context.Context, productID string) ([]model.ProductVersion, error) {
@@ -330,21 +353,28 @@ func (m *Memory) ProductVersionPins(_ context.Context, productID string) ([]mode
 	for _, value := range values {
 		result = append(result, value)
 	}
-	sort.SliceStable(result, func(i, j int) bool { return result[i].CustomerID < result[j].CustomerID })
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Scope == result[j].Scope {
+			return result[i].ScopeID < result[j].ScopeID
+		}
+		return result[i].Scope < result[j].Scope
+	})
 	return result, nil
 }
 
-func (m *Memory) ProductVersionPin(_ context.Context, productID, customerID string) (model.ProductVersionPin, error) {
+func pinMapKey(scope, scopeID string) string { return scope + "\x00" + scopeID }
+
+func (m *Memory) ProductVersionPin(_ context.Context, productID, scope, scopeID string) (model.ProductVersionPin, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	value, ok := m.productVersionPins[productID][customerID]
+	value, ok := m.productVersionPins[productID][pinMapKey(scope, scopeID)]
 	if !ok {
 		return model.ProductVersionPin{}, ErrNotFound
 	}
 	return value, nil
 }
 
-func (m *Memory) SaveProductVersionPin(_ context.Context, value model.ProductVersionPin) (model.ProductVersionPin, error) {
+func (m *Memory) SaveProductVersionPin(_ context.Context, value model.ProductVersionPin, expected int64) (model.ProductVersionPin, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	values, ok := m.productVersionPins[value.ProductID]
@@ -355,13 +385,20 @@ func (m *Memory) SaveProductVersionPin(_ context.Context, value model.ProductVer
 		return model.ProductVersionPin{}, ErrNotFound
 	}
 	now := time.Now().UTC()
-	if current, ok := values[value.CustomerID]; ok {
+	key := pinMapKey(value.Scope, value.ScopeID)
+	if current, ok := values[key]; ok {
+		if current.Revision != expected {
+			return model.ProductVersionPin{}, ErrConflict
+		}
 		value.ID, value.CreatedAt, value.Revision = current.ID, current.CreatedAt, current.Revision+1
 	} else {
+		if expected != 0 {
+			return model.ProductVersionPin{}, ErrConflict
+		}
 		value.Revision, value.CreatedAt = 1, now
 	}
 	value.UpdatedAt = now
-	values[value.CustomerID] = value
+	values[key] = value
 	return value, nil
 }
 
@@ -372,13 +409,101 @@ func (m *Memory) DeleteProductVersionPin(_ context.Context, productID, id string
 	if !ok {
 		return ErrNotFound
 	}
-	for customerID, value := range values {
+	for key, value := range values {
 		if value.ID == id {
-			delete(values, customerID)
+			delete(values, key)
 			return nil
 		}
 	}
 	return ErrNotFound
+}
+
+func (m *Memory) ProductVersionPinHistory(_ context.Context, productID string) ([]model.ProductVersionPinHistory, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values, ok := m.productVersionPinHistory[productID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	result := append([]model.ProductVersionPinHistory(nil), values...)
+	sort.SliceStable(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	return result, nil
+}
+
+func (m *Memory) AppendProductVersionPinHistory(_ context.Context, value model.ProductVersionPinHistory) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.products[value.ProductID]; !ok {
+		return ErrNotFound
+	}
+	m.productVersionPinHistory[value.ProductID] = append(m.productVersionPinHistory[value.ProductID], value)
+	return nil
+}
+
+func (m *Memory) ProductInstallations(_ context.Context, productID string) ([]model.ProductInstallation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values, ok := m.productInstallations[productID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]model.ProductInstallation, 0, len(values))
+	for _, value := range values {
+		result = append(result, value)
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func (m *Memory) ProductInstallation(_ context.Context, productID, id string) (model.ProductInstallation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.productInstallations[productID][id]
+	if !ok {
+		return model.ProductInstallation{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (m *Memory) ProductInstallationByExternalID(_ context.Context, productID, externalID string) (model.ProductInstallation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, value := range m.productInstallations[productID] {
+		if value.ExternalID == externalID {
+			return value, nil
+		}
+	}
+	return model.ProductInstallation{}, ErrNotFound
+}
+
+func (m *Memory) SaveProductInstallation(_ context.Context, value model.ProductInstallation, expected int64) (model.ProductInstallation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.productInstallations[value.ProductID]
+	if !ok {
+		return model.ProductInstallation{}, ErrNotFound
+	}
+	for id, current := range values {
+		if current.ExternalID == value.ExternalID && id != value.ID {
+			return model.ProductInstallation{}, ErrConflict
+		}
+	}
+	now := time.Now().UTC()
+	current, exists := values[value.ID]
+	if exists {
+		if current.Revision != expected {
+			return model.ProductInstallation{}, ErrConflict
+		}
+		value.Revision, value.CreatedAt = current.Revision+1, current.CreatedAt
+	} else {
+		if expected != 0 {
+			return model.ProductInstallation{}, ErrConflict
+		}
+		value.Revision, value.CreatedAt = 1, now
+	}
+	value.UpdatedAt = now
+	values[value.ID] = value
+	return value, nil
 }
 
 func cloneProductDefinition(value model.ProductDefinition) model.ProductDefinition {
@@ -1168,10 +1293,40 @@ func (m *Memory) AppendAnalytics(_ context.Context, event model.AnalyticsEvent) 
 	return nil
 }
 
+func (m *Memory) ProductVersionActivity(_ context.Context, productID, versionID string, since time.Time) (model.ProductVersionActivity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var value model.ProductVersionActivity
+	for _, event := range m.analytics {
+		if event.ProductID != productID || event.CreatedAt.Before(since) || event.Dimensions["product_version_id"] != versionID {
+			continue
+		}
+		switch event.EventName {
+		case "mcp.request":
+			value.Requests++
+		case "tool.called":
+			value.ToolCalls++
+		}
+	}
+	return value, nil
+}
+
+func (m *Memory) LLMTokensUsed(_ context.Context, productID, role string, since time.Time) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var total int64
+	for _, event := range m.analytics {
+		if event.ProductID == productID && event.EventName == "llm.tokens" && !event.CreatedAt.Before(since) && event.Dimensions["role"] == role {
+			total += int64(event.Value)
+		}
+	}
+	return total, nil
+}
+
 func (m *Memory) AnalyticsSummary(_ context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "package_acquired": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "package_acquired": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
 	actors := map[string]bool{}
 	daily := map[string]int64{}
 	for _, event := range m.analytics {
@@ -1187,6 +1342,9 @@ func (m *Memory) AnalyticsSummary(_ context.Context, productID string, since tim
 			channel, _ := event.Dimensions["channel"].(string)
 			value.Channels[channel]++
 			daily[event.CreatedAt.UTC().Format("2006-01-02")]++
+			if version, _ := event.Dimensions["product_version"].(string); version != "" {
+				value.Versions[version]++
+			}
 		case "tool.called":
 			value.ToolCalls++
 		case "package.downloaded":

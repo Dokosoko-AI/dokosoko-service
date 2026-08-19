@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
@@ -107,6 +108,47 @@ func TestPackageCredentialIsEncryptedAndExcludedFromAPIRepresentation(t *testing
 	}
 	if bytes.Contains(stored.Ciphertext, []byte("upstream-secret-token")) {
 		t.Fatal("credential was stored in plaintext")
+	}
+}
+
+func TestUsageHookCredentialIsEncryptedAndExcludedFromIdentityAPI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x55}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVault(memory, vault)
+	config, err := service.ConfigureIdentity(ctx, platform.IdentityInput{
+		OrganisationID:      "org_acme",
+		ProductID:           "prod_acme",
+		Issuer:              "https://identity.vendor.example",
+		ClientID:            "vendor-client",
+		ClientSecret:        "oidc-client-secret",
+		AllowedRedirectURIs: []string{"https://client.example/callback"},
+		UsageHookURL:        "https://hooks.vendor.example/usage",
+		UsageCredential:     "usage-service-secret",
+	}, platform.Actor{ID: "root", RequestID: "req_usage_config"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.UsageHookURL == "" || config.UsageCredentialID == "" {
+		t.Fatalf("usage configuration = %#v", config)
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("usage-service-secret")) || bytes.Contains(encoded, []byte(config.UsageCredentialID)) {
+		t.Fatalf("usage credential leaked in identity JSON: %s", encoded)
+	}
+	stored, err := memory.Secret(ctx, "org_acme", config.UsageCredentialID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Purpose != "vendor_usage" || bytes.Contains(stored.Ciphertext, []byte("usage-service-secret")) {
+		t.Fatalf("usage credential was not safely stored: %#v", stored)
 	}
 }
 
@@ -317,6 +359,7 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 		{Kind: "tool", Name: "voice.calls_create", Location: "tool:voice.calls_create", Version: "v3", Metadata: map[string]string{"api_version": "v3", "capability_slug": "voice", "capability_name": "Voice API"}},
 		{Kind: "openapi", Name: "Messages API", Location: "https://api.example.com/messages/v2/openapi.yaml", Version: "v2"},
 		{Kind: "package", Name: "@acme/messages", Location: "npm:@acme/messages@5.1.3", Version: "5.1.3", Metadata: map[string]string{"api_version": "v2"}},
+		{Kind: "docs", Name: "Platform changelog", Location: "https://docs.example.com/changelog/2026.8", Version: "2026.8"},
 	}, actor)
 	if err != nil {
 		t.Fatal(err)
@@ -340,12 +383,15 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if latestVersion.ManifestHash == "" || latestVersion.Diff.FromVersionID != ltsVersion.ID || latestVersion.Diff.Summary != "0 added, 0 removed, 0 changed" {
+		t.Fatalf("generated release integrity or diff = %#v", latestVersion)
+	}
 
 	manifest, err := service.ProductManifest(ctx, product.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.EffectiveVersion == nil || manifest.EffectiveVersion.ID != latestVersion.ID || manifest.SelectionSource != "default_latest" || len(manifest.Capabilities) != 2 {
+	if manifest.EffectiveVersion == nil || manifest.EffectiveVersion.ID != latestVersion.ID || manifest.SelectionSource != "default_latest" || len(manifest.Capabilities) != 2 || len(manifest.Artifacts) != 1 || manifest.Artifacts[0].Name != "Platform changelog" {
 		t.Fatalf("default manifest = %#v", manifest)
 	}
 	managed, allowed, err := service.ProductVersionAllowsTool(ctx, product.ID, "", model.Tool{ID: "tool_voice", Namespace: "voice", Name: "calls_create"})
@@ -366,12 +412,46 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	if pinned.EffectiveVersion == nil || pinned.EffectiveVersion.ID != ltsVersion.ID || pinned.SelectionSource != "customer_pin" {
 		t.Fatalf("pinned manifest = %#v", pinned)
 	}
+	environment, err := service.CreateEnvironment(ctx, product.OrganisationID, product.ID, "Customer production", "customer-production", true, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, err := service.SaveProductInstallation(ctx, product.ID, platform.ProductInstallationInput{CustomerID: "contoso", EnvironmentID: environment.ID, ExternalID: "contoso-voice-prod", Name: "Contoso voice production", State: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveScopedProductVersionPin(ctx, product.ID, platform.ProductVersionPinInput{Scope: "environment", ScopeID: environment.ID, ProductVersionID: latestVersion.ID, Reason: "Production rollout"}, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveScopedProductVersionPin(ctx, product.ID, platform.ProductVersionPinInput{Scope: "installation", ScopeID: installation.ID, ProductVersionID: ltsVersion.ID, Reason: "Voice certification"}, actor); err != nil {
+		t.Fatal(err)
+	}
+	installationManifest, err := service.ProductManifestFor(ctx, product.ID, model.ProductSelectionContext{CustomerID: "contoso", InstallationID: "contoso-voice-prod"})
+	if err != nil || installationManifest.EffectiveVersion == nil || installationManifest.EffectiveVersion.ID != ltsVersion.ID || installationManifest.SelectionSource != "installation_pin" || installationManifest.EnvironmentID != environment.ID {
+		t.Fatalf("installation-scoped manifest = %#v err=%v", installationManifest, err)
+	}
+	secondInstallation, err := service.SaveProductInstallation(ctx, product.ID, platform.ProductInstallationInput{CustomerID: "contoso", EnvironmentID: environment.ID, ExternalID: "contoso-messages-prod", Name: "Contoso messages production", State: "active"}, actor)
+	if err != nil || secondInstallation.ID == "" {
+		t.Fatal(err)
+	}
+	environmentManifest, err := service.ProductManifestFor(ctx, product.ID, model.ProductSelectionContext{CustomerID: "contoso", InstallationID: "contoso-messages-prod"})
+	if err != nil || environmentManifest.EffectiveVersion == nil || environmentManifest.EffectiveVersion.ID != latestVersion.ID || environmentManifest.SelectionSource != "environment_pin" {
+		t.Fatalf("environment-scoped manifest = %#v err=%v", environmentManifest, err)
+	}
+	history, err := memory.ProductVersionPinHistory(ctx, product.ID)
+	if err != nil || len(history) != 3 {
+		t.Fatalf("pin history = %#v err=%v", history, err)
+	}
 
 	ltsVersion, err = memory.ProductVersion(ctx, product.ID, ltsVersion.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ltsVersion, err = service.UpdateProductVersionLifecycle(ctx, product.ID, ltsVersion.ID, platform.ProductVersionLifecycleInput{Deprecated: true, DeprecationMessage: "Move to 2026.8 for continued support.", ReplacementVersion: "2026.8", Revision: ltsVersion.Revision}, actor)
+	impact, err := service.ProductVersionImpact(ctx, product.ID, ltsVersion.ID)
+	if err != nil || impact.CustomerPins != 1 || impact.InstallationPins != 1 {
+		t.Fatalf("deprecation impact = %#v err=%v", impact, err)
+	}
+	ltsVersion, err = service.UpdateProductVersionLifecycle(ctx, product.ID, ltsVersion.ID, platform.ProductVersionLifecycleInput{Deprecated: true, DeprecationMessage: "Move to 2026.8 for continued support.", ReplacementVersion: "2026.8", AcknowledgeImpact: true, Revision: ltsVersion.Revision}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,6 +476,53 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	}
 	if manifest.EffectiveVersion == nil || manifest.EffectiveVersion.ID != latestVersion.ID || manifest.SelectionSource != "default_lts" {
 		t.Fatalf("LTS default manifest = %#v", manifest)
+	}
+
+	product, err = service.UpdateProductSettingsWithApproval(ctx, product.ID, product.Description, "latest", true, product.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := platform.Actor{ID: "root_publisher", RequestID: "req_publish_preview"}
+	preview, err := service.CreateProductVersion(ctx, product.ID, platform.ProductVersionInput{Version: "2026.9", ProfileID: definition.Profiles[0].ID, IsLatest: true, ReleaseStage: "active", RolloutPercentage: 25}, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.PromotionState != "pending" || preview.ReleaseStage != "preview" || preview.IsLatest {
+		t.Fatalf("approval-gated preview = %#v", preview)
+	}
+	unpinnedPreviewManifest, err := service.ProductManifest(ctx, product.ID, "preview-unpinned")
+	if err != nil || unpinnedPreviewManifest.EffectiveVersion == nil || unpinnedPreviewManifest.EffectiveVersion.ID == preview.ID {
+		t.Fatalf("pending preview was selected without an exact pin: %#v err=%v", unpinnedPreviewManifest, err)
+	}
+	for _, available := range unpinnedPreviewManifest.AvailableVersions {
+		if available.ID == preview.ID {
+			t.Fatalf("pending preview leaked into ordinary discovery: %#v", unpinnedPreviewManifest.AvailableVersions)
+		}
+	}
+	if _, err := service.SaveScopedProductVersionPin(ctx, product.ID, platform.ProductVersionPinInput{Scope: "customer", ScopeID: "preview-customer", ProductVersionID: preview.ID, Reason: "Pre-production acceptance", Revision: 0}, actor); err != nil {
+		t.Fatal(err)
+	}
+	pinnedPreviewManifest, err := service.ProductManifest(ctx, product.ID, "preview-customer")
+	if err != nil || pinnedPreviewManifest.EffectiveVersion == nil || pinnedPreviewManifest.EffectiveVersion.ID != preview.ID || len(pinnedPreviewManifest.OperationalWarnings) == 0 {
+		t.Fatalf("explicit preview pin = %#v err=%v", pinnedPreviewManifest, err)
+	}
+	if _, err := service.PromoteProductVersion(ctx, product.ID, preview.ID, platform.ProductVersionPromotionInput{Action: "approve", Revision: preview.Revision}, publisher); !errors.Is(err, platform.ErrPromotionSeparationOfDuties) {
+		t.Fatalf("publisher approval error = %v", err)
+	}
+	preview, err = service.PromoteProductVersion(ctx, product.ID, preview.ID, platform.ProductVersionPromotionInput{Action: "approve", Note: "Reviewed generated diff and artifact health.", Revision: preview.Revision}, platform.Actor{ID: "root_approver", RequestID: "req_approve_preview"})
+	if err != nil || preview.PromotionState != "approved" || preview.ReleaseStage != "active" || !preview.IsLatest {
+		t.Fatalf("approved release = %#v err=%v", preview, err)
+	}
+	preview, err = service.UpdateProductVersionLifecycle(ctx, product.ID, preview.ID, platform.ProductVersionLifecycleInput{IsLatest: true, IsLTS: true, RolloutPercentage: preview.RolloutPercentage, Revision: preview.Revision}, actor)
+	if err != nil || preview.PromotionState != "pending" || preview.IsLTS || !preview.RequestedLTS || preview.PromotionRequestedBy != actor.ID {
+		t.Fatalf("approval-gated channel promotion = %#v err=%v", preview, err)
+	}
+	if _, err := service.PromoteProductVersion(ctx, product.ID, preview.ID, platform.ProductVersionPromotionInput{Action: "approve", Revision: preview.Revision}, actor); !errors.Is(err, platform.ErrPromotionSeparationOfDuties) {
+		t.Fatalf("channel requester approval error = %v", err)
+	}
+	preview, err = service.PromoteProductVersion(ctx, product.ID, preview.ID, platform.ProductVersionPromotionInput{Action: "approve", Note: "LTS channel reviewed.", Revision: preview.Revision}, platform.Actor{ID: "root_second_approver", RequestID: "req_approve_lts"})
+	if err != nil || !preview.IsLatest || !preview.IsLTS || preview.PromotionState != "approved" {
+		t.Fatalf("approved channel promotion = %#v err=%v", preview, err)
 	}
 }
 
@@ -433,5 +560,23 @@ func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
 	}
 	if doer.authorization != "Bearer provider-secret" || bytes.Contains(doer.requestBody, []byte("provider-secret")) || !bytes.Contains(doer.requestBody, []byte("never invent capabilities")) {
 		t.Fatalf("rewrite request was not hardened: auth=%q body=%s", doer.authorization, doer.requestBody)
+	}
+	used, err := memory.LLMTokensUsed(ctx, product.ID, "assistant", time.Now().UTC().Add(-24*time.Hour))
+	if err != nil || used <= 0 {
+		t.Fatalf("rewrite token accounting = %d err=%v", used, err)
+	}
+	audits, err := memory.AuditEvents(ctx, product.OrganisationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedAudits, _ := json.Marshal(audits)
+	if !bytes.Contains(encodedAudits, []byte("mcp-product-description-v1")) || bytes.Contains(encodedAudits, []byte("Voice API v3 and Messages API v2 for developers.")) {
+		t.Fatalf("rewrite audit omitted prompt version or retained raw draft: %s", encodedAudits)
+	}
+	if err := memory.AppendAnalytics(ctx, model.AnalyticsEvent{OrganisationID: product.OrganisationID, ProductID: product.ID, EventName: "llm.tokens", Dimensions: map[string]any{"role": "assistant"}, Value: 10000, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RewriteProductDescription(ctx, product.ID, "A second bounded draft.", actor); err == nil || !strings.Contains(err.Error(), "daily token budget") {
+		t.Fatalf("daily rewrite budget error = %v", err)
 	}
 }

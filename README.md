@@ -10,13 +10,14 @@ The implementation follows [the final product plan](docs/FINAL_PLAN.md). Its key
 - First-run setup with a one-time setup token, Argon2id passwords, TOTP MFA, one-use recovery codes, secure sessions, CSRF, and root-user lifecycle management.
 - PostgreSQL/pgvector persistence with checksummed startup migrations and a database-backed readiness check.
 - Organisations, products, production/non-production environments, and private-first resources.
+- Product Definitions with independently versioned API tracks, immutable hashed product-version snapshots, generated release diffs, Latest/LTS/Preview/deprecated lifecycle, deterministic rollout, artifact-drift shutdown, separation-of-duties promotion, scoped installation/environment/customer pins, and immutable assignment history.
 - Sources with sitemap-first Crawlee discovery, Cheerio fast path, Playwright fallback, immutable snapshots, incremental HTTP metadata, SSRF controls, crawl budgets, prompt-injection scanning, quarantine, review, and atomic publication.
 - npm, Go, Git, Maven/Java, Android, Swift, and NuGet/C# package records in public-link, credential-backed proxy, and short-lived fetch-hook modes.
 - Custom MCP tools defined by name, JSON input/output Schema, fixed HTTPS API hook, encrypted credential, entitlement policy, confirmation policy, schema validation, draft/publish lifecycle, and audited execution.
 - Managed third-party MCP imports with the [Stateless MCPv2 Only](https://blog.modelcontextprotocol.io/posts/2026-07-28/) `2026-07-28` contract, fixed HTTPS upstreams, complete catalog inspection, explicit selection, namespacing, schema pins, drift shutdown, and local draft/publish review.
 - Separate upstream identity modes: an encrypted service credential or delegated OAuth grants bound to the canonical DokoSoko subject. The inbound DokoSoko token is never forwarded.
 - OAuth 2.0 authorization-code + PKCE broker from MCP/widget clients through DokoSoko to the vendor OIDC provider.
-- Vendor entitlement resolution during login and an independent per-operation authorization hook. Both fail closed.
+- Vendor entitlement resolution during login, an independent per-operation authorization hook, and an ephemeral customer-defined usage-report proxy.
 - Standard Provider API integration for idempotent project creation, one-time credential delivery, short leases, and revocation.
 - Private MCP with product-bound DokoSoko tokens; Public MCP is anonymous, read-only, public-only, rate-limited, and off by default.
 - Owner-scoped integration runs with deterministic completion, analytics funnel events, and an append-only audit feed.
@@ -113,7 +114,7 @@ MCP/widget → DokoSoko OAuth → vendor OIDC → entitlement hook
            → product-bound DokoSoko token → Private MCP
 ```
 
-The vendor entitlement hook answers which commercial/account features are enabled during authorization. It narrows discovery; it does not define DokoSoko tools. Before each configured custom tool operation, DokoSoko can call a separate authorization hook with product, tool, subject, vendor organisation, and argument names only. Argument values and the Doko token are not sent.
+The vendor entitlement hook answers which commercial/account features are enabled during authorization. It narrows discovery; it does not define DokoSoko tools. An optional signed installation claim maps the principal to one registered customer/environment installation for product-version resolution. Before each configured custom tool operation, DokoSoko can call a separate authorization hook with product, tool, subject, vendor organisation, installation, and argument names only. Argument values and the Doko token are not sent. When configured, Private MCP also exposes `usage.get`, which calls a dedicated usage hook for the authenticated subject and proxies its ordered scalar values without calculating, caching, or persisting them.
 
 All downstream redirect URIs are exact allowlist entries. Authorization code and access-token records are stored by digest, expire quickly, and are product-bound.
 
@@ -150,11 +151,11 @@ docker compose config
 docker compose build
 ```
 
-The suites cover publication boundaries, Public MCP isolation and rate limits, strict Stateless MCPv2 request/response metadata, third-party catalog import and schema drift, separate service/delegated upstream identity, root MFA/session/CSRF controls, crawler SSRF and injection quarantine, encrypted secret handling, OAuth PKCE and product binding, entitlement and authorization fail-closed behavior, package integrity, custom tool schema/policy execution, Provider API issuance/revocation, integration-run analytics, audit, and the production static export.
+The suites cover publication boundaries, product/version discovery, scoped selection and pins, manifest integrity and diffs, preview isolation, rollouts, deprecation impact, artifact drift, promotion separation of duties, LLM budgets, Public MCP isolation and rate limits, strict Stateless MCPv2 request/response metadata, third-party catalog import and schema drift, separate service/delegated upstream identity, root MFA/session/CSRF controls, crawler SSRF and injection quarantine, encrypted secret handling, OAuth PKCE and product binding, entitlement and authorization fail-closed behavior, private-only bounded usage proxying, package integrity, custom tool schema/policy execution, Provider API issuance/revocation, integration-run analytics, audit, and the production static export.
 
 ## API and repository map
 
-The DokoSoko control-plane contract is [api/openapi.yaml](api/openapi.yaml). Vendors use the separate [Provider API contract](api/provider-openapi.yaml) for projects and credentials and the [Vendor Hooks contract](api/hooks-openapi.yaml) for entitlements, tool authorization, and fetch-mode packages. Important protocol endpoints are:
+The DokoSoko control-plane contract is [api/openapi.yaml](api/openapi.yaml). Vendors use the separate [Provider API contract](api/provider-openapi.yaml) for projects and credentials and the [Vendor Hooks contract](api/hooks-openapi.yaml) for entitlements, usage reports, tool authorization, and fetch-mode packages. Important protocol endpoints are:
 
 | Surface | Endpoint |
 | --- | --- |
@@ -175,7 +176,7 @@ app/                  static Next.js/Catalyst console
 cmd/dokosoko/         service entry point and deployment validation
 crawler/              isolated Crawlee/Playwright worker
 internal/auth/         setup, root accounts, MFA, sessions, and CSRF
-internal/identity/     OAuth/OIDC broker, entitlements, and operation authz
+internal/identity/     OAuth/OIDC broker, entitlements, usage, and operation authz
 internal/packages/     public/proxy/fetch artifact gateway
 internal/providers/    project and credential Provider API runtime
 internal/mcpbridge/     Stateless MCPv2 import, OAuth grants, drift, and execution
