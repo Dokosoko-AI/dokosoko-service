@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dokosoko/dokosoko/v2/internal/tools"
+	"github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
 func TestSchemaAndArgumentsRejectUnexpectedAuthority(t *testing.T) {

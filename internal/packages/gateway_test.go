@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/model"
-	"github.com/dokosoko/dokosoko/v2/internal/packages"
-	"github.com/dokosoko/dokosoko/v2/internal/secrets"
-	"github.com/dokosoko/dokosoko/v2/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/packages"
+	"github.com/dokosoko/dokosoko-service/internal/secrets"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
 type resolver struct{ address net.IP }

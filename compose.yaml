@@ -1,4 +1,4 @@
-name: dokosoko-v2
+name: dokosoko-service
 
 services:
   dokosoko:

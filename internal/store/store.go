@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/identity"
-	"github.com/dokosoko/dokosoko/v2/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/identity"
+	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
 var (

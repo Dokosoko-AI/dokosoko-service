@@ -1,4 +1,4 @@
-module github.com/dokosoko/dokosoko/v2
+module github.com/dokosoko/dokosoko-service
 
 go 1.25.0
 

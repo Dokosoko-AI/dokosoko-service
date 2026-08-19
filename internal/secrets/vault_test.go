@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/dokosoko/dokosoko/v2/internal/secrets"
+	"github.com/dokosoko/dokosoko-service/internal/secrets"
 )
 
 func TestVaultEncryptsWithContextBinding(t *testing.T) {

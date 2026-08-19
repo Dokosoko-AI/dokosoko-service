@@ -17,15 +17,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/auth"
-	"github.com/dokosoko/dokosoko/v2/internal/identity"
-	"github.com/dokosoko/dokosoko/v2/internal/mcpbridge"
-	"github.com/dokosoko/dokosoko/v2/internal/model"
-	packagegateway "github.com/dokosoko/dokosoko/v2/internal/packages"
-	"github.com/dokosoko/dokosoko/v2/internal/platform"
-	providerruntime "github.com/dokosoko/dokosoko/v2/internal/providers"
-	"github.com/dokosoko/dokosoko/v2/internal/store"
-	toolruntime "github.com/dokosoko/dokosoko/v2/internal/tools"
+	"github.com/dokosoko/dokosoko-service/internal/auth"
+	"github.com/dokosoko/dokosoko-service/internal/identity"
+	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	packagegateway "github.com/dokosoko/dokosoko-service/internal/packages"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
+	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
+	"github.com/dokosoko/dokosoko-service/internal/store"
+	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
 const (

@@ -7,10 +7,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dokosoko/dokosoko/v2/internal/model"
-	"github.com/dokosoko/dokosoko/v2/internal/platform"
-	"github.com/dokosoko/dokosoko/v2/internal/secrets"
-	"github.com/dokosoko/dokosoko/v2/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
+	"github.com/dokosoko/dokosoko-service/internal/secrets"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
 func TestPrivateDefaultsAndGuardedPublication(t *testing.T) {

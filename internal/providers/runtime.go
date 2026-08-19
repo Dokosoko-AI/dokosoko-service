@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/model"
-	"github.com/dokosoko/dokosoko/v2/internal/secrets"
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/secrets"
 )
 
 var (

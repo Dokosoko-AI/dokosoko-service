@@ -22,10 +22,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/model"
-	"github.com/dokosoko/dokosoko/v2/internal/secrets"
-	"github.com/dokosoko/dokosoko/v2/internal/store"
-	toolruntime "github.com/dokosoko/dokosoko/v2/internal/tools"
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/secrets"
+	"github.com/dokosoko/dokosoko-service/internal/store"
+	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
 var (

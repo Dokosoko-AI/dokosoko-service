@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/auth"
-	"github.com/dokosoko/dokosoko/v2/internal/identity"
-	"github.com/dokosoko/dokosoko/v2/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/auth"
+	"github.com/dokosoko/dokosoko-service/internal/identity"
+	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dokosoko/dokosoko/v2/internal/auth"
-	"github.com/dokosoko/dokosoko/v2/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/auth"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
 func newManager(t *testing.T) (*auth.Manager, *store.Memory) {
