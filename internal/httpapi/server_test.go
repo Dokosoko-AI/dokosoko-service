@@ -127,6 +127,39 @@ func TestPublicMCPIsAnonymousButOffByDefault(t *testing.T) {
 	}
 }
 
+func TestAIProductBuilderAPIProducesReviewAndPublishesDefinition(t *testing.T) {
+	t.Parallel()
+	handler := newServer()
+	body := `{"inputs":[{"kind":"openapi","name":"Voice API","location":"https://api.example.com/voice/v3/openapi.yaml","version":"v3"},{"kind":"package","name":"@acme/voice-node","location":"npm:@acme/voice-node@7.2.1","version":"7.2.1","metadata":{"api_version":"v3"}}]}`
+	w := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/product-builds", "doko_admin_demo", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("build status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var build struct {
+		ID           string `json:"id"`
+		State        string `json:"state"`
+		AnalysisMode string `json:"analysis_mode"`
+		Proposal     struct {
+			Components []any `json:"components"`
+		} `json:"proposal"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &build); err != nil {
+		t.Fatal(err)
+	}
+	if build.ID == "" || build.State != "review" || build.AnalysisMode != "automatic" || len(build.Proposal.Components) == 0 {
+		t.Fatalf("build = %#v", build)
+	}
+
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/product-builds/"+build.ID+"/publish", "doko_admin_demo", `{}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"published"`) {
+		t.Fatalf("publish status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/definition", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"source_build_id":"`+build.ID+`"`) {
+		t.Fatalf("definition status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
 func TestPublicTransitionWarningsAreEnforcedByAPI(t *testing.T) {
 	t.Parallel()
 	handler := newServer()

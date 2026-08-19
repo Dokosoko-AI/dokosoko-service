@@ -53,3 +53,17 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
+
+test("ships the automatic Product Definition review flow", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(source, /Build product automatically/);
+  assert.match(source, /Review exceptions, not configuration/);
+  assert.match(source, /Independent API tracks/);
+  assert.match(source, /Voice API/);
+  assert.match(source, /Messages API/);
+  assert.match(source, /Stateless MCPv2 Only/);
+  assert.match(client, /product-builds/);
+  assert.match(client, /publishProductBuild/);
+});

@@ -13,6 +13,8 @@ import {
   Copy,
   Database,
   ExternalLink,
+  FileJson2,
+  GitBranch,
   Globe2,
   KeyRound,
   LayoutDashboard,
@@ -27,6 +29,7 @@ import {
   Settings,
   Share2,
   ShieldCheck,
+  Sparkles,
   TerminalSquare,
   TriangleAlert,
   Users,
@@ -34,10 +37,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAnalytics, APIAuditEvent, APICredentialLease, APIEnvironment, APIError, APIIdentity, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProject, APIProvider, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
+import { APIAnalytics, APIAuditEvent, APICredentialLease, APIEnvironment, APIError, APIIdentity, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProject, APIProvider, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
-type Section = "overview" | "sources" | "packages" | "projects" | "connections" | "tools" | "distribution" | "runs" | "analytics" | "activity" | "settings";
+type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "distribution" | "runs" | "analytics" | "activity" | "settings";
 type Visibility = "private" | "public";
 
 type Source = {
@@ -75,6 +78,7 @@ type PendingPublication = {
 
 const nav: Array<{ id: Section; label: string; icon: typeof LayoutDashboard }> = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
+  { id: "product", label: "Product definition", icon: Sparkles },
   { id: "sources", label: "Sources", icon: BookOpen },
   { id: "packages", label: "Packages", icon: PackageIcon },
   { id: "projects", label: "Projects & credentials", icon: KeyRound },
@@ -108,6 +112,73 @@ const fixtureProduct: APIProduct = { id: "prod_acme", organisation_id: "org_acme
 const fixtureEnvironment: APIEnvironment = { id: "env_prod", organisation_id: "org_acme", product_id: "prod_acme", name: "Production", slug: "production", is_production: true, revision: 1 };
 const fixtureMCPConnections: APIMCPConnection[] = [{ id: "mcp_support", organisation_id: "org_acme", product_id: "prod_acme", name: "Support operations", namespace: "support", endpoint: "https://mcp.support.example/v2", protocol_version: "2026-07-28", auth_mode: "delegated_oauth", oauth_client_id: "dokosoko-production", oauth_issuer: "https://identity.support.example", authorization_url: "https://identity.support.example/oauth/authorize", token_url: "https://identity.support.example/oauth/token", scopes: ["incidents.read", "incidents.write"], state: "active", last_synced_at: "2026-08-19T11:48:00Z", last_catalog_hash: "sha256:48f2a81d", revision: 2 }];
 
+const fixtureDefinition: APIProductDefinition = {
+  id: "definition_acme",
+  organisation_id: "org_acme",
+  product_id: "prod_acme",
+  name: "Acme Platform",
+  slug: "acme",
+  state: "draft",
+  version_strategy: "independent_api_tracks",
+  mcp_policy: "Stateless MCPv2 Only",
+  generated_by: "ai_product_builder",
+  source_build_id: "build_acme",
+  revision: 0,
+  created_at: "2026-08-19T12:00:00Z",
+  updated_at: "2026-08-19T12:00:08Z",
+  product_bindings: [],
+  validation: [],
+  components: [
+    {
+      id: "component_voice",
+      kind: "api",
+      name: "Voice API",
+      slug: "voice",
+      version_strategy: "independent",
+      releases: [{ id: "release_voice-v3", version: "v3", state: "draft", bindings: [
+        { id: "binding_voice_spec", kind: "openapi", name: "Voice OpenAPI", location: "api.acme.dev/voice/v3/openapi.yaml", version: "v3", scope: "api_release", confidence: 0.99, evidence: ["OpenAPI title matches Voice API", "Explicit /v3 path"], verified: true },
+        { id: "binding_voice_docs", kind: "docs", name: "Voice documentation", location: "docs.acme.dev/voice/v3", version: "v3", scope: "api_release", confidence: 0.97, evidence: ["Versioned documentation path"], verified: true },
+        { id: "binding_voice_package", kind: "package", name: "@acme/voice-node", location: "npm:@acme/voice-node@7.2.1", version: "7.2.1", scope: "api_release", confidence: 0.96, evidence: ["Package metadata declares Voice API v3"], verified: true },
+        { id: "binding_voice_tools", kind: "mcp", name: "voice.calls.*", location: "mcp.acme.dev/v2", version: "2026-07-28", scope: "api_release", confidence: 0.94, evidence: ["Tool namespace matches Voice API"], verified: true },
+      ] }],
+    },
+    {
+      id: "component_messages",
+      kind: "api",
+      name: "Messages API",
+      slug: "messages",
+      version_strategy: "independent",
+      releases: [{ id: "release_messages-v2", version: "v2", state: "draft", bindings: [
+        { id: "binding_messages_spec", kind: "openapi", name: "Messages OpenAPI", location: "api.acme.dev/messages/v2/openapi.yaml", version: "v2", scope: "api_release", confidence: 0.99, evidence: ["OpenAPI title matches Messages API", "Explicit /v2 path"], verified: true },
+        { id: "binding_messages_docs", kind: "docs", name: "Messages documentation", location: "docs.acme.dev/messages/v2", version: "v2", scope: "api_release", confidence: 0.97, evidence: ["Versioned documentation path"], verified: true },
+        { id: "binding_messages_package", kind: "package", name: "@acme/messages", location: "npm:@acme/messages@5.1.3", version: "5.1.3", scope: "api_release", confidence: 0.96, evidence: ["Package metadata declares Messages API v2"], verified: true },
+      ] }],
+    },
+  ],
+  profiles: [{ id: "profile_communications_202608", name: "Voice v3 + Messages v2", state: "draft", selections: [{ component_id: "component_voice", release_id: "release_voice-v3" }, { component_id: "component_messages", release_id: "release_messages-v2" }] }],
+};
+
+const fixtureProductBuild: APIProductBuild = {
+  id: "build_acme",
+  organisation_id: "org_acme",
+  product_id: "prod_acme",
+  state: "review",
+  analysis_mode: "ai_assisted",
+  inputs: [
+    { kind: "openapi", name: "Voice OpenAPI", location: "https://api.acme.dev/voice/v3/openapi.yaml", version: "v3" },
+    { kind: "docs", name: "Voice documentation", location: "https://docs.acme.dev/voice/v3", version: "v3" },
+    { kind: "package", name: "@acme/voice-node", location: "npm:@acme/voice-node@7.2.1", version: "7.2.1" },
+    { kind: "openapi", name: "Messages OpenAPI", location: "https://api.acme.dev/messages/v2/openapi.yaml", version: "v2" },
+    { kind: "docs", name: "Messages documentation", location: "https://docs.acme.dev/messages/v2", version: "v2" },
+    { kind: "package", name: "@acme/messages", location: "npm:@acme/messages@5.1.3", version: "5.1.3" },
+    { kind: "mcp", name: "Acme tools", location: "https://mcp.acme.dev/v2", version: "2026-07-28" },
+  ],
+  proposal: fixtureDefinition,
+  unresolved: [],
+  created_at: "2026-08-19T12:00:00Z",
+  completed_at: "2026-08-19T12:00:08Z",
+};
+
 function CopyButton({ text, label, disabled = false, onCopied }: { text: string; label: string; disabled?: boolean; onCopied: (label: string) => void }) {
   async function copy() {
     if (disabled) return;
@@ -132,6 +203,11 @@ function CopyButton({ text, label, disabled = false, onCopied }: { text: string;
 export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentUser?: APIUser | null; currentProduct?: APIProduct | null; onLogout?: () => void | Promise<void> }) {
 	const product = currentProduct ?? fixtureProduct;
   const [section, setSection] = useState<Section>("distribution");
+  const [productDefinition, setProductDefinition] = useState<APIProductDefinition | null>(fixtureDefinition);
+  const [latestProductBuild, setLatestProductBuild] = useState<APIProductBuild | null>(fixtureProductBuild);
+  const [productBuilderOpen, setProductBuilderOpen] = useState(false);
+  const [productBuilderBusy, setProductBuilderBusy] = useState(false);
+  const [productBuilderInputs, setProductBuilderInputs] = useState("");
   const [sources, setSources] = useState(initialSources);
   const [packages, setPackages] = useState(initialPackages);
   const [tools, setTools] = useState(initialTools);
@@ -294,6 +370,8 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
 	    api.rootUsers().then((value) => { if (!cancelled) setRootUsers(value); }).catch(() => {});
 	    Promise.all([api.providers(product.id), api.projects(product.id), api.credentials(product.id)]).then(([providerValues, projectValues, credentialValues]) => { if (!cancelled) { setProviders(providerValues); setProjects(projectValues); setCredentialLeases(credentialValues); } }).catch(() => {});
 	    api.llmProfiles(product.id).then((values) => { if (!cancelled) setLLMProfiles(values); }).catch(() => {});
+	    api.productDefinition(product.id).then((value) => { if (!cancelled) setProductDefinition(value); }).catch((error) => { if (!cancelled && error instanceof APIError && error.status === 404) setProductDefinition(null); });
+	    api.productBuilds(product.id).then((values) => { if (!cancelled) setLatestProductBuild(values[0] ?? null); }).catch(() => {});
 	    Promise.all([api.environments(product.id), api.integrationRuns(product.id), api.auditEvents(product.organisation_id)]).then(([environmentValues, runValues, eventValues]) => {
 	      if (cancelled) return;
 	      setEnvironments(environmentValues);
@@ -316,6 +394,56 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
   function showToast(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(null), 2200);
+  }
+
+  async function buildProductAutomatically() {
+    setProductBuilderBusy(true);
+    const additionalInputs: APIProductBuildInput[] = productBuilderInputs
+      .split(/\r?\n/)
+      .map((location) => location.trim())
+      .filter(Boolean)
+      .map((location) => ({ kind: "auto", location }));
+    try {
+      const fallbackBuildID = `build_${Date.now()}`;
+      const value = apiConnected
+        ? await api.buildProduct(product.id, additionalInputs)
+        : { ...fixtureProductBuild, id: fallbackBuildID, state: "review" as const, created_at: new Date().toISOString(), completed_at: new Date().toISOString(), inputs: [...fixtureProductBuild.inputs, ...additionalInputs], proposal: { ...fixtureDefinition, state: "draft" as const, source_build_id: fallbackBuildID } };
+      setLatestProductBuild(value);
+      setProductBuilderOpen(false);
+      setProductBuilderInputs("");
+      setSection("product");
+      showToast(`Product draft built from ${value.inputs.length} sources. Review ${value.unresolved.length || "no"} exception${value.unresolved.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "The product could not be built automatically.");
+    } finally {
+      setProductBuilderBusy(false);
+    }
+  }
+
+  async function publishProductDefinition() {
+    if (!latestProductBuild || latestProductBuild.state !== "review") return;
+    setProductBuilderBusy(true);
+    try {
+      const publishedAt = new Date().toISOString();
+      const value = apiConnected
+        ? await api.publishProductBuild(product.id, latestProductBuild.id)
+        : {
+            ...latestProductBuild.proposal,
+            state: "published" as const,
+            revision: Math.max(1, latestProductBuild.proposal.revision),
+            published_at: publishedAt,
+            updated_at: publishedAt,
+            components: latestProductBuild.proposal.components.map((component) => ({ ...component, releases: component.releases.map((release) => ({ ...release, state: "published" as const })) })),
+            profiles: latestProductBuild.proposal.profiles.map((profile) => ({ ...profile, state: "published" as const })),
+          };
+      setProductDefinition(value);
+      setLatestProductBuild({ ...latestProductBuild, state: "published", proposal: value });
+      showToast("Product definition published. Existing customer version pins were not changed.");
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "The product definition could not be published.");
+    } finally {
+      setProductBuilderBusy(false);
+    }
   }
 
   async function requestVisibility(kind: "source" | "package", id: string) {
@@ -794,6 +922,7 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
               onOpenSources={() => setSection("sources")}
             />
           )}
+          {section === "product" && <ProductDefinitionView definition={productDefinition} build={latestProductBuild} busy={productBuilderBusy} onBuild={() => setProductBuilderOpen(true)} onPublish={publishProductDefinition} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} />}
           {section === "packages" && <PackagesView packages={packages} onAdd={() => setAddPackageOpen(true)} onPublish={publishPackage} onVisibilityChange={(id) => requestVisibility("package", id)} />}
           {section === "projects" && <ProjectsView providers={providers} projects={projects} credentials={credentialLeases} onAddProvider={() => setProviderOpen(true)} />}
@@ -819,6 +948,25 @@ export function ConsoleApp({ currentUser, currentProduct, onLogout }: { currentU
           <p>DokoSoko will record your identity, the prior revision, and this decision in the audit log.</p>
           <Confirmation checked={acknowledged} onChange={setAcknowledged}>I understand this published {pendingPublication?.kind} will be available without authentication.</Confirmation>
         </WarningContent>
+      </Dialog>
+
+      <Dialog
+        open={productBuilderOpen}
+        onClose={setProductBuilderOpen}
+        title="Build product automatically"
+        description="DokoSoko will inspect everything already attached, infer API capabilities and versions, and create one reviewable Product Definition."
+        actions={<><Button outline onClick={() => setProductBuilderOpen(false)}>Cancel</Button><Button color="indigo" disabled={productBuilderBusy} onClick={buildProductAutomatically}>{productBuilderBusy ? "Building product…" : "Build automatically"}</Button></>}
+      >
+        <div className="product-builder-form">
+          <div className="builder-source-summary">
+            <span><BookOpen /><strong>{sources.length}</strong><small>docs & specs</small></span>
+            <span><PackageIcon /><strong>{packages.length}</strong><small>packages</small></span>
+            <span><Share2 /><strong>{mcpConnections.length}</strong><small>MCP upstreams</small></span>
+            <span><Wrench /><strong>{tools.length}</strong><small>tools</small></span>
+          </div>
+          <label className="auth-field"><span>Anything else?</span><textarea value={productBuilderInputs} onChange={(event) => setProductBuilderInputs(event.target.value)} placeholder={"Paste URLs, package coordinates, repositories, or MCP endpoints—one per line.\nhttps://api.example.com/voice/v3/openapi.yaml\nnpm:@acme/voice-node@7.2.1"} /><small>Optional. DokoSoko automatically classifies each input and never retrieves credentials embedded in a URL.</small></label>
+          <div className="builder-magic-note"><Sparkles /><span><strong>Review exceptions, not configuration.</strong> Exact matches are joined automatically. Ambiguous version relationships stay unresolved and cannot silently fall back.</span></div>
+        </div>
       </Dialog>
 
       <Dialog
@@ -1094,6 +1242,77 @@ function IntegrationRunsView({ runs, environments, onStart, onComplete }: { runs
 
 function ActivityView({ events }: { events: APIAuditEvent[] }) {
   return <><PageHeading eyebrow="Operations" title="Activity & audit" description="Append-only administrative and policy decisions, kept separate from product analytics." /><section className="panel"><div className="panel-heading"><div><h2>Audit events</h2><p>Actor, action, target, request ID, and timestamp. Secret values are never recorded.</p></div><Badge color="green">Append-only</Badge></div>{events.map((event) => <div className="root-row audit-row" key={event.id}><span className="settings-icon"><ShieldCheck /></span><span><strong>{event.action}</strong><small>{event.target_type} · {event.target_id} · {new Date(event.created_at).toLocaleString()}</small></span><code>{event.actor_id}</code><code>{event.request_id}</code></div>)}{events.length === 0 && <div className="empty-row">Audit activity appears after the first configuration change.</div>}</section></>;
+}
+
+function productBindingIcon(binding: APIProductBinding) {
+  if (binding.kind === "openapi") return <FileJson2 />;
+  if (binding.kind === "docs" || binding.kind === "git") return <BookOpen />;
+  if (binding.kind === "package") return <PackageIcon />;
+  if (binding.kind === "mcp") return <Share2 />;
+  return <Wrench />;
+}
+
+function ProductDefinitionView({ definition, build, busy, onBuild, onPublish }: { definition: APIProductDefinition | null; build: APIProductBuild | null; busy: boolean; onBuild: () => void; onPublish: () => void }) {
+  const reviewing = build?.state === "review";
+  const activeDefinition = reviewing ? build.proposal : definition;
+  if (!activeDefinition) {
+    return <>
+      <PageHeading eyebrow="Auto-magic" title="Product definition" description="Give DokoSoko your specs, documentation, packages, repositories, or MCP endpoints. It will assemble the version graph for you." action={<Button onClick={onBuild}><Sparkles data-slot="icon" />Build automatically</Button>} />
+      <section className="panel product-definition-empty"><span className="definition-empty-icon"><Sparkles /></span><div><h2>Start with what you already have</h2><p>DokoSoko finds API capabilities, release versions, compatible packages, versioned documentation, and tools—then asks only about ambiguous relationships.</p></div><Button color="indigo" onClick={onBuild}><Sparkles data-slot="icon" />Build product automatically</Button></section>
+    </>;
+  }
+
+  const unresolved = reviewing ? build.unresolved : activeDefinition.validation.filter((finding) => finding.level !== "info");
+  const blocking = unresolved.some((finding) => finding.level === "error");
+  const bindingCount = activeDefinition.components.reduce((total, component) => total + component.releases.reduce((releaseTotal, release) => releaseTotal + release.bindings.length, 0), activeDefinition.product_bindings.length);
+  const selectionLabel = (componentID: string, releaseID: string) => {
+    const component = activeDefinition.components.find((candidate) => candidate.id === componentID);
+    const release = component?.releases.find((candidate) => candidate.id === releaseID);
+    return `${component?.name ?? componentID} ${release?.version ?? ""}`.trim();
+  };
+
+  return <>
+    <PageHeading eyebrow="Auto-magic" title="Product definition" description="One product catalog with independently versioned APIs and evidence-backed bindings." action={<Button outline onClick={onBuild}><Sparkles data-slot="icon" />{reviewing ? "Rebuild automatically" : "Scan for changes"}</Button>} />
+    <section className={`ai-build-banner ${reviewing ? "reviewing" : "published"}`}>
+      <span className="ai-build-icon">{reviewing ? <Bot /> : <CheckCircle2 />}</span>
+      <span className="ai-build-copy"><strong>{reviewing ? "Product draft built automatically" : "Product definition published"}</strong><small>{reviewing ? `${build.inputs.length} sources analyzed · ${activeDefinition.components.length} APIs · ${bindingCount} relationships` : `Revision ${activeDefinition.revision} · customer version pins remain unchanged`}</small></span>
+      <Badge color={reviewing ? (blocking ? "red" : unresolved.length ? "amber" : "green") : "green"}>{reviewing ? (blocking ? "Blocked" : unresolved.length ? `${unresolved.length} to review` : "Ready to publish") : "Published"}</Badge>
+      {reviewing && <Button color="indigo" disabled={busy || blocking} onClick={onPublish}>{busy ? "Publishing…" : "Publish definition"}</Button>}
+    </section>
+
+    <section className="panel product-identity-panel">
+      <span className="product-definition-mark">{activeDefinition.name.slice(0, 1).toUpperCase()}</span>
+      <span className="product-definition-name"><small>Product</small><strong>{activeDefinition.name}</strong><code>{activeDefinition.slug}</code></span>
+      <span className="definition-property"><small>Version strategy</small><strong>Independent API tracks</strong></span>
+      <a className="definition-property policy" href="https://blog.modelcontextprotocol.io/posts/2026-07-28/" target="_blank" rel="noreferrer"><small>MCP policy</small><strong>{activeDefinition.mcp_policy}</strong></a>
+    </section>
+
+    <div className="definition-columns">
+      <section className="panel definition-capabilities">
+        <div className="panel-heading"><div><h2>Discovered APIs</h2><p>Every release owns its exact specs, docs, packages, and tools.</p></div><Badge color="violet">{activeDefinition.components.length} independent</Badge></div>
+        {activeDefinition.components.map((component) => <ProductCapability key={component.id} component={component} />)}
+      </section>
+      <div className="definition-side">
+        <section className="panel definition-profile-panel">
+          <div className="panel-heading"><div><h2>Compatibility profile</h2><p>Known-good combinations for customer integrations.</p></div></div>
+          {activeDefinition.profiles.map((profile) => <article className="definition-profile" key={profile.id}><span className="profile-icon"><GitBranch /></span><span><strong>{profile.name}</strong><small>{profile.selections.map((selection) => selectionLabel(selection.component_id, selection.release_id)).join(" · ")}</small></span><Badge color={profile.state === "published" ? "green" : "amber"}>{profile.state}</Badge></article>)}
+          {activeDefinition.profiles.length === 0 && <div className="empty-row">A profile appears after at least one API release is identified.</div>}
+        </section>
+        <section className="panel definition-validation-panel">
+          <div className="panel-heading"><div><h2>Review exceptions</h2><p>Automatic matches stay out of your way.</p></div><Badge color={blocking ? "red" : unresolved.length ? "amber" : "green"}>{unresolved.length ? unresolved.length : "None"}</Badge></div>
+          {unresolved.map((finding) => <div className="definition-finding" key={`${finding.code}-${finding.message}`}><span className={finding.level}><AlertCircle /></span><span><strong>{finding.code.replaceAll("_", " ")}</strong><small>{finding.message}</small></span></div>)}
+          {unresolved.length === 0 && <div className="definition-all-clear"><CheckCircle2 /><span><strong>Everything joined cleanly</strong><small>No silent version fallback or unresolved compatibility edge.</small></span></div>}
+        </section>
+      </div>
+    </div>
+  </>;
+}
+
+function ProductCapability({ component }: { component: APIProductComponent }) {
+  return <article className="product-capability">
+    <div className="capability-heading"><span className="capability-icon"><GitBranch /></span><span><strong>{component.name}</strong><small>Independent release track</small></span><span className="capability-versions">{component.releases.map((release) => <Badge color="violet" key={release.id}>{release.version}</Badge>)}</span></div>
+    {component.releases.map((release) => <div className="capability-release" key={release.id}><div className="release-label"><small>Release</small><strong>{release.version}</strong></div><div className="release-bindings">{release.bindings.map((binding) => <div className="release-binding" key={binding.id}><span className="binding-icon">{productBindingIcon(binding)}</span><span className="binding-copy"><strong>{binding.name}</strong><small>{binding.version || binding.kind} · {Math.round(binding.confidence * 100)}% confidence</small></span>{binding.verified ? <CheckCircle2 className="binding-verified" /> : <AlertCircle className="binding-pending" />}</div>)}</div></div>)}
+  </article>;
 }
 
 function OverviewView({ productName, sourceCount, publishedSourceCount, packageCount, credentialPackageCount, publicResourceCount, analytics, onNavigate, onStartRun }: { productName: string; sourceCount: number; publishedSourceCount: number; packageCount: number; credentialPackageCount: number; publicResourceCount: number; analytics: APIAnalytics | null; onNavigate: (section: Section) => void; onStartRun: () => void }) {

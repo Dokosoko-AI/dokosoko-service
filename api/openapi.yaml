@@ -256,6 +256,78 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Product" }
         "409": { $ref: "#/components/responses/ConfirmationOrRevisionConflict" }
+  /api/v1/products/{product_id}/definition:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getProductDefinition
+      description: Returns the currently published evidence-backed product and version graph.
+      responses:
+        "200":
+          description: Current Product Definition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDefinition" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/product-builds:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProductBuilds
+      responses:
+        "200":
+          description: Newest automatic product build runs first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductBuildList" }
+    post:
+      operationId: buildProductAutomatically
+      description: Scans every attached source, package, tool, and MCP connection plus optional supplemental inputs. The result is always a reviewable draft and never silently changes a published definition or customer version pin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                inputs:
+                  type: array
+                  maxItems: 50
+                  items: { $ref: "#/components/schemas/ProductBuildInput" }
+              required: [inputs]
+      responses:
+        "201":
+          description: Product graph generated for review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductBuild" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/product-builds/{build_id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: build_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: publishProductBuild
+      description: Publishes one reviewed graph. Blocking findings fail closed; warnings remain visible. Existing customer integration pins are not moved.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: Published Product Definition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDefinition" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/sources:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1699,6 +1771,126 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       required: [id, organisation_id, name, slug, public_mcp_enabled, revision, created_at, updated_at]
+    ProductBinding:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [openapi, docs, git, package, mcp, tool] }
+        name: { type: string }
+        reference_id: { type: string }
+        location: { type: string }
+        version: { type: string }
+        scope: { type: string, enum: [product, component, api_release] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        evidence: { type: array, items: { type: string } }
+        verified: { type: boolean }
+      required: [id, kind, name, scope, confidence, evidence, verified]
+    ProductRelease:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        version: { type: string }
+        state: { type: string, enum: [draft, published] }
+        bindings: { type: array, items: { $ref: "#/components/schemas/ProductBinding" } }
+      required: [id, version, state, bindings]
+    ProductComponent:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        kind: { const: api }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        version_strategy: { const: independent }
+        releases: { type: array, minItems: 1, items: { $ref: "#/components/schemas/ProductRelease" } }
+      required: [id, kind, name, slug, version_strategy, releases]
+    ProductProfileSelection:
+      type: object
+      additionalProperties: false
+      properties:
+        component_id: { type: string }
+        release_id: { type: string }
+      required: [component_id, release_id]
+    ProductProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        name: { type: string }
+        state: { type: string, enum: [draft, published] }
+        selections: { type: array, items: { $ref: "#/components/schemas/ProductProfileSelection" } }
+      required: [id, name, state, selections]
+    ProductValidationFinding:
+      type: object
+      additionalProperties: false
+      properties:
+        level: { type: string, enum: [info, warning, error] }
+        code: { type: string }
+        message: { type: string }
+        component_id: { type: string }
+        binding_id: { type: string }
+      required: [level, code, message]
+    ProductDefinition:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        state: { type: string, enum: [draft, published] }
+        version_strategy: { const: independent_api_tracks }
+        mcp_policy: { const: Stateless MCPv2 Only }
+        components: { type: array, items: { $ref: "#/components/schemas/ProductComponent" } }
+        product_bindings: { type: array, items: { $ref: "#/components/schemas/ProductBinding" } }
+        profiles: { type: array, items: { $ref: "#/components/schemas/ProductProfile" } }
+        validation: { type: array, items: { $ref: "#/components/schemas/ProductValidationFinding" } }
+        generated_by: { type: string, enum: [automatic_product_builder, ai_product_builder] }
+        source_build_id: { type: string }
+        revision: { type: integer, format: int64 }
+        published_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, name, slug, state, version_strategy, mcp_policy, components, product_bindings, profiles, validation, generated_by, revision, created_at, updated_at]
+    ProductBuildInput:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [auto, openapi, docs, git, package, mcp, tool], default: auto }
+        name: { type: string, maxLength: 160 }
+        location: { type: string, maxLength: 2048 }
+        version: { type: string, maxLength: 80 }
+        ecosystem: { type: string }
+        metadata:
+          type: object
+          maxProperties: 16
+          additionalProperties: { type: string }
+      required: [kind, location]
+    ProductBuild:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        state: { type: string, enum: [running, review, published, failed] }
+        analysis_mode: { type: string, enum: [automatic, ai_assisted] }
+        inputs: { type: array, items: { $ref: "#/components/schemas/ProductBuildInput" } }
+        proposal: { $ref: "#/components/schemas/ProductDefinition" }
+        unresolved: { type: array, items: { $ref: "#/components/schemas/ProductValidationFinding" } }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+      required: [id, organisation_id, product_id, state, analysis_mode, inputs, proposal, unresolved, created_at]
+    ProductBuildList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ProductBuild" } }
+      required: [items]
     Source:
       type: object
       additionalProperties: false

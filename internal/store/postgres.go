@@ -137,6 +137,108 @@ func (p *Postgres) UpdateProduct(ctx context.Context, value model.Product, expec
 	return updated, err
 }
 
+func scanProductDefinition(row interface{ Scan(...any) error }) (model.ProductDefinition, error) {
+	var value model.ProductDefinition
+	var raw []byte
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.State, &value.GeneratedBy, &value.SourceBuildID, &raw, &value.Revision, &value.PublishedAt, &value.CreatedAt, &value.UpdatedAt)
+	if err != nil {
+		return model.ProductDefinition{}, databaseError(err)
+	}
+	metadata := value
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return model.ProductDefinition{}, err
+	}
+	value.ID, value.OrganisationID, value.ProductID = metadata.ID, metadata.OrganisationID, metadata.ProductID
+	value.State, value.GeneratedBy, value.SourceBuildID = metadata.State, metadata.GeneratedBy, metadata.SourceBuildID
+	value.Revision, value.PublishedAt, value.CreatedAt, value.UpdatedAt = metadata.Revision, metadata.PublishedAt, metadata.CreatedAt, metadata.UpdatedAt
+	return value, nil
+}
+
+const productDefinitionSelect = `SELECT id::text, organisation_id::text, product_id::text, state, generated_by, coalesce(source_build_id::text,''), definition, revision, published_at, created_at, updated_at FROM product_definitions`
+
+func (p *Postgres) ProductDefinition(ctx context.Context, productID string) (model.ProductDefinition, error) {
+	return scanProductDefinition(p.pool.QueryRow(ctx, productDefinitionSelect+` WHERE product_id=$1`, productID))
+}
+
+func (p *Postgres) SaveProductDefinition(ctx context.Context, value model.ProductDefinition, expected int64) (model.ProductDefinition, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return model.ProductDefinition{}, err
+	}
+	if expected == 0 {
+		return scanProductDefinition(p.pool.QueryRow(ctx, `INSERT INTO product_definitions(id,organisation_id,product_id,state,generated_by,source_build_id,definition,published_at) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8) RETURNING id::text, organisation_id::text, product_id::text, state, generated_by, coalesce(source_build_id::text,''), definition, revision, published_at, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.State, value.GeneratedBy, value.SourceBuildID, raw, value.PublishedAt))
+	}
+	updated, err := scanProductDefinition(p.pool.QueryRow(ctx, `UPDATE product_definitions SET state=$2,generated_by=$3,source_build_id=nullif($4,'')::uuid,definition=$5,published_at=$6,revision=revision+1,updated_at=now() WHERE product_id=$1 AND revision=$7 RETURNING id::text, organisation_id::text, product_id::text, state, generated_by, coalesce(source_build_id::text,''), definition, revision, published_at, created_at, updated_at`, value.ProductID, value.State, value.GeneratedBy, value.SourceBuildID, raw, value.PublishedAt, expected))
+	if errors.Is(err, ErrNotFound) {
+		if _, lookupErr := p.ProductDefinition(ctx, value.ProductID); lookupErr == nil {
+			return model.ProductDefinition{}, ErrConflict
+		}
+	}
+	return updated, err
+}
+
+func scanProductBuild(row interface{ Scan(...any) error }) (model.ProductBuild, error) {
+	var value model.ProductBuild
+	var inputs, proposal, unresolved []byte
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.State, &value.AnalysisMode, &inputs, &proposal, &unresolved, &value.CreatedAt, &value.CompletedAt)
+	if err != nil {
+		return model.ProductBuild{}, databaseError(err)
+	}
+	if err := json.Unmarshal(inputs, &value.Inputs); err != nil {
+		return model.ProductBuild{}, err
+	}
+	if err := json.Unmarshal(proposal, &value.Proposal); err != nil {
+		return model.ProductBuild{}, err
+	}
+	if err := json.Unmarshal(unresolved, &value.Unresolved); err != nil {
+		return model.ProductBuild{}, err
+	}
+	return value, nil
+}
+
+const productBuildSelect = `SELECT id::text, organisation_id::text, product_id::text, state, analysis_mode, inputs, proposed_definition, unresolved, created_at, completed_at FROM product_builds`
+
+func (p *Postgres) ProductBuilds(ctx context.Context, productID string) ([]model.ProductBuild, error) {
+	rows, err := p.pool.Query(ctx, productBuildSelect+` WHERE product_id=$1 ORDER BY created_at DESC LIMIT 50`, productID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.ProductBuild, 0)
+	for rows.Next() {
+		value, err := scanProductBuild(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) ProductBuild(ctx context.Context, productID, id string) (model.ProductBuild, error) {
+	return scanProductBuild(p.pool.QueryRow(ctx, productBuildSelect+` WHERE product_id=$1 AND id=$2`, productID, id))
+}
+
+func (p *Postgres) CreateProductBuild(ctx context.Context, value model.ProductBuild) (model.ProductBuild, error) {
+	inputs, err := json.Marshal(value.Inputs)
+	if err != nil {
+		return model.ProductBuild{}, err
+	}
+	proposal, err := json.Marshal(value.Proposal)
+	if err != nil {
+		return model.ProductBuild{}, err
+	}
+	unresolved, err := json.Marshal(value.Unresolved)
+	if err != nil {
+		return model.ProductBuild{}, err
+	}
+	return scanProductBuild(p.pool.QueryRow(ctx, `INSERT INTO product_builds(id,organisation_id,product_id,state,analysis_mode,inputs,proposed_definition,unresolved,created_at,completed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text, organisation_id::text, product_id::text, state, analysis_mode, inputs, proposed_definition, unresolved, created_at, completed_at`, value.ID, value.OrganisationID, value.ProductID, value.State, value.AnalysisMode, inputs, proposal, unresolved, value.CreatedAt, value.CompletedAt))
+}
+
+func (p *Postgres) MarkProductBuildPublished(ctx context.Context, productID, id string) (model.ProductBuild, error) {
+	return scanProductBuild(p.pool.QueryRow(ctx, `UPDATE product_builds SET state='published' WHERE product_id=$1 AND id=$2 AND state='review' RETURNING id::text, organisation_id::text, product_id::text, state, analysis_mode, inputs, proposed_definition, unresolved, created_at, completed_at`, productID, id))
+}
+
 func scanSource(row interface{ Scan(...any) error }) (model.Source, error) {
 	var value model.Source
 	var state string

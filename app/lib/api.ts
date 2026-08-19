@@ -9,6 +9,94 @@ export type APIProduct = {
   revision: number;
 };
 
+export type APIProductBinding = {
+  id: string;
+  kind: "openapi" | "docs" | "git" | "package" | "mcp" | "tool";
+  name: string;
+  reference_id?: string;
+  location?: string;
+  version?: string;
+  scope: "product" | "component" | "api_release";
+  confidence: number;
+  evidence: string[];
+  verified: boolean;
+};
+
+export type APIProductRelease = {
+  id: string;
+  version: string;
+  state: "draft" | "published";
+  bindings: APIProductBinding[];
+};
+
+export type APIProductComponent = {
+  id: string;
+  kind: "api";
+  name: string;
+  slug: string;
+  description?: string;
+  version_strategy: "independent";
+  releases: APIProductRelease[];
+};
+
+export type APIProductValidationFinding = {
+  level: "info" | "warning" | "error";
+  code: string;
+  message: string;
+  component_id?: string;
+  binding_id?: string;
+};
+
+export type APIProductProfile = {
+  id: string;
+  name: string;
+  state: "draft" | "published";
+  selections: Array<{ component_id: string; release_id: string }>;
+};
+
+export type APIProductDefinition = {
+  id: string;
+  organisation_id: string;
+  product_id: string;
+  name: string;
+  slug: string;
+  state: "draft" | "published";
+  version_strategy: "independent_api_tracks";
+  mcp_policy: "Stateless MCPv2 Only";
+  components: APIProductComponent[];
+  product_bindings: APIProductBinding[];
+  profiles: APIProductProfile[];
+  validation: APIProductValidationFinding[];
+  generated_by: "automatic_product_builder" | "ai_product_builder";
+  source_build_id?: string;
+  revision: number;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIProductBuildInput = {
+  kind: "auto" | "openapi" | "docs" | "git" | "package" | "mcp" | "tool";
+  name?: string;
+  location: string;
+  version?: string;
+  ecosystem?: string;
+  metadata?: Record<string, string>;
+};
+
+export type APIProductBuild = {
+  id: string;
+  organisation_id: string;
+  product_id: string;
+  state: "running" | "review" | "published" | "failed";
+  analysis_mode: "automatic" | "ai_assisted";
+  inputs: APIProductBuildInput[];
+  proposal: APIProductDefinition;
+  unresolved: APIProductValidationFinding[];
+  created_at: string;
+  completed_at?: string;
+};
+
 export type APIOrganisation = {
   id: string;
   name: string;
@@ -344,6 +432,10 @@ export const api = {
   createOrganisation: (name: string, slug: string) => request<APIOrganisation>("/api/v1/organisations", { method: "POST", body: JSON.stringify({ name, slug }) }),
   products: async (organisationID: string) => (await request<{ items: APIProduct[] }>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/products`)).items,
   createProduct: (organisationID: string, name: string, slug: string) => request<APIProduct>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/products`, { method: "POST", body: JSON.stringify({ name, slug }) }),
+  productDefinition: (productID: string) => request<APIProductDefinition>(`${productPath(productID)}/definition`),
+  productBuilds: async (productID: string) => (await request<{ items: APIProductBuild[] }>(`${productPath(productID)}/product-builds`)).items,
+  buildProduct: (productID: string, inputs: APIProductBuildInput[]) => request<APIProductBuild>(`${productPath(productID)}/product-builds`, { method: "POST", body: JSON.stringify({ inputs }) }),
+  publishProductBuild: (productID: string, buildID: string) => request<APIProductDefinition>(`${productPath(productID)}/product-builds/${encodeURIComponent(buildID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
   environments: async (productID: string) => (await request<{ items: APIEnvironment[] }>(`${productPath(productID)}/environments`)).items,
   createEnvironment: (productID: string, organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>(`${productPath(productID)}/environments`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   distribution: (productID: string) => request<Distribution>(`${productPath(productID)}/distribution`),

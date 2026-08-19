@@ -48,6 +48,99 @@ type Product struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+type ProductBinding struct {
+	ID          string   `json:"id"`
+	Kind        string   `json:"kind"`
+	Name        string   `json:"name"`
+	ReferenceID string   `json:"reference_id,omitempty"`
+	Location    string   `json:"location,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Scope       string   `json:"scope"`
+	Confidence  float64  `json:"confidence"`
+	Evidence    []string `json:"evidence"`
+	Verified    bool     `json:"verified"`
+}
+
+type ProductRelease struct {
+	ID       string           `json:"id"`
+	Version  string           `json:"version"`
+	State    string           `json:"state"`
+	Bindings []ProductBinding `json:"bindings"`
+}
+
+type ProductComponent struct {
+	ID              string           `json:"id"`
+	Kind            string           `json:"kind"`
+	Name            string           `json:"name"`
+	Slug            string           `json:"slug"`
+	Description     string           `json:"description,omitempty"`
+	VersionStrategy string           `json:"version_strategy"`
+	Releases        []ProductRelease `json:"releases"`
+}
+
+type ProductProfileSelection struct {
+	ComponentID string `json:"component_id"`
+	ReleaseID   string `json:"release_id"`
+}
+
+type ProductProfile struct {
+	ID         string                    `json:"id"`
+	Name       string                    `json:"name"`
+	State      string                    `json:"state"`
+	Selections []ProductProfileSelection `json:"selections"`
+}
+
+type ProductValidationFinding struct {
+	Level       string `json:"level"`
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	ComponentID string `json:"component_id,omitempty"`
+	BindingID   string `json:"binding_id,omitempty"`
+}
+
+type ProductDefinition struct {
+	ID              string                     `json:"id"`
+	OrganisationID  string                     `json:"organisation_id"`
+	ProductID       string                     `json:"product_id"`
+	Name            string                     `json:"name"`
+	Slug            string                     `json:"slug"`
+	State           string                     `json:"state"`
+	VersionStrategy string                     `json:"version_strategy"`
+	MCPPolicy       string                     `json:"mcp_policy"`
+	Components      []ProductComponent         `json:"components"`
+	ProductBindings []ProductBinding           `json:"product_bindings"`
+	Profiles        []ProductProfile           `json:"profiles"`
+	Validation      []ProductValidationFinding `json:"validation"`
+	GeneratedBy     string                     `json:"generated_by"`
+	SourceBuildID   string                     `json:"source_build_id,omitempty"`
+	Revision        int64                      `json:"revision"`
+	PublishedAt     *time.Time                 `json:"published_at,omitempty"`
+	CreatedAt       time.Time                  `json:"created_at"`
+	UpdatedAt       time.Time                  `json:"updated_at"`
+}
+
+type ProductBuildInput struct {
+	Kind      string            `json:"kind"`
+	Name      string            `json:"name,omitempty"`
+	Location  string            `json:"location"`
+	Version   string            `json:"version,omitempty"`
+	Ecosystem string            `json:"ecosystem,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
+type ProductBuild struct {
+	ID             string                     `json:"id"`
+	OrganisationID string                     `json:"organisation_id"`
+	ProductID      string                     `json:"product_id"`
+	State          string                     `json:"state"`
+	AnalysisMode   string                     `json:"analysis_mode"`
+	Inputs         []ProductBuildInput        `json:"inputs"`
+	Proposal       ProductDefinition          `json:"proposal"`
+	Unresolved     []ProductValidationFinding `json:"unresolved"`
+	CreatedAt      time.Time                  `json:"created_at"`
+	CompletedAt    *time.Time                 `json:"completed_at,omitempty"`
+}
+
 type Source struct {
 	ID             string     `json:"id"`
 	OrganisationID string     `json:"organisation_id"`

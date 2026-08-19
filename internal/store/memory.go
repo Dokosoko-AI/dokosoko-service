@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -14,34 +15,36 @@ import (
 )
 
 type Memory struct {
-	mu              sync.RWMutex
-	orgs            map[string]model.Organisation
-	products        map[string]model.Product
-	envs            map[string]map[string]model.Environment
-	sources         map[string]map[string]model.Source
-	packages        map[string]map[string]model.Package
-	secrets         map[string]model.Secret
-	tools           map[string]map[string]model.Tool
-	mcpConnections  map[string]map[string]model.MCPConnection
-	mcpGrants       map[string]map[string]model.MCPUserGrant
-	mcpAuthStates   map[string]model.MCPAuthorizationState
-	providers       map[string]map[string]model.Provider
-	projects        map[string]map[string]model.Project
-	leases          map[string]map[string]model.CredentialLease
-	integrationRuns map[string]map[string]model.IntegrationRun
-	llmProfiles     map[string]map[string]model.LLMProfile
-	knowledge       map[string][]model.KnowledgeRecord
-	crawls          map[string][]model.CrawlJob
-	audit           []model.AuditEvent
-	analytics       []model.AnalyticsEvent
-	setupDone       bool
-	roots           map[string]auth.RootAccount
-	rootEmail       map[string]string
-	sessions        map[string]auth.SessionRecord
-	idps            map[string]identity.VendorConfig
-	oauthState      map[string]identity.OAuthState
-	oauthCodes      map[string]identity.OAuthCode
-	accessTokens    map[string]identity.AccessToken
+	mu                 sync.RWMutex
+	orgs               map[string]model.Organisation
+	products           map[string]model.Product
+	productDefinitions map[string]model.ProductDefinition
+	productBuilds      map[string]map[string]model.ProductBuild
+	envs               map[string]map[string]model.Environment
+	sources            map[string]map[string]model.Source
+	packages           map[string]map[string]model.Package
+	secrets            map[string]model.Secret
+	tools              map[string]map[string]model.Tool
+	mcpConnections     map[string]map[string]model.MCPConnection
+	mcpGrants          map[string]map[string]model.MCPUserGrant
+	mcpAuthStates      map[string]model.MCPAuthorizationState
+	providers          map[string]map[string]model.Provider
+	projects           map[string]map[string]model.Project
+	leases             map[string]map[string]model.CredentialLease
+	integrationRuns    map[string]map[string]model.IntegrationRun
+	llmProfiles        map[string]map[string]model.LLMProfile
+	knowledge          map[string][]model.KnowledgeRecord
+	crawls             map[string][]model.CrawlJob
+	audit              []model.AuditEvent
+	analytics          []model.AnalyticsEvent
+	setupDone          bool
+	roots              map[string]auth.RootAccount
+	rootEmail          map[string]string
+	sessions           map[string]auth.SessionRecord
+	idps               map[string]identity.VendorConfig
+	oauthState         map[string]identity.OAuthState
+	oauthCodes         map[string]identity.OAuthCode
+	accessTokens       map[string]identity.AccessToken
 }
 
 func NewMemory() *Memory {
@@ -57,21 +60,23 @@ func NewMemory() *Memory {
 		"pkg_node": {ID: "pkg_node", OrganisationID: "org_acme", ProductID: product.ID, Name: "@acme/node", Ecosystem: "npm", Version: "2.4.1", Mode: "proxy", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
 	}
 	return &Memory{
-		orgs:            map[string]model.Organisation{organisation.ID: organisation},
-		products:        map[string]model.Product{product.ID: product},
-		envs:            map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
-		sources:         map[string]map[string]model.Source{product.ID: sources},
-		packages:        map[string]map[string]model.Package{product.ID: packages},
-		secrets:         make(map[string]model.Secret),
-		tools:           map[string]map[string]model.Tool{product.ID: {}},
-		mcpConnections:  map[string]map[string]model.MCPConnection{product.ID: {}},
-		mcpGrants:       make(map[string]map[string]model.MCPUserGrant),
-		mcpAuthStates:   make(map[string]model.MCPAuthorizationState),
-		providers:       map[string]map[string]model.Provider{product.ID: {}},
-		projects:        map[string]map[string]model.Project{product.ID: {}},
-		leases:          map[string]map[string]model.CredentialLease{product.ID: {}},
-		integrationRuns: map[string]map[string]model.IntegrationRun{product.ID: {}},
-		llmProfiles:     map[string]map[string]model.LLMProfile{product.ID: {}},
+		orgs:               map[string]model.Organisation{organisation.ID: organisation},
+		products:           map[string]model.Product{product.ID: product},
+		productDefinitions: make(map[string]model.ProductDefinition),
+		productBuilds:      map[string]map[string]model.ProductBuild{product.ID: {}},
+		envs:               map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
+		sources:            map[string]map[string]model.Source{product.ID: sources},
+		packages:           map[string]map[string]model.Package{product.ID: packages},
+		secrets:            make(map[string]model.Secret),
+		tools:              map[string]map[string]model.Tool{product.ID: {}},
+		mcpConnections:     map[string]map[string]model.MCPConnection{product.ID: {}},
+		mcpGrants:          make(map[string]map[string]model.MCPUserGrant),
+		mcpAuthStates:      make(map[string]model.MCPAuthorizationState),
+		providers:          map[string]map[string]model.Provider{product.ID: {}},
+		projects:           map[string]map[string]model.Project{product.ID: {}},
+		leases:             map[string]map[string]model.CredentialLease{product.ID: {}},
+		integrationRuns:    map[string]map[string]model.IntegrationRun{product.ID: {}},
+		llmProfiles:        map[string]map[string]model.LLMProfile{product.ID: {}},
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},
@@ -143,6 +148,7 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 	value.CreatedAt = time.Now().UTC()
 	value.UpdatedAt = value.CreatedAt
 	m.products[value.ID] = value
+	m.productBuilds[value.ID] = make(map[string]model.ProductBuild)
 	m.sources[value.ID] = make(map[string]model.Source)
 	m.packages[value.ID] = make(map[string]model.Package)
 	m.knowledge[value.ID] = nil
@@ -215,6 +221,109 @@ func (m *Memory) UpdateProduct(_ context.Context, value model.Product, expected 
 	value.UpdatedAt = time.Now().UTC()
 	m.products[value.ID] = value
 	return value, nil
+}
+
+func cloneProductDefinition(value model.ProductDefinition) model.ProductDefinition {
+	encoded, _ := json.Marshal(value)
+	var cloned model.ProductDefinition
+	_ = json.Unmarshal(encoded, &cloned)
+	return cloned
+}
+
+func cloneProductBuild(value model.ProductBuild) model.ProductBuild {
+	encoded, _ := json.Marshal(value)
+	var cloned model.ProductBuild
+	_ = json.Unmarshal(encoded, &cloned)
+	return cloned
+}
+
+func (m *Memory) ProductDefinition(_ context.Context, productID string) (model.ProductDefinition, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.productDefinitions[productID]
+	if !ok {
+		return model.ProductDefinition{}, ErrNotFound
+	}
+	return cloneProductDefinition(value), nil
+}
+
+func (m *Memory) SaveProductDefinition(_ context.Context, value model.ProductDefinition, expected int64) (model.ProductDefinition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.products[value.ProductID]; !ok {
+		return model.ProductDefinition{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	current, exists := m.productDefinitions[value.ProductID]
+	if exists {
+		if current.Revision != expected {
+			return model.ProductDefinition{}, ErrConflict
+		}
+		value.Revision = current.Revision + 1
+		value.CreatedAt = current.CreatedAt
+	} else {
+		if expected != 0 {
+			return model.ProductDefinition{}, ErrConflict
+		}
+		value.Revision = 1
+		value.CreatedAt = now
+	}
+	value.UpdatedAt = now
+	m.productDefinitions[value.ProductID] = cloneProductDefinition(value)
+	return cloneProductDefinition(value), nil
+}
+
+func (m *Memory) ProductBuilds(_ context.Context, productID string) ([]model.ProductBuild, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values, ok := m.productBuilds[productID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]model.ProductBuild, 0, len(values))
+	for _, value := range values {
+		result = append(result, cloneProductBuild(value))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	return result, nil
+}
+
+func (m *Memory) ProductBuild(_ context.Context, productID, id string) (model.ProductBuild, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.productBuilds[productID][id]
+	if !ok {
+		return model.ProductBuild{}, ErrNotFound
+	}
+	return cloneProductBuild(value), nil
+}
+
+func (m *Memory) CreateProductBuild(_ context.Context, value model.ProductBuild) (model.ProductBuild, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.products[value.ProductID]; !ok {
+		return model.ProductBuild{}, ErrNotFound
+	}
+	if m.productBuilds[value.ProductID] == nil {
+		m.productBuilds[value.ProductID] = make(map[string]model.ProductBuild)
+	}
+	if _, ok := m.productBuilds[value.ProductID][value.ID]; ok {
+		return model.ProductBuild{}, ErrConflict
+	}
+	m.productBuilds[value.ProductID][value.ID] = cloneProductBuild(value)
+	return cloneProductBuild(value), nil
+}
+
+func (m *Memory) MarkProductBuildPublished(_ context.Context, productID, id string) (model.ProductBuild, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.productBuilds[productID][id]
+	if !ok {
+		return model.ProductBuild{}, ErrNotFound
+	}
+	value.State = "published"
+	m.productBuilds[productID][id] = cloneProductBuild(value)
+	return cloneProductBuild(value), nil
 }
 
 func sortedSources(values map[string]model.Source) []model.Source {

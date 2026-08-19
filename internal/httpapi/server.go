@@ -847,6 +847,12 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.environments(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "distribution":
 		s.distribution(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "definition" && r.Method == http.MethodGet:
+		s.productDefinition(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "product-builds":
+		s.productBuilds(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "product-builds" && parts[6] == "publish" && r.Method == http.MethodPost:
+		s.publishProductBuild(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "sources":
 		s.sources(w, r, parts[3])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "visibility" && r.Method == http.MethodPatch:
@@ -894,6 +900,57 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "Route not found.", nil)
 	}
+}
+
+func (s *Server) productDefinition(w http.ResponseWriter, r *http.Request, productID string) {
+	value, err := s.service.Store().ProductDefinition(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) productBuilds(w http.ResponseWriter, r *http.Request, productID string) {
+	switch r.Method {
+	case http.MethodGet:
+		values, err := s.service.Store().ProductBuilds(r.Context(), productID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": values})
+	case http.MethodPost:
+		var input struct {
+			Inputs []model.ProductBuildInput `json:"inputs"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.service.BuildProductDefinition(r.Context(), productID, input.Inputs, actor(r))
+		if err != nil {
+			s.creationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, value)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) publishProductBuild(w http.ResponseWriter, r *http.Request, productID, buildID string) {
+	value, err := s.service.PublishProductDefinition(r.Context(), productID, buildID, actor(r))
+	if errors.Is(err, platform.ErrProductDefinitionInvalid) {
+		writeError(w, http.StatusUnprocessableEntity, "product_definition_invalid", "Resolve blocking product definition findings before publication.", nil)
+		return
+	}
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) auditEvents(w http.ResponseWriter, r *http.Request, organisationID string) {

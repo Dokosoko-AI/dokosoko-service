@@ -34,9 +34,10 @@ type Actor struct {
 }
 
 type Service struct {
-	store store.Store
-	vault *secretvault.Vault
-	now   func() time.Time
+	store              store.Store
+	vault              *secretvault.Vault
+	productBuilderDoer ProductBuilderDoer
+	now                func() time.Time
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -48,6 +49,10 @@ func New(storage store.Store) *Service {
 
 func NewWithVault(storage store.Store, vault *secretvault.Vault) *Service {
 	return &Service{store: storage, vault: vault, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func NewWithVaultAndProductBuilderDoer(storage store.Store, vault *secretvault.Vault, doer ProductBuilderDoer) *Service {
+	return &Service{store: storage, vault: vault, productBuilderDoer: doer, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *Service) Store() store.Store { return s.store }
