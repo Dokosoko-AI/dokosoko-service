@@ -197,6 +197,172 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuditEventList" }
+  /api/v1/products/{product_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    patch:
+      operationId: updateProductDiscoverySettings
+      description: Updates the agent-facing product description and the default version channel for unpinned customers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                description: { type: string, minLength: 1, maxLength: 1000 }
+                default_version_policy: { type: string, enum: [latest, lts] }
+                revision: { type: integer, format: int64, minimum: 1 }
+              required: [description, default_version_policy, revision]
+      responses:
+        "200":
+          description: Updated product discovery settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/description/rewrite:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    post:
+      operationId: rewriteProductDescription
+      description: Uses the enabled assistant LLM profile to return an editable MCP-facing draft. The draft is never saved automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                draft: { type: string, minLength: 1, maxLength: 2000 }
+              required: [draft]
+      responses:
+        "200":
+          description: Unsaved rewritten description draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  description: { type: string, minLength: 1, maxLength: 1000 }
+                required: [description]
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/versions:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProductVersions
+      responses:
+        "200":
+          description: Published immutable Product Definition compatibility snapshots, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersionList" }
+    post:
+      operationId: publishProductVersion
+      description: Publishes one immutable compatibility-profile snapshot. The first product version is automatically marked latest.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                version: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }
+                profile_id: { type: string }
+                is_latest: { type: boolean, default: false }
+                is_lts: { type: boolean, default: false }
+              required: [version, profile_id]
+      responses:
+        "201":
+          description: Product version published.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersion" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/versions/{version_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateProductVersionLifecycle
+      description: Updates latest, LTS, and deprecation guidance without mutating the version's compatibility snapshot or silently moving customer pins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                is_latest: { type: boolean }
+                is_lts: { type: boolean }
+                deprecated: { type: boolean }
+                deprecation_message: { type: string, maxLength: 500 }
+                replacement_version: { type: string }
+                sunset_at: { type: [string, "null"], format: date-time }
+                revision: { type: integer, format: int64, minimum: 1 }
+              required: [is_latest, is_lts, deprecated, revision]
+      responses:
+        "200":
+          description: Updated product-version lifecycle metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersion" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/version-pins:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listProductVersionPins
+      responses:
+        "200":
+          description: Exact customer product-version pins.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersionPinList" }
+    post:
+      operationId: saveProductVersionPin
+      description: Creates or replaces the exact pin for a vendor-organisation claim. New pins cannot target deprecated versions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                customer_id: { type: string, minLength: 1, maxLength: 200 }
+                product_version_id: { type: string }
+                reason: { type: string, maxLength: 500 }
+              required: [customer_id, product_version_id]
+      responses:
+        "200":
+          description: Saved customer pin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductVersionPin" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/version-pins/{pin_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: pin_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: deleteProductVersionPin
+      description: Removes the exact customer pin so future discovery follows the configured default channel.
+      responses:
+        "204": { description: Customer pin removed. }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/environments:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1766,11 +1932,62 @@ components:
         organisation_id: { type: string }
         name: { type: string }
         slug: { type: string }
+        description: { type: string, maxLength: 1000 }
+        default_version_policy: { type: string, enum: [latest, lts] }
         public_mcp_enabled: { type: boolean, default: false }
         revision: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, name, slug, public_mcp_enabled, revision, created_at, updated_at]
+      required: [id, organisation_id, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at]
+    ProductVersion:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        version: { type: string }
+        profile_id: { type: string }
+        profile_name: { type: string }
+        definition_revision: { type: integer, format: int64 }
+        is_latest: { type: boolean }
+        is_lts: { type: boolean }
+        deprecated_at: { type: string, format: date-time }
+        deprecation_message: { type: string }
+        replacement_version: { type: string }
+        sunset_at: { type: string, format: date-time }
+        revision: { type: integer, format: int64 }
+        published_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, version, profile_id, profile_name, definition_revision, is_latest, is_lts, revision, published_at, created_at, updated_at]
+    ProductVersionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ProductVersion" } }
+      required: [items]
+    ProductVersionPin:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        customer_id: { type: string }
+        product_version_id: { type: string }
+        product_version: { type: string }
+        reason: { type: string }
+        revision: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, customer_id, product_version_id, product_version, revision, created_at, updated_at]
+    ProductVersionPinList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ProductVersionPin" } }
+      required: [items]
     ProductBinding:
       type: object
       additionalProperties: false

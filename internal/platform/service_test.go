@@ -20,13 +20,17 @@ type productBuilderDoer struct {
 	authorization string
 	requestBody   []byte
 	requestURL    string
+	response      string
 }
 
 func (d *productBuilderDoer) Do(request *http.Request) (*http.Response, error) {
 	d.authorization = request.Header.Get("Authorization")
 	d.requestURL = request.URL.String()
 	d.requestBody, _ = io.ReadAll(request.Body)
-	response := `{"choices":[{"message":{"content":"{\"assignments\":[{\"input_index\":0,\"capability_slug\":\"voice\",\"capability_name\":\"Voice API\",\"api_version\":\"v3\",\"confidence\":0.94,\"evidence\":\"The artifact describes voice calling.\"}]}"}}]}`
+	response := d.response
+	if response == "" {
+		response = `{"choices":[{"message":{"content":"{\"assignments\":[{\"input_index\":0,\"capability_slug\":\"voice\",\"capability_name\":\"Voice API\",\"api_version\":\"v3\",\"confidence\":0.94,\"evidence\":\"The artifact describes voice calling.\"}]}"}}]}`
+	}
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response)), Header: make(http.Header)}, nil
 }
 
@@ -294,5 +298,140 @@ func TestAIProductBuilderRejectsCredentialsInInputURLs(t *testing.T) {
 	_, err = service.BuildProductDefinition(ctx, product.ID, []model.ProductBuildInput{{Kind: "docs", Name: "Private docs", Location: "https://token@example.com/docs"}}, platform.Actor{ID: "root_builder"})
 	if err == nil || !strings.Contains(err.Error(), "cannot include credentials") {
 		t.Fatalf("credential-bearing URL error = %v", err)
+	}
+}
+
+func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "root_catalog", RequestID: "req_catalog"}
+	product, err := service.CreateProduct(ctx, "org_acme", "Communications Platform", "communications-catalog", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, err := service.BuildProductDefinition(ctx, product.ID, []model.ProductBuildInput{
+		{Kind: "openapi", Name: "Voice API", Location: "https://api.example.com/voice/v3/openapi.yaml", Version: "v3"},
+		{Kind: "package", Name: "@acme/voice", Location: "npm:@acme/voice@7.2.1", Version: "7.2.1", Metadata: map[string]string{"api_version": "v3"}},
+		{Kind: "tool", Name: "voice.calls_create", Location: "tool:voice.calls_create", Version: "v3", Metadata: map[string]string{"api_version": "v3", "capability_slug": "voice", "capability_name": "Voice API"}},
+		{Kind: "openapi", Name: "Messages API", Location: "https://api.example.com/messages/v2/openapi.yaml", Version: "v2"},
+		{Kind: "package", Name: "@acme/messages", Location: "npm:@acme/messages@5.1.3", Version: "5.1.3", Metadata: map[string]string{"api_version": "v2"}},
+	}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := service.PublishProductDefinition(ctx, product.ID, build.ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateProductVersion(ctx, product.ID, platform.ProductVersionInput{Version: "2026.5", ProfileID: definition.Profiles[0].ID}, actor); !errors.Is(err, platform.ErrProductDescriptionRequired) {
+		t.Fatalf("missing description error = %v", err)
+	}
+	product, err = service.UpdateProductSettings(ctx, product.ID, "Build voice and messaging integrations using independently versioned APIs and compatible SDKs.", "latest", product.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ltsVersion, err := service.CreateProductVersion(ctx, product.ID, platform.ProductVersionInput{Version: "2026.5", ProfileID: definition.Profiles[0].ID, IsLTS: true}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestVersion, err := service.CreateProductVersion(ctx, product.ID, platform.ProductVersionInput{Version: "2026.8", ProfileID: definition.Profiles[0].ID, IsLatest: true, IsLTS: true}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := service.ProductManifest(ctx, product.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.EffectiveVersion == nil || manifest.EffectiveVersion.ID != latestVersion.ID || manifest.SelectionSource != "default_latest" || len(manifest.Capabilities) != 2 {
+		t.Fatalf("default manifest = %#v", manifest)
+	}
+	managed, allowed, err := service.ProductVersionAllowsTool(ctx, product.ID, "", model.Tool{ID: "tool_voice", Namespace: "voice", Name: "calls_create"})
+	if err != nil || !managed || !allowed {
+		t.Fatalf("version-matched tool managed=%v allowed=%v err=%v", managed, allowed, err)
+	}
+	managed, allowed, err = service.ProductVersionAllowsTool(ctx, product.ID, "", model.Tool{ID: "tool_future", Namespace: "voice", Name: "calls_delete"})
+	if err != nil || !managed || allowed {
+		t.Fatalf("tool outside snapshot managed=%v allowed=%v err=%v", managed, allowed, err)
+	}
+	if _, err := service.SaveProductVersionPin(ctx, product.ID, "contoso", ltsVersion.ID, "Production stability window", actor); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := service.ProductManifest(ctx, product.ID, "contoso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.EffectiveVersion == nil || pinned.EffectiveVersion.ID != ltsVersion.ID || pinned.SelectionSource != "customer_pin" {
+		t.Fatalf("pinned manifest = %#v", pinned)
+	}
+
+	ltsVersion, err = memory.ProductVersion(ctx, product.ID, ltsVersion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ltsVersion, err = service.UpdateProductVersionLifecycle(ctx, product.ID, ltsVersion.ID, platform.ProductVersionLifecycleInput{Deprecated: true, DeprecationMessage: "Move to 2026.8 for continued support.", ReplacementVersion: "2026.8", Revision: ltsVersion.Revision}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err = service.ProductManifest(ctx, product.ID, "contoso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.EffectiveVersion == nil || !pinned.EffectiveVersion.Deprecated || pinned.EffectiveVersion.ReplacementVersion != "2026.8" {
+		t.Fatalf("deprecated pin moved or lost guidance: %#v", pinned)
+	}
+	if _, err := service.SaveProductVersionPin(ctx, product.ID, "fabrikam", ltsVersion.ID, "", actor); !errors.Is(err, platform.ErrProductVersionDeprecated) {
+		t.Fatalf("new deprecated pin error = %v", err)
+	}
+
+	product, err = service.UpdateProductSettings(ctx, product.ID, product.Description, "lts", product.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err = service.ProductManifest(ctx, product.ID, "fabrikam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.EffectiveVersion == nil || manifest.EffectiveVersion.ID != latestVersion.ID || manifest.SelectionSource != "default_lts" {
+		t.Fatalf("LTS default manifest = %#v", manifest)
+	}
+}
+
+func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doer := &productBuilderDoer{response: `{"choices":[{"message":{"content":"{\"description\":\"Build voice and messaging integrations with version-matched APIs, SDKs, documentation, and authorized tools.\"}"}}]}`}
+	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, doer)
+	actor := platform.Actor{ID: "root_description", RequestID: "req_description"}
+	product, err := service.CreateProduct(ctx, "org_acme", "Communications Platform", "communications-description", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveLLMProfile(ctx, platform.LLMProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "description-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := service.RewriteProductDescription(ctx, product.ID, "Voice API v3 and Messages API v2 for developers.", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rewritten, "version-matched APIs") {
+		t.Fatalf("rewrite = %q", rewritten)
+	}
+	stored, err := memory.Product(ctx, product.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Description != "" {
+		t.Fatalf("AI rewrite silently saved product description: %q", stored.Description)
+	}
+	if doer.authorization != "Bearer provider-secret" || bytes.Contains(doer.requestBody, []byte("provider-secret")) || !bytes.Contains(doer.requestBody, []byte("never invent capabilities")) {
+		t.Fatalf("rewrite request was not hardened: auth=%q body=%s", doer.authorization, doer.requestBody)
 	}
 }

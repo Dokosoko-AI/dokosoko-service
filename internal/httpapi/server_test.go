@@ -15,6 +15,7 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
+	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
@@ -157,6 +158,101 @@ func TestAIProductBuilderAPIProducesReviewAndPublishesDefinition(t *testing.T) {
 	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/definition", "doko_admin_demo", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"source_build_id":"`+build.ID+`"`) {
 		t.Fatalf("definition status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMCPDiscoversTheEffectiveDokosokoProductVersion(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "root_catalog", RequestID: "req_catalog"}
+	product, err := memory.Product(t.Context(), "prod_acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	product, err = service.UpdateProductSettings(t.Context(), product.ID, "Build voice and messaging integrations with version-matched APIs, SDKs, documentation, and authorized tools.", "latest", product.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, err := service.BuildProductDefinition(t.Context(), product.ID, []model.ProductBuildInput{
+		{Kind: "openapi", Name: "Voice API", Location: "https://api.example.com/voice/v3/openapi.yaml", Version: "v3"},
+		{Kind: "package", Name: "@acme/voice", Location: "npm:@acme/voice@7.2.1", Version: "7.2.1", Metadata: map[string]string{"api_version": "v3"}},
+		{Kind: "openapi", Name: "Messages API", Location: "https://api.example.com/messages/v2/openapi.yaml", Version: "v2"},
+		{Kind: "package", Name: "@acme/messages", Location: "npm:@acme/messages@5.1.3", Version: "5.1.3", Metadata: map[string]string{"api_version": "v2"}},
+	}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := service.PublishProductDefinition(t.Context(), product.ID, build.ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateProductVersion(t.Context(), product.ID, platform.ProductVersionInput{Version: "2026.8", ProfileID: definition.Profiles[0].ID, IsLatest: true, IsLTS: true}, actor); err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(service, "https://dokosoko.example")
+
+	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"product_name":"Acme Platform"`) || !strings.Contains(w.Body.String(), `"version":"2026.8"`) || !strings.Contains(w.Body.String(), `"release":"v3"`) || !strings.Contains(w.Body.String(), `"release":"v2"`) {
+		t.Fatalf("discover status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"product.get_manifest"`) || !strings.Contains(w.Body.String(), `"name":"product.versions.list"`) || !strings.Contains(w.Body.String(), `"com.dokosoko/productVersion"`) || !strings.Contains(w.Body.String(), `"is_lts":true`) {
+		t.Fatalf("tools/list status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
+	t.Parallel()
+	handler := newServer()
+	w := request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme", "doko_admin_demo", `{"description":"Build supported Acme API integrations with version-matched documentation, packages, and tools.","default_version_policy":"latest","revision":1}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("settings status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/product-builds", "doko_admin_demo", `{"inputs":[{"kind":"openapi","name":"Voice API","location":"https://api.example.com/voice/v3/openapi.yaml","version":"v3"}]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("build status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var build struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &build); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/product-builds/"+build.ID+"/publish", "doko_admin_demo", `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("publish status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var definition struct {
+		Profiles []struct {
+			ID string `json:"id"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &definition); err != nil || len(definition.Profiles) == 0 {
+		t.Fatalf("definition = %#v, err = %v", definition, err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/versions", "doko_admin_demo", fmt.Sprintf(`{"version":"2026.8","profile_id":%q,"is_latest":true,"is_lts":true}`, definition.Profiles[0].ID))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("version status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var version struct {
+		ID      string `json:"id"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &version); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", fmt.Sprintf(`{"customer_id":"contoso","product_version_id":%q,"reason":"Production stability"}`, version.ID))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_id":"contoso"`) || !strings.Contains(w.Body.String(), `"product_version":"2026.8"`) {
+		t.Fatalf("pin status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/versions", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"is_latest":true`) || !strings.Contains(w.Body.String(), `"is_lts":true`) {
+		t.Fatalf("versions status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_id":"contoso"`) {
+		t.Fatalf("pins status = %d, body = %s", w.Code, w.Body.String())
 	}
 }
 

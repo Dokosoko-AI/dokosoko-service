@@ -44,9 +44,11 @@ func databaseError(err error) error {
 
 func scanProduct(row pgx.Row) (model.Product, error) {
 	var value model.Product
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.PublicMCPEnabled, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.DefaultVersionPolicy, &value.PublicMCPEnabled, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
+
+const productSelect = `SELECT id::text, organisation_id::text, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at FROM products`
 
 func scanOrganisation(row interface{ Scan(...any) error }) (model.Organisation, error) {
 	var value model.Organisation
@@ -76,7 +78,7 @@ func (p *Postgres) CreateOrganisation(ctx context.Context, value model.Organisat
 }
 
 func (p *Postgres) Products(ctx context.Context, organisationID string) ([]model.Product, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id::text, organisation_id::text, name, slug, public_mcp_enabled, revision, created_at, updated_at FROM products WHERE organisation_id = $1 ORDER BY name`, organisationID)
+	rows, err := p.pool.Query(ctx, productSelect+` WHERE organisation_id = $1 ORDER BY name`, organisationID)
 	if err != nil {
 		return nil, databaseError(err)
 	}
@@ -93,7 +95,7 @@ func (p *Postgres) Products(ctx context.Context, organisationID string) ([]model
 }
 
 func (p *Postgres) CreateProduct(ctx context.Context, value model.Product) (model.Product, error) {
-	return scanProduct(p.pool.QueryRow(ctx, `INSERT INTO products(id, organisation_id, name, slug) VALUES ($1, $2, $3, $4) RETURNING id::text, organisation_id::text, name, slug, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.Name, value.Slug))
+	return scanProduct(p.pool.QueryRow(ctx, `INSERT INTO products(id, organisation_id, name, slug, description, default_version_policy) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text, organisation_id::text, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.DefaultVersionPolicy))
 }
 
 func scanEnvironment(row interface{ Scan(...any) error }) (model.Environment, error) {
@@ -124,17 +126,153 @@ func (p *Postgres) CreateEnvironment(ctx context.Context, value model.Environmen
 }
 
 func (p *Postgres) Product(ctx context.Context, id string) (model.Product, error) {
-	return scanProduct(p.pool.QueryRow(ctx, `SELECT id::text, organisation_id::text, name, slug, public_mcp_enabled, revision, created_at, updated_at FROM products WHERE id = $1`, id))
+	return scanProduct(p.pool.QueryRow(ctx, productSelect+` WHERE id = $1`, id))
 }
 
 func (p *Postgres) UpdateProduct(ctx context.Context, value model.Product, expected int64) (model.Product, error) {
-	updated, err := scanProduct(p.pool.QueryRow(ctx, `UPDATE products SET public_mcp_enabled = $2, revision = revision + 1, updated_at = now() WHERE id = $1 AND revision = $3 RETURNING id::text, organisation_id::text, name, slug, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.PublicMCPEnabled, expected))
+	updated, err := scanProduct(p.pool.QueryRow(ctx, `UPDATE products SET description=$2, default_version_policy=$3, public_mcp_enabled=$4, revision=revision+1, updated_at=now() WHERE id=$1 AND revision=$5 RETURNING id::text, organisation_id::text, name, slug, description, default_version_policy, public_mcp_enabled, revision, created_at, updated_at`, value.ID, value.Description, value.DefaultVersionPolicy, value.PublicMCPEnabled, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.Product(ctx, value.ID); lookupErr == nil {
 			return model.Product{}, ErrConflict
 		}
 	}
 	return updated, err
+}
+
+func scanProductVersion(row interface{ Scan(...any) error }) (model.ProductVersion, error) {
+	var value model.ProductVersion
+	var manifest []byte
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Version, &value.ProfileID, &value.ProfileName, &value.DefinitionRevision, &value.IsLatest, &value.IsLTS, &value.DeprecatedAt, &value.DeprecationMessage, &value.ReplacementVersion, &value.SunsetAt, &value.Revision, &value.PublishedAt, &value.CreatedAt, &value.UpdatedAt, &manifest)
+	if err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	if err := json.Unmarshal(manifest, &value.Manifest); err != nil {
+		return model.ProductVersion{}, err
+	}
+	return value, nil
+}
+
+const productVersionSelect = `SELECT id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest FROM connector_releases`
+
+func (p *Postgres) ProductVersions(ctx context.Context, productID string) ([]model.ProductVersion, error) {
+	rows, err := p.pool.Query(ctx, productVersionSelect+` WHERE product_id=$1 AND state='published' ORDER BY published_at DESC, created_at DESC`, productID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.ProductVersion, 0)
+	for rows.Next() {
+		value, err := scanProductVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (p *Postgres) ProductVersion(ctx context.Context, productID, id string) (model.ProductVersion, error) {
+	return scanProductVersion(p.pool.QueryRow(ctx, productVersionSelect+` WHERE product_id=$1 AND id=$2 AND state='published'`, productID, id))
+}
+
+func (p *Postgres) CreateProductVersion(ctx context.Context, value model.ProductVersion) (model.ProductVersion, error) {
+	manifest, err := json.Marshal(value.Manifest)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM products WHERE id=$1 FOR UPDATE`, value.ProductID); err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	if value.IsLatest {
+		if _, err := tx.Exec(ctx, `UPDATE connector_releases SET is_latest=false, revision=revision+1, updated_at=now() WHERE product_id=$1 AND is_latest`, value.ProductID); err != nil {
+			return model.ProductVersion{}, databaseError(err)
+		}
+	}
+	created, err := scanProductVersion(tx.QueryRow(ctx, `INSERT INTO connector_releases(id,organisation_id,product_id,version,state,manifest,published_at,display_version,profile_id,profile_name,definition_revision,is_latest,is_lts,deprecated_at,deprecation_message,replacement_version,sunset_at) SELECT $1,$2,$3,coalesce(max(version),0)+1,'published',$4,now(),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 FROM connector_releases WHERE product_id=$3 RETURNING id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest`, value.ID, value.OrganisationID, value.ProductID, manifest, value.Version, value.ProfileID, value.ProfileName, value.DefinitionRevision, value.IsLatest, value.IsLTS, value.DeprecatedAt, value.DeprecationMessage, value.ReplacementVersion, value.SunsetAt))
+	if err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	return created, nil
+}
+
+func (p *Postgres) UpdateProductVersion(ctx context.Context, value model.ProductVersion, expected int64) (model.ProductVersion, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.ProductVersion{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM products WHERE id=$1 FOR UPDATE`, value.ProductID); err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	if value.IsLatest {
+		if _, err := tx.Exec(ctx, `UPDATE connector_releases SET is_latest=false, revision=revision+1, updated_at=now() WHERE product_id=$1 AND id<>$2 AND is_latest`, value.ProductID, value.ID); err != nil {
+			return model.ProductVersion{}, databaseError(err)
+		}
+	}
+	updated, err := scanProductVersion(tx.QueryRow(ctx, `UPDATE connector_releases SET is_latest=$3,is_lts=$4,deprecated_at=$5,deprecation_message=$6,replacement_version=$7,sunset_at=$8,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$9 AND state='published' RETURNING id::text, organisation_id::text, product_id::text, display_version, profile_id, profile_name, definition_revision, is_latest, is_lts, deprecated_at, deprecation_message, replacement_version, sunset_at, revision, coalesce(published_at,created_at), created_at, updated_at, manifest`, value.ProductID, value.ID, value.IsLatest, value.IsLTS, value.DeprecatedAt, value.DeprecationMessage, value.ReplacementVersion, value.SunsetAt, expected))
+	if err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.ProductVersion{}, databaseError(err)
+	}
+	return updated, nil
+}
+
+func scanProductVersionPin(row interface{ Scan(...any) error }) (model.ProductVersionPin, error) {
+	var value model.ProductVersionPin
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.CustomerID, &value.ProductVersionID, &value.ProductVersion, &value.Reason, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	return value, databaseError(err)
+}
+
+const productVersionPinSelect = `SELECT p.id::text,p.organisation_id::text,p.product_id::text,p.customer_id,p.connector_release_id::text,r.display_version,p.reason,p.revision,p.created_at,p.updated_at FROM product_version_pins p JOIN connector_releases r ON r.id=p.connector_release_id`
+
+func (p *Postgres) ProductVersionPins(ctx context.Context, productID string) ([]model.ProductVersionPin, error) {
+	rows, err := p.pool.Query(ctx, productVersionPinSelect+` WHERE p.product_id=$1 ORDER BY p.customer_id`, productID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.ProductVersionPin, 0)
+	for rows.Next() {
+		value, err := scanProductVersionPin(rows)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (p *Postgres) ProductVersionPin(ctx context.Context, productID, customerID string) (model.ProductVersionPin, error) {
+	return scanProductVersionPin(p.pool.QueryRow(ctx, productVersionPinSelect+` WHERE p.product_id=$1 AND p.customer_id=$2`, productID, customerID))
+}
+
+func (p *Postgres) SaveProductVersionPin(ctx context.Context, value model.ProductVersionPin) (model.ProductVersionPin, error) {
+	_, err := p.pool.Exec(ctx, `INSERT INTO product_version_pins(id,organisation_id,product_id,customer_id,connector_release_id,reason) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(product_id,customer_id) DO UPDATE SET connector_release_id=excluded.connector_release_id,reason=excluded.reason,revision=product_version_pins.revision+1,updated_at=now()`, value.ID, value.OrganisationID, value.ProductID, value.CustomerID, value.ProductVersionID, value.Reason)
+	if err != nil {
+		return model.ProductVersionPin{}, databaseError(err)
+	}
+	return p.ProductVersionPin(ctx, value.ProductID, value.CustomerID)
+}
+
+func (p *Postgres) DeleteProductVersionPin(ctx context.Context, productID, id string) error {
+	result, err := p.pool.Exec(ctx, `DELETE FROM product_version_pins WHERE product_id=$1 AND id=$2`, productID, id)
+	if err != nil {
+		return databaseError(err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func scanProductDefinition(row interface{ Scan(...any) error }) (model.ProductDefinition, error) {

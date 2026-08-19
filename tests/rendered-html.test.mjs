@@ -67,3 +67,20 @@ test("ships the automatic Product Definition review flow", async () => {
   assert.match(client, /product-builds/);
   assert.match(client, /publishProductBuild/);
 });
+
+test("ships product-version discovery, lifecycle, pinning, and AI rewrite controls", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(source, /Product discovery & versions/);
+  assert.match(source, /Rewrite for agents/);
+  assert.match(source, /Publish product version/);
+  assert.match(source, /Customer version pins/);
+  assert.match(source, /No silent migration/);
+  assert.match(source, /Latest/);
+  assert.match(source, /LTS/);
+  assert.match(source, /Deprecated/);
+  assert.match(client, /description\/rewrite/);
+  assert.match(client, /version-pins/);
+  assert.match(client, /productVersions/);
+});

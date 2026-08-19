@@ -38,14 +38,88 @@ type Environment struct {
 }
 
 type Product struct {
+	ID                   string    `json:"id"`
+	OrganisationID       string    `json:"organisation_id"`
+	Name                 string    `json:"name"`
+	Slug                 string    `json:"slug"`
+	Description          string    `json:"description"`
+	DefaultVersionPolicy string    `json:"default_version_policy"`
+	PublicMCPEnabled     bool      `json:"public_mcp_enabled"`
+	Revision             int64     `json:"revision"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type ProductVersion struct {
+	ID                 string            `json:"id"`
+	OrganisationID     string            `json:"organisation_id"`
+	ProductID          string            `json:"product_id"`
+	Version            string            `json:"version"`
+	ProfileID          string            `json:"profile_id"`
+	ProfileName        string            `json:"profile_name"`
+	DefinitionRevision int64             `json:"definition_revision"`
+	IsLatest           bool              `json:"is_latest"`
+	IsLTS              bool              `json:"is_lts"`
+	DeprecatedAt       *time.Time        `json:"deprecated_at,omitempty"`
+	DeprecationMessage string            `json:"deprecation_message,omitempty"`
+	ReplacementVersion string            `json:"replacement_version,omitempty"`
+	SunsetAt           *time.Time        `json:"sunset_at,omitempty"`
+	Revision           int64             `json:"revision"`
+	PublishedAt        time.Time         `json:"published_at"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
+	Manifest           ProductDefinition `json:"-"`
+}
+
+type ProductVersionPin struct {
 	ID               string    `json:"id"`
 	OrganisationID   string    `json:"organisation_id"`
-	Name             string    `json:"name"`
-	Slug             string    `json:"slug"`
-	PublicMCPEnabled bool      `json:"public_mcp_enabled"`
+	ProductID        string    `json:"product_id"`
+	CustomerID       string    `json:"customer_id"`
+	ProductVersionID string    `json:"product_version_id"`
+	ProductVersion   string    `json:"product_version"`
+	Reason           string    `json:"reason,omitempty"`
 	Revision         int64     `json:"revision"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type ProductManifestArtifact struct {
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+type ProductManifestCapability struct {
+	ID        string                    `json:"id"`
+	Name      string                    `json:"name"`
+	Release   string                    `json:"release"`
+	Artifacts []ProductManifestArtifact `json:"artifacts"`
+}
+
+type ProductVersionSummary struct {
+	ID                 string     `json:"id"`
+	Version            string     `json:"version"`
+	ProfileName        string     `json:"profile_name"`
+	IsLatest           bool       `json:"is_latest"`
+	IsLTS              bool       `json:"is_lts"`
+	Deprecated         bool       `json:"deprecated"`
+	DeprecationMessage string     `json:"deprecation_message,omitempty"`
+	ReplacementVersion string     `json:"replacement_version,omitempty"`
+	SunsetAt           *time.Time `json:"sunset_at,omitempty"`
+}
+
+type ProductManifest struct {
+	ProductID            string                      `json:"product_id"`
+	ProductSlug          string                      `json:"product_slug"`
+	ProductName          string                      `json:"product_name"`
+	Description          string                      `json:"description"`
+	DefaultVersionPolicy string                      `json:"default_version_policy"`
+	DefinitionRevision   int64                       `json:"definition_revision,omitempty"`
+	EffectiveVersion     *ProductVersionSummary      `json:"effective_version,omitempty"`
+	SelectionSource      string                      `json:"selection_source"`
+	Capabilities         []ProductManifestCapability `json:"capabilities"`
+	AvailableVersions    []ProductVersionSummary     `json:"available_versions"`
 }
 
 type ProductBinding struct {

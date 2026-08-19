@@ -5,8 +5,41 @@ export type APIProduct = {
   organisation_id: string;
   name: string;
   slug: string;
+  description: string;
+  default_version_policy: "latest" | "lts";
   public_mcp_enabled: boolean;
   revision: number;
+};
+
+export type APIProductVersion = {
+  id: string;
+  organisation_id: string;
+  product_id: string;
+  version: string;
+  profile_id: string;
+  profile_name: string;
+  definition_revision: number;
+  is_latest: boolean;
+  is_lts: boolean;
+  deprecated_at?: string;
+  deprecation_message?: string;
+  replacement_version?: string;
+  sunset_at?: string;
+  revision: number;
+  published_at: string;
+};
+
+export type APIProductVersionPin = {
+  id: string;
+  organisation_id: string;
+  product_id: string;
+  customer_id: string;
+  product_version_id: string;
+  product_version: string;
+  reason?: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type APIProductBinding = {
@@ -432,6 +465,14 @@ export const api = {
   createOrganisation: (name: string, slug: string) => request<APIOrganisation>("/api/v1/organisations", { method: "POST", body: JSON.stringify({ name, slug }) }),
   products: async (organisationID: string) => (await request<{ items: APIProduct[] }>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/products`)).items,
   createProduct: (organisationID: string, name: string, slug: string) => request<APIProduct>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/products`, { method: "POST", body: JSON.stringify({ name, slug }) }),
+  updateProductSettings: (productID: string, description: string, defaultVersionPolicy: "latest" | "lts", revision: number) => request<APIProduct>(productPath(productID), { method: "PATCH", body: JSON.stringify({ description, default_version_policy: defaultVersionPolicy, revision }) }),
+  rewriteProductDescription: (productID: string, draft: string) => request<{ description: string }>(`${productPath(productID)}/description/rewrite`, { method: "POST", body: JSON.stringify({ draft }) }),
+  productVersions: async (productID: string) => (await request<{ items: APIProductVersion[] }>(`${productPath(productID)}/versions`)).items,
+  createProductVersion: (productID: string, input: { version: string; profile_id: string; is_latest: boolean; is_lts: boolean }) => request<APIProductVersion>(`${productPath(productID)}/versions`, { method: "POST", body: JSON.stringify(input) }),
+  updateProductVersion: (productID: string, versionID: string, input: { is_latest: boolean; is_lts: boolean; deprecated: boolean; deprecation_message: string; replacement_version: string; sunset_at?: string; revision: number }) => request<APIProductVersion>(`${productPath(productID)}/versions/${encodeURIComponent(versionID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  productVersionPins: async (productID: string) => (await request<{ items: APIProductVersionPin[] }>(`${productPath(productID)}/version-pins`)).items,
+  saveProductVersionPin: (productID: string, customerID: string, productVersionID: string, reason: string) => request<APIProductVersionPin>(`${productPath(productID)}/version-pins`, { method: "POST", body: JSON.stringify({ customer_id: customerID, product_version_id: productVersionID, reason }) }),
+  deleteProductVersionPin: (productID: string, pinID: string) => request<void>(`${productPath(productID)}/version-pins/${encodeURIComponent(pinID)}`, { method: "DELETE" }),
   productDefinition: (productID: string) => request<APIProductDefinition>(`${productPath(productID)}/definition`),
   productBuilds: async (productID: string) => (await request<{ items: APIProductBuild[] }>(`${productPath(productID)}/product-builds`)).items,
   buildProduct: (productID: string, inputs: APIProductBuildInput[]) => request<APIProductBuild>(`${productPath(productID)}/product-builds`, { method: "POST", body: JSON.stringify({ inputs }) }),

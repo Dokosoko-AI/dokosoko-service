@@ -247,7 +247,7 @@ func (s *Service) CreateProduct(ctx context.Context, organisationID, name, slug 
 	if err != nil {
 		return model.Product{}, err
 	}
-	value, err := s.store.CreateProduct(ctx, model.Product{ID: id, OrganisationID: organisationID, Name: name, Slug: slug})
+	value, err := s.store.CreateProduct(ctx, model.Product{ID: id, OrganisationID: organisationID, Name: name, Slug: slug, DefaultVersionPolicy: "latest"})
 	if err != nil {
 		return model.Product{}, err
 	}

@@ -18,6 +18,8 @@ type Memory struct {
 	mu                 sync.RWMutex
 	orgs               map[string]model.Organisation
 	products           map[string]model.Product
+	productVersions    map[string]map[string]model.ProductVersion
+	productVersionPins map[string]map[string]model.ProductVersionPin
 	productDefinitions map[string]model.ProductDefinition
 	productBuilds      map[string]map[string]model.ProductBuild
 	envs               map[string]map[string]model.Environment
@@ -50,7 +52,7 @@ type Memory struct {
 func NewMemory() *Memory {
 	now := time.Now().UTC()
 	organisation := model.Organisation{ID: "org_acme", Name: "Acme", Slug: "acme", Revision: 1, CreatedAt: now, UpdatedAt: now}
-	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Description: "Build voice and messaging integrations with Acme APIs, SDKs, documentation, and managed tools.", DefaultVersionPolicy: "latest", Revision: 1, CreatedAt: now, UpdatedAt: now}
 	environment := model.Environment{ID: "env_prod", OrganisationID: organisation.ID, ProductID: product.ID, Name: "Production", Slug: "production", IsProduction: true, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	sources := map[string]model.Source{
 		"src_docs": {ID: "src_docs", OrganisationID: "org_acme", ProductID: product.ID, Name: "Developer documentation", Kind: "website", Location: "https://docs.acme.dev", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
@@ -62,6 +64,8 @@ func NewMemory() *Memory {
 	return &Memory{
 		orgs:               map[string]model.Organisation{organisation.ID: organisation},
 		products:           map[string]model.Product{product.ID: product},
+		productVersions:    map[string]map[string]model.ProductVersion{product.ID: {}},
+		productVersionPins: map[string]map[string]model.ProductVersionPin{product.ID: {}},
 		productDefinitions: make(map[string]model.ProductDefinition),
 		productBuilds:      map[string]map[string]model.ProductBuild{product.ID: {}},
 		envs:               map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
@@ -148,6 +152,8 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 	value.CreatedAt = time.Now().UTC()
 	value.UpdatedAt = value.CreatedAt
 	m.products[value.ID] = value
+	m.productVersions[value.ID] = make(map[string]model.ProductVersion)
+	m.productVersionPins[value.ID] = make(map[string]model.ProductVersionPin)
 	m.productBuilds[value.ID] = make(map[string]model.ProductBuild)
 	m.sources[value.ID] = make(map[string]model.Source)
 	m.packages[value.ID] = make(map[string]model.Package)
@@ -221,6 +227,158 @@ func (m *Memory) UpdateProduct(_ context.Context, value model.Product, expected 
 	value.UpdatedAt = time.Now().UTC()
 	m.products[value.ID] = value
 	return value, nil
+}
+
+func (m *Memory) ProductVersions(_ context.Context, productID string) ([]model.ProductVersion, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values, ok := m.productVersions[productID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]model.ProductVersion, 0, len(values))
+	for _, value := range values {
+		value.Manifest = cloneProductDefinition(value.Manifest)
+		result = append(result, value)
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].PublishedAt.After(result[j].PublishedAt) })
+	return result, nil
+}
+
+func (m *Memory) ProductVersion(_ context.Context, productID, id string) (model.ProductVersion, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.productVersions[productID][id]
+	if !ok {
+		return model.ProductVersion{}, ErrNotFound
+	}
+	value.Manifest = cloneProductDefinition(value.Manifest)
+	return value, nil
+}
+
+func (m *Memory) CreateProductVersion(_ context.Context, value model.ProductVersion) (model.ProductVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.productVersions[value.ProductID]
+	if !ok {
+		return model.ProductVersion{}, ErrNotFound
+	}
+	for _, current := range values {
+		if current.Version == value.Version {
+			return model.ProductVersion{}, ErrConflict
+		}
+	}
+	if value.IsLatest {
+		for id, current := range values {
+			if !current.IsLatest {
+				continue
+			}
+			current.IsLatest = false
+			current.Revision++
+			current.UpdatedAt = time.Now().UTC()
+			values[id] = current
+		}
+	}
+	now := time.Now().UTC()
+	value.Revision, value.PublishedAt, value.CreatedAt, value.UpdatedAt = 1, now, now, now
+	value.Manifest = cloneProductDefinition(value.Manifest)
+	values[value.ID] = value
+	return value, nil
+}
+
+func (m *Memory) UpdateProductVersion(_ context.Context, value model.ProductVersion, expected int64) (model.ProductVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.productVersions[value.ProductID]
+	if !ok {
+		return model.ProductVersion{}, ErrNotFound
+	}
+	current, ok := values[value.ID]
+	if !ok {
+		return model.ProductVersion{}, ErrNotFound
+	}
+	if current.Revision != expected {
+		return model.ProductVersion{}, ErrConflict
+	}
+	if value.IsLatest {
+		for id, candidate := range values {
+			if id == value.ID || !candidate.IsLatest {
+				continue
+			}
+			candidate.IsLatest = false
+			candidate.Revision++
+			candidate.UpdatedAt = time.Now().UTC()
+			values[id] = candidate
+		}
+	}
+	value.Version, value.ProfileID, value.ProfileName = current.Version, current.ProfileID, current.ProfileName
+	value.DefinitionRevision, value.Manifest = current.DefinitionRevision, cloneProductDefinition(current.Manifest)
+	value.OrganisationID, value.PublishedAt, value.CreatedAt = current.OrganisationID, current.PublishedAt, current.CreatedAt
+	value.Revision, value.UpdatedAt = current.Revision+1, time.Now().UTC()
+	values[value.ID] = value
+	return value, nil
+}
+
+func (m *Memory) ProductVersionPins(_ context.Context, productID string) ([]model.ProductVersionPin, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values, ok := m.productVersionPins[productID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]model.ProductVersionPin, 0, len(values))
+	for _, value := range values {
+		result = append(result, value)
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].CustomerID < result[j].CustomerID })
+	return result, nil
+}
+
+func (m *Memory) ProductVersionPin(_ context.Context, productID, customerID string) (model.ProductVersionPin, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.productVersionPins[productID][customerID]
+	if !ok {
+		return model.ProductVersionPin{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (m *Memory) SaveProductVersionPin(_ context.Context, value model.ProductVersionPin) (model.ProductVersionPin, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.productVersionPins[value.ProductID]
+	if !ok {
+		return model.ProductVersionPin{}, ErrNotFound
+	}
+	if _, ok := m.productVersions[value.ProductID][value.ProductVersionID]; !ok {
+		return model.ProductVersionPin{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	if current, ok := values[value.CustomerID]; ok {
+		value.ID, value.CreatedAt, value.Revision = current.ID, current.CreatedAt, current.Revision+1
+	} else {
+		value.Revision, value.CreatedAt = 1, now
+	}
+	value.UpdatedAt = now
+	values[value.CustomerID] = value
+	return value, nil
+}
+
+func (m *Memory) DeleteProductVersionPin(_ context.Context, productID, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values, ok := m.productVersionPins[productID]
+	if !ok {
+		return ErrNotFound
+	}
+	for customerID, value := range values {
+		if value.ID == id {
+			delete(values, customerID)
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 func cloneProductDefinition(value model.ProductDefinition) model.ProductDefinition {
