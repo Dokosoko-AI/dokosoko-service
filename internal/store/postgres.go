@@ -1387,7 +1387,7 @@ func (p *Postgres) CreateInitialRoot(ctx context.Context, account auth.RootAccou
 	if _, err := tx.Exec(ctx, `INSERT INTO platform_config(singleton, public_url, setup_completed_at) VALUES (true, $1, $2) ON CONFLICT (singleton) DO UPDATE SET public_url = excluded.public_url, setup_completed_at = excluded.setup_completed_at, updated_at = now()`, p.publicURL, account.CreatedAt); err != nil {
 		return databaseError(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO users(id, issuer, subject, email, display_name, created_at, updated_at) VALUES ($1, 'dokosoko:root', $1::text, $2, $3, $4, $4)`, account.UserID, account.Email, account.DisplayName, account.CreatedAt); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO users(id, issuer, subject, email, display_name, created_at, updated_at) VALUES ($1::uuid, 'dokosoko:root', $1::uuid::text, $2, $3, $4, $4)`, account.UserID, account.Email, account.DisplayName, account.CreatedAt); err != nil {
 		return databaseError(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO root_users(user_id, password_hash, totp_secret_ciphertext, recovery_code_digests, created_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6)`, account.UserID, account.PasswordHash, account.TOTPSecretCiphertext, account.RecoveryCodeDigests, account.CreatedAt, account.RevokedAt); err != nil {
@@ -1402,7 +1402,7 @@ func (p *Postgres) CreateRoot(ctx context.Context, account auth.RootAccount) err
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `INSERT INTO users(id, issuer, subject, email, display_name, created_at, updated_at) VALUES ($1, 'dokosoko:root', $1::text, $2, $3, $4, $4)`, account.UserID, account.Email, account.DisplayName, account.CreatedAt); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO users(id, issuer, subject, email, display_name, created_at, updated_at) VALUES ($1::uuid, 'dokosoko:root', $1::uuid::text, $2, $3, $4, $4)`, account.UserID, account.Email, account.DisplayName, account.CreatedAt); err != nil {
 		return databaseError(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO root_users(user_id, password_hash, totp_secret_ciphertext, recovery_code_digests, created_by, created_at) VALUES ($1,$2,$3,$4,nullif($5,'')::uuid,$6)`, account.UserID, account.PasswordHash, account.TOTPSecretCiphertext, account.RecoveryCodeDigests, account.CreatedBy, account.CreatedAt); err != nil {

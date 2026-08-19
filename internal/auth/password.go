@@ -76,7 +76,7 @@ func strongPassword(password string) bool {
 	if len(password) < 14 || len(password) > 256 {
 		return false
 	}
-	var lower, upper, digit, symbol bool
+	var lower, upper, digit bool
 	for _, value := range password {
 		switch {
 		case unicode.IsLower(value):
@@ -85,9 +85,7 @@ func strongPassword(password string) bool {
 			upper = true
 		case unicode.IsDigit(value):
 			digit = true
-		default:
-			symbol = true
 		}
 	}
-	return lower && upper && digit && symbol
+	return lower && upper && digit
 }

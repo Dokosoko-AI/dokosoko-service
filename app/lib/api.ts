@@ -558,7 +558,7 @@ const productPath = (productID: string) => `/api/v1/products/${encodeURIComponen
 
 export const api = {
   setupStatus: () => request<{ setup_complete: boolean; requires_mfa: boolean }>("/api/v1/setup/status"),
-  beginSetup: (setupToken: string, input: { email: string; display_name: string; password: string }) => request<SetupEnrollment>("/api/v1/setup/begin", {
+  beginSetup: (setupToken: string, input: { email: string; password: string }) => request<SetupEnrollment>("/api/v1/setup/begin", {
     method: "POST",
     headers: { Authorization: `Bearer ${setupToken}` },
     body: JSON.stringify(input),

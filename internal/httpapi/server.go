@@ -126,24 +126,57 @@ func staticConsole(directory string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		if cleaned == "." {
+		rscRequest := r.Header.Get("RSC") == "1" || strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/x-component")
+		serveRootHTML := false
+		if rscRequest {
+			switch {
+			case cleaned == ".":
+				cleaned = "index.rsc"
+			case !strings.HasSuffix(strings.ToLower(cleaned), ".rsc"):
+				cleaned = strings.TrimSuffix(cleaned, ".html") + ".rsc"
+			}
+		} else if cleaned == "." {
 			cleaned = "index.html"
+			serveRootHTML = true
 		}
 		candidate := filepath.Join(directory, cleaned)
 		if info, err := os.Stat(candidate); err != nil || info.IsDir() {
+			if rscRequest {
+				http.NotFound(w, r)
+				return
+			}
+			cleaned = "index.html"
+			serveRootHTML = true
 			candidate = filepath.Join(directory, "index.html")
 			if _, err := os.Stat(candidate); err != nil {
 				http.NotFound(w, r)
 				return
 			}
+		}
+		if serveRootHTML {
 			r.URL.Path = "/"
+		} else {
+			r.URL.Path = "/" + filepath.ToSlash(cleaned)
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		if extension := strings.ToLower(filepath.Ext(cleaned)); extension == ".html" || extension == ".rsc" {
+			w.Header().Set("Vary", "RSC, Accept")
+		}
+		if strings.HasSuffix(strings.ToLower(cleaned), ".rsc") {
+			w.Header().Set("Content-Type", "text/x-component")
+			// An older deployment may have cached index.html at the same RSC URL.
+			// Always return the component payload so a conditional request cannot
+			// receive 304 and reuse that stale HTML response.
+			r.Header.Del("If-Modified-Since")
+			r.Header.Del("If-None-Match")
+		}
 		if strings.Contains(r.URL.Path, "/_next/static/") || strings.Contains(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else if extension := strings.ToLower(filepath.Ext(cleaned)); extension == ".html" || extension == ".rsc" {
+			w.Header().Set("Cache-Control", "no-store")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
@@ -474,7 +507,7 @@ func (s *Server) authError(w http.ResponseWriter, err error) {
 	case errors.Is(err, auth.ErrSetupExpired):
 		writeError(w, http.StatusGone, "setup_expired", "The setup enrollment expired. Start again.", nil)
 	case errors.Is(err, auth.ErrPasswordRequirement):
-		writeError(w, http.StatusBadRequest, "password_requirements", "Use at least 14 characters with upper-case, lower-case, number, and symbol characters.", nil)
+		writeError(w, http.StatusBadRequest, "password_requirements", "Use at least 14 characters with upper-case, lower-case, and number characters.", nil)
 	default:
 		writeError(w, http.StatusBadRequest, "authentication_failed", err.Error(), nil)
 	}

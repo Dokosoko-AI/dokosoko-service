@@ -52,6 +52,12 @@ nav { margin-top: 25px; display: grid; gap: 4px; }
 .auth-field textarea { width: 100%; min-height: 92px; resize: vertical; padding: 10px 11px; border: 1px solid #d4d4d8; border-radius: 8px; outline: 0; color: #18181b; background: white; font: 11px/1.5 var(--font-geist-mono), monospace; }
 .auth-field input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px #e0e7ff; }
 .auth-field small { color: #8b8b94; font-size: 9px; font-weight: 450; }
+.password-input { position: relative; }
+.password-input input { padding-right: 42px; }
+.password-visibility { position: absolute; top: 50%; right: 6px; display: grid; width: 30px; height: 30px; padding: 0; place-items: center; transform: translateY(-50%); border: 0; border-radius: 6px; color: #71717a; background: transparent; cursor: pointer; }
+.password-visibility:hover { color: #4338ca; background: #eef2ff; }
+.password-visibility:focus-visible { outline: 2px solid #6366f1; outline-offset: 1px; }
+.password-visibility svg { width: 16px; height: 16px; }
 .auth-problem { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid #fecaca; border-radius: 8px; color: #b91c1c; background: #fff5f5; font-size: 11px; line-height: 1.45; }
 .auth-problem svg { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 1px; }
 .private-default-note { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #dfe3f5; border-radius: 8px; color: #52525b; background: #f8f9ff; font-size: 10px; }
@@ -61,10 +67,14 @@ nav { margin-top: 25px; display: grid; gap: 4px; }
 .setup-progress span { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid #d4d4d8; border-radius: 50%; color: #a1a1aa; background: white; font-size: 10px; font-weight: 700; }
 .setup-progress span.active, .setup-progress span.done { color: white; border-color: #4f46e5; background: #4f46e5; }
 .setup-progress i { height: 1px; background: #d4d4d8; }
-.secret-box { display: grid; gap: 8px; padding: 15px; border: 1px solid #dfe3f5; border-radius: 10px; background: #f8f9ff; }
-.secret-box small { color: #71717a; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
-.secret-box code { overflow-wrap: anywhere; color: #3730a3; font-size: 14px; letter-spacing: .07em; }
-.secret-box a { width: fit-content; color: #4f46e5; font-size: 10px; font-weight: 650; }
+.authenticator-setup { display: grid; justify-items: center; gap: 8px; padding: 18px; border: 1px solid #dfe3f5; border-radius: 12px; background: #f8f9ff; text-align: center; }
+.authenticator-qr { display: grid; place-items: center; padding: 8px; border: 1px solid #e4e4e7; border-radius: 10px; background: white; box-shadow: 0 4px 14px rgba(24,24,27,.06); }
+.authenticator-qr svg { display: block; width: 176px; height: 176px; }
+.authenticator-setup strong { color: #27272a; font-size: 13px; }
+.authenticator-secret { display: grid; justify-items: center; width: 100%; gap: 8px; margin-top: 8px; padding-top: 16px; border-top: 1px solid #dfe3f5; text-align: center; }
+.authenticator-secret small { color: #71717a; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.authenticator-secret code { overflow-wrap: anywhere; color: #3730a3; font-size: 14px; letter-spacing: .07em; }
+.authenticator-secret a { width: fit-content; color: #4f46e5; font-size: 10px; font-weight: 650; }
 .recovery-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 14px; border: 1px solid #dfe3f5; border-radius: 10px; background: #f8f9ff; }
 .recovery-grid code { color: #3730a3; font-size: 11px; }
 .auth-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }

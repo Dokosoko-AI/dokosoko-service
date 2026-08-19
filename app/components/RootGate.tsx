@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Copy, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { FormEvent, useEffect, useState } from "react";
 import { APIError, APIOrganisation, APIProduct, APIUser, SetupEnrollment, api } from "../lib/api";
 import { Button } from "./catalyst";
@@ -122,12 +123,11 @@ function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisa
   }
 
   return (
-    <AuthShell icon={<ShieldCheck />} title="Create your first product" description="Set the organisation, product, and production environment that DokoSoko will deliver to agents.">
+    <AuthShell icon={<ShieldCheck />} title="Create your first product" description="Tell DokoSoko which product agents will support and which environment they should use first.">
       <form className="auth-form" onSubmit={create}>
         <Field label="Organisation"><input required disabled={Boolean(existingOrganisation)} value={organisationName} onChange={(event) => setOrganisationName(event.target.value)} /></Field>
-        <Field label="Product"><input required value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Developer Platform" /></Field>
-        <Field label="First environment"><input required value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} /></Field>
-        <div className="private-default-note"><LockKeyhole />New sources, packages, tools, and MCP access start private.</div>
+        <Field label="Product" hint="The API, SDK, app, or platform whose knowledge and tools agents will use."><input required value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Developer Platform" /></Field>
+        <Field label="First environment" hint="The deployment stage agents should target first, such as Production, Staging, or Development."><input required value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} /></Field>
         {problem && <AuthProblem>{problem}</AuthProblem>}
         <Button type="submit" color="indigo" disabled={busy}>{busy ? "Creating workspace…" : "Create and open console"}</Button>
       </form>
@@ -139,8 +139,8 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
   const [step, setStep] = useState<SetupStep>("identity");
   const [setupToken, setSetupToken] = useState("");
   const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [enrollment, setEnrollment] = useState<SetupEnrollment | null>(null);
   const [code, setCode] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
@@ -153,7 +153,7 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
     setBusy(true);
     setProblem("");
     try {
-      const value = await api.beginSetup(setupToken, { email, display_name: displayName, password });
+      const value = await api.beginSetup(setupToken, { email, password });
       setEnrollment(value);
       setStep("mfa");
     } catch (error) {
@@ -186,11 +186,21 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
 
   if (step === "mfa" && enrollment) {
     return (
-      <AuthShell icon={<ShieldCheck />} title="Secure the root account" description="Add DokoSoko to your authenticator, then enter the current six-digit code.">
+      <AuthShell icon={<ShieldCheck />} title="Secure the root account" description="Scan the QR code with Google Authenticator, then enter the current six-digit code.">
         <div className="setup-progress"><span className="done">1</span><i /><span className="active">2</span><i /><span>3</span></div>
-        <div className="secret-box"><small>Authenticator secret</small><code>{enrollment.totp_secret}</code><a href={enrollment.provisioning_uri}>Open in authenticator</a></div>
+        <div className="authenticator-setup">
+          <strong>Setup Google Authenticator</strong>
+          <div className="authenticator-qr">
+            <QRCodeSVG value={enrollment.provisioning_uri} size={176} level="M" marginSize={2} title="Google Authenticator setup QR code" />
+          </div>
+          <div className="authenticator-secret">
+            <small>Alternatively, manually set up with this secret</small>
+            <code>{enrollment.totp_secret}</code>
+            <a href={enrollment.provisioning_uri}>Open authenticator app</a>
+          </div>
+        </div>
         <form className="auth-form" onSubmit={complete}>
-          <Field label="Six-digit code"><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></Field>
+          <Field label="Six-digit code"><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="123456" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></Field>
           {problem && <AuthProblem>{problem}</AuthProblem>}
           <Button type="submit" color="indigo" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify and create root user"}</Button>
         </form>
@@ -214,8 +224,14 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
       <form className="auth-form" onSubmit={begin}>
         <Field label="Setup token"><input required type="password" autoComplete="off" value={setupToken} onChange={(event) => setSetupToken(event.target.value)} /></Field>
         <Field label="Root email"><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-        <Field label="Display name"><input required autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field>
-        <Field label="Password" hint="14+ characters with upper, lower, number, and symbol"><input required type="password" autoComplete="new-password" minLength={14} value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+        <Field label="Password" hint="14+ characters with upper, lower, and a number">
+          <div className="password-input">
+            <input required type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={14} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <button type="button" className="password-visibility" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>
+              {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </button>
+          </div>
+        </Field>
         {problem && <AuthProblem>{problem}</AuthProblem>}
         <Button type="submit" color="indigo" disabled={busy}>{busy ? "Preparing MFA…" : "Continue to MFA"}</Button>
       </form>

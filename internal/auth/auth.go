@@ -164,8 +164,14 @@ func (m *Manager) BeginSetup(ctx context.Context, setupToken string, input Setup
 func (m *Manager) beginEnrollment(input SetupInput) (Enrollment, error) {
 	email := strings.ToLower(strings.TrimSpace(input.Email))
 	displayName := strings.TrimSpace(input.DisplayName)
-	if !validEmail(email) || displayName == "" || len(displayName) > 120 {
-		return Enrollment{}, errors.New("valid email and display name are required")
+	if !validEmail(email) {
+		return Enrollment{}, errors.New("valid email is required")
+	}
+	if displayName == "" {
+		displayName = email
+	}
+	if len(displayName) > 120 {
+		return Enrollment{}, errors.New("display name must be 120 characters or fewer")
 	}
 	passwordHash, err := HashPassword(input.Password)
 	if err != nil {

@@ -25,20 +25,22 @@ func newManager(t *testing.T) (*auth.Manager, *store.Memory) {
 
 func TestPasswordHashingAndRequirements(t *testing.T) {
 	t.Parallel()
-	if _, err := auth.HashPassword("short"); !errors.Is(err, auth.ErrPasswordRequirement) {
-		t.Fatalf("weak password error = %v", err)
+	for _, password := range []string{"short", "longpassword123", "LONGPASSWORD123", "LongPasswordOnly"} {
+		if _, err := auth.HashPassword(password); !errors.Is(err, auth.ErrPasswordRequirement) {
+			t.Fatalf("weak password %q error = %v", password, err)
+		}
 	}
-	hash, err := auth.HashPassword("Long-and-Safe-Password-42!")
+	hash, err := auth.HashPassword("LongPassword42")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(hash, "Long-and-Safe") {
+	if strings.Contains(hash, "LongPassword42") {
 		t.Fatal("password hash contains plaintext")
 	}
-	if !auth.VerifyPassword(hash, "Long-and-Safe-Password-42!") {
+	if !auth.VerifyPassword(hash, "LongPassword42") {
 		t.Fatal("valid password did not verify")
 	}
-	if auth.VerifyPassword(hash, "Wrong-and-Safe-Password-42!") {
+	if auth.VerifyPassword(hash, "WrongPassword42") {
 		t.Fatal("invalid password verified")
 	}
 }
@@ -59,7 +61,7 @@ func TestFirstRunSetupRequiresTokenMFAAndCreatesSession(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	manager, memory := newManager(t)
-	input := auth.SetupInput{Email: "Root@Example.com", DisplayName: "Root Operator", Password: "Long-and-Safe-Password-42!"}
+	input := auth.SetupInput{Email: "Root@Example.com", Password: "Long-and-Safe-Password-42!"}
 
 	if _, err := manager.BeginSetup(ctx, "wrong", input); !errors.Is(err, auth.ErrSetupToken) {
 		t.Fatalf("wrong setup token error = %v", err)
@@ -79,7 +81,7 @@ func TestFirstRunSetupRequiresTokenMFAAndCreatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.User.Role != "root" || result.User.Email != "root@example.com" || len(result.RecoveryCodes) != 10 {
+	if result.User.Role != "root" || result.User.Email != "root@example.com" || result.User.DisplayName != "root@example.com" || len(result.RecoveryCodes) != 10 {
 		t.Fatalf("setup result = %#v", result)
 	}
 	completed, err := manager.Status(ctx)

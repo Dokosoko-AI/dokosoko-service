@@ -567,6 +567,9 @@ func TestGoServiceServesStaticConsoleWithoutShadowingAPI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("<!doctype html><title>DokoSoko console</title>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(directory, "index.rsc"), []byte("0:{\"__route\":\"route:/\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	handler := httpapi.NewWithUI(platform.New(store.NewMemory()), "https://dokosoko.example", directory)
 
 	w := request(t, handler, http.MethodGet, "/", "", "")
@@ -575,6 +578,31 @@ func TestGoServiceServesStaticConsoleWithoutShadowingAPI(t *testing.T) {
 	}
 	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 		t.Fatalf("missing console CSP: %q", w.Header().Get("Content-Security-Policy"))
+	}
+	if !strings.Contains(w.Header().Get("Vary"), "RSC") || !strings.Contains(w.Header().Get("Vary"), "Accept") {
+		t.Fatalf("console HTML does not vary from RSC: %q", w.Header().Get("Vary"))
+	}
+
+	rscRequest := httptest.NewRequest(http.MethodGet, "/?__rsc=test", nil)
+	rscRequest.Header.Set("RSC", "1")
+	rscRequest.Header.Set("Accept", "text/x-component")
+	rscRequest.Header.Set("If-Modified-Since", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, rscRequest)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/x-component" || !strings.Contains(w.Body.String(), `"route:/"`) {
+		t.Fatalf("RSC bootstrap status = %d, content-type = %q, body = %s", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("RSC bootstrap cache-control = %q", w.Header().Get("Cache-Control"))
+	}
+
+	missingRSCRequest := httptest.NewRequest(http.MethodGet, "/missing?__rsc=test", nil)
+	missingRSCRequest.Header.Set("RSC", "1")
+	missingRSCRequest.Header.Set("Accept", "text/x-component")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, missingRSCRequest)
+	if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "DokoSoko console") {
+		t.Fatalf("missing RSC route fell back to HTML: status = %d, body = %s", w.Code, w.Body.String())
 	}
 
 	w = request(t, handler, http.MethodGet, "/healthz", "", "")
@@ -612,7 +640,7 @@ func TestFirstRunSetupCreatesMFARootAndCookieSession(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong setup token status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/api/v1/setup/begin", "setup-token-for-tests", `{"email":"root@example.com","display_name":"Root Operator","password":"Correct-Horse-47!Battery"}`)
+	w = request(t, handler, http.MethodPost, "/api/v1/setup/begin", "setup-token-for-tests", `{"email":"root@example.com","password":"Correct-Horse-47!Battery"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("begin setup status = %d, body = %s", w.Code, w.Body.String())
 	}
