@@ -181,6 +181,62 @@ func TestPublicMCPRequiresConfirmationAndPrivateTransitionDoesNot(t *testing.T) 
 	}
 }
 
+func TestIntegrationsCanShareAndThenIsolateResourceSets(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "root", RequestID: "req-integration-sharing"}
+
+	voiceV2, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "voice", VersionKey: "v2", DisplayName: "Voice API", Lifecycle: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	voiceV1, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "voice", VersionKey: "v1", DisplayName: "Voice API (deprecated)", Lifecycle: "deprecated", ReplacementIntegrationID: voiceV2.ID}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shared, err := service.CreateResourceSet(ctx, platform.ResourceSetInput{Kind: "hook", Name: "Voice hooks", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v1/calls"}]`)}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, integrationID := range []string{voiceV2.ID, voiceV1.ID} {
+		if _, err := service.AttachResourceSet(ctx, integrationID, shared.ID, "", actor); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	shared, err = service.UpdateResourceSet(ctx, shared.ID, platform.ResourceSetInput{Kind: "hook", Name: shared.Name, State: "active", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v2/calls"}]`), Revision: shared.Revision}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, integrationID := range []string{voiceV2.ID, voiceV1.ID} {
+		integration, err := memory.Integration(ctx, "prod_acme", integrationID)
+		if err != nil || len(integration.Resources) != 1 || integration.Resources[0].ResolvedRevision == nil || integration.Resources[0].ResolvedRevision.ID != shared.Latest.ID {
+			t.Fatalf("shared resource did not advance for %s: integration=%#v err=%v", integrationID, integration, err)
+		}
+	}
+
+	isolated, err := service.DuplicateResourceSet(ctx, shared.ID, "Voice v1 frozen hooks", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DetachResourceSet(ctx, voiceV1.ID, shared.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AttachResourceSet(ctx, voiceV1.ID, isolated.ID, isolated.Latest.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateResourceSet(ctx, shared.ID, platform.ResourceSetInput{Kind: "hook", Name: shared.Name, State: "active", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v3/calls"}]`), Revision: shared.Revision}, actor); err != nil {
+		t.Fatal(err)
+	}
+	deprecated, err := memory.Integration(ctx, "prod_acme", voiceV1.ID)
+	if err != nil || len(deprecated.Resources) != 1 || deprecated.Resources[0].ResourceSetID != isolated.ID || deprecated.Resources[0].ResolvedRevision.ID != isolated.Latest.ID {
+		t.Fatalf("duplicated resource set did not isolate v1: integration=%#v err=%v", deprecated, err)
+	}
+}
+
 func TestCredentialBackedPackagePublicationIsStillGuarded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

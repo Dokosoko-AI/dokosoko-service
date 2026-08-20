@@ -1,9 +1,11 @@
 openapi: 3.1.0
 info:
   title: DokoSoko Control Plane API
-  version: 2.0.0
+  version: 3.0.0
   description: >-
-    UI and automation contract for DokoSoko. Cookie-authenticated mutations
+    UI and automation contract for one DokoSoko Deployment and its versioned
+    API Integrations. Product-scoped routes are retained as compatibility
+    aliases during migration. Cookie-authenticated mutations
     additionally require the dokosoko_csrf cookie value in X-CSRF-Token and an
     exact Origin matching the configured public URL. Public MCP is a separate,
     authentication-free protocol surface and is disabled by default. Every MCP
@@ -40,6 +42,199 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/HealthStatus" }
         "503": { $ref: "#/components/responses/Error" }
+  /api/v1/deployment:
+    get:
+      operationId: getDeployment
+      responses:
+        "200": { description: Singleton DokoSoko deployment., content: { application/json: { schema: { $ref: "#/components/schemas/Deployment" } } } }
+    post:
+      operationId: createDeployment
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentInput" } } } }
+      responses:
+        "201": { description: Deployment created., content: { application/json: { schema: { $ref: "#/components/schemas/Deployment" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateDeployment
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentInput" } } } }
+      responses:
+        "200": { description: Deployment updated., content: { application/json: { schema: { $ref: "#/components/schemas/Deployment" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/environments:
+    get:
+      operationId: listDeploymentEnvironments
+      responses:
+        "200": { description: Deployment environments., content: { application/json: { schema: { $ref: "#/components/schemas/EnvironmentList" } } } }
+    post:
+      operationId: createDeploymentEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                organisation_id: { type: string }
+                name: { type: string }
+                slug: { type: string }
+                is_production: { type: boolean }
+              required: [organisation_id, name, slug]
+      responses:
+        "201": { description: Environment created., content: { application/json: { schema: { $ref: "#/components/schemas/Environment" } } } }
+  /api/v1/integrations:
+    get:
+      operationId: listIntegrations
+      responses:
+        "200": { description: Versioned API Integrations., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationList" } } } }
+    post:
+      operationId: createIntegration
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationInput" } } } }
+      responses:
+        "201": { description: Integration created., content: { application/json: { schema: { $ref: "#/components/schemas/Integration" } } } }
+  /api/v1/integrations/{integration_id}:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getIntegration
+      responses:
+        "200":
+          description: Integration and immutable revision history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  integration: { $ref: "#/components/schemas/Integration" }
+                  revisions: { type: array, items: { $ref: "#/components/schemas/IntegrationRevision" } }
+                required: [integration, revisions]
+    patch:
+      operationId: updateIntegration
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationInput" } } } }
+      responses:
+        "200": { description: Integration updated., content: { application/json: { schema: { $ref: "#/components/schemas/Integration" } } } }
+  /api/v1/integrations/{integration_id}/publish:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: publishIntegration
+      responses:
+        "201": { description: Immutable Integration revision., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationRevision" } } } }
+  /api/v1/integrations/{integration_id}/resource-sets:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: attachIntegrationResourceSet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                resource_set_id: { type: string }
+                pinned_revision_id: { type: string }
+              required: [resource_set_id]
+      responses:
+        "200": { description: Explicit Integration resource link., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationResourceLink" } } } }
+  /api/v1/integrations/{integration_id}/resource-sets/{resource_set_id}:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+      - { name: resource_set_id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: detachIntegrationResourceSet
+      responses:
+        "204": { description: Resource set detached. }
+  /api/v1/resource-sets:
+    get:
+      operationId: listResourceSets
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [documentation, package, hook] } }
+      responses:
+        "200": { description: Reusable resource sets., content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSetList" } } } }
+    post:
+      operationId: createResourceSet
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSetInput" } } } }
+      responses:
+        "201": { description: Resource set and first revision., content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSet" } } } }
+  /api/v1/resource-sets/{resource_set_id}:
+    parameters:
+      - { name: resource_set_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getResourceSet
+      responses:
+        "200": { description: Resource set., content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSet" } } } }
+    patch:
+      operationId: updateResourceSet
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSetInput" } } } }
+      responses:
+        "200": { description: Resource set with a new immutable content revision., content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSet" } } } }
+  /api/v1/resource-sets/{resource_set_id}/duplicate:
+    parameters:
+      - { name: resource_set_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: duplicateResourceSet
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, properties: { name: { type: string } }, required: [name] } } }
+      responses:
+        "201": { description: Independent resource-set copy., content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSet" } } } }
+  /api/v1/access-definitions:
+    get:
+      operationId: listAccessDefinitions
+      responses:
+        "200": { description: Provider access contracts., content: { application/json: { schema: { $ref: "#/components/schemas/AccessDefinitionList" } } } }
+    post:
+      operationId: createAccessDefinition
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccessDefinitionInput" } } } }
+      responses:
+        "201": { description: Access definition created., content: { application/json: { schema: { $ref: "#/components/schemas/AccessDefinition" } } } }
+  /api/v1/access-connections:
+    get:
+      operationId: listAccessConnections
+      responses:
+        "200": { description: Configured vendor accounts., content: { application/json: { schema: { $ref: "#/components/schemas/AccessConnectionList" } } } }
+    post:
+      operationId: createAccessConnection
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccessConnectionInput" } } } }
+      responses:
+        "201": { description: Access connection created with its management credential encrypted., content: { application/json: { schema: { $ref: "#/components/schemas/AccessConnection" } } } }
+  /api/v1/access-connections/{connection_id}/instances:
+    parameters:
+      - { name: connection_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listAccessInstances
+      responses:
+        "200": { description: Provider-owned resource metadata., content: { application/json: { schema: { $ref: "#/components/schemas/AccessInstanceList" } } } }
+  /api/v1/access-connections/{connection_id}/credentials:
+    parameters:
+      - { name: connection_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listAccessCredentials
+      responses:
+        "200": { description: Credential fingerprints and lifecycle metadata; never plaintext., content: { application/json: { schema: { $ref: "#/components/schemas/AccessCredentialList" } } } }
+  /api/v1/support-routes:
+    get:
+      operationId: listSupportRoutes
+      responses:
+        "200": { description: Default and Integration-specific support routes., content: { application/json: { schema: { $ref: "#/components/schemas/SupportRouteList" } } } }
+    post:
+      operationId: createSupportRoute
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupportRouteInput" } } } }
+      responses:
+        "201": { description: Support route created., content: { application/json: { schema: { $ref: "#/components/schemas/SupportRoute" } } } }
+  /api/v1/support-routes/{route_id}:
+    parameters:
+      - { name: route_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getSupportRoute
+      responses:
+        "200": { description: Support route., content: { application/json: { schema: { $ref: "#/components/schemas/SupportRoute" } } } }
+    patch:
+      operationId: updateSupportRoute
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupportRouteInput" } } } }
+      responses:
+        "200": { description: Support route updated., content: { application/json: { schema: { $ref: "#/components/schemas/SupportRoute" } } } }
   /api/v1/setup/status:
     get:
       security: []
@@ -995,6 +1190,8 @@ paths:
       - $ref: "#/components/parameters/ProductID"
     get:
       operationId: listProviders
+      deprecated: true
+      description: Legacy compatibility surface. Use Access Definitions and Access Connections.
       responses:
         "200":
           description: Redacted Provider API connections.
@@ -1003,7 +1200,8 @@ paths:
               schema: { $ref: "#/components/schemas/ProviderList" }
     post:
       operationId: createProvider
-      description: Connects the standard remote Provider API using a fixed HTTPS base URL and encrypted service credential.
+      deprecated: true
+      description: Legacy compatibility surface. Use an Access Definition and Access Connection instead.
       requestBody:
         required: true
         content:
@@ -1021,6 +1219,8 @@ paths:
       - $ref: "#/components/parameters/ProductID"
     get:
       operationId: listProjects
+      deprecated: true
+      description: Legacy DokoSoko Project records. Provider-owned resources are now managed through Access Connections.
       responses:
         "200":
           description: Issued project metadata.
@@ -1032,6 +1232,8 @@ paths:
       - $ref: "#/components/parameters/ProductID"
     get:
       operationId: listCredentialLeases
+      deprecated: true
+      description: Legacy credential leases. Use Access Connection credential metadata instead.
       responses:
         "200":
           description: Credential lease metadata and SHA-256 fingerprints; never credential plaintext.
@@ -1250,6 +1452,31 @@ paths:
             text/javascript:
               schema: { type: string }
         "404": { description: Invalid asset, product missing, or Public MCP disabled for public.js. }
+  /mcp/public:
+    post:
+      security: []
+      operationId: publicDeploymentMCP
+      description: Canonical authentication-free Stateless MCPv2 endpoint for the singleton Deployment. Available only while Public MCP is enabled.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/JSONRPCRequest" } } }
+      responses:
+        "200": { description: JSON-RPC result., content: { application/json: { schema: { $ref: "#/components/schemas/JSONRPCResponse" } } } }
+        "404": { description: Public MCP is disabled. }
+        "429": { description: Anonymous request budget exceeded. }
+  /mcp:
+    post:
+      security: [{ dokoBearer: [] }]
+      operationId: privateDeploymentMCP
+      description: Canonical authenticated Stateless MCPv2 endpoint for the singleton Deployment.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/JSONRPCRequest" } } }
+      responses:
+        "200": { description: JSON-RPC result., content: { application/json: { schema: { $ref: "#/components/schemas/JSONRPCResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /mcp/public/{product_id}:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1473,6 +1700,292 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
   schemas:
+    DeploymentInput:
+      type: object
+      properties:
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        description: { type: string, maxLength: 2000 }
+        default_release_policy: { type: string, enum: [latest, lts], default: latest }
+        require_promotion_approval: { type: boolean }
+        public_mcp_enabled: { type: boolean, default: false }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [name, slug]
+    Deployment:
+      allOf:
+        - $ref: "#/components/schemas/DeploymentInput"
+        - type: object
+          properties:
+            id: { type: string }
+            organisation_id: { type: string }
+            catalog_revision: { type: integer, format: int64, minimum: 1 }
+            revision: { type: integer, format: int64, minimum: 1 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+          required: [id, organisation_id, catalog_revision, revision, created_at, updated_at]
+    IntegrationInput:
+      type: object
+      properties:
+        family_key: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        version_key: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        lifecycle: { type: string, enum: [draft, active, deprecated, retired] }
+        replacement_integration_id: { type: string }
+        sunset_at: { type: [string, "null"], format: date-time }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [family_key, version_key, display_name]
+    ResourceSetRevision:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        resource_set_id: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        manifest: { type: array, items: {} }
+        content_hash: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, resource_set_id, revision, manifest, content_hash, created_at]
+    IntegrationResourceLink:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        integration_id: { type: string }
+        resource_set_id: { type: string }
+        kind: { type: string, enum: [documentation, package, hook] }
+        name: { type: string }
+        follow_latest: { type: boolean }
+        pinned_revision_id: { type: string }
+        resolved_revision: { $ref: "#/components/schemas/ResourceSetRevision" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, integration_id, resource_set_id, kind, name, follow_latest, created_at, updated_at]
+    Integration:
+      allOf:
+        - $ref: "#/components/schemas/IntegrationInput"
+        - type: object
+          properties:
+            id: { type: string }
+            deployment_id: { type: string }
+            organisation_id: { type: string }
+            resources: { type: array, items: { $ref: "#/components/schemas/IntegrationResourceLink" } }
+            access_connection_ids: { type: array, items: { type: string } }
+            support_route_id: { type: string }
+            revision: { type: integer, format: int64, minimum: 1 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+          required: [id, deployment_id, organisation_id, revision, created_at, updated_at]
+    IntegrationList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/Integration" } } }
+      required: [items]
+    IntegrationRevision:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        integration_id: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        state: { type: string, enum: [draft, published] }
+        snapshot: { type: object, additionalProperties: true }
+        manifest_hash: { type: string }
+        published_by: { type: string }
+        published_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, integration_id, revision, state, snapshot, manifest_hash, created_at]
+    ResourceSetInput:
+      type: object
+      properties:
+        kind: { type: string, enum: [documentation, package, hook] }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        state: { type: string, enum: [active, archived] }
+        manifest: { type: array, items: {} }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [name, manifest]
+    ResourceSet:
+      allOf:
+        - $ref: "#/components/schemas/ResourceSetInput"
+        - type: object
+          properties:
+            id: { type: string }
+            deployment_id: { type: string }
+            organisation_id: { type: string }
+            latest_revision: { $ref: "#/components/schemas/ResourceSetRevision" }
+            integration_ids: { type: array, items: { type: string } }
+            revision: { type: integer, format: int64, minimum: 1 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+          required: [id, deployment_id, organisation_id, revision, created_at, updated_at]
+    ResourceSetList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/ResourceSet" } } }
+      required: [items]
+    AccessDefinitionInput:
+      type: object
+      properties:
+        service_key: { type: string }
+        name: { type: string }
+        instance_cardinality: { type: string, enum: [one, many] }
+        instance_label_singular: { type: string }
+        instance_label_plural: { type: string }
+        credential_scope: { type: string, enum: [connection, instance] }
+        management_auth_type: { type: string, enum: [none, bearer, api_key, oauth2_client_credentials] }
+        hook_set_id: { type: string }
+        operations: { type: object, additionalProperties: true }
+      required: [service_key, name, instance_cardinality, instance_label_singular, instance_label_plural, credential_scope]
+    AccessDefinition:
+      allOf:
+        - $ref: "#/components/schemas/AccessDefinitionInput"
+        - type: object
+          properties:
+            id: { type: string }
+            deployment_id: { type: string }
+            organisation_id: { type: string }
+            state: { type: string, enum: [draft, active, archived] }
+            revision: { type: integer, format: int64 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+          required: [id, deployment_id, organisation_id, state, revision, created_at, updated_at]
+    AccessDefinitionList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/AccessDefinition" } } }
+      required: [items]
+    AccessConnectionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        access_definition_id: { type: string }
+        environment_id: { type: string }
+        name: { type: string }
+        region: { type: string }
+        base_url: { type: string, format: uri }
+        management_secret: { type: string, writeOnly: true }
+        config: { type: object, additionalProperties: true }
+        integration_ids: { type: array, minItems: 1, items: { type: string } }
+      required: [access_definition_id, name, base_url, integration_ids]
+    AccessConnection:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        access_definition_id: { type: string }
+        environment_id: { type: string }
+        name: { type: string }
+        region: { type: string }
+        config: { type: object, additionalProperties: true }
+        state: { type: string, enum: [active, disabled, error] }
+        revision: { type: integer, format: int64 }
+        definition: { $ref: "#/components/schemas/AccessDefinition" }
+        integration_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, access_definition_id, name, state, revision, created_at, updated_at]
+    AccessConnectionList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/AccessConnection" } } }
+      required: [items]
+    AccessInstance:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        access_connection_id: { type: string }
+        environment_id: { type: string }
+        owner_type: { type: string, enum: [organisation, user, installation] }
+        owner_id: { type: string }
+        external_id: { type: string }
+        display_name: { type: string }
+        state: { type: string }
+        provider_metadata: { type: object, additionalProperties: true }
+        expires_at: { type: [string, "null"], format: date-time }
+        integration_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, access_connection_id, environment_id, owner_type, owner_id, external_id, state, created_at, updated_at]
+    AccessInstanceList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/AccessInstance" } } }
+      required: [items]
+    AccessCredential:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        access_connection_id: { type: string }
+        access_instance_id: { type: string }
+        environment_id: { type: string }
+        subject_id: { type: string }
+        external_id: { type: string }
+        scopes: { type: array, items: { type: string } }
+        secret_fingerprint: { type: string }
+        storage_mode: { type: string, enum: [one_time, managed, reference] }
+        state: { type: string, enum: [active, retiring, revoked, expired] }
+        expires_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, access_connection_id, environment_id, subject_id, scopes, secret_fingerprint, storage_mode, state, created_at]
+    AccessCredentialList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/AccessCredential" } } }
+      required: [items]
+    SupportRouteInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        is_default: { type: boolean }
+        bug_reports_enabled: { type: boolean }
+        feedback_enabled: { type: boolean }
+        bug_hook_url: { type: string, format: uri }
+        bug_hook_credential: { type: string, writeOnly: true }
+        feedback_hook_url: { type: string, format: uri }
+        feedback_hook_credential: { type: string, writeOnly: true }
+        retention_days: { type: integer, minimum: 1, maximum: 365 }
+        state: { type: string, enum: [active, archived] }
+        integration_ids: { type: array, items: { type: string } }
+        revision: { type: integer, format: int64 }
+      required: [name]
+    SupportRoute:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        name: { type: string }
+        is_default: { type: boolean }
+        bug_reports_enabled: { type: boolean }
+        feedback_enabled: { type: boolean }
+        bug_hook_url: { type: string }
+        feedback_hook_url: { type: string }
+        retention_days: { type: integer }
+        state: { type: string, enum: [active, archived] }
+        revision: { type: integer, format: int64 }
+        integration_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, name, is_default, bug_reports_enabled, feedback_enabled, retention_days, state, revision, created_at, updated_at]
+    SupportRouteList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/SupportRoute" } } }
+      required: [items]
     HealthStatus:
       type: object
       additionalProperties: false

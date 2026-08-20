@@ -17,6 +17,21 @@ import (
 type Memory struct {
 	mu                       sync.RWMutex
 	orgs                     map[string]model.Organisation
+	deployment               model.Deployment
+	hasDeployment            bool
+	integrations             map[string]model.Integration
+	integrationRevisions     map[string]map[string]model.IntegrationRevision
+	resourceSets             map[string]model.ResourceSet
+	resourceSetRevisions     map[string]map[string]model.ResourceSetRevision
+	integrationResourceLinks map[string]map[string]model.IntegrationResourceLink
+	accessDefinitions        map[string]model.AccessDefinition
+	accessConnections        map[string]model.AccessConnection
+	integrationAccessLinks   map[string]map[string]bool
+	accessInstances          map[string]model.AccessInstance
+	instanceIntegrationLinks map[string]map[string]bool
+	accessCredentials        map[string]model.AccessCredential
+	supportRoutes            map[string]model.SupportRoute
+	integrationSupportRoutes map[string]string
 	products                 map[string]model.Product
 	productVersions          map[string]map[string]model.ProductVersion
 	productVersionPins       map[string]map[string]model.ProductVersionPin
@@ -57,6 +72,7 @@ func NewMemory() *Memory {
 	now := time.Now().UTC()
 	organisation := model.Organisation{ID: "org_acme", Name: "Acme", Slug: "acme", Revision: 1, CreatedAt: now, UpdatedAt: now}
 	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Description: "Build voice and messaging integrations with Acme APIs, SDKs, documentation, and managed tools.", DefaultVersionPolicy: "latest", CatalogRevision: 1, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	deployment := model.Deployment{ID: product.ID, OrganisationID: product.OrganisationID, Name: product.Name, Slug: product.Slug, Description: product.Description, DefaultReleasePolicy: product.DefaultVersionPolicy, CatalogRevision: product.CatalogRevision, Revision: product.Revision, CreatedAt: now, UpdatedAt: now}
 	environment := model.Environment{ID: "env_prod", OrganisationID: organisation.ID, ProductID: product.ID, Name: "Production", Slug: "production", IsProduction: true, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	sources := map[string]model.Source{
 		"src_docs": {ID: "src_docs", OrganisationID: "org_acme", ProductID: product.ID, Name: "Developer documentation", Kind: "website", Location: "https://docs.acme.dev", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
@@ -67,6 +83,21 @@ func NewMemory() *Memory {
 	}
 	return &Memory{
 		orgs:                     map[string]model.Organisation{organisation.ID: organisation},
+		deployment:               deployment,
+		hasDeployment:            true,
+		integrations:             make(map[string]model.Integration),
+		integrationRevisions:     make(map[string]map[string]model.IntegrationRevision),
+		resourceSets:             make(map[string]model.ResourceSet),
+		resourceSetRevisions:     make(map[string]map[string]model.ResourceSetRevision),
+		integrationResourceLinks: make(map[string]map[string]model.IntegrationResourceLink),
+		accessDefinitions:        make(map[string]model.AccessDefinition),
+		accessConnections:        make(map[string]model.AccessConnection),
+		integrationAccessLinks:   make(map[string]map[string]bool),
+		accessInstances:          make(map[string]model.AccessInstance),
+		instanceIntegrationLinks: make(map[string]map[string]bool),
+		accessCredentials:        make(map[string]model.AccessCredential),
+		supportRoutes:            make(map[string]model.SupportRoute),
+		integrationSupportRoutes: make(map[string]string),
 		products:                 map[string]model.Product{product.ID: product},
 		productVersions:          map[string]map[string]model.ProductVersion{product.ID: {}},
 		productVersionPins:       map[string]map[string]model.ProductVersionPin{product.ID: {}},
@@ -1233,6 +1264,7 @@ func cloneReportSubmission(value model.ReportSubmission) model.ReportSubmission 
 	value.IdempotencyDigest = append([]byte(nil), value.IdempotencyDigest...)
 	value.PayloadCiphertext = append([]byte(nil), value.PayloadCiphertext...)
 	value.PayloadNonce = append([]byte(nil), value.PayloadNonce...)
+	value.IntegrationSnapshot = append([]byte(nil), value.IntegrationSnapshot...)
 	return value
 }
 

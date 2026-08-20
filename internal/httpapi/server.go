@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
@@ -41,6 +42,7 @@ type Server struct {
 	toolRuntime     *toolruntime.Runtime
 	identityBroker  *identity.Broker
 	usageReporter   identity.UsageReporter
+	accessRuntime   *accessruntime.Runtime
 	providerRuntime *providerruntime.Runtime
 	mcpBridge       *mcpbridge.Manager
 	reporting       *reporting.Service
@@ -59,6 +61,7 @@ type Options struct {
 	ToolRuntime     *toolruntime.Runtime
 	IdentityBroker  *identity.Broker
 	UsageReporter   identity.UsageReporter
+	AccessRuntime   *accessruntime.Runtime
 	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
 	Reporting       *reporting.Service
@@ -89,7 +92,7 @@ func NewWithUI(service *platform.Service, baseURL, uiDirectory string) http.Hand
 
 func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	baseURL := strings.TrimRight(options.BaseURL, "/")
-	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, usageReporter: options.UsageReporter, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
+	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, usageReporter: options.UsageReporter, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -106,6 +109,8 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("/api/v1/", server.adminAPI)
 	mux.HandleFunc("POST /mcp/public/{productID}", server.publicMCP)
 	mux.HandleFunc("POST /mcp/{productID}", server.privateMCP)
+	mux.HandleFunc("POST /mcp/public", server.publicMCP)
+	mux.HandleFunc("POST /mcp", server.privateMCP)
 	mux.HandleFunc("GET /widgets/{productID}/{asset}", server.widgetScript)
 	mux.HandleFunc("GET /artifacts/{productID}/{packageID}", server.packageArtifact)
 	if options.UIDirectory != "" {
@@ -880,6 +885,42 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.revokeRootUser(w, r, parts[4])
 	case len(parts) == 3 && parts[2] == "organisations":
 		s.organisations(w, r)
+	case len(parts) == 3 && parts[2] == "deployment":
+		s.deployment(w, r)
+	case len(parts) == 3 && parts[2] == "environments":
+		s.deploymentEnvironments(w, r)
+	case len(parts) == 3 && parts[2] == "integrations":
+		s.integrations(w, r)
+	case len(parts) == 4 && parts[2] == "integrations":
+		s.integration(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "publish" && r.Method == http.MethodPost:
+		s.publishIntegration(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodPost:
+		s.attachResourceSet(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodDelete:
+		s.detachResourceSet(w, r, parts[3], parts[5])
+	case len(parts) == 3 && parts[2] == "resource-sets":
+		s.resourceSets(w, r)
+	case len(parts) == 4 && parts[2] == "resource-sets":
+		s.resourceSet(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "resource-sets" && parts[4] == "duplicate" && r.Method == http.MethodPost:
+		s.duplicateResourceSet(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "resource-sets" && parts[4] == "revisions" && r.Method == http.MethodGet:
+		s.resourceSetRevisions(w, r, parts[3])
+	case len(parts) == 3 && parts[2] == "access-definitions":
+		s.accessDefinitions(w, r)
+	case len(parts) == 3 && parts[2] == "access-connections":
+		s.accessConnections(w, r)
+	case len(parts) == 3 && parts[2] == "support-routes":
+		s.supportRoutes(w, r)
+	case len(parts) == 4 && parts[2] == "support-routes":
+		s.supportRoute(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "access-connections" && parts[4] == "instances" && r.Method == http.MethodGet:
+		s.accessInstances(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "access-connections" && parts[4] == "credentials" && r.Method == http.MethodGet:
+		s.accessCredentials(w, r, parts[3], "")
+	case len(parts) == 5 && parts[2] == "access-instances" && parts[4] == "credentials" && r.Method == http.MethodGet:
+		s.accessCredentials(w, r, "", parts[3])
 	case len(parts) == 5 && parts[2] == "organisations" && parts[4] == "products":
 		s.products(w, r, parts[3])
 	case len(parts) == 4 && parts[2] == "products" && r.Method == http.MethodPatch:
@@ -1898,7 +1939,7 @@ func usageToolDefinition() map[string]any {
 	}
 }
 
-const reportingAgentInstructions = " When a likely connector-specific defect is found, offer to prepare a bug report but do not submit automatically. Before using a support reporting tool, show the user a concise preview of what will be shared and obtain explicit approval. Explain that DokoSoko adds the authenticated subject, account or installation, current product and version, and request metadata; contact name and email are added only when allow_contact is approved. Submit only relevant, sanitized context; never include credentials, tokens, unrelated conversation, complete files, or unapproved personal data. For feedback, preserve the user's meaning and never invent ratings, sentiment, or claims."
+const reportingAgentInstructions = " When a likely connector-specific defect is found, offer to prepare a bug report but do not submit automatically. Before using a support reporting tool, show the user a concise preview of what will be shared and obtain explicit approval. Explain that DokoSoko adds the authenticated subject, account or installation, applicable Integration, current connector release, and request metadata; contact name and email are added only when allow_contact is approved. Submit only relevant, sanitized context; never include credentials, tokens, unrelated conversation, complete files, or unapproved personal data. For feedback, preserve the user's meaning and never invent ratings, sentiment, or claims."
 
 func reportOutputSchema() map[string]any {
 	return map[string]any{
@@ -1914,6 +1955,19 @@ func reportOutputSchema() map[string]any {
 	}
 }
 
+func mergeMetadata(current any, additions map[string]any) map[string]any {
+	result := make(map[string]any)
+	if existing, ok := current.(map[string]any); ok {
+		for key, value := range existing {
+			result[key] = value
+		}
+	}
+	for key, value := range additions {
+		result[key] = value
+	}
+	return result
+}
+
 func bugReportToolDefinition() map[string]any {
 	return map[string]any{
 		"name":        "support.report_bug",
@@ -1922,6 +1976,7 @@ func bugReportToolDefinition() map[string]any {
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
+				"integration_id":     map[string]any{"type": "string", "description": "The affected Integration ID from com.dokosoko/supportCapabilities metadata. Omit only for a legacy connector with no Integration catalog."},
 				"summary":            map[string]any{"type": "string", "minLength": 1, "maxLength": 160, "description": "A concise user-approved title for the defect."},
 				"description":        map[string]any{"type": "string", "minLength": 1, "maxLength": 10000, "description": "What happened and why it appears related to this connector."},
 				"reproduction_steps": map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 1000}},
@@ -1953,6 +2008,7 @@ func feedbackToolDefinition() map[string]any {
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
+				"integration_id":     map[string]any{"type": "string", "description": "The Integration ID the experience relates to, from com.dokosoko/supportCapabilities metadata."},
 				"message":            map[string]any{"type": "string", "minLength": 1, "maxLength": 10000, "description": "The user's feedback, faithfully summarized or quoted with approval."},
 				"category":           map[string]any{"type": "string", "enum": []string{"general", "usability", "documentation", "performance", "feature_request", "other"}, "default": "general"},
 				"rating":             map[string]any{"type": "integer", "minimum": 1, "maximum": 5, "description": "Include only when the user explicitly supplied or approved the rating."},
@@ -1971,9 +2027,17 @@ func feedbackToolDefinition() map[string]any {
 
 func (s *Server) publicMCP(w http.ResponseWriter, r *http.Request) {
 	productID := r.PathValue("productID")
+	if productID == "" {
+		deployment, err := s.service.Store().Deployment(r.Context())
+		if err != nil {
+			writeError(w, http.StatusNotFound, "public_mcp_unavailable", "Public MCP is not configured for this deployment.", nil)
+			return
+		}
+		productID = deployment.ID
+	}
 	product, err := s.service.Store().Product(r.Context(), productID)
 	if err != nil || !product.PublicMCPEnabled {
-		writeError(w, http.StatusNotFound, "public_mcp_unavailable", "Public MCP is not enabled for this product.", nil)
+		writeError(w, http.StatusNotFound, "public_mcp_unavailable", "Public MCP is not enabled for this deployment.", nil)
 		return
 	}
 	if !s.allowAnonymous(productID, r.RemoteAddr, time.Now().UTC()) {
@@ -2015,6 +2079,14 @@ func (s *Server) allowFixedWindow(key string, limit int, now time.Time) bool {
 
 func (s *Server) privateMCP(w http.ResponseWriter, r *http.Request) {
 	productID := r.PathValue("productID")
+	if productID == "" {
+		deployment, err := s.service.Store().Deployment(r.Context())
+		if err != nil {
+			writeError(w, http.StatusNotFound, "mcp_unavailable", "Private MCP is not configured for this deployment.", nil)
+			return
+		}
+		productID = deployment.ID
+	}
 	var principal identity.Principal
 	if s.identityBroker != nil {
 		value, err := s.identityBroker.Authenticate(r.Context(), bearerToken(r))
@@ -2071,29 +2143,39 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 	switch request.Method {
 	case "server/discover":
 		if manifestErr != nil {
-			writeRPCError(w, request.ID, -32603, "Product discovery failed")
+			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")
 			return
 		}
 		cacheScope := "private"
 		if public {
 			cacheScope = "public"
 		}
-		instructions := "Use the effective DokoSoko product version and capability releases returned in product discovery. Authenticated installation, environment, and customer pins override default product channels in that order."
+		instructions := "Use the effective DokoSoko connector release and Integration revisions returned in discovery. Authenticated installation, environment, and customer pins override default deployment channels in that order."
 		if !public && s.reporting != nil {
-			if config, configErr := s.reporting.Config(r.Context(), productID); configErr == nil && (config.BugReportsEnabled || config.FeedbackEnabled) {
+			capabilities, _ := s.reporting.Capabilities(r.Context(), productID)
+			reportingEnabled := false
+			for _, capability := range capabilities {
+				reportingEnabled = reportingEnabled || capability.BugReportsEnabled || capability.FeedbackEnabled
+			}
+			if !reportingEnabled {
+				if config, configErr := s.reporting.Config(r.Context(), productID); configErr == nil {
+					reportingEnabled = config.BugReportsEnabled || config.FeedbackEnabled
+				}
+			}
+			if reportingEnabled {
 				instructions += reportingAgentInstructions
 			}
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/list":
 		if manifestErr != nil {
-			writeRPCError(w, request.ID, -32603, "Product discovery failed")
+			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")
 			return
 		}
 		tools := []map[string]any{
-			{"name": "product.get_manifest", "description": "Return this product, its MCP-facing description, the effective pinned or default product version, compatibility profile, capability releases, and available versions.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "product.versions.list", "description": "List published product versions and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "search_knowledge", "description": "Search published product knowledge.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment, its applicable Integration revisions, effective pinned or default connector release, and available releases.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
+			{"name": "deployment.releases.list", "description": "List published connector releases and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
+			{"name": "search_knowledge", "description": "Search published connector knowledge.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
 			{"name": "find_package", "description": "Find published packages.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}},
 			{"name": "get_package", "description": "Get published package metadata.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"package_id": map[string]any{"type": "string"}}, "required": []string{"package_id"}}},
 		}
@@ -2110,13 +2192,29 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				}
 			}
 			if s.reporting != nil {
-				if config, err := s.reporting.Config(r.Context(), productID); err == nil {
-					if config.BugReportsEnabled {
-						tools = append(tools, bugReportToolDefinition())
+				capabilities, _ := s.reporting.Capabilities(r.Context(), productID)
+				bugEnabled, feedbackEnabled := false, false
+				for _, capability := range capabilities {
+					bugEnabled = bugEnabled || capability.BugReportsEnabled
+					feedbackEnabled = feedbackEnabled || capability.FeedbackEnabled
+				}
+				// Compatibility for deployments that have not yet materialized an
+				// Integration catalog. New deployments are routed only by Integration.
+				if len(capabilities) == 0 {
+					if config, err := s.reporting.Config(r.Context(), productID); err == nil {
+						bugEnabled, feedbackEnabled = config.BugReportsEnabled, config.FeedbackEnabled
 					}
-					if config.FeedbackEnabled {
-						tools = append(tools, feedbackToolDefinition())
-					}
+				}
+				metadata := map[string]any{"com.dokosoko/supportCapabilities": capabilities}
+				if bugEnabled {
+					definition := bugReportToolDefinition()
+					definition["_meta"] = mergeMetadata(definition["_meta"], metadata)
+					tools = append(tools, definition)
+				}
+				if feedbackEnabled {
+					definition := feedbackToolDefinition()
+					definition["_meta"] = mergeMetadata(definition["_meta"], metadata)
+					tools = append(tools, definition)
 				}
 			}
 			if s.mcpBridge != nil {
@@ -2128,12 +2226,30 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 					}
 				}
 			}
-			if s.providerRuntime != nil && s.providerRuntime.HasCapabilities(r.Context(), productID, principal.Entitlements) {
-				tools = append(tools,
-					map[string]any{"name": "projects.create", "description": "Create an idempotent, environment-scoped vendor project.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"provider_id": map[string]any{"type": "string"}, "environment_id": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "idempotency_key": map[string]any{"type": "string", "minLength": 16}, "ttl_seconds": map[string]any{"type": "integer", "minimum": 300}}, "required": []string{"provider_id", "environment_id", "name", "idempotency_key", "ttl_seconds"}}},
-					map[string]any{"name": "credentials.issue", "description": "Issue a short-lived credential once; DokoSoko retains only its fingerprint.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"provider_id": map[string]any{"type": "string"}, "environment_id": map[string]any{"type": "string"}, "project_id": map[string]any{"type": "string"}, "scopes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "idempotency_key": map[string]any{"type": "string", "minLength": 16}, "ttl_seconds": map[string]any{"type": "integer", "minimum": 300}}, "required": []string{"provider_id", "environment_id", "scopes", "idempotency_key", "ttl_seconds"}}},
-					map[string]any{"name": "credentials.revoke", "description": "Revoke a credential lease owned by the authenticated vendor subject.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"lease_id": map[string]any{"type": "string"}}, "required": []string{"lease_id"}}},
-				)
+			if s.accessRuntime != nil {
+				capabilities := s.accessRuntime.Capabilities(r.Context(), productID, principal.Entitlements)
+				if len(capabilities) > 0 {
+					metadata := map[string]any{"com.dokosoko/accessConnections": capabilities}
+					canCreateInstance, canCreateCredential, canRevokeCredential := false, false, false
+					for _, capability := range capabilities {
+						canCreateInstance = canCreateInstance || capability.CanCreateInstance
+						canCreateCredential = canCreateCredential || capability.CanCreateCredential
+						canRevokeCredential = canRevokeCredential || capability.CanRevokeCredential
+					}
+					tools = append(tools,
+						map[string]any{"name": "access.instances.list", "description": "List provider-owned resources available to the authenticated subject. The provider-specific resource label and allowed Integrations are supplied in tool metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}}, "required": []string{"connection_id", "integration_id"}}, "_meta": metadata},
+						map[string]any{"name": "access.credentials.list", "description": "List credential metadata and fingerprints for an allowed provider connection or resource. Credential material is never returned by list operations.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}, "access_instance_id": map[string]any{"type": "string"}}, "required": []string{"connection_id", "integration_id"}}, "_meta": metadata},
+					)
+					if canCreateInstance {
+						tools = append(tools, map[string]any{"name": "access.instances.create", "description": "Create an idempotent provider resource using the provider-specific label shown in tool metadata. This tool is omitted for single-instance services.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}, "environment_id": map[string]any{"type": "string"}, "display_name": map[string]any{"type": "string", "maxLength": 160}, "idempotency_key": map[string]any{"type": "string", "minLength": 16}, "ttl_seconds": map[string]any{"type": "integer", "minimum": 300}}, "required": []string{"connection_id", "integration_id", "environment_id", "display_name", "idempotency_key"}}, "_meta": metadata})
+					}
+					if canCreateCredential {
+						tools = append(tools, map[string]any{"name": "access.credentials.create", "description": "Create scoped credential material once for an allowed provider connection or resource. DokoSoko retains only a fingerprint unless the provider definition explicitly requires encrypted managed storage.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}, "environment_id": map[string]any{"type": "string"}, "access_instance_id": map[string]any{"type": "string"}, "scopes": map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "string"}}, "idempotency_key": map[string]any{"type": "string", "minLength": 16}, "ttl_seconds": map[string]any{"type": "integer", "minimum": 300}}, "required": []string{"connection_id", "integration_id", "environment_id", "scopes", "idempotency_key"}}, "_meta": metadata})
+					}
+					if canRevokeCredential {
+						tools = append(tools, map[string]any{"name": "access.credentials.revoke", "description": "Revoke provider credential material owned by the authenticated subject.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"credential_id": map[string]any{"type": "string"}}, "required": []string{"credential_id"}}, "_meta": metadata})
+					}
+				}
 			}
 			if s.toolRuntime != nil {
 				custom, err := s.toolRuntime.Available(r.Context(), productID, principal.Entitlements)
@@ -2169,9 +2285,10 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				metadata = make(map[string]any)
 			}
 			metadata["com.dokosoko/productVersion"] = versionMeta
+			metadata["com.dokosoko/deploymentRelease"] = versionMeta
 			definition["_meta"] = metadata
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/call":
 		s.callTool(r.Context(), w, request, productID, public, productManifest, manifestErr)
 	default:
@@ -2244,15 +2361,15 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 	}
 	s.recordAnalytics(ctx, productID, "tool.called", actorKind, actorID, dimensions)
 	switch params.Name {
-	case "product.get_manifest":
+	case "deployment.get_manifest", "product.get_manifest":
 		if manifestErr != nil {
-			writeRPCError(w, request.ID, -32603, "Product discovery failed")
+			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")
 			return
 		}
 		writeToolResult(w, request.ID, productManifest)
-	case "product.versions.list":
+	case "deployment.releases.list", "product.versions.list":
 		if manifestErr != nil {
-			writeRPCError(w, request.ID, -32603, "Product version discovery failed")
+			writeRPCError(w, request.ID, -32603, "Connector release discovery failed")
 			return
 		}
 		writeToolResult(w, request.ID, map[string]any{"product_id": productManifest.ProductID, "catalog_revision": productManifest.CatalogRevision, "manifest_hash": productManifest.ManifestHash, "effective_version": productManifest.EffectiveVersion, "selection_source": productManifest.SelectionSource, "available_versions": productManifest.AvailableVersions, "operational_warnings": productManifest.OperationalWarnings})
@@ -2279,8 +2396,13 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32602, "Bug report arguments are invalid")
 			return
 		}
+		integration, err := s.reportIntegrationContext(ctx, productID, input.IntegrationID)
+		if err != nil {
+			writeRPCError(w, request.ID, -32602, "The selected Integration is not available in this deployment")
+			return
+		}
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		value, err := s.reporting.SubmitBug(ctx, input, reporting.SubmitContext{Principal: principal, ActorPseudonym: actorID, Product: reportProductContext(productManifest), RequestID: requestID})
+		value, err := s.reporting.SubmitBug(ctx, input, reporting.SubmitContext{Principal: principal, ActorPseudonym: actorID, Product: reportProductContext(productManifest), Integration: integration, RequestID: requestID})
 		if err != nil {
 			reportingRPCError(w, request.ID, err)
 			return
@@ -2310,8 +2432,13 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32602, "Feedback arguments are invalid")
 			return
 		}
+		integration, err := s.reportIntegrationContext(ctx, productID, input.IntegrationID)
+		if err != nil {
+			writeRPCError(w, request.ID, -32602, "The selected Integration is not available in this deployment")
+			return
+		}
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		value, err := s.reporting.SubmitFeedback(ctx, input, reporting.SubmitContext{Principal: principal, ActorPseudonym: actorID, Product: reportProductContext(productManifest), RequestID: requestID})
+		value, err := s.reporting.SubmitFeedback(ctx, input, reporting.SubmitContext{Principal: principal, ActorPseudonym: actorID, Product: reportProductContext(productManifest), Integration: integration, RequestID: requestID})
 		if err != nil {
 			reportingRPCError(w, request.ID, err)
 			return
@@ -2393,55 +2520,82 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			return
 		}
 		writeToolResult(w, request.ID, value)
-	case "projects.create":
-		if public || s.providerRuntime == nil {
+	case "access.instances.list":
+		if public || s.accessRuntime == nil {
+			writeRPCError(w, request.ID, -32601, "Tool is not available")
+			return
+		}
+		connectionID, _ := params.Arguments["connection_id"].(string)
+		integrationID, _ := params.Arguments["integration_id"].(string)
+		values, err := s.accessRuntime.ListInstances(ctx, productID, connectionID, integrationID, accessPrincipal(principal, ctx))
+		if err != nil {
+			accessRPCError(w, request.ID, err)
+			return
+		}
+		writeToolResult(w, request.ID, map[string]any{"instances": values})
+	case "access.instances.create":
+		if public || s.accessRuntime == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
 		var input struct {
-			ProviderID string `json:"provider_id"`
-			providerruntime.ProjectRequest
+			ConnectionID string `json:"connection_id"`
+			accessruntime.InstanceRequest
 		}
 		if decodeArguments(params.Arguments, &input) != nil {
 			writeRPCError(w, request.ID, -32602, "Invalid params")
 			return
 		}
-		value, err := s.providerRuntime.CreateProject(ctx, productID, input.ProviderID, input.ProjectRequest, providerPrincipal(principal, ctx))
+		value, err := s.accessRuntime.CreateInstance(ctx, productID, input.ConnectionID, input.InstanceRequest, accessPrincipal(principal, ctx))
 		if err != nil {
-			providerRPCError(w, request.ID, err)
+			accessRPCError(w, request.ID, err)
 			return
 		}
-		s.recordAnalytics(ctx, productID, "capability_resolved", "vendor_user", pseudonym(productID, principal), map[string]any{"capability": "project.create"})
+		s.recordAnalytics(ctx, productID, "access_instance.created", "vendor_user", pseudonym(productID, principal), map[string]any{"connection_id": input.ConnectionID, "integration_id": input.IntegrationID})
 		writeToolResult(w, request.ID, value)
-	case "credentials.issue":
-		if public || s.providerRuntime == nil {
+	case "access.credentials.list":
+		if public || s.accessRuntime == nil {
+			writeRPCError(w, request.ID, -32601, "Tool is not available")
+			return
+		}
+		connectionID, _ := params.Arguments["connection_id"].(string)
+		integrationID, _ := params.Arguments["integration_id"].(string)
+		instanceID, _ := params.Arguments["access_instance_id"].(string)
+		values, err := s.accessRuntime.ListCredentials(ctx, productID, connectionID, integrationID, instanceID, accessPrincipal(principal, ctx))
+		if err != nil {
+			accessRPCError(w, request.ID, err)
+			return
+		}
+		writeToolResult(w, request.ID, map[string]any{"credentials": values})
+	case "access.credentials.create":
+		if public || s.accessRuntime == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
 		var input struct {
-			ProviderID string `json:"provider_id"`
-			providerruntime.CredentialRequest
+			ConnectionID string `json:"connection_id"`
+			accessruntime.CredentialRequest
 		}
 		if decodeArguments(params.Arguments, &input) != nil {
 			writeRPCError(w, request.ID, -32602, "Invalid params")
 			return
 		}
-		value, err := s.providerRuntime.IssueCredential(ctx, productID, input.ProviderID, input.CredentialRequest, providerPrincipal(principal, ctx))
+		value, err := s.accessRuntime.IssueCredential(ctx, productID, input.ConnectionID, input.CredentialRequest, accessPrincipal(principal, ctx))
 		if err != nil {
-			providerRPCError(w, request.ID, err)
+			accessRPCError(w, request.ID, err)
 			return
 		}
-		s.recordAnalytics(ctx, productID, "credentials_issued", "vendor_user", pseudonym(productID, principal), map[string]any{"existing": value.Existing})
+		s.recordAnalytics(ctx, productID, "access_credential.created", "vendor_user", pseudonym(productID, principal), map[string]any{"connection_id": input.ConnectionID, "integration_id": input.IntegrationID, "existing": value.Existing})
 		writeToolResult(w, request.ID, value)
-	case "credentials.revoke":
-		if public || s.providerRuntime == nil {
+	case "access.credentials.revoke":
+		if public || s.accessRuntime == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
-		leaseID, _ := params.Arguments["lease_id"].(string)
-		value, err := s.providerRuntime.RevokeCredential(ctx, productID, leaseID, providerPrincipal(principal, ctx))
+		credentialID, _ := params.Arguments["credential_id"].(string)
+		value, err := s.accessRuntime.RevokeCredential(ctx, productID, credentialID, accessPrincipal(principal, ctx))
 		if err != nil {
-			providerRPCError(w, request.ID, err)
+			accessRPCError(w, request.ID, err)
 			return
 		}
 		writeToolResult(w, request.ID, value)
@@ -2581,6 +2735,29 @@ func reportProductContext(manifest model.ProductManifest) reporting.ProductConte
 	return value
 }
 
+func (s *Server) reportIntegrationContext(ctx context.Context, deploymentID, integrationID string) (*reporting.IntegrationContext, error) {
+	integrationID = strings.TrimSpace(integrationID)
+	if integrationID == "" {
+		return nil, nil
+	}
+	integration, err := s.service.Store().Integration(ctx, deploymentID, integrationID)
+	if err != nil || integration.Lifecycle == "retired" {
+		return nil, store.ErrNotFound
+	}
+	value := &reporting.IntegrationContext{IntegrationID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Lifecycle: integration.Lifecycle, Revision: integration.Revision}
+	revisions, err := s.service.Store().IntegrationRevisions(ctx, integration.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, revision := range revisions {
+		if revision.State == "published" {
+			value.Revision, value.ManifestHash, value.Snapshot = revision.Revision, revision.ManifestHash, revision.Snapshot
+			break
+		}
+	}
+	return value, nil
+}
+
 func reportToolResult(value reporting.SubmissionView) map[string]any {
 	result := map[string]any{"submission_id": value.ID, "status": value.State}
 	if value.ExternalID != "" {
@@ -2599,7 +2776,7 @@ func reportingRPCError(w http.ResponseWriter, id any, err error) {
 	case errors.Is(err, reporting.ErrInvalidReport):
 		writeRPCError(w, id, -32602, err.Error())
 	case errors.Is(err, reporting.ErrDisabled), errors.Is(err, reporting.ErrNotConfigured):
-		writeRPCError(w, id, -32601, "Reporting tool is not enabled for this product")
+		writeRPCError(w, id, -32601, "Reporting tool is not enabled for this Integration")
 	default:
 		writeRPCError(w, id, -32603, "The report could not be held safely")
 	}
@@ -2618,6 +2795,26 @@ func decodeArguments(arguments map[string]any, destination any) error {
 func providerPrincipal(principal identity.Principal, ctx context.Context) providerruntime.Principal {
 	requestID, _ := ctx.Value(requestIDKey).(string)
 	return providerruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID}
+}
+
+func accessPrincipal(principal identity.Principal, ctx context.Context) accessruntime.Principal {
+	requestID, _ := ctx.Value(requestIDKey).(string)
+	return accessruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID}
+}
+
+func accessRPCError(w http.ResponseWriter, id any, err error) {
+	switch {
+	case errors.Is(err, accessruntime.ErrDenied):
+		writeRPCError(w, id, -32003, "Access operation was denied")
+	case errors.Is(err, accessruntime.ErrInvalidRequest):
+		writeRPCError(w, id, -32602, "Access operation request or provider response was invalid")
+	case errors.Is(err, accessruntime.ErrUnsupported):
+		writeRPCError(w, id, -32601, "Access operation is not supported by this connection")
+	case errors.Is(err, accessruntime.ErrUnsafeDestination):
+		writeRPCError(w, id, -32603, "Access provider destination failed safety validation")
+	default:
+		writeRPCError(w, id, -32603, "Access operation failed closed")
+	}
 }
 
 func providerRPCError(w http.ResponseWriter, id any, err error) {

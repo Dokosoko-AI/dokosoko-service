@@ -366,7 +366,54 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		return model.ProductManifest{}, err
 	}
 	selection.CustomerID, selection.EnvironmentID, selection.InstallationID = strings.TrimSpace(selection.CustomerID), strings.TrimSpace(selection.EnvironmentID), strings.TrimSpace(selection.InstallationID)
-	manifest := model.ProductManifest{ProductID: product.ID, ProductSlug: product.Slug, ProductName: product.Name, Description: product.Description, DefaultVersionPolicy: product.DefaultVersionPolicy, CatalogRevision: product.CatalogRevision, SelectionSource: "unversioned", CustomerID: selection.CustomerID, EnvironmentID: selection.EnvironmentID, InstallationID: selection.InstallationID, OperationalWarnings: []string{}, Artifacts: []model.ProductManifestArtifact{}, Capabilities: []model.ProductManifestCapability{}, AvailableVersions: []model.ProductVersionSummary{}}
+	manifest := model.ProductManifest{DeploymentID: product.ID, DeploymentSlug: product.Slug, DeploymentName: product.Name, ProductID: product.ID, ProductSlug: product.Slug, ProductName: product.Name, Description: product.Description, DefaultVersionPolicy: product.DefaultVersionPolicy, CatalogRevision: product.CatalogRevision, SelectionSource: "unversioned", CustomerID: selection.CustomerID, EnvironmentID: selection.EnvironmentID, InstallationID: selection.InstallationID, OperationalWarnings: []string{}, Artifacts: []model.ProductManifestArtifact{}, Capabilities: []model.ProductManifestCapability{}, Integrations: []model.IntegrationManifest{}, AvailableVersions: []model.ProductVersionSummary{}}
+	if deployment, deploymentErr := s.store.Deployment(ctx); deploymentErr == nil && deployment.ID == productID {
+		manifest.DeploymentID, manifest.DeploymentSlug, manifest.DeploymentName = deployment.ID, deployment.Slug, deployment.Name
+		manifest.CatalogRevision = deployment.CatalogRevision
+	}
+	integrations, integrationsErr := s.store.Integrations(ctx, productID)
+	if integrationsErr != nil && !errors.Is(integrationsErr, store.ErrNotFound) {
+		return model.ProductManifest{}, integrationsErr
+	}
+	for _, integration := range integrations {
+		if integration.Lifecycle != "active" && integration.Lifecycle != "deprecated" {
+			continue
+		}
+		revisions, revisionErr := s.store.IntegrationRevisions(ctx, integration.ID)
+		if revisionErr != nil {
+			return model.ProductManifest{}, revisionErr
+		}
+		var published model.IntegrationRevision
+		for _, revision := range revisions {
+			if revision.State == "published" {
+				published = revision
+				break
+			}
+		}
+		if published.ID == "" {
+			continue
+		}
+		entry := model.IntegrationManifest{ID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Revision: published.Revision, ManifestHash: published.ManifestHash, Resources: []model.IntegrationManifestResource{}}
+		for _, link := range integration.Resources {
+			if link.ResolvedRevision == nil {
+				continue
+			}
+			entry.Resources = append(entry.Resources, model.IntegrationManifestResource{ResourceSetID: link.ResourceSetID, Kind: link.Kind, Name: link.Name, Revision: link.ResolvedRevision.Revision, ContentHash: link.ResolvedRevision.ContentHash})
+		}
+		sort.SliceStable(entry.Resources, func(i, j int) bool {
+			if entry.Resources[i].Kind == entry.Resources[j].Kind {
+				return entry.Resources[i].Name < entry.Resources[j].Name
+			}
+			return entry.Resources[i].Kind < entry.Resources[j].Kind
+		})
+		manifest.Integrations = append(manifest.Integrations, entry)
+	}
+	sort.SliceStable(manifest.Integrations, func(i, j int) bool {
+		if manifest.Integrations[i].FamilyKey == manifest.Integrations[j].FamilyKey {
+			return manifest.Integrations[i].VersionKey < manifest.Integrations[j].VersionKey
+		}
+		return manifest.Integrations[i].FamilyKey < manifest.Integrations[j].FamilyKey
+	})
 	var selected model.ProductVersion
 	findVersion := func(id, source string) bool {
 		for _, version := range versions {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
@@ -188,5 +189,39 @@ func TestAddingHookActivatesHeldSubmissions(t *testing.T) {
 	stored, err := memory.ReportSubmission(ctx, "prod_acme", view.ID)
 	if err != nil || stored.State != "pending" || stored.NextAttemptAt == nil || stored.NextAttemptAt.After(time.Now().Add(time.Second)) {
 		t.Fatalf("held submission was not activated: %#v err=%v", stored, err)
+	}
+}
+
+func TestIntegrationRouteAndRevisionArePinnedAtSubmission(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	service, memory := newReportingService(t)
+	catalog := platform.New(memory)
+	integration, err := catalog.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "voice", VersionKey: "v2", DisplayName: "Voice API", Lifecycle: "active"}, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := catalog.PublishIntegration(ctx, integration.ID, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := service.SaveRoute(ctx, "prod_acme", "", RouteInput{Name: "Voice API support", BugReportsEnabled: true, RetentionDays: 45, IntegrationIDs: []string{integration.ID}}, "root", "req-route")
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := service.Capabilities(ctx, "prod_acme")
+	if err != nil || len(capabilities) != 1 || capabilities[0].IntegrationID != integration.ID || !capabilities[0].BugReportsEnabled {
+		t.Fatalf("support capabilities=%#v err=%v", capabilities, err)
+	}
+
+	submit := submitContext()
+	submit.Integration = &IntegrationContext{IntegrationID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Lifecycle: integration.Lifecycle, Revision: revision.Revision, ManifestHash: revision.ManifestHash, Snapshot: revision.Snapshot}
+	view, err := service.SubmitBug(ctx, BugInput{IntegrationID: integration.ID, Summary: "Voice API regression", Description: "The versioned Voice API connector returned an unexpected response.", IdempotencyKey: "integration-route-report-0001"}, submit)
+	if err != nil || view.State != "held" || view.TrustedIntegration == nil || view.TrustedIntegration.ManifestHash != revision.ManifestHash {
+		t.Fatalf("submission=%#v err=%v", view, err)
+	}
+	stored, err := memory.ReportSubmission(ctx, "prod_acme", view.ID)
+	if err != nil || stored.IntegrationID != integration.ID || stored.SupportRouteID != route.ID || len(stored.IntegrationSnapshot) == 0 {
+		t.Fatalf("stored integration route snapshot=%#v err=%v", stored, err)
 	}
 }

@@ -1015,11 +1015,12 @@ func (p *Postgres) SaveReportingConfig(ctx context.Context, value model.Reportin
 
 func scanReportSubmission(row interface{ Scan(...any) error }) (model.ReportSubmission, error) {
 	var value model.ReportSubmission
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Kind, &value.State, &value.ActorPseudonym, &value.IdempotencyDigest, &value.PayloadCiphertext, &value.PayloadNonce, &value.PayloadKeyVersion, &value.PayloadFingerprint, &value.Attempts, &value.NextAttemptAt, &value.DeliveryStartedAt, &value.LastError, &value.ExternalID, &value.ExternalURL, &value.DeliveredAt, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.IntegrationID, &value.IntegrationSnapshot, &value.SupportRouteID, &value.Kind, &value.State, &value.ActorPseudonym, &value.IdempotencyDigest, &value.PayloadCiphertext, &value.PayloadNonce, &value.PayloadKeyVersion, &value.PayloadFingerprint, &value.Attempts, &value.NextAttemptAt, &value.DeliveryStartedAt, &value.LastError, &value.ExternalID, &value.ExternalURL, &value.DeliveredAt, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const reportSubmissionSelect = `SELECT id::text, organisation_id::text, product_id::text, kind, state, actor_pseudonym, idempotency_digest, payload_ciphertext, payload_nonce, payload_key_version, payload_fingerprint, attempts, next_attempt_at, delivery_started_at, last_error, external_id, external_url, delivered_at, expires_at, created_at, updated_at FROM report_submissions`
+const reportSubmissionColumns = `id::text, organisation_id::text, product_id::text, coalesce(integration_id::text,''), integration_snapshot, coalesce(support_route_id::text,''), kind, state, actor_pseudonym, idempotency_digest, payload_ciphertext, payload_nonce, payload_key_version, payload_fingerprint, attempts, next_attempt_at, delivery_started_at, last_error, external_id, external_url, delivered_at, expires_at, created_at, updated_at`
+const reportSubmissionSelect = `SELECT ` + reportSubmissionColumns + ` FROM report_submissions`
 
 func (p *Postgres) ReportSubmissions(ctx context.Context, productID string, limit int) ([]model.ReportSubmission, error) {
 	if limit <= 0 || limit > 500 {
@@ -1046,10 +1047,10 @@ func (p *Postgres) ReportSubmission(ctx context.Context, productID, id string) (
 }
 
 func (p *Postgres) CreateReportSubmission(ctx context.Context, value model.ReportSubmission) (model.ReportSubmission, error) {
-	return scanReportSubmission(p.pool.QueryRow(ctx, `INSERT INTO report_submissions(id,organisation_id,product_id,kind,state,actor_pseudonym,idempotency_digest,payload_ciphertext,payload_nonce,payload_key_version,payload_fingerprint,next_attempt_at,expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	return scanReportSubmission(p.pool.QueryRow(ctx, `INSERT INTO report_submissions(id,organisation_id,product_id,integration_id,integration_snapshot,support_route_id,kind,state,actor_pseudonym,idempotency_digest,payload_ciphertext,payload_nonce,payload_key_version,payload_fingerprint,next_attempt_at,expires_at)
+		VALUES ($1,$2,$3,nullif($4,'')::uuid,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (product_id,actor_pseudonym,kind,idempotency_digest) DO UPDATE SET updated_at=report_submissions.updated_at
-		RETURNING id::text, organisation_id::text, product_id::text, kind, state, actor_pseudonym, idempotency_digest, payload_ciphertext, payload_nonce, payload_key_version, payload_fingerprint, attempts, next_attempt_at, delivery_started_at, last_error, external_id, external_url, delivered_at, expires_at, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Kind, value.State, value.ActorPseudonym, value.IdempotencyDigest, value.PayloadCiphertext, value.PayloadNonce, value.PayloadKeyVersion, value.PayloadFingerprint, value.NextAttemptAt, value.ExpiresAt))
+		RETURNING `+reportSubmissionColumns, value.ID, value.OrganisationID, value.ProductID, value.IntegrationID, value.IntegrationSnapshot, value.SupportRouteID, value.Kind, value.State, value.ActorPseudonym, value.IdempotencyDigest, value.PayloadCiphertext, value.PayloadNonce, value.PayloadKeyVersion, value.PayloadFingerprint, value.NextAttemptAt, value.ExpiresAt))
 }
 
 func (p *Postgres) ActivateHeldReportSubmissions(ctx context.Context, productID, kind string, now time.Time) error {
@@ -1067,7 +1068,7 @@ func (p *Postgres) ClaimReportSubmissions(ctx context.Context, now time.Time, li
 		ORDER BY coalesce(next_attempt_at,created_at), created_at
 		FOR UPDATE SKIP LOCKED LIMIT $2
 	) UPDATE report_submissions s SET state='delivering', attempts=s.attempts+1, delivery_started_at=$1, updated_at=$1 FROM ready WHERE s.id=ready.id
-	RETURNING s.id::text, s.organisation_id::text, s.product_id::text, s.kind, s.state, s.actor_pseudonym, s.idempotency_digest, s.payload_ciphertext, s.payload_nonce, s.payload_key_version, s.payload_fingerprint, s.attempts, s.next_attempt_at, s.delivery_started_at, s.last_error, s.external_id, s.external_url, s.delivered_at, s.expires_at, s.created_at, s.updated_at`, now, limit)
+	RETURNING s.id::text, s.organisation_id::text, s.product_id::text, coalesce(s.integration_id::text,''), s.integration_snapshot, coalesce(s.support_route_id::text,''), s.kind, s.state, s.actor_pseudonym, s.idempotency_digest, s.payload_ciphertext, s.payload_nonce, s.payload_key_version, s.payload_fingerprint, s.attempts, s.next_attempt_at, s.delivery_started_at, s.last_error, s.external_id, s.external_url, s.delivered_at, s.expires_at, s.created_at, s.updated_at`, now, limit)
 	if err != nil {
 		return nil, databaseError(err)
 	}
@@ -1085,12 +1086,12 @@ func (p *Postgres) ClaimReportSubmissions(ctx context.Context, now time.Time, li
 
 func (p *Postgres) UpdateReportSubmissionDelivery(ctx context.Context, value model.ReportSubmission) (model.ReportSubmission, error) {
 	return scanReportSubmission(p.pool.QueryRow(ctx, `UPDATE report_submissions SET state=$3, attempts=$4, next_attempt_at=$5, delivery_started_at=$6, last_error=$7, external_id=$8, external_url=$9, delivered_at=$10, updated_at=now() WHERE product_id=$1 AND id=$2
-	RETURNING id::text, organisation_id::text, product_id::text, kind, state, actor_pseudonym, idempotency_digest, payload_ciphertext, payload_nonce, payload_key_version, payload_fingerprint, attempts, next_attempt_at, delivery_started_at, last_error, external_id, external_url, delivered_at, expires_at, created_at, updated_at`, value.ProductID, value.ID, value.State, value.Attempts, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError, value.ExternalID, value.ExternalURL, value.DeliveredAt))
+	RETURNING `+reportSubmissionColumns, value.ProductID, value.ID, value.State, value.Attempts, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError, value.ExternalID, value.ExternalURL, value.DeliveredAt))
 }
 
 func (p *Postgres) RetryReportSubmission(ctx context.Context, productID, id string, now time.Time) (model.ReportSubmission, error) {
 	value, err := scanReportSubmission(p.pool.QueryRow(ctx, `UPDATE report_submissions SET state='pending', next_attempt_at=$3, delivery_started_at=NULL, last_error='', updated_at=$3 WHERE product_id=$1 AND id=$2 AND state IN ('held','failed') AND expires_at>$3
-	RETURNING id::text, organisation_id::text, product_id::text, kind, state, actor_pseudonym, idempotency_digest, payload_ciphertext, payload_nonce, payload_key_version, payload_fingerprint, attempts, next_attempt_at, delivery_started_at, last_error, external_id, external_url, delivered_at, expires_at, created_at, updated_at`, productID, id, now))
+	RETURNING `+reportSubmissionColumns, productID, id, now))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.ReportSubmission(ctx, productID, id); lookupErr == nil {
 			return model.ReportSubmission{}, ErrConflict

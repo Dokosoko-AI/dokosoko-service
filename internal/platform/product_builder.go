@@ -759,9 +759,137 @@ func (s *Service) PublishProductDefinition(ctx context.Context, productID, build
 	if err != nil {
 		return model.ProductDefinition{}, err
 	}
+	if deployment, deploymentErr := s.store.Deployment(ctx); deploymentErr == nil && deployment.ID == productID {
+		if err := s.reconcileIntegrationsFromDefinition(ctx, saved, buildID, actor); err != nil {
+			return model.ProductDefinition{}, fmt.Errorf("published connector catalog could not be materialized as Integrations: %w", err)
+		}
+	}
 	if _, err := s.store.MarkProductBuildPublished(ctx, productID, buildID); err != nil {
 		return model.ProductDefinition{}, err
 	}
 	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: saved.OrganisationID, ProductID: saved.ProductID, ActorID: actor.ID, Action: "product.definition.published", TargetType: "product_definition", TargetID: saved.ID, Current: map[string]any{"revision": saved.Revision, "component_count": len(saved.Components), "profile_count": len(saved.Profiles), "source_build_id": buildID}, RequestID: actor.RequestID, CreatedAt: now})
 	return saved, nil
+}
+
+func integrationResourceKind(bindingKind string) string {
+	switch bindingKind {
+	case "openapi", "docs", "git":
+		return "documentation"
+	case "package":
+		return "package"
+	case "mcp", "tool":
+		return "hook"
+	default:
+		return ""
+	}
+}
+
+func boundedCatalogName(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 120 {
+		return value
+	}
+	return strings.TrimSpace(value[:120])
+}
+
+// reconcileIntegrationsFromDefinition is the compatibility bridge from the
+// legacy AI product builder to the first-class Integration catalog. It never
+// silently edits a resource set shared by multiple Integrations; a private copy
+// is created for the newly published build instead.
+func (s *Service) reconcileIntegrationsFromDefinition(ctx context.Context, definition model.ProductDefinition, buildID string, actor Actor) error {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil || deployment.ID != definition.ProductID {
+		return err
+	}
+	existingIntegrations, err := s.store.Integrations(ctx, deployment.ID)
+	if err != nil {
+		return err
+	}
+	byKey := make(map[string]model.Integration, len(existingIntegrations))
+	for _, integration := range existingIntegrations {
+		byKey[integration.FamilyKey+"\x00"+integration.VersionKey] = integration
+	}
+	for _, component := range definition.Components {
+		for _, release := range component.Releases {
+			key := component.Slug + "\x00" + release.Version
+			integration, exists := byKey[key]
+			if !exists {
+				integration, err = s.CreateIntegration(ctx, IntegrationInput{FamilyKey: component.Slug, VersionKey: release.Version, DisplayName: component.Name, Description: component.Description, Lifecycle: "active"}, actor)
+				if err != nil {
+					return err
+				}
+				byKey[key] = integration
+			} else if integration.DisplayName != component.Name || integration.Description != component.Description || integration.Lifecycle == "draft" {
+				lifecycle := integration.Lifecycle
+				if lifecycle == "draft" {
+					lifecycle = "active"
+				}
+				integration, err = s.UpdateIntegration(ctx, integration.ID, IntegrationInput{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: component.Name, Description: component.Description, Lifecycle: lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Revision: integration.Revision}, actor)
+				if err != nil {
+					return err
+				}
+			}
+
+			groups := map[string][]model.ProductBinding{}
+			for _, binding := range release.Bindings {
+				if kind := integrationResourceKind(binding.Kind); kind != "" {
+					groups[kind] = append(groups[kind], binding)
+				}
+			}
+			for _, kind := range []string{"documentation", "package", "hook"} {
+				bindings := groups[kind]
+				if len(bindings) == 0 {
+					continue
+				}
+				manifest, marshalErr := json.Marshal(bindings)
+				if marshalErr != nil {
+					return marshalErr
+				}
+				baseName := boundedCatalogName(component.Name + " " + release.Version + " " + kind)
+				sets, listErr := s.store.ResourceSets(ctx, deployment.ID, kind)
+				if listErr != nil {
+					return listErr
+				}
+				var target model.ResourceSet
+				for _, candidate := range sets {
+					if candidate.Name == baseName {
+						target = candidate
+						break
+					}
+				}
+				if target.ID != "" && len(target.UsedBy) > 1 && (target.Latest == nil || target.Latest.ContentHash != contentHash(manifest)) {
+					suffix := strings.ReplaceAll(buildID, "-", "")
+					if len(suffix) > 8 {
+						suffix = suffix[:8]
+					}
+					target = model.ResourceSet{}
+					baseName = boundedCatalogName(baseName + " " + suffix)
+				}
+				if target.ID == "" {
+					target, err = s.CreateResourceSet(ctx, ResourceSetInput{Kind: kind, Name: baseName, Description: "Imported from connector catalog build " + buildID, State: "active", Manifest: manifest}, actor)
+				} else if target.Latest == nil || target.Latest.ContentHash != contentHash(manifest) {
+					target, err = s.UpdateResourceSet(ctx, target.ID, ResourceSetInput{Kind: kind, Name: target.Name, Description: target.Description, State: target.State, Manifest: manifest, Revision: target.Revision}, actor)
+				}
+				if err != nil {
+					return err
+				}
+				attached := false
+				for _, link := range integration.Resources {
+					if link.ResourceSetID == target.ID {
+						attached = true
+						break
+					}
+				}
+				if !attached {
+					if _, err := s.AttachResourceSet(ctx, integration.ID, target.ID, "", actor); err != nil {
+						return err
+					}
+				}
+			}
+			if _, err := s.PublishIntegration(ctx, integration.ID, actor); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

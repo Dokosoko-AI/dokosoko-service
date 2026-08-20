@@ -68,15 +68,15 @@ test("ships the automatic Product Definition review flow", async () => {
   assert.match(client, /publishProductBuild/);
 });
 
-test("ships product-version discovery, lifecycle, pinning, and AI rewrite controls", async () => {
+test("ships deployment-release discovery, lifecycle, pinning, and AI rewrite controls", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Product discovery & versions/);
+  assert.match(source, /Deployment discovery & connector releases/);
   assert.match(source, /Rewrite for agents/);
-  assert.match(source, /Publish product version/);
+  assert.match(source, /Publish connector release/);
   assert.match(source, /Scoped version pins/);
-  assert.match(source, /immutable release integrity/);
+  assert.match(source, /immutable connector-release integrity/);
   assert.match(source, /Integration installations/);
   assert.match(source, /generated release diff/);
   assert.match(source, /Independent approval required/);
@@ -114,6 +114,30 @@ test("ships consent-gated support reporting configuration and inbox", async () =
   assert.match(source, />Retry<\/Button>/);
   assert.match(source, /Fixed agent policy/);
   assert.match(client, /report-submissions/);
-  assert.match(client, /configureReporting/);
+  assert.match(source, /Default route for Integrations without an override/);
+  assert.match(source, /Leave empty to hold locally/);
+  assert.match(client, /createSupportRoute/);
+  assert.match(client, /updateSupportRoute/);
   assert.match(client, /retryReportSubmission/);
+});
+
+test("ships first-class Integration, reusable-set, and provider-access management", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(source, /New Integration/);
+  assert.match(source, /Create reusable resource set/);
+  assert.match(source, /Duplicate resource set/);
+  assert.match(source, /Pin the current revision instead of following latest/);
+  assert.match(source, /Create service definition/);
+  assert.match(source, /One fixed instance/);
+  assert.match(source, /Multiple provider resources/);
+  assert.match(source, /Allowed Integrations/);
+  assert.match(client, /createIntegration/);
+  assert.match(client, /updateIntegration/);
+  assert.match(client, /duplicateResourceSet/);
+  assert.match(client, /createAccessDefinition/);
+  assert.match(client, /createAccessConnection/);
+  assert.doesNotMatch(client, /createProvider:/);
+  assert.doesNotMatch(client, /projects:\s*async/);
 });

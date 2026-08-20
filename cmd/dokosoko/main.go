@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
@@ -93,9 +94,10 @@ func run() error {
 	toolProxy.SetAuthorizer(identity.NewHookAuthorization(persistence, vault))
 	toolProxy.SetMCPExecutor(mcpBridge)
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
+	accessProxy := accessruntime.New(persistence, vault, nil, nil)
 	handler := httpapi.NewWithOptions(platform.NewWithVault(persistence, vault), httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), PackageGateway: packageGateway, ToolRuntime: toolProxy, IdentityBroker: identityBroker, UsageReporter: usageReporter, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
+		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), PackageGateway: packageGateway, ToolRuntime: toolProxy, IdentityBroker: identityBroker, UsageReporter: usageReporter, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
 	})
 	workerCtx, stopReporting := context.WithCancel(context.Background())
 	defer stopReporting()

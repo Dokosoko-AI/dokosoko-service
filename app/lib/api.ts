@@ -13,6 +13,142 @@ export type APIProduct = {
   revision: number;
 };
 
+export type APIDeployment = {
+  id: string;
+  organisation_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  default_release_policy: "latest" | "lts";
+  catalog_revision: number;
+  require_promotion_approval: boolean;
+  public_mcp_enabled: boolean;
+  revision: number;
+};
+
+export type APIResourceSetRevision = {
+  id: string;
+  resource_set_id: string;
+  revision: number;
+  manifest: Array<Record<string, unknown>>;
+  content_hash: string;
+  created_by?: string;
+  created_at: string;
+};
+
+export type APIIntegrationResourceLink = {
+  id: string;
+  integration_id: string;
+  resource_set_id: string;
+  kind: "documentation" | "package" | "hook";
+  name: string;
+  follow_latest: boolean;
+  pinned_revision_id?: string;
+  resolved_revision?: APIResourceSetRevision;
+};
+
+export type APIIntegration = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  family_key: string;
+  version_key: string;
+  display_name: string;
+  description: string;
+  lifecycle: "draft" | "active" | "deprecated" | "retired";
+  replacement_integration_id?: string;
+  sunset_at?: string;
+  revision: number;
+  resources?: APIIntegrationResourceLink[];
+  access_connection_ids?: string[];
+  support_route_id?: string;
+};
+
+export type APIResourceSet = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  kind: "documentation" | "package" | "hook";
+  name: string;
+  description: string;
+  state: "active" | "archived";
+  revision: number;
+  latest_revision?: APIResourceSetRevision;
+  integration_ids?: string[];
+};
+
+export type APIAccessDefinition = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  service_key: string;
+  name: string;
+  instance_cardinality: "one" | "many";
+  instance_label_singular: string;
+  instance_label_plural: string;
+  credential_scope: "connection" | "instance";
+  management_auth_type: "none" | "bearer" | "api_key" | "oauth2_client_credentials";
+  hook_set_id?: string;
+  operations: Record<string, unknown>;
+  state: "draft" | "active" | "archived";
+  revision: number;
+};
+
+export type APIAccessConnection = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  access_definition_id: string;
+  environment_id?: string;
+  name: string;
+  region?: string;
+  config: Record<string, unknown>;
+  state: "active" | "disabled" | "error";
+  revision: number;
+  definition?: APIAccessDefinition;
+  integration_ids?: string[];
+};
+
+export type APIAccessInstance = {
+  id: string;
+  access_connection_id: string;
+  environment_id: string;
+  owner_type: "organisation" | "user" | "installation";
+  external_id: string;
+  display_name: string;
+  state: string;
+  integration_ids?: string[];
+  expires_at?: string;
+};
+
+export type APIAccessCredential = {
+  id: string;
+  access_connection_id: string;
+  access_instance_id?: string;
+  environment_id: string;
+  scopes: string[];
+  secret_fingerprint: string;
+  storage_mode: "one_time" | "managed" | "reference";
+  state: "active" | "retiring" | "revoked" | "expired";
+  expires_at?: string;
+};
+
+export type APISupportRoute = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  name: string;
+  is_default: boolean;
+  bug_reports_enabled: boolean;
+  feedback_enabled: boolean;
+  bug_hook_url: string;
+  feedback_hook_url: string;
+  retention_days: number;
+  state: "active" | "archived";
+  revision: number;
+  integration_ids?: string[];
+};
+
 export type APIProductVersion = {
   id: string;
   organisation_id: string;
@@ -399,6 +535,15 @@ export type APIReportSubmission = {
     environment_id?: string;
     installation_id?: string;
   };
+  trusted_integration?: {
+    integration_id: string;
+    family_key: string;
+    version_key: string;
+    display_name: string;
+    lifecycle: string;
+    revision: number;
+    manifest_hash?: string;
+  };
 };
 
 export type APIAnalytics = {
@@ -417,38 +562,6 @@ export type APIAnalytics = {
   daily_requests: Array<{ date: string; count: number }>;
   since: string;
   generated_at: string;
-};
-
-export type APIProvider = {
-  id: string;
-  organisation_id: string;
-  product_id: string;
-  name: string;
-  kind: "remote" | "builtin" | "proxy";
-  config: { contract_version?: string; required_entitlements?: string[]; max_ttl_seconds?: number };
-  revision: number;
-};
-
-export type APIProject = {
-  id: string;
-  provider_id: string;
-  environment_id: string;
-  external_id: string;
-  state: string;
-  expires_at?: string;
-  created_at: string;
-};
-
-export type APICredentialLease = {
-  id: string;
-  provider_id: string;
-  project_id?: string;
-  subject_id: string;
-  scopes: string[];
-  secret_fingerprint: string;
-  expires_at: string;
-  revoked_at?: string;
-  created_at: string;
 };
 
 export type APILLMProfile = {
@@ -580,6 +693,30 @@ export const api = {
   revokeRootUser: (userID: string) => request<void>(`/api/v1/root/users/${encodeURIComponent(userID)}`, { method: "DELETE" }),
   organisations: async () => (await request<{ items: APIOrganisation[] }>("/api/v1/organisations")).items,
   createOrganisation: (name: string, slug: string) => request<APIOrganisation>("/api/v1/organisations", { method: "POST", body: JSON.stringify({ name, slug }) }),
+  deployment: () => request<APIDeployment>("/api/v1/deployment"),
+  createDeployment: (organisationID: string, name: string, slug: string) => request<APIDeployment>("/api/v1/deployment", { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, default_release_policy: "latest" }) }),
+  updateDeployment: (input: Partial<APIDeployment> & { revision: number }) => request<APIDeployment>("/api/v1/deployment", { method: "PATCH", body: JSON.stringify(input) }),
+  deploymentEnvironments: async () => (await request<{ items: APIEnvironment[] }>("/api/v1/environments")).items,
+  createDeploymentEnvironment: (organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>("/api/v1/environments", { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
+  integrations: async () => (await request<{ items: APIIntegration[] }>("/api/v1/integrations")).items,
+  createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
+  updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "lifecycle" | "revision"> & { replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  publishIntegration: (integrationID: string) => request(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
+  resourceSets: async (kind = "") => (await request<{ items: APIResourceSet[] }>(`/api/v1/resource-sets${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`)).items,
+  createResourceSet: (input: { kind: APIResourceSet["kind"]; name: string; description: string; manifest: Array<Record<string, unknown>> }) => request<APIResourceSet>("/api/v1/resource-sets", { method: "POST", body: JSON.stringify(input) }),
+  updateResourceSet: (setID: string, input: { name: string; description: string; state: APIResourceSet["state"]; manifest: Array<Record<string, unknown>>; revision: number }) => request<APIResourceSet>(`/api/v1/resource-sets/${encodeURIComponent(setID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  duplicateResourceSet: (setID: string, name: string) => request<APIResourceSet>(`/api/v1/resource-sets/${encodeURIComponent(setID)}/duplicate`, { method: "POST", body: JSON.stringify({ name }) }),
+  attachResourceSet: (integrationID: string, resourceSetID: string, pinnedRevisionID = "") => request<APIIntegrationResourceLink>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/resource-sets`, { method: "POST", body: JSON.stringify({ resource_set_id: resourceSetID, pinned_revision_id: pinnedRevisionID }) }),
+  detachResourceSet: (integrationID: string, resourceSetID: string) => request<void>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/resource-sets/${encodeURIComponent(resourceSetID)}`, { method: "DELETE" }),
+  accessDefinitions: async () => (await request<{ items: APIAccessDefinition[] }>("/api/v1/access-definitions")).items,
+  createAccessDefinition: (input: { service_key: string; name: string; instance_cardinality: APIAccessDefinition["instance_cardinality"]; instance_label_singular: string; instance_label_plural: string; credential_scope: APIAccessDefinition["credential_scope"]; management_auth_type: APIAccessDefinition["management_auth_type"]; hook_set_id?: string; operations: Record<string, unknown> }) => request<APIAccessDefinition>("/api/v1/access-definitions", { method: "POST", body: JSON.stringify(input) }),
+  accessConnections: async () => (await request<{ items: APIAccessConnection[] }>("/api/v1/access-connections")).items,
+  createAccessConnection: (input: { access_definition_id: string; environment_id?: string; name: string; region?: string; base_url: string; management_secret?: string; config: Record<string, unknown>; integration_ids: string[] }) => request<APIAccessConnection>("/api/v1/access-connections", { method: "POST", body: JSON.stringify(input) }),
+  accessInstances: async (connectionID: string) => (await request<{ items: APIAccessInstance[] }>(`/api/v1/access-connections/${encodeURIComponent(connectionID)}/instances`)).items,
+  accessCredentials: async (connectionID: string) => (await request<{ items: APIAccessCredential[] }>(`/api/v1/access-connections/${encodeURIComponent(connectionID)}/credentials`)).items,
+  supportRoutes: async () => (await request<{ items: APISupportRoute[] }>("/api/v1/support-routes")).items,
+  createSupportRoute: (input: { name: string; is_default: boolean; bug_reports_enabled: boolean; feedback_enabled: boolean; bug_hook_url: string; bug_hook_credential?: string; feedback_hook_url: string; feedback_hook_credential?: string; retention_days: number; state: APISupportRoute["state"]; integration_ids: string[] }) => request<APISupportRoute>("/api/v1/support-routes", { method: "POST", body: JSON.stringify(input) }),
+  updateSupportRoute: (routeID: string, input: { name: string; is_default: boolean; bug_reports_enabled: boolean; feedback_enabled: boolean; bug_hook_url: string; bug_hook_credential?: string; feedback_hook_url: string; feedback_hook_credential?: string; retention_days: number; state: APISupportRoute["state"]; integration_ids: string[]; revision: number }) => request<APISupportRoute>(`/api/v1/support-routes/${encodeURIComponent(routeID)}`, { method: "PATCH", body: JSON.stringify(input) }),
   products: async (organisationID: string) => (await request<{ items: APIProduct[] }>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/products`)).items,
   createProduct: (organisationID: string, name: string, slug: string) => request<APIProduct>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/products`, { method: "POST", body: JSON.stringify({ name, slug }) }),
   updateProductSettings: (productID: string, description: string, defaultVersionPolicy: "latest" | "lts", requirePromotionApproval: boolean, revision: number) => request<APIProduct>(productPath(productID), { method: "PATCH", body: JSON.stringify({ description, default_version_policy: defaultVersionPolicy, require_promotion_approval: requirePromotionApproval, revision }) }),
@@ -617,10 +754,6 @@ export const api = {
   startIntegrationRun: (productID: string, environmentID: string, requestedOutcome: string) => request<APIIntegrationRun>(`${productPath(productID)}/integration-runs`, { method: "POST", body: JSON.stringify({ environment_id: environmentID, requested_outcome: requestedOutcome }) }),
   completeIntegrationRun: (productID: string, runID: string, reportedSuccess: boolean, validatedSuccess: boolean, failureCode = "") => request<APIIntegrationRun>(`${productPath(productID)}/integration-runs/${encodeURIComponent(runID)}/complete`, { method: "POST", body: JSON.stringify({ reported_success: reportedSuccess, validated_success: validatedSuccess, failure_code: failureCode }) }),
   auditEvents: async (organisationID: string) => (await request<{ items: APIAuditEvent[] }>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/audit`)).items,
-  providers: async (productID: string) => (await request<{ items: APIProvider[] }>(`${productPath(productID)}/providers`)).items,
-  createProvider: (productID: string, input: { organisation_id: string; name: string; base_url: string; credential: string; required_entitlements: string[]; max_ttl_seconds: number }) => request<APIProvider>(`${productPath(productID)}/providers`, { method: "POST", body: JSON.stringify(input) }),
-  projects: async (productID: string) => (await request<{ items: APIProject[] }>(`${productPath(productID)}/projects`)).items,
-  credentials: async (productID: string) => (await request<{ items: APICredentialLease[] }>(`${productPath(productID)}/credentials`)).items,
   llmProfiles: async (productID: string) => (await request<{ items: APILLMProfile[] }>(`${productPath(productID)}/llm-profiles`)).items,
   saveLLMProfile: (productID: string, input: { organisation_id: string; role: string; provider: string; endpoint: string; model: string; credential: string; embedding_dimensions: number; max_input_tokens: number; max_output_tokens: number; daily_token_budget: number; enabled: boolean }) => request<APILLMProfile>(`${productPath(productID)}/llm-profiles`, { method: "PUT", body: JSON.stringify(input) }),
   sources: async (productID: string) => (await request<{ items: APISource[] }>(`${productPath(productID)}/sources`)).items,

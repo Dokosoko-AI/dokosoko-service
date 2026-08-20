@@ -57,7 +57,23 @@ type ConfigInput struct {
 	Revision               int64
 }
 
+type RouteInput struct {
+	Name                   string
+	IsDefault              bool
+	BugReportsEnabled      bool
+	FeedbackEnabled        bool
+	BugHookURL             string
+	BugHookCredential      string
+	FeedbackHookURL        string
+	FeedbackHookCredential string
+	RetentionDays          int
+	State                  string
+	IntegrationIDs         []string
+	Revision               int64
+}
+
 type BugInput struct {
+	IntegrationID     string   `json:"integration_id,omitempty"`
 	Summary           string   `json:"summary"`
 	Description       string   `json:"description"`
 	ReproductionSteps []string `json:"reproduction_steps,omitempty"`
@@ -75,6 +91,7 @@ type BugInput struct {
 }
 
 type FeedbackInput struct {
+	IntegrationID    string `json:"integration_id,omitempty"`
 	Message          string `json:"message"`
 	Category         string `json:"category,omitempty"`
 	Rating           *int   `json:"rating,omitempty"`
@@ -105,42 +122,91 @@ type ProductContext struct {
 	InstallationID   string `json:"installation_id,omitempty"`
 }
 
+// IntegrationContext is resolved by DokoSoko, never trusted from agent-authored
+// diagnostic text. It pins support submissions to the API family/version and
+// immutable Integration revision that were active at submission time.
+type IntegrationContext struct {
+	IntegrationID string          `json:"integration_id"`
+	FamilyKey     string          `json:"family_key"`
+	VersionKey    string          `json:"version_key"`
+	DisplayName   string          `json:"display_name"`
+	Lifecycle     string          `json:"lifecycle"`
+	Revision      int64           `json:"revision"`
+	ManifestHash  string          `json:"manifest_hash,omitempty"`
+	Snapshot      json.RawMessage `json:"snapshot,omitempty"`
+}
+
 type Envelope struct {
-	SchemaVersion string          `json:"schema_version"`
-	Kind          string          `json:"kind"`
-	Bug           *BugInput       `json:"bug,omitempty"`
-	Feedback      *FeedbackInput  `json:"feedback,omitempty"`
-	Reporter      ReporterContext `json:"reporter"`
-	Product       ProductContext  `json:"product"`
-	Source        string          `json:"source"`
-	ConfirmedAt   time.Time       `json:"confirmed_at"`
-	RequestID     string          `json:"request_id"`
+	SchemaVersion string              `json:"schema_version"`
+	Kind          string              `json:"kind"`
+	Bug           *BugInput           `json:"bug,omitempty"`
+	Feedback      *FeedbackInput      `json:"feedback,omitempty"`
+	Reporter      ReporterContext     `json:"reporter"`
+	Product       ProductContext      `json:"product"`
+	Integration   *IntegrationContext `json:"integration,omitempty"`
+	Source        string              `json:"source"`
+	ConfirmedAt   time.Time           `json:"confirmed_at"`
+	RequestID     string              `json:"request_id"`
 }
 
 type SubmissionView struct {
-	ID             string         `json:"id"`
-	Kind           string         `json:"kind"`
-	State          string         `json:"state"`
-	Summary        string         `json:"summary"`
-	Category       string         `json:"category,omitempty"`
-	Rating         *int           `json:"rating,omitempty"`
-	RelatedTool    string         `json:"related_tool,omitempty"`
-	Attempts       int            `json:"attempts"`
-	LastError      string         `json:"last_error,omitempty"`
-	ExternalID     string         `json:"external_id,omitempty"`
-	ExternalURL    string         `json:"external_url,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-	DeliveredAt    *time.Time     `json:"delivered_at,omitempty"`
-	ExpiresAt      time.Time      `json:"expires_at"`
-	Content        map[string]any `json:"content,omitempty"`
-	TrustedContext ProductContext `json:"trusted_context"`
+	ID                 string              `json:"id"`
+	Kind               string              `json:"kind"`
+	State              string              `json:"state"`
+	Summary            string              `json:"summary"`
+	Category           string              `json:"category,omitempty"`
+	Rating             *int                `json:"rating,omitempty"`
+	RelatedTool        string              `json:"related_tool,omitempty"`
+	Attempts           int                 `json:"attempts"`
+	LastError          string              `json:"last_error,omitempty"`
+	ExternalID         string              `json:"external_id,omitempty"`
+	ExternalURL        string              `json:"external_url,omitempty"`
+	CreatedAt          time.Time           `json:"created_at"`
+	DeliveredAt        *time.Time          `json:"delivered_at,omitempty"`
+	ExpiresAt          time.Time           `json:"expires_at"`
+	Content            map[string]any      `json:"content,omitempty"`
+	TrustedContext     ProductContext      `json:"trusted_context"`
+	TrustedIntegration *IntegrationContext `json:"trusted_integration,omitempty"`
 }
 
 type SubmitContext struct {
 	Principal      identity.Principal
 	ActorPseudonym string
 	Product        ProductContext
+	Integration    *IntegrationContext
 	RequestID      string
+}
+
+type SupportCapability struct {
+	IntegrationID     string `json:"integration_id"`
+	FamilyKey         string `json:"family_key"`
+	VersionKey        string `json:"version_key"`
+	BugReportsEnabled bool   `json:"bug_reports_enabled"`
+	FeedbackEnabled   bool   `json:"feedback_enabled"`
+}
+
+func (s *Service) Capabilities(ctx context.Context, deploymentID string) ([]SupportCapability, error) {
+	integrations, err := s.store.Integrations(ctx, deploymentID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]SupportCapability, 0, len(integrations))
+	for _, integration := range integrations {
+		if integration.Lifecycle == "retired" {
+			continue
+		}
+		route, routeErr := s.store.SupportRouteForIntegration(ctx, deploymentID, integration.ID)
+		if routeErr != nil {
+			if errors.Is(routeErr, store.ErrNotFound) {
+				continue
+			}
+			return nil, routeErr
+		}
+		if route.BugReportsEnabled || route.FeedbackEnabled {
+			result = append(result, SupportCapability{IntegrationID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, BugReportsEnabled: route.BugReportsEnabled, FeedbackEnabled: route.FeedbackEnabled})
+		}
+	}
+	return result, nil
 }
 
 type Service struct {
@@ -258,6 +324,18 @@ func (s *Service) Configure(ctx context.Context, productID string, input ConfigI
 	if err != nil {
 		return model.ReportingConfig{}, err
 	}
+	// Keep the legacy configuration endpoint as a default Integration route
+	// during the console transition. Dedicated support-route APIs can then add
+	// Integration-specific overrides without changing this default.
+	routeExpected := int64(0)
+	if currentRoute, routeErr := s.store.SupportRoute(ctx, productID, updated.ID); routeErr == nil {
+		routeExpected = currentRoute.Revision
+	} else if !errors.Is(routeErr, store.ErrNotFound) {
+		return model.ReportingConfig{}, routeErr
+	}
+	if _, routeErr := s.store.SaveSupportRoute(ctx, model.SupportRoute{ID: updated.ID, DeploymentID: productID, OrganisationID: updated.OrganisationID, Name: "Default support route", IsDefault: true, BugReportsEnabled: updated.BugReportsEnabled, FeedbackEnabled: updated.FeedbackEnabled, BugHookURL: updated.BugHookURL, BugHookCredentialID: updated.BugHookCredentialID, FeedbackHookURL: updated.FeedbackHookURL, FeedbackHookCredentialID: updated.FeedbackHookCredentialID, RetentionDays: updated.RetentionDays, State: "active"}, routeExpected); routeErr != nil {
+		return model.ReportingConfig{}, routeErr
+	}
 	if updated.BugReportsEnabled && updated.BugHookURL != "" {
 		_ = s.store.ActivateHeldReportSubmissions(ctx, productID, KindBug, s.now())
 	}
@@ -266,6 +344,96 @@ func (s *Service) Configure(ctx context.Context, productID string, input ConfigI
 	}
 	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: product.OrganisationID, ProductID: productID, ActorID: actorID, Action: "reporting.configured", TargetType: "reporting_config", TargetID: updated.ID, Current: map[string]any{"bug_reports_enabled": updated.BugReportsEnabled, "feedback_enabled": updated.FeedbackEnabled, "bug_hook": updated.BugHookURL != "", "feedback_hook": updated.FeedbackHookURL != "", "bug_credential_rotated": input.BugHookCredential != "", "feedback_credential_rotated": input.FeedbackHookCredential != "", "retention_days": updated.RetentionDays}, RequestID: requestID, CreatedAt: s.now()})
 	return updated, nil
+}
+
+func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, input RouteInput, actorID, requestID string) (model.SupportRoute, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil || deployment.ID != deploymentID {
+		return model.SupportRoute{}, store.ErrNotFound
+	}
+	input.Name, input.BugHookURL, input.FeedbackHookURL = strings.TrimSpace(input.Name), strings.TrimSpace(input.BugHookURL), strings.TrimSpace(input.FeedbackHookURL)
+	input.BugHookCredential, input.FeedbackHookCredential = strings.TrimSpace(input.BugHookCredential), strings.TrimSpace(input.FeedbackHookCredential)
+	if input.Name == "" || len(input.Name) > 120 || !validHookURL(input.BugHookURL) || !validHookURL(input.FeedbackHookURL) {
+		return model.SupportRoute{}, fmt.Errorf("%w: route name or hook destination is invalid", ErrInvalidReport)
+	}
+	if input.RetentionDays == 0 {
+		input.RetentionDays = 30
+	}
+	if input.RetentionDays < 1 || input.RetentionDays > 365 {
+		return model.SupportRoute{}, fmt.Errorf("%w: retention_days must be between 1 and 365", ErrInvalidReport)
+	}
+	if input.State == "" {
+		input.State = "active"
+	}
+	if input.State != "active" && input.State != "archived" {
+		return model.SupportRoute{}, fmt.Errorf("%w: support route state is invalid", ErrInvalidReport)
+	}
+	if !input.IsDefault && len(input.IntegrationIDs) == 0 {
+		return model.SupportRoute{}, fmt.Errorf("%w: a non-default route must be attached to at least one Integration", ErrInvalidReport)
+	}
+	seen := make(map[string]bool, len(input.IntegrationIDs))
+	integrationIDs := make([]string, 0, len(input.IntegrationIDs))
+	for _, integrationID := range input.IntegrationIDs {
+		integrationID = strings.TrimSpace(integrationID)
+		if integrationID == "" || seen[integrationID] {
+			continue
+		}
+		if _, err := s.store.Integration(ctx, deploymentID, integrationID); err != nil {
+			return model.SupportRoute{}, fmt.Errorf("%w: support route Integration does not exist", ErrInvalidReport)
+		}
+		seen[integrationID] = true
+		integrationIDs = append(integrationIDs, integrationID)
+	}
+	value := model.SupportRoute{ID: routeID, DeploymentID: deploymentID, OrganisationID: deployment.OrganisationID, Name: input.Name, IsDefault: input.IsDefault, BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BugHookURL: input.BugHookURL, FeedbackHookURL: input.FeedbackHookURL, RetentionDays: input.RetentionDays, State: input.State, IntegrationIDs: integrationIDs}
+	if routeID == "" {
+		if input.Revision != 0 {
+			return model.SupportRoute{}, store.ErrConflict
+		}
+		value.ID, err = randomUUID()
+		if err != nil {
+			return model.SupportRoute{}, err
+		}
+	} else {
+		current, currentErr := s.store.SupportRoute(ctx, deploymentID, routeID)
+		if currentErr != nil {
+			return model.SupportRoute{}, currentErr
+		}
+		value.BugHookCredentialID, value.FeedbackHookCredentialID = current.BugHookCredentialID, current.FeedbackHookCredentialID
+		if current.Revision != input.Revision {
+			return model.SupportRoute{}, store.ErrConflict
+		}
+		if input.BugHookURL != "" && input.BugHookCredential == "" && (current.BugHookURL != input.BugHookURL || current.BugHookCredentialID == "") {
+			return model.SupportRoute{}, fmt.Errorf("%w: a changed bug hook requires a new credential", ErrInvalidReport)
+		}
+		if input.FeedbackHookURL != "" && input.FeedbackHookCredential == "" && (current.FeedbackHookURL != input.FeedbackHookURL || current.FeedbackHookCredentialID == "") {
+			return model.SupportRoute{}, fmt.Errorf("%w: a changed feedback hook requires a new credential", ErrInvalidReport)
+		}
+	}
+	if input.BugHookURL == "" {
+		value.BugHookCredentialID = ""
+	} else if input.BugHookCredential != "" {
+		value.BugHookCredentialID, err = s.storeHookCredential(ctx, deployment.OrganisationID, KindBug, input.BugHookCredential)
+		if err != nil {
+			return model.SupportRoute{}, err
+		}
+	}
+	if input.FeedbackHookURL == "" {
+		value.FeedbackHookCredentialID = ""
+	} else if input.FeedbackHookCredential != "" {
+		value.FeedbackHookCredentialID, err = s.storeHookCredential(ctx, deployment.OrganisationID, KindFeedback, input.FeedbackHookCredential)
+		if err != nil {
+			return model.SupportRoute{}, err
+		}
+	}
+	if (value.BugHookURL != "" && value.BugHookCredentialID == "") || (value.FeedbackHookURL != "" && value.FeedbackHookCredentialID == "") {
+		return model.SupportRoute{}, fmt.Errorf("%w: every configured hook requires a credential", ErrInvalidReport)
+	}
+	saved, err := s.store.SaveSupportRoute(ctx, value, input.Revision)
+	if err != nil {
+		return model.SupportRoute{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: deployment.OrganisationID, ProductID: deploymentID, ActorID: actorID, Action: "support_route.saved", TargetType: "support_route", TargetID: saved.ID, Current: map[string]any{"name": saved.Name, "is_default": saved.IsDefault, "integration_ids": saved.IntegrationIDs, "bug_reports_enabled": saved.BugReportsEnabled, "feedback_enabled": saved.FeedbackEnabled}, RequestID: requestID, CreatedAt: s.now()})
+	return saved, nil
 }
 
 func (s *Service) storeHookCredential(ctx context.Context, organisationID, kind, plaintext string) (string, error) {
@@ -300,6 +468,7 @@ func validateCommon(idempotencyKey, relatedTool, integrationRunID string) error 
 func trimExact(value string) string { return strings.TrimSpace(value) }
 
 func validateBug(input *BugInput) error {
+	input.IntegrationID = trimExact(input.IntegrationID)
 	input.Summary, input.Description = trimExact(input.Summary), trimExact(input.Description)
 	input.RelatedTool, input.IntegrationRunID = trimExact(input.RelatedTool), trimExact(input.IntegrationRunID)
 	input.Severity = strings.ToLower(trimExact(input.Severity))
@@ -333,6 +502,7 @@ func validateBug(input *BugInput) error {
 }
 
 func validateFeedback(input *FeedbackInput) error {
+	input.IntegrationID = trimExact(input.IntegrationID)
 	input.Message, input.Category = trimExact(input.Message), strings.ToLower(trimExact(input.Category))
 	input.RelatedTool, input.IntegrationRunID = trimExact(input.RelatedTool), trimExact(input.IntegrationRunID)
 	if input.Message == "" || len(input.Message) > 10000 {
@@ -368,6 +538,9 @@ func (s *Service) SubmitBug(ctx context.Context, input BugInput, submit SubmitCo
 	if containsSensitiveContent(input) {
 		return SubmissionView{}, ErrSensitiveContent
 	}
+	if input.IntegrationID != "" && (submit.Integration == nil || submit.Integration.IntegrationID != input.IntegrationID) {
+		return SubmissionView{}, fmt.Errorf("%w: integration_id does not belong to the trusted connector context", ErrInvalidReport)
+	}
 	if input.IntegrationRunID != "" {
 		if _, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID); err != nil {
 			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to this product", ErrInvalidReport)
@@ -386,6 +559,9 @@ func (s *Service) SubmitFeedback(ctx context.Context, input FeedbackInput, submi
 	}
 	if containsSensitiveContent(input) {
 		return SubmissionView{}, ErrSensitiveContent
+	}
+	if input.IntegrationID != "" && (submit.Integration == nil || submit.Integration.IntegrationID != input.IntegrationID) {
+		return SubmissionView{}, fmt.Errorf("%w: integration_id does not belong to the trusted connector context", ErrInvalidReport)
 	}
 	if input.IntegrationRunID != "" {
 		if _, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID); err != nil {
@@ -408,18 +584,13 @@ func (s *Service) envelope(kind string, submit SubmitContext, allowContact bool)
 	if allowContact {
 		reporter.DisplayName, reporter.Email = submit.Principal.DisplayName, submit.Principal.Email
 	}
-	return Envelope{SchemaVersion: "2026-08-19", Kind: kind, Reporter: reporter, Product: submit.Product, Source: "private_mcp", ConfirmedAt: s.now(), RequestID: submit.RequestID}
+	return Envelope{SchemaVersion: "2026-08-20", Kind: kind, Reporter: reporter, Product: submit.Product, Integration: submit.Integration, Source: "private_mcp", ConfirmedAt: s.now(), RequestID: submit.RequestID}
 }
 
 func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope Envelope, actorPseudonym string) (SubmissionView, error) {
-	config, err := s.Config(ctx, envelope.Product.ProductID)
+	organisationID, supportRouteID, retentionDays, enabled, hookURL, err := s.submissionRoute(ctx, envelope)
 	if err != nil {
 		return SubmissionView{}, err
-	}
-	enabled := config.BugReportsEnabled
-	hookURL := config.BugHookURL
-	if envelope.Kind == KindFeedback {
-		enabled, hookURL = config.FeedbackEnabled, config.FeedbackHookURL
 	}
 	if !enabled {
 		return SubmissionView{}, ErrDisabled
@@ -435,22 +606,59 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	encrypted, err := s.vault.Encrypt(encoded, config.OrganisationID+":report:"+id)
+	encrypted, err := s.vault.Encrypt(encoded, organisationID+":report:"+id)
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	digest := sha256.Sum256([]byte(envelope.Product.ProductID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
+	integrationID := ""
+	integrationSnapshot := json.RawMessage(`{}`)
+	if envelope.Integration != nil {
+		integrationID = envelope.Integration.IntegrationID
+		integrationSnapshot, _ = json.Marshal(envelope.Integration)
+	}
+	digest := sha256.Sum256([]byte(envelope.Product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
 	now := s.now()
 	state := "held"
 	var next *time.Time
 	if hookURL != "" {
 		state, next = "pending", &now
 	}
-	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: config.OrganisationID, ProductID: envelope.Product.ProductID, Kind: envelope.Kind, State: state, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], PayloadCiphertext: encrypted.Ciphertext, PayloadNonce: encrypted.Nonce, PayloadKeyVersion: encrypted.KeyVersion, PayloadFingerprint: encrypted.Fingerprint, NextAttemptAt: next, ExpiresAt: now.AddDate(0, 0, config.RetentionDays)})
+	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: organisationID, ProductID: envelope.Product.ProductID, IntegrationID: integrationID, IntegrationSnapshot: integrationSnapshot, SupportRouteID: supportRouteID, Kind: envelope.Kind, State: state, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], PayloadCiphertext: encrypted.Ciphertext, PayloadNonce: encrypted.Nonce, PayloadKeyVersion: encrypted.KeyVersion, PayloadFingerprint: encrypted.Fingerprint, NextAttemptAt: next, ExpiresAt: now.AddDate(0, 0, retentionDays)})
 	if err != nil {
 		return SubmissionView{}, err
 	}
 	return s.view(value)
+}
+
+func (s *Service) submissionRoute(ctx context.Context, envelope Envelope) (organisationID, routeID string, retentionDays int, enabled bool, hookURL string, err error) {
+	if envelope.Integration != nil && envelope.Integration.IntegrationID != "" {
+		route, routeErr := s.store.SupportRouteForIntegration(ctx, envelope.Product.ProductID, envelope.Integration.IntegrationID)
+		if routeErr != nil {
+			if errors.Is(routeErr, store.ErrNotFound) {
+				err = ErrNotConfigured
+			} else {
+				err = routeErr
+			}
+			return
+		}
+		organisationID, routeID, retentionDays = route.OrganisationID, route.ID, route.RetentionDays
+		enabled, hookURL = route.BugReportsEnabled, route.BugHookURL
+		if envelope.Kind == KindFeedback {
+			enabled, hookURL = route.FeedbackEnabled, route.FeedbackHookURL
+		}
+		return
+	}
+	config, configErr := s.Config(ctx, envelope.Product.ProductID)
+	if configErr != nil {
+		err = configErr
+		return
+	}
+	organisationID, retentionDays = config.OrganisationID, config.RetentionDays
+	enabled, hookURL = config.BugReportsEnabled, config.BugHookURL
+	if envelope.Kind == KindFeedback {
+		enabled, hookURL = config.FeedbackEnabled, config.FeedbackHookURL
+	}
+	return
 }
 
 func (s *Service) decrypt(value model.ReportSubmission) (Envelope, error) {
@@ -475,7 +683,7 @@ func (s *Service) view(value model.ReportSubmission) (SubmissionView, error) {
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	view := SubmissionView{ID: value.ID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product}
+	view := SubmissionView{ID: value.ID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
 	if envelope.Bug != nil {
 		view.Summary, view.RelatedTool = envelope.Bug.Summary, envelope.Bug.RelatedTool
 		encoded, _ := json.Marshal(envelope.Bug)
@@ -519,13 +727,9 @@ func (s *Service) Retry(ctx context.Context, productID, id string) (SubmissionVi
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	config, err := s.Config(ctx, productID)
+	hookURL, _, err := s.deliveryRoute(ctx, value)
 	if err != nil {
 		return SubmissionView{}, err
-	}
-	hookURL := config.BugHookURL
-	if value.Kind == KindFeedback {
-		hookURL = config.FeedbackHookURL
 	}
 	if hookURL == "" {
 		return SubmissionView{}, ErrHookUnavailable
@@ -549,14 +753,10 @@ func (s *Service) ProcessPending(ctx context.Context, limit int) (int, error) {
 }
 
 func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
-	config, err := s.Config(ctx, value.ProductID)
+	hookURL, credentialID, err := s.deliveryRoute(ctx, value)
 	if err != nil {
 		s.deliveryFailed(ctx, value, err)
 		return
-	}
-	hookURL, credentialID := config.BugHookURL, config.BugHookCredentialID
-	if value.Kind == KindFeedback {
-		hookURL, credentialID = config.FeedbackHookURL, config.FeedbackHookCredentialID
 	}
 	if hookURL == "" || credentialID == "" {
 		value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "held", nil, nil, ""
@@ -629,6 +829,29 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 	value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "delivered", nil, nil, ""
 	value.ExternalID, value.ExternalURL, value.DeliveredAt = result.ExternalID, result.ExternalURL, &now
 	_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
+}
+
+func (s *Service) deliveryRoute(ctx context.Context, value model.ReportSubmission) (hookURL, credentialID string, err error) {
+	if value.SupportRouteID != "" {
+		route, routeErr := s.store.SupportRoute(ctx, value.ProductID, value.SupportRouteID)
+		if routeErr != nil {
+			return "", "", routeErr
+		}
+		hookURL, credentialID = route.BugHookURL, route.BugHookCredentialID
+		if value.Kind == KindFeedback {
+			hookURL, credentialID = route.FeedbackHookURL, route.FeedbackHookCredentialID
+		}
+		return hookURL, credentialID, nil
+	}
+	config, configErr := s.Config(ctx, value.ProductID)
+	if configErr != nil {
+		return "", "", configErr
+	}
+	hookURL, credentialID = config.BugHookURL, config.BugHookCredentialID
+	if value.Kind == KindFeedback {
+		hookURL, credentialID = config.FeedbackHookURL, config.FeedbackHookCredentialID
+	}
+	return hookURL, credentialID, nil
 }
 
 func validExternalURL(raw string) bool {

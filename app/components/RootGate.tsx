@@ -3,7 +3,7 @@
 import { Check, Copy, Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { FormEvent, useEffect, useState } from "react";
-import { APIError, APIOrganisation, APIProduct, APIUser, SetupEnrollment, api } from "../lib/api";
+import { APIDeployment, APIError, APIOrganisation, APIUser, SetupEnrollment, api } from "../lib/api";
 import { Button } from "./catalyst";
 import { ConsoleApp } from "./ConsoleApp";
 
@@ -17,7 +17,7 @@ function errorMessage(error: unknown): string {
 export function RootGate() {
   const [gate, setGate] = useState<Gate>("console");
   const [user, setUser] = useState<APIUser | null>(null);
-  const [product, setProduct] = useState<APIProduct | null>(null);
+  const [deployment, setDeployment] = useState<APIDeployment | null>(null);
   const [onboardingOrganisation, setOnboardingOrganisation] = useState<APIOrganisation | null>(null);
   const [problem, setProblem] = useState("");
 
@@ -64,14 +64,15 @@ export function RootGate() {
         setGate("onboarding");
         return;
       }
-      const products = await api.products(organisations[0].id);
-      if (products.length === 0) {
+      try {
+        const currentDeployment = await api.deployment();
+        setDeployment(currentDeployment);
+        setGate("console");
+      } catch (error) {
+        if (!(error instanceof APIError) || error.status !== 404) throw error;
         setOnboardingOrganisation(organisations[0]);
         setGate("onboarding");
-        return;
       }
-      setProduct(products[0]);
-      setGate("console");
     } catch (error) {
       setProblem(errorMessage(error));
       setGate("error");
@@ -83,25 +84,25 @@ export function RootGate() {
       await api.logout();
     } finally {
       setUser(null);
-      setProduct(null);
+      setDeployment(null);
       setGate("login");
     }
   }
 
   if (gate === "setup") return <SetupScreen onComplete={openWorkspace} />;
   if (gate === "login") return <LoginScreen onComplete={openWorkspace} />;
-  if (gate === "onboarding") return <WorkspaceSetup existingOrganisation={onboardingOrganisation} onComplete={(value) => { setProduct(value); setGate("console"); }} />;
+  if (gate === "onboarding") return <WorkspaceSetup existingOrganisation={onboardingOrganisation} onComplete={(value) => { setDeployment(value); setGate("console"); }} />;
   if (gate === "error") return <AuthShell icon={<TriangleAlert />} title="Deployment needs attention" description={problem || "Authentication is not configured. Check the setup token, master key, database, and public URL."} />;
-  return <ConsoleApp currentUser={user} currentProduct={product} onLogout={user ? logout : undefined} />;
+  return <ConsoleApp currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
 }
 
 function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 63);
 }
 
-function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisation: APIOrganisation | null; onComplete: (product: APIProduct) => void }) {
+function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisation: APIOrganisation | null; onComplete: (deployment: APIDeployment) => void }) {
   const [organisationName, setOrganisationName] = useState(existingOrganisation?.name ?? "");
-  const [productName, setProductName] = useState("");
+  const [deploymentName, setDeploymentName] = useState("");
   const [environmentName, setEnvironmentName] = useState("Production");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
@@ -112,9 +113,9 @@ function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisa
     setProblem("");
     try {
       const organisation = existingOrganisation ?? await api.createOrganisation(organisationName, slugify(organisationName));
-      const product = await api.createProduct(organisation.id, productName, slugify(productName));
-      await api.createEnvironment(product.id, organisation.id, environmentName, slugify(environmentName), true);
-      onComplete(product);
+      const deployment = await api.createDeployment(organisation.id, deploymentName, slugify(deploymentName));
+      await api.createDeploymentEnvironment(organisation.id, environmentName, slugify(environmentName), true);
+      onComplete(deployment);
     } catch (error) {
       setProblem(errorMessage(error));
     } finally {
@@ -123,10 +124,10 @@ function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisa
   }
 
   return (
-    <AuthShell icon={<ShieldCheck />} title="Create your first product" description="Tell DokoSoko which product agents will support and which environment they should use first.">
+    <AuthShell icon={<ShieldCheck />} title="Configure this DokoSoko deployment" description="Name this connector deployment and create the first environment agents will target.">
       <form className="auth-form" onSubmit={create}>
         <Field label="Organisation"><input required disabled={Boolean(existingOrganisation)} value={organisationName} onChange={(event) => setOrganisationName(event.target.value)} /></Field>
-        <Field label="Product" hint="The API, SDK, app, or platform whose knowledge and tools agents will use."><input required value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Developer Platform" /></Field>
+        <Field label="Deployment name" hint="The identity of this DokoSoko installation. APIs and versions are added later as Integrations."><input required value={deploymentName} onChange={(event) => setDeploymentName(event.target.value)} placeholder="Developer Platform connector" /></Field>
         <Field label="First environment" hint="The deployment stage agents should target first, such as Production, Staging, or Development."><input required value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} /></Field>
         {problem && <AuthProblem>{problem}</AuthProblem>}
         <Button type="submit" color="indigo" disabled={busy}>{busy ? "Creating workspace…" : "Create and open console"}</Button>

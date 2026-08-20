@@ -1,6 +1,6 @@
 # DokoSoko service
 
-DokoSoko is a self-hosted, UI-first delivery control plane for coding agents. Vendors use it to publish trustworthy product knowledge, distribute public or private SDK packages, expose policy-wrapped API tools, and issue short-lived projects and credentials.
+DokoSoko is a self-hosted, UI-first delivery control plane for coding agents. One DokoSoko installation represents one vendor product/deployment. Inside it, first-class **Integrations** represent individual API families and versions such as Voice API v2 or Face API v3.
 
 The implementation follows [the final product plan](docs/FINAL_PLAN.md). Its key security boundary is simple: private by default, explicit and audited publication, vendor-controlled entitlements, separate per-operation authorization, and no persistent credential exposure to browsers or MCP clients.
 
@@ -9,7 +9,9 @@ The implementation follows [the final product plan](docs/FINAL_PLAN.md). Its key
 - Static Next.js console built on Catalyst-style UI primitives and served by the Go service.
 - First-run setup with a one-time setup token, Argon2id passwords, TOTP MFA, one-use recovery codes, secure sessions, CSRF, and root-user lifecycle management.
 - PostgreSQL/pgvector persistence with checksummed startup migrations and a database-backed readiness check.
-- Organisations, products, production/non-production environments, and private-first resources.
+- A singleton Deployment with production/non-production environments. The legacy Product API remains as a compatibility facade over that Deployment.
+- First-class Integrations keyed by API family + version, with draft/active/deprecated/retired lifecycle, immutable published revisions, replacement/sunset metadata, and stable manifest hashes.
+- Reusable, independently revisioned documentation, package, and hook resource sets. Integrations may deliberately share a set, follow its latest revision, pin a revision, or duplicate it before diverging.
 - Product Definitions with independently versioned API tracks, immutable hashed product-version snapshots, generated release diffs, Latest/LTS/Preview/deprecated lifecycle, deterministic rollout, artifact-drift shutdown, separation-of-duties promotion, scoped installation/environment/customer pins, and immutable assignment history.
 - Sources with sitemap-first Crawlee discovery, Cheerio fast path, Playwright fallback, immutable snapshots, incremental HTTP metadata, SSRF controls, crawl budgets, prompt-injection scanning, quarantine, review, and atomic publication.
 - npm, Go, Git, Maven/Java, Android, Swift, and NuGet/C# package records in public-link, credential-backed proxy, and short-lived fetch-hook modes.
@@ -18,8 +20,8 @@ The implementation follows [the final product plan](docs/FINAL_PLAN.md). Its key
 - Separate upstream identity modes: an encrypted service credential or delegated OAuth grants bound to the canonical DokoSoko subject. The inbound DokoSoko token is never forwarded.
 - OAuth 2.0 authorization-code + PKCE broker from MCP/widget clients through DokoSoko to the vendor OIDC provider.
 - Vendor entitlement resolution during login, an independent per-operation authorization hook, and an ephemeral customer-defined usage-report proxy.
-- Consent-gated `support.report_bug` and `support.submit_feedback` Private MCP tools with fixed agent instructions, encrypted durable holding, secret detection, bounded retention, and separate idempotent delivery hooks.
-- Standard Provider API integration for idempotent project creation, one-time credential delivery, short leases, and revocation.
+- Consent-gated `support.report_bug` and `support.submit_feedback` Private MCP tools with fixed server/tool instructions, Integration-specific support routes, immutable trusted Integration context, encrypted durable holding, secret detection, bounded retention, and separate idempotent delivery hooks.
+- Provider-owned access definitions and connections. The provider declares whether a service has one fixed instance or many user-created resources (for example Auth0 tenants/projects), plus connection- or instance-scoped credential issuance and revocation.
 - Private MCP with product-bound DokoSoko tokens; Public MCP is anonymous, read-only, public-only, rate-limited, and off by default.
 - Owner-scoped integration runs with deterministic completion, analytics funnel events, and an append-only audit feed.
 - Analytics for authorized/active users, MCP channels, tools, packages, integration runs, validated success, and daily volume without storing raw queries or secrets.
@@ -123,24 +125,29 @@ For imported upstream MCP tools, DokoSoko completes its own entitlement, confirm
 
 ## Bug reports and feedback
 
-Products can independently enable `support.report_bug` and `support.submit_feedback` on Private MCP. Discovery and each tool definition carry a platform-owned instruction: the agent must preview the exact sanitized report, obtain explicit user approval, preserve user-authored feedback faithfully, and avoid secrets, complete files, unrelated conversation, or unapproved contact information. Execution also requires `_meta.confirmed=true`; the instruction is never the only control.
+Support routes can independently enable `support.report_bug` and `support.submit_feedback` for a specific Integration or as the Deployment default. Discovery and each tool definition carry a platform-owned instruction: the agent must preview the exact sanitized report, obtain explicit user approval, preserve user-authored feedback faithfully, and avoid secrets, complete files, unrelated conversation, or unapproved contact information. Execution also requires `_meta.confirmed=true`; the instruction is never the only control.
 
-Approved submissions enter an encrypted durable outbox. A product may use DokoSoko as a holding inbox without a hook, or configure separate fixed HTTPS bug and feedback hooks with independently encrypted service credentials. Delivery uses the submission ID as an idempotency key, retries with bounded backoff, records only sanitized status metadata in plaintext, and deletes expired submissions according to the configured 1–365 day retention window. Public MCP never discovers or executes these tools.
+Approved submissions enter an encrypted durable outbox. A support route may use DokoSoko as a holding inbox without a hook, or configure separate fixed HTTPS bug and feedback hooks with independently encrypted service credentials. Each submission pins the selected Integration ID, family, API version, published revision, manifest hash, and route at submission time. Delivery uses the submission ID as an idempotency key, retries with bounded backoff, records only sanitized status metadata in plaintext, and deletes expired submissions according to the configured 1–365 day retention window. Public MCP never discovers or executes these tools.
 
-## Provider API contract
+## Provider-owned access contract
 
-Projects and credentials use a standard vendor-owned HTTPS contract. DokoSoko calls it with an encrypted server-side service credential:
+Access Definitions describe the vendor service contract; Access Connections configure a particular vendor account and explicitly attach it to allowed Integrations. The definition sets `instance_cardinality`:
+
+- `one`: the connected service is the only instance, so no instance-creation tool is exposed;
+- `many`: authenticated users may create/list provider resources labelled by the vendor, such as Project, Tenant, Workspace, or Account.
+
+Credentials are scoped either to the connection or to one provider instance. DokoSoko calls fixed HTTPS operations with a separately encrypted server-side management credential:
 
 ```text
 POST /v1/authorize
-POST /v1/projects
+POST /v1/instances
 POST /v1/credentials
 POST /v1/credentials/{credential_id}/revoke
 ```
 
-Every mutation calls `/v1/authorize` first and fails closed. Requests are product-, environment-, subject-, and idempotency-scoped. A newly issued credential is returned to the authorized MCP caller once; DokoSoko stores only its SHA-256 fingerprint, lease metadata, expiry, and revocation state.
+Every mutation calls the configured authorization operation first and fails closed. Requests are Deployment-, Integration-, environment-, subject-, owner-, and idempotency-scoped. A newly issued credential is returned to the authorized MCP caller once by default; DokoSoko lists only its fingerprint, scope, lifecycle, expiry, and revocation state. Managed encrypted storage and provider-reference modes are available when the definition explicitly selects them.
 
-Custom vendor actions that do not fit this lifecycle belong in the no-code custom tool proxy, not in the Provider API.
+Operation paths are declared by the Access Definition; the paths above are the reference contract, not hard-coded DokoSoko routes. Custom vendor actions that do not fit this lifecycle belong in the no-code custom tool proxy, not in the Access Provider API.
 
 ## Package delivery
 
@@ -158,21 +165,25 @@ docker compose config
 docker compose build
 ```
 
-The suites cover publication boundaries, product/version discovery, scoped selection and pins, manifest integrity and diffs, preview isolation, rollouts, deprecation impact, artifact drift, promotion separation of duties, LLM budgets, Public MCP isolation and rate limits, strict Stateless MCPv2 request/response metadata, third-party catalog import and schema drift, separate service/delegated upstream identity, root MFA/session/CSRF controls, crawler SSRF and injection quarantine, encrypted secret handling, OAuth PKCE and product binding, entitlement and authorization fail-closed behavior, private-only bounded usage proxying, consent-gated encrypted support reporting and idempotent hook delivery, package integrity, custom tool schema/policy execution, Provider API issuance/revocation, integration-run analytics, audit, and the production static export.
+The suites cover publication boundaries, deployment/release discovery, scoped selection and pins, manifest integrity and diffs, preview isolation, rollouts, deprecation impact, artifact drift, promotion separation of duties, LLM budgets, Public MCP isolation and rate limits, strict Stateless MCPv2 request/response metadata, third-party catalog import and schema drift, separate service/delegated upstream identity, root MFA/session/CSRF controls, crawler SSRF and injection quarantine, encrypted secret handling, OAuth PKCE and deployment binding, entitlement and authorization fail-closed behavior, private-only bounded usage proxying, consent-gated encrypted support reporting and idempotent hook delivery, package integrity, custom tool schema/policy execution, provider access issuance/revocation, integration-run analytics, audit, and the production static export.
 
 ## API and repository map
 
-The DokoSoko control-plane contract is [api/openapi.yaml](api/openapi.yaml). Vendors use the separate [Provider API contract](api/provider-openapi.yaml) for projects and credentials and the [Vendor Hooks contract](api/hooks-openapi.yaml) for entitlements, usage reports, support reporting, tool authorization, and fetch-mode packages. Important protocol endpoints are:
+The DokoSoko control-plane contract is [api/openapi.yaml](api/openapi.yaml). Vendors use the separate [Access Provider API contract](api/provider-openapi.yaml) for authorization, optional provider-owned instance management, credential creation, and revocation; [api/hooks-openapi.yaml](api/hooks-openapi.yaml) covers entitlements, usage reports, support reporting, tool authorization, and fetch-mode packages. Important protocol endpoints are:
 
 | Surface | Endpoint |
 | --- | --- |
 | Health/readiness | `/healthz`, `/readyz` |
-| Browser administration | `/api/v1/...` |
+| Deployment | `/api/v1/deployment`, `/api/v1/environments` |
+| Integrations and reusable sets | `/api/v1/integrations/...`, `/api/v1/resource-sets/...` |
+| Access management | `/api/v1/access-definitions`, `/api/v1/access-connections/...` |
+| Support routes | `/api/v1/support-routes/...` |
+| Browser administration compatibility APIs | `/api/v1/products/...` |
 | Managed MCP imports | `/api/v1/products/{product_id}/mcp-connections/...` |
 | OAuth broker | `/oauth/authorize`, `/oauth/callback/{product_id}`, `/oauth/token` |
 | Upstream OAuth callback | `/oauth/upstream/callback` |
-| Private MCP | `/mcp/{product_id}` |
-| Public MCP | `/mcp/public/{product_id}` |
+| Private MCP | `/mcp` (legacy alias: `/mcp/{deployment_id}`) |
+| Public MCP | `/mcp/public` (legacy alias: `/mcp/public/{deployment_id}`) |
 | Package gateway | `/artifacts/{product_id}/{package_id}` |
 | Widget loaders | `/widgets/{product_id}/public.js`, `/widgets/{product_id}/private.js` |
 
@@ -185,7 +196,8 @@ crawler/              isolated Crawlee/Playwright worker
 internal/auth/         setup, root accounts, MFA, sessions, and CSRF
 internal/identity/     OAuth/OIDC broker, entitlements, usage, and operation authz
 internal/packages/     public/proxy/fetch artifact gateway
-internal/providers/    project and credential Provider API runtime
+internal/providers/    legacy Provider API compatibility runtime
+internal/access/       provider-owned instance and credential runtime
 internal/reporting/    encrypted reporting outbox, validation, hooks, and retries
 internal/mcpbridge/     Stateless MCPv2 import, OAuth grants, drift, and execution
 internal/tools/        JSON Schema tool proxy runtime

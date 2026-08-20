@@ -6,6 +6,8 @@ import (
 	"encoding/base32"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
@@ -31,6 +34,22 @@ type usageReporterStub struct {
 	calls     int
 }
 
+type accessResolverStub struct{}
+
+func (accessResolverStub) LookupIP(context.Context, string, string) ([]net.IP, error) {
+	return []net.IP{net.ParseIP("93.184.216.34")}, nil
+}
+
+type accessDoerStub struct{}
+
+func (accessDoerStub) Do(request *http.Request) (*http.Response, error) {
+	body := `{"external_id":"provider-instance-1","display_name":"Voice sandbox","state":"active"}`
+	if request.URL.Path == "/v1/authorize" {
+		body = `{"allowed":true}`
+	}
+	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
 func (s *usageReporterStub) Report(_ context.Context, _ string, principal identity.Principal) (identity.UsageReport, error) {
 	s.calls++
 	s.principal = principal
@@ -39,6 +58,17 @@ func (s *usageReporterStub) Report(_ context.Context, _ string, principal identi
 
 func newServer() http.Handler {
 	return httpapi.New(platform.New(store.NewMemory()), "https://dokosoko.example")
+}
+
+func newCatalogServer(t *testing.T) http.Handler {
+	t.Helper()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x53}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVault(memory, vault)
+	return httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", Reporting: reporting.New(memory, vault), AllowDemoTokens: true})
 }
 
 func newProductionAuthServer(t *testing.T) http.Handler {
@@ -138,6 +168,98 @@ func TestMCPRejectsPreV2Requests(t *testing.T) {
 	}
 }
 
+func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+
+	w := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"voice-api","version_key":"v2","display_name":"Voice API v2","description":"Voice calls","lifecycle":"active"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create integration status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var integration model.Integration
+	if err := json.Unmarshal(w.Body.Bytes(), &integration); err != nil {
+		t.Fatal(err)
+	}
+
+	w = request(t, handler, http.MethodPost, "/api/v1/resource-sets", "doko_admin_demo", `{"kind":"hook","name":"Voice hooks","description":"Shared provider operations","manifest":[{"name":"calls.create","path":"/v2/calls"}]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create resource set status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resourceSet model.ResourceSet
+	if err := json.Unmarshal(w.Body.Bytes(), &resourceSet); err != nil {
+		t.Fatal(err)
+	}
+
+	w = request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/resource-sets", "doko_admin_demo", `{"resource_set_id":"`+resourceSet.ID+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("attach resource set status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/publish", "doko_admin_demo", `{}`)
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"manifest_hash":"sha256:`) {
+		t.Fatalf("publish integration status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodPost, "/api/v1/access-definitions", "doko_admin_demo", `{"service_key":"voice-access","name":"Voice access","instance_cardinality":"one","instance_label_singular":"account","instance_label_plural":"accounts","credential_scope":"connection","management_auth_type":"none","operations":{}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create access definition status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var definition model.AccessDefinition
+	if err := json.Unmarshal(w.Body.Bytes(), &definition); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/access-connections", "doko_admin_demo", `{"access_definition_id":"`+definition.ID+`","environment_id":"env_prod","name":"Voice production","base_url":"https://provider.example","config":{},"integration_ids":["`+integration.ID+`"]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create access connection status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Default support","is_default":true,"bug_reports_enabled":true,"feedback_enabled":true,"retention_days":30,"state":"active","integration_ids":[]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create support route status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodGet, "/api/v1/integrations", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), resourceSet.ID) || !strings.Contains(w.Body.String(), `"access_connection_ids":[`) {
+		t.Fatalf("hydrated integration list status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPrivateMCPDiscoversAndExecutesProviderAccessWithoutLegacyProjects(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x61}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVault(memory, vault)
+	integration, err := service.CreateIntegration(t.Context(), platform.IntegrationInput{FamilyKey: "voice-api", VersionKey: "v2", DisplayName: "Voice API v2", Lifecycle: "active"}, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := json.RawMessage(`{"max_ttl_seconds":3600,"credential_storage_mode":"one_time","authorize":{"method":"POST","path":"/v1/authorize"},"instances.create":{"method":"POST","path":"/v1/instances"},"credentials.create":{"method":"POST","path":"/v1/credentials"},"credentials.revoke":{"method":"POST","path":"/v1/credentials/{credential_id}/revoke"}}`)
+	definition, err := service.CreateAccessDefinition(t.Context(), platform.AccessDefinitionInput{ServiceKey: "voice-access", Name: "Voice access", InstanceCardinality: "many", InstanceLabelSingular: "workspace", InstanceLabelPlural: "workspaces", CredentialScope: "instance", ManagementAuthType: "none", Operations: operations}, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := service.CreateAccessConnection(t.Context(), platform.AccessConnectionInput{AccessDefinitionID: definition.ID, EnvironmentID: "env_prod", Name: "Voice production", BaseURL: "https://provider.example", IntegrationIDs: []string{integration.ID}}, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AccessRuntime: accessruntime.New(memory, vault, accessResolverStub{}, accessDoerStub{}), AllowDemoTokens: true})
+
+	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"access.instances.create"`) || !strings.Contains(w.Body.String(), `"instance_label":"workspace"`) {
+		t.Fatalf("access discovery status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"name":"projects.create"`) || strings.Contains(w.Body.String(), `"name":"credentials.issue"`) {
+		t.Fatalf("legacy DokoSoko project tools must not be discoverable: %s", w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"access.instances.create","arguments":{"connection_id":"`+connection.ID+`","integration_id":"`+integration.ID+`","environment_id":"env_prod","display_name":"Voice sandbox","idempotency_key":"mcp-access-instance-0001"}}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"external_id":"provider-instance-1"`) {
+		t.Fatalf("access instance call status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
 func TestPublicMCPIsAnonymousButOffByDefault(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
@@ -219,8 +341,11 @@ func TestMCPDiscoversTheEffectiveDokosokoProductVersion(t *testing.T) {
 		t.Fatalf("discover status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"product.get_manifest"`) || !strings.Contains(w.Body.String(), `"name":"product.versions.list"`) || !strings.Contains(w.Body.String(), `"com.dokosoko/productVersion"`) || !strings.Contains(w.Body.String(), `"is_lts":true`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"deployment.get_manifest"`) || !strings.Contains(w.Body.String(), `"name":"deployment.releases.list"`) || !strings.Contains(w.Body.String(), `"com.dokosoko/deploymentRelease"`) || !strings.Contains(w.Body.String(), `"is_lts":true`) {
 		t.Fatalf("tools/list status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"name":"projects.create"`) || strings.Contains(w.Body.String(), `"name":"credentials.issue"`) {
+		t.Fatalf("legacy DokoSoko project tools must not be discoverable: %s", w.Body.String())
 	}
 }
 
@@ -484,7 +609,7 @@ func TestSupportReportingToolsRequireConsentHoldEncryptedReportsAndStayPrivate(t
 		t.Fatalf("support reporting definitions missing: status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	bugArgs := `"summary":"Connector failure","description":"The connector returned an unexpected result.","related_tool":"projects.create","idempotency_key":"bug-report-idempotency-http-1"`
+	bugArgs := `"summary":"Connector failure","description":"The connector returned an unexpected result.","related_tool":"access.credentials.create","idempotency_key":"bug-report-idempotency-http-1"`
 	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`}}}`)
 	if !strings.Contains(w.Body.String(), "Explicit user confirmation is required") {
 		t.Fatalf("unconfirmed report was not denied: %s", w.Body.String())

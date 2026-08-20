@@ -46,7 +46,7 @@ paths:
               example:
                 entitlements:
                   developer.pro: true
-                  projects.create: true
+                  access.instances.create: true
                   production.write: false
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
