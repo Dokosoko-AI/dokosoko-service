@@ -32,13 +32,12 @@ var (
 )
 
 const (
-	packageDownloadAPIVersion = "2026-08-22"
-	packageDownloadPath       = "/v1/package/download"
-	maxDownloadResponseBytes  = 1 << 20
-	minDownloadLifetime       = 5 * time.Minute
-	maxDownloadLifetime       = time.Hour
-	maxDownloadAttempts       = 2
-	defaultMaxArtifactBytes   = 1 << 30
+	packageDownloadPath      = "/v1/package/download"
+	maxDownloadResponseBytes = 1 << 20
+	minDownloadLifetime      = 5 * time.Minute
+	maxDownloadLifetime      = time.Hour
+	maxDownloadAttempts      = 2
+	defaultMaxArtifactBytes  = 1 << 30
 )
 
 type Store interface {
@@ -275,7 +274,6 @@ func (g *Gateway) requestPackageDownload(ctx context.Context, pkg model.Package,
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Idempotency-Key", idempotencyKey)
 	request.Header.Set("X-DokoSoko-Request-ID", requestID)
-	request.Header.Set("DokoSoko-Version", packageDownloadAPIVersion)
 	request.Header.Set("User-Agent", "DokoSokoPackageGateway/3.0")
 	return g.clientFor(parsed, address).Do(request)
 }
@@ -310,11 +308,14 @@ func (g *Gateway) validatePackageDownload(pkg model.Package, response downloadRe
 }
 
 func (g *Gateway) createPackageDownload(ctx context.Context, pkg model.Package, credential string) (string, string, int64, error) {
+	if strings.TrimSpace(pkg.ExternalPackageID) == "" {
+		return "", "", 0, errors.New("download package is missing external_package_id")
+	}
 	idempotencyKey, err := packageDownloadIdentifier("pkgdl_")
 	if err != nil {
 		return "", "", 0, err
 	}
-	payload, err := json.Marshal(map[string]string{"package_id": pkg.ID, "product_id": pkg.ProductID, "ecosystem": pkg.Ecosystem, "name": pkg.Name, "version": pkg.Version})
+	payload, err := json.Marshal(map[string]string{"external_package_id": pkg.ExternalPackageID})
 	if err != nil {
 		return "", "", 0, err
 	}

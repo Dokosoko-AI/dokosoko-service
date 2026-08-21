@@ -153,7 +153,7 @@ Operation paths are declared by the Access Definition; the paths above are the r
 
 - `public`: DokoSoko returns/streams a fixed public artifact URL.
 - `proxy`: DokoSoko authenticates to a fixed upstream and streams the response.
-- `download`: DokoSoko calls the vendor's versioned `POST /v1/package/download` endpoint for a short-lived artifact URL, exact checksum, and exact size, then streams it.
+- `download`: DokoSoko sends a vendor-owned opaque package identifier to `POST /v1/package/download`, receives a short-lived artifact URL with an exact checksum and size, then validates and streams it. DokoSoko resource IDs are never part of the vendor request.
 
 All package modes start private and unpublished. Proxy/download credentials are encrypted. Outbound destinations are DNS/IP validated, redirects are disabled or revalidated, sizes are bounded, and configured SHA-256 checksums are enforced.
 

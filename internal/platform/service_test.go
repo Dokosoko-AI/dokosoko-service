@@ -121,20 +121,21 @@ func TestPackageDownloadRequiresTheVersionedContractEndpoint(t *testing.T) {
 	}
 	service := platform.NewWithVault(memory, vault)
 	input := platform.PackageInput{
-		OrganisationID: "org_acme",
-		ProductID:      "prod_acme",
-		Name:           "@acme/private",
-		Ecosystem:      "npm",
-		Version:        "1.0.0",
-		Mode:           "download",
-		DownloadURL:    "https://packages.example.com/v1/package/download",
-		Credential:     "download-service-token",
+		OrganisationID:    "org_acme",
+		ProductID:         "prod_acme",
+		Name:              "@acme/private",
+		Ecosystem:         "npm",
+		Version:           "1.0.0",
+		ExternalPackageID: "vendor-sdk-node-1.0.0",
+		Mode:              "download",
+		DownloadURL:       "https://packages.example.com/v1/package/download",
+		Credential:        "download-service-token",
 	}
 	pkg, err := service.CreatePackage(ctx, input, platform.Actor{ID: "root", RequestID: "req_package_download"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pkg.Mode != "download" || pkg.DownloadURL != input.DownloadURL {
+	if pkg.Mode != "download" || pkg.DownloadURL != input.DownloadURL || pkg.ExternalPackageID != input.ExternalPackageID {
 		t.Fatalf("package download configuration = %#v", pkg)
 	}
 	encoded, err := json.Marshal(pkg)
@@ -146,21 +147,28 @@ func TestPackageDownloadRequiresTheVersionedContractEndpoint(t *testing.T) {
 	}
 
 	invalid := []struct {
-		name string
-		mode string
-		url  string
+		name       string
+		mode       string
+		url        string
+		externalID string
 	}{
-		{name: "legacy mode", mode: "fetch", url: input.DownloadURL},
-		{name: "legacy path", mode: "download", url: "https://packages.example.com/package-fetch"},
-		{name: "encoded path", mode: "download", url: "https://packages.example.com/v1/package/%64ownload"},
-		{name: "query string", mode: "download", url: input.DownloadURL + "?tenant=acme"},
-		{name: "nonstandard port", mode: "download", url: "https://packages.example.com:8443/v1/package/download"},
+		{name: "legacy mode", mode: "fetch", url: input.DownloadURL, externalID: input.ExternalPackageID},
+		{name: "legacy path", mode: "download", url: "https://packages.example.com/package-fetch", externalID: input.ExternalPackageID},
+		{name: "encoded path", mode: "download", url: "https://packages.example.com/v1/package/%64ownload", externalID: input.ExternalPackageID},
+		{name: "query string", mode: "download", url: input.DownloadURL + "?tenant=acme", externalID: input.ExternalPackageID},
+		{name: "nonstandard port", mode: "download", url: "https://packages.example.com:8443/v1/package/download", externalID: input.ExternalPackageID},
+		{name: "missing external package id", mode: "download", url: input.DownloadURL},
+		{name: "external package id on proxy", mode: "proxy", url: "https://packages.example.com/artifact", externalID: input.ExternalPackageID},
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := input
 			candidate.Mode = test.mode
 			candidate.DownloadURL = test.url
+			candidate.ExternalPackageID = test.externalID
+			if test.mode == "proxy" {
+				candidate.UpstreamURL = test.url
+			}
 			if _, err := service.CreatePackage(ctx, candidate, platform.Actor{ID: "root"}); err == nil {
 				t.Fatalf("CreatePackage accepted mode %q and URL %q", test.mode, test.url)
 			}

@@ -66,6 +66,7 @@ type ProductPackage = {
   name: string;
   ecosystem: string;
   version: string;
+  externalPackageID?: string;
   mode: "public" | "proxy" | "download";
   visibility: Visibility;
   published: boolean;
@@ -100,7 +101,7 @@ const initialSources: Source[] = [
 
 const initialPackages: ProductPackage[] = [
   { id: "pkg_node", name: "@acme/node", ecosystem: "npm", version: "2.4.1", mode: "proxy", visibility: "private", published: true, status: "ready", revision: 1 },
-  { id: "pkg_go", name: "go.acme.dev/sdk", ecosystem: "Go", version: "1.8.0", mode: "download", visibility: "private", published: true, status: "ready", revision: 1 },
+  { id: "pkg_go", name: "go.acme.dev/sdk", ecosystem: "Go", version: "1.8.0", externalPackageID: "vendor-sdk-go-1.8.0", mode: "download", visibility: "private", published: true, status: "ready", revision: 1 },
   { id: "pkg_swift", name: "AcmeKit", ecosystem: "Swift", version: "3.1.0", mode: "public", visibility: "private", published: false, status: "checking", revision: 1 },
 ];
 
@@ -295,6 +296,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [addPackageOpen, setAddPackageOpen] = useState(false);
   const [packageName, setPackageName] = useState("");
   const [packageVersion, setPackageVersion] = useState("");
+  const [packageExternalID, setPackageExternalID] = useState("");
   const [packageEcosystem, setPackageEcosystem] = useState("npm");
   const [packageMode, setPackageMode] = useState<"public" | "proxy" | "download">("proxy");
   const [packageEndpoint, setPackageEndpoint] = useState("");
@@ -450,7 +452,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       }));
       setPackages((current) => remotePackages.map((pkg) => {
         const local = current.find((item) => item.id === pkg.id);
-        return { id: pkg.id, name: pkg.name, ecosystem: pkg.ecosystem, version: pkg.version, mode: pkg.mode, visibility: pkg.visibility, published: pkg.published, status: local?.status ?? "ready", revision: pkg.revision };
+        return { id: pkg.id, name: pkg.name, ecosystem: pkg.ecosystem, version: pkg.version, externalPackageID: pkg.external_package_id, mode: pkg.mode, visibility: pkg.visibility, published: pkg.published, status: local?.status ?? "ready", revision: pkg.revision };
       }));
       setTools(remoteTools);
       setMCPConnections(remoteMCPConnections);
@@ -881,12 +883,18 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   async function createPackage() {
     setPackageBusy(true);
     try {
+      const base = { organisation_id: product.organisation_id, name: packageName, ecosystem: packageEcosystem, version: packageVersion, ...(packageChecksum.trim() ? { checksum_sha256: packageChecksum.trim() } : {}) };
+      const input = packageMode === "public"
+        ? { ...base, mode: "public" as const, upstream_url: packageEndpoint }
+        : packageMode === "proxy"
+          ? { ...base, mode: "proxy" as const, upstream_url: packageEndpoint, credential: packageCredential }
+          : { ...base, mode: "download" as const, download_url: packageEndpoint, external_package_id: packageExternalID, credential: packageCredential };
       const created = apiConnected
-        ? await api.createPackage(product.id, { organisation_id: product.organisation_id, name: packageName, ecosystem: packageEcosystem, version: packageVersion, mode: packageMode, upstream_url: packageMode === "proxy" || packageMode === "public" ? packageEndpoint : "", download_url: packageMode === "download" ? packageEndpoint : "", credential: packageMode === "public" ? "" : packageCredential, checksum_sha256: packageChecksum, expected_size: 0 })
-        : { id: `pkg_${Date.now()}`, name: packageName, ecosystem: packageEcosystem, version: packageVersion, mode: packageMode, visibility: "private" as const, published: false, revision: 1 };
-      setPackages((items) => [...items, { id: created.id, name: created.name, ecosystem: created.ecosystem, version: created.version, mode: created.mode, visibility: created.visibility, published: created.published, status: "checking", revision: created.revision }]);
+        ? await api.createPackage(product.id, input)
+        : { id: `pkg_${Date.now()}`, name: packageName, ecosystem: packageEcosystem, version: packageVersion, external_package_id: packageMode === "download" ? packageExternalID : undefined, mode: packageMode, visibility: "private" as const, published: false, revision: 1 };
+      setPackages((items) => [...items, { id: created.id, name: created.name, ecosystem: created.ecosystem, version: created.version, externalPackageID: created.external_package_id, mode: created.mode, visibility: created.visibility, published: created.published, status: "checking", revision: created.revision }]);
       setAddPackageOpen(false);
-      setPackageName(""); setPackageVersion(""); setPackageEndpoint(""); setPackageCredential(""); setPackageChecksum("");
+      setPackageName(""); setPackageVersion(""); setPackageExternalID(""); setPackageEndpoint(""); setPackageCredential(""); setPackageChecksum("");
       showToast(`${created.name} was added privately; credentials remain server-side.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not add package.");
@@ -1494,9 +1502,9 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         onClose={setAddPackageOpen}
         title="Add package"
         description="Configure public metadata, a credential-backed proxy, or the versioned package download API. Every package starts private."
-        actions={<><Button outline onClick={() => setAddPackageOpen(false)}>Cancel</Button><Button color="indigo" disabled={packageBusy || !packageName.trim() || !packageVersion.trim() || (packageMode !== "public" && (!packageEndpoint.trim() || !packageCredential.trim()))} onClick={createPackage}>{packageBusy ? "Encrypting…" : "Add package"}</Button></>}
+        actions={<><Button outline onClick={() => setAddPackageOpen(false)}>Cancel</Button><Button color="indigo" disabled={packageBusy || !packageName.trim() || !packageVersion.trim() || !packageEndpoint.trim() || (packageMode !== "public" && !packageCredential.trim()) || (packageMode === "download" && !packageExternalID.trim())} onClick={createPackage}>{packageBusy ? "Encrypting…" : "Add package"}</Button></>}
       >
-        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Name</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="@acme/sdk" /></label><label className="auth-field"><span>Version</span><input value={packageVersion} onChange={(event) => setPackageVersion(event.target.value)} placeholder="1.0.0" /></label></div><div className="two-fields"><label className="auth-field"><span>Ecosystem</span><select value={packageEcosystem} onChange={(event) => setPackageEcosystem(event.target.value)}>{["npm", "go", "git", "maven", "android", "swift", "nuget"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="auth-field"><span>Delivery mode</span><select value={packageMode} onChange={(event) => setPackageMode(event.target.value as "public" | "proxy" | "download")}><option value="public">Public link</option><option value="proxy">Proxy</option><option value="download">Download service</option></select></label></div><label className="auth-field"><span>{packageMode === "download" ? "Package download endpoint" : "Upstream artifact URL"}</span><input type="url" value={packageEndpoint} onChange={(event) => setPackageEndpoint(event.target.value)} placeholder={packageMode === "download" ? "https://packages.example.com/v1/package/download" : "https://packages.example.com/artifact"} /></label>{packageMode !== "public" && <label className="auth-field"><span>Upstream credential</span><input type="password" autoComplete="off" value={packageCredential} onChange={(event) => setPackageCredential(event.target.value)} /><small>Encrypted before storage and never returned to the browser or agent.</small></label>}<label className="auth-field"><span>Expected SHA-256 (optional)</span><input value={packageChecksum} onChange={(event) => setPackageChecksum(event.target.value)} placeholder="64 hexadecimal characters" /></label><div className="private-default-note"><LockKeyhole />Proxy and download packages can only become anonymous through a separate confirmed publication.</div></div>
+        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Name</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="@acme/sdk" /></label><label className="auth-field"><span>Version</span><input value={packageVersion} onChange={(event) => setPackageVersion(event.target.value)} placeholder="1.0.0" /></label></div><div className="two-fields"><label className="auth-field"><span>Ecosystem</span><select value={packageEcosystem} onChange={(event) => setPackageEcosystem(event.target.value)}>{["npm", "go", "git", "maven", "android", "swift", "nuget"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="auth-field"><span>Delivery mode</span><select value={packageMode} onChange={(event) => setPackageMode(event.target.value as "public" | "proxy" | "download")}><option value="public">Public link</option><option value="proxy">Proxy</option><option value="download">Download service</option></select></label></div>{packageMode === "download" && <label className="auth-field"><span>Vendor package ID</span><input value={packageExternalID} onChange={(event) => setPackageExternalID(event.target.value)} maxLength={200} placeholder="vendor-sdk-node-1.0.0" /><small>Opaque vendor-owned identifier for this exact artifact. DokoSoko IDs are never sent to the download API.</small></label>}<label className="auth-field"><span>{packageMode === "download" ? "Package download endpoint" : "Upstream artifact URL"}</span><input type="url" value={packageEndpoint} onChange={(event) => setPackageEndpoint(event.target.value)} placeholder={packageMode === "download" ? "https://packages.example.com/v1/package/download" : "https://packages.example.com/artifact"} /></label>{packageMode !== "public" && <label className="auth-field"><span>Upstream credential</span><input type="password" autoComplete="off" value={packageCredential} onChange={(event) => setPackageCredential(event.target.value)} /><small>Encrypted before storage and never returned to the browser or agent.</small></label>}<label className="auth-field"><span>Expected SHA-256 (optional)</span><input value={packageChecksum} onChange={(event) => setPackageChecksum(event.target.value)} placeholder="64 hexadecimal characters" /></label><div className="private-default-note"><LockKeyhole />Proxy and download packages can only become anonymous through a separate confirmed publication.</div></div>
       </Dialog>
 
       <Dialog

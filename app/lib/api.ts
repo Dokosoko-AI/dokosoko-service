@@ -495,11 +495,27 @@ export type APIPackage = {
   name: string;
   ecosystem: string;
   version: string;
+  external_package_id?: string;
   mode: "public" | "proxy" | "download";
   visibility: APIVisibility;
   published: boolean;
   revision: number;
 };
+
+type CreatePackageBase = {
+  organisation_id: string;
+  name: string;
+  ecosystem: string;
+  version: string;
+  checksum_sha256?: string;
+  expected_size?: number;
+};
+
+export type CreatePackageInput = CreatePackageBase & (
+  | { mode: "public"; upstream_url: string }
+  | { mode: "proxy"; upstream_url: string; credential: string }
+  | { mode: "download"; download_url: string; external_package_id: string; credential: string }
+);
 
 export type Distribution = {
   product: APIProduct;
@@ -813,7 +829,7 @@ export const api = {
   inspectMCPConnection: (productID: string, connectionID: string) => request<APIMCPCatalog>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/inspect`, { method: "POST" }),
   importMCPTools: (productID: string, connectionID: string, input: { tool_names: string[]; required_entitlements: string[]; confirmation_required: boolean; timeout_ms: number }) => request<APIMCPImportResult>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/import`, { method: "POST", body: JSON.stringify(input) }),
   packages: async (productID: string) => (await request<{ items: APIPackage[] }>(`${productPath(productID)}/packages`)).items,
-  createPackage: (productID: string, input: { organisation_id: string; name: string; ecosystem: string; version: string; mode: "public" | "proxy" | "download"; upstream_url: string; download_url: string; credential: string; checksum_sha256: string; expected_size: number }) => request<APIPackage>(`${productPath(productID)}/packages`, { method: "POST", body: JSON.stringify(input) }),
+  createPackage: (productID: string, input: CreatePackageInput) => request<APIPackage>(`${productPath(productID)}/packages`, { method: "POST", body: JSON.stringify(input) }),
   publishPackage: (productID: string, packageID: string, revision: number) => request<APIPackage>(`${productPath(productID)}/packages/${encodeURIComponent(packageID)}/publish`, { method: "POST", body: JSON.stringify({ revision }) }),
   setPublicMCP: (productID: string, enabled: boolean, revision: number, acknowledgePublic: boolean) => request<APIProduct>(`${productPath(productID)}/distribution`, {
     method: "PATCH",

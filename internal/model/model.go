@@ -572,23 +572,24 @@ type CrawlJob struct {
 }
 
 type Package struct {
-	ID             string     `json:"id"`
-	OrganisationID string     `json:"organisation_id"`
-	ProductID      string     `json:"product_id"`
-	Name           string     `json:"name"`
-	Ecosystem      string     `json:"ecosystem"`
-	Version        string     `json:"version"`
-	Mode           string     `json:"mode"`
-	Location       string     `json:"-"`
-	DownloadURL    string     `json:"-"`
-	CredentialID   string     `json:"-"`
-	ChecksumSHA256 []byte     `json:"-"`
-	ExpectedSize   int64      `json:"-"`
-	Visibility     Visibility `json:"visibility"`
-	Published      bool       `json:"published"`
-	Revision       int64      `json:"revision"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID                string     `json:"id"`
+	OrganisationID    string     `json:"organisation_id"`
+	ProductID         string     `json:"product_id"`
+	Name              string     `json:"name"`
+	Ecosystem         string     `json:"ecosystem"`
+	Version           string     `json:"version"`
+	ExternalPackageID string     `json:"external_package_id,omitempty"`
+	Mode              string     `json:"mode"`
+	Location          string     `json:"-"`
+	DownloadURL       string     `json:"-"`
+	CredentialID      string     `json:"-"`
+	ChecksumSHA256    []byte     `json:"-"`
+	ExpectedSize      int64      `json:"-"`
+	Visibility        Visibility `json:"visibility"`
+	Published         bool       `json:"published"`
+	Revision          int64      `json:"revision"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type Secret struct {

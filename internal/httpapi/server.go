@@ -1739,22 +1739,49 @@ func (s *Server) packages(w http.ResponseWriter, r *http.Request, productID stri
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			OrganisationID string `json:"organisation_id"`
-			Name           string `json:"name"`
-			Ecosystem      string `json:"ecosystem"`
-			Version        string `json:"version"`
-			Mode           string `json:"mode"`
-			UpstreamURL    string `json:"upstream_url"`
-			DownloadURL    string `json:"download_url"`
-			Credential     string `json:"credential"`
-			ChecksumSHA256 string `json:"checksum_sha256"`
-			ExpectedSize   int64  `json:"expected_size"`
+			OrganisationID    string  `json:"organisation_id"`
+			Name              string  `json:"name"`
+			Ecosystem         string  `json:"ecosystem"`
+			Version           string  `json:"version"`
+			ExternalPackageID *string `json:"external_package_id"`
+			Mode              string  `json:"mode"`
+			UpstreamURL       *string `json:"upstream_url"`
+			DownloadURL       *string `json:"download_url"`
+			Credential        *string `json:"credential"`
+			ChecksumSHA256    *string `json:"checksum_sha256"`
+			ExpectedSize      *int64  `json:"expected_size"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreatePackage(r.Context(), platform.PackageInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, Mode: input.Mode, UpstreamURL: input.UpstreamURL, DownloadURL: input.DownloadURL, Credential: input.Credential, ChecksumSHA256: input.ChecksumSHA256, ExpectedSize: input.ExpectedSize}, actor(r))
+		mode := strings.ToLower(strings.TrimSpace(input.Mode))
+		invalidShape := (mode == "public" && (input.DownloadURL != nil || input.ExternalPackageID != nil || input.Credential != nil)) ||
+			(mode == "proxy" && (input.DownloadURL != nil || input.ExternalPackageID != nil)) ||
+			(mode == "download" && input.UpstreamURL != nil)
+		if invalidShape {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Package delivery fields do not match the selected mode.", nil)
+			return
+		}
+		if input.ChecksumSHA256 != nil && strings.TrimSpace(*input.ChecksumSHA256) == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "checksum_sha256 cannot be empty when provided.", nil)
+			return
+		}
+		if input.ExpectedSize != nil && *input.ExpectedSize == 0 {
+			writeError(w, http.StatusBadRequest, "invalid_request", "expected_size must be positive when provided.", nil)
+			return
+		}
+		stringValue := func(value *string) string {
+			if value == nil {
+				return ""
+			}
+			return *value
+		}
+		expectedSize := int64(0)
+		if input.ExpectedSize != nil {
+			expectedSize = *input.ExpectedSize
+		}
+		value, err := s.service.CreatePackage(r.Context(), platform.PackageInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, ExternalPackageID: stringValue(input.ExternalPackageID), Mode: input.Mode, UpstreamURL: stringValue(input.UpstreamURL), DownloadURL: stringValue(input.DownloadURL), Credential: stringValue(input.Credential), ChecksumSHA256: stringValue(input.ChecksumSHA256), ExpectedSize: expectedSize}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return

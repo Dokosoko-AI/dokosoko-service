@@ -149,7 +149,7 @@ Packages support npm, Go, Git, Java/Maven, Android/AAR, Swift, and C#/NuGet. A p
 
 - public metadata/link mode;
 - proxy mode, where DokoSoko stores the upstream credential and streams the package;
-- download mode, where DokoSoko calls the vendor's versioned `POST /v1/package/download` endpoint for an idempotent short-lived URL, exact checksum, and exact size.
+- download mode, where DokoSoko sends a vendor-owned opaque artifact identifier to `POST /v1/package/download` and receives an idempotent short-lived URL, exact checksum, and exact size without exposing DokoSoko resource IDs.
 
 Any mode may be marked public after the guarded warning and confirmation. For proxy and download modes this explicitly authorizes anonymous access through DokoSoko; public rate limits, download budgets, checksum enforcement, and rapid disable controls are mandatory.
 

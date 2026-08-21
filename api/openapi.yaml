@@ -2161,32 +2161,41 @@ components:
     CreatePackageRequest:
       type: object
       additionalProperties: false
-      description: Proxy and download modes require a credential. Public and proxy modes use upstream_url; download mode calls the exact download_url endpoint.
+      description: Each delivery mode accepts exactly one configuration shape. Download packages use a vendor-owned external_package_id and the exact download_url endpoint; DokoSoko resource IDs are never sent to that endpoint.
       properties:
         organisation_id: { type: string }
         name: { type: string, minLength: 1, maxLength: 240 }
         ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
         version: { type: string, minLength: 1, maxLength: 120 }
+        external_package_id: { type: string, minLength: 1, maxLength: 200, description: Vendor-owned opaque identifier for the exact artifact. Required only in download mode. }
         mode: { type: string, enum: [public, proxy, download] }
         upstream_url: { type: string, format: uri, description: Fixed credential-free HTTPS origin for public and proxy modes. }
-        download_url: { type: string, format: uri, pattern: '^https://[^/?#:]+(?::443)?/v1/package/download$', description: Exact vendor package-download endpoint. The path must be /v1/package/download, with no query or fragment and no port other than 443. }
-        credential: { type: string, format: password, writeOnly: true, description: Required for proxy and download modes; encrypted before persistence. }
+        download_url: { type: string, format: uri, pattern: '^https://[^/?#:@]+(?::443)?/v1/package/download$', description: Exact credential-free vendor package-download endpoint. The path must be /v1/package/download, with no user information, query, or fragment and no port other than 443. }
+        credential: { type: string, format: password, minLength: 1, writeOnly: true, description: Required for proxy and download modes; encrypted before persistence. }
         checksum_sha256: { type: string, pattern: "^[A-Fa-f0-9]{64}$" }
-        expected_size: { type: integer, format: int64, minimum: 0, maximum: 1073741824, description: Optional exact artifact size in bytes; the gateway limit is 1 GiB. }
+        expected_size: { type: integer, format: int64, minimum: 1, maximum: 1073741824, description: Optional exact artifact size in bytes; omit it when unknown. The gateway limit is 1 GiB. }
       required: [organisation_id, name, ecosystem, version, mode]
-      allOf:
-        - if:
-            properties:
-              mode: { const: download }
-          then:
-            required: [download_url, credential]
-          else:
+      oneOf:
+        - properties:
+            mode: { const: public }
+          required: [upstream_url]
+          not:
+            anyOf:
+              - required: [download_url]
+              - required: [external_package_id]
+              - required: [credential]
+        - properties:
+            mode: { const: proxy }
+          required: [upstream_url, credential]
+          not:
+            anyOf:
+              - required: [download_url]
+              - required: [external_package_id]
+        - properties:
+            mode: { const: download }
+          required: [download_url, external_package_id, credential]
+          not:
             required: [upstream_url]
-        - if:
-            properties:
-              mode: { const: proxy }
-          then:
-            required: [credential]
     JSONSchema:
       type: object
       additionalProperties: true
@@ -3135,6 +3144,7 @@ components:
         name: { type: string }
         ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
         version: { type: string }
+        external_package_id: { type: string, description: Vendor-owned identifier returned only for download-mode packages. }
         mode: { type: string, enum: [public, proxy, download] }
         visibility: { $ref: "#/components/schemas/Visibility" }
         published: { type: boolean }

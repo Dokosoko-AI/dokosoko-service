@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
@@ -346,21 +347,22 @@ func (s *Service) QueueCrawl(ctx context.Context, productID, sourceID string, ac
 }
 
 type PackageInput struct {
-	OrganisationID string
-	ProductID      string
-	Name           string
-	Ecosystem      string
-	Version        string
-	Mode           string
-	UpstreamURL    string
-	DownloadURL    string
-	Credential     string
-	ChecksumSHA256 string
-	ExpectedSize   int64
+	OrganisationID    string
+	ProductID         string
+	Name              string
+	Ecosystem         string
+	Version           string
+	ExternalPackageID string
+	Mode              string
+	UpstreamURL       string
+	DownloadURL       string
+	Credential        string
+	ChecksumSHA256    string
+	ExpectedSize      int64
 }
 
 func (s *Service) CreatePackage(ctx context.Context, input PackageInput, actor Actor) (model.Package, error) {
-	input.Name, input.Version = strings.TrimSpace(input.Name), strings.TrimSpace(input.Version)
+	input.Name, input.Version, input.ExternalPackageID = strings.TrimSpace(input.Name), strings.TrimSpace(input.Version), strings.TrimSpace(input.ExternalPackageID)
 	input.Ecosystem, input.Mode = strings.ToLower(strings.TrimSpace(input.Ecosystem)), strings.ToLower(strings.TrimSpace(input.Mode))
 	if input.Name == "" || input.Version == "" || len(input.Name) > 240 || len(input.Version) > 120 {
 		return model.Package{}, errors.New("package name and version are required")
@@ -369,9 +371,27 @@ func (s *Service) CreatePackage(ctx context.Context, input PackageInput, actor A
 	if !ecosystems[input.Ecosystem] || (input.Mode != "public" && input.Mode != "proxy" && input.Mode != "download") {
 		return model.Package{}, errors.New("unsupported package ecosystem or delivery mode")
 	}
-	endpoint := strings.TrimSpace(input.UpstreamURL)
+	upstreamURL, downloadURL := strings.TrimSpace(input.UpstreamURL), strings.TrimSpace(input.DownloadURL)
+	switch input.Mode {
+	case "public":
+		if downloadURL != "" || input.ExternalPackageID != "" || strings.TrimSpace(input.Credential) != "" {
+			return model.Package{}, errors.New("public packages accept only upstream_url delivery configuration")
+		}
+	case "proxy":
+		if downloadURL != "" || input.ExternalPackageID != "" {
+			return model.Package{}, errors.New("proxy packages accept only upstream_url and credential delivery configuration")
+		}
+	case "download":
+		if upstreamURL != "" {
+			return model.Package{}, errors.New("download packages accept only download_url, external_package_id, and credential delivery configuration")
+		}
+		if input.ExternalPackageID == "" || utf8.RuneCountInString(input.ExternalPackageID) > 200 {
+			return model.Package{}, errors.New("external_package_id is required for download packages and cannot exceed 200 characters")
+		}
+	}
+	endpoint := upstreamURL
 	if input.Mode == "download" {
-		endpoint = strings.TrimSpace(input.DownloadURL)
+		endpoint = downloadURL
 	}
 	parsed, parseErr := url.Parse(endpoint)
 	if parseErr != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.RawPath != "" || (parsed.Port() != "" && parsed.Port() != "443") {
@@ -419,11 +439,11 @@ func (s *Service) CreatePackage(ctx context.Context, input PackageInput, actor A
 			return model.Package{}, err
 		}
 	}
-	value, err := s.store.CreatePackage(ctx, model.Package{ID: packageID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, Mode: input.Mode, Location: strings.TrimSpace(input.UpstreamURL), DownloadURL: strings.TrimSpace(input.DownloadURL), CredentialID: credentialID, ChecksumSHA256: checksum, ExpectedSize: input.ExpectedSize, Visibility: model.VisibilityPrivate})
+	value, err := s.store.CreatePackage(ctx, model.Package{ID: packageID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, ExternalPackageID: input.ExternalPackageID, Mode: input.Mode, Location: upstreamURL, DownloadURL: downloadURL, CredentialID: credentialID, ChecksumSHA256: checksum, ExpectedSize: input.ExpectedSize, Visibility: model.VisibilityPrivate})
 	if err != nil {
 		return model.Package{}, err
 	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "package.created", TargetType: "package", TargetID: value.ID, Current: map[string]any{"name": value.Name, "ecosystem": value.Ecosystem, "mode": value.Mode, "visibility": model.VisibilityPrivate, "credential_stored": credentialID != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "package.created", TargetType: "package", TargetID: value.ID, Current: map[string]any{"name": value.Name, "ecosystem": value.Ecosystem, "mode": value.Mode, "external_package_id": value.ExternalPackageID, "visibility": model.VisibilityPrivate, "credential_stored": credentialID != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, err
 }
 

@@ -55,7 +55,11 @@ func packageFixture(t *testing.T, mode string, body []byte) (*store.Memory, *sec
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := memory.CreatePackage(context.Background(), model.Package{ID: "package-id", OrganisationID: "org_acme", ProductID: "prod_acme", Name: "@acme/sdk", Version: "1.2.3", Ecosystem: "npm", Mode: mode, Location: "https://packages.example.test/sdk.tgz", DownloadURL: "https://api.example.test/v1/package/download", CredentialID: credentialID, ChecksumSHA256: digest[:], ExpectedSize: int64(len(body))})
+	externalPackageID := ""
+	if mode == "download" {
+		externalPackageID = "vendor-sdk-node-1.2.3"
+	}
+	pkg, err := memory.CreatePackage(context.Background(), model.Package{ID: "package-id", OrganisationID: "org_acme", ProductID: "prod_acme", Name: "@acme/sdk", Version: "1.2.3", Ecosystem: "npm", ExternalPackageID: externalPackageID, Mode: mode, Location: "https://packages.example.test/sdk.tgz", DownloadURL: "https://api.example.test/v1/package/download", CredentialID: credentialID, ChecksumSHA256: digest[:], ExpectedSize: int64(len(body))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +103,7 @@ func TestDownloadModeUsesVersionedIdempotentContractAndDoesNotForwardCredential(
 			requestBody, _ := io.ReadAll(request.Body)
 			idempotencyKey = request.Header.Get("Idempotency-Key")
 			requestID := request.Header.Get("X-DokoSoko-Request-ID")
-			if request.URL.Path != "/v1/package/download" || request.Header.Get("Authorization") != "Bearer vendor-token" || request.Method != http.MethodPost || !strings.HasPrefix(idempotencyKey, "pkgdl_") || !strings.HasPrefix(requestID, "req_") || requestID == idempotencyKey || request.Header.Get("DokoSoko-Version") != "2026-08-22" || !strings.Contains(string(requestBody), `"product_id":"prod_acme"`) {
+			if request.URL.Path != "/v1/package/download" || request.Header.Get("Authorization") != "Bearer vendor-token" || request.Method != http.MethodPost || !strings.HasPrefix(idempotencyKey, "pkgdl_") || !strings.HasPrefix(requestID, "req_") || requestID == idempotencyKey || request.Header.Get("DokoSoko-Version") != "" || string(requestBody) != `{"external_package_id":"vendor-sdk-node-1.2.3"}` {
 				t.Fatalf("download request url=%s headers=%v body=%s", request.URL, request.Header, requestBody)
 			}
 			digest := sha256.Sum256(body)

@@ -468,12 +468,12 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 func TestPackageControlAPIUsesDownloadContractVocabulary(t *testing.T) {
 	t.Parallel()
 	handler := newCatalogServer(t)
-	body := `{"organisation_id":"org_acme","name":"@acme/private","ecosystem":"npm","version":"1.0.0","mode":"download","download_url":"https://packages.example.com/v1/package/download","credential":"download-service-token","checksum_sha256":"","expected_size":0}`
+	body := `{"organisation_id":"org_acme","name":"@acme/private","ecosystem":"npm","version":"1.0.0","external_package_id":"vendor-sdk-node-1.0.0","mode":"download","download_url":"https://packages.example.com/v1/package/download","credential":"download-service-token"}`
 	w := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"mode":"download"`) || strings.Contains(w.Body.String(), "download_url") || strings.Contains(w.Body.String(), "download-service-token") {
+	if !strings.Contains(w.Body.String(), `"mode":"download"`) || !strings.Contains(w.Body.String(), `"external_package_id":"vendor-sdk-node-1.0.0"`) || strings.Contains(w.Body.String(), "download_url") || strings.Contains(w.Body.String(), "download-service-token") {
 		t.Fatalf("unsafe or inconsistent package response: %s", w.Body.String())
 	}
 
@@ -481,6 +481,18 @@ func TestPackageControlAPIUsesDownloadContractVocabulary(t *testing.T) {
 	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", legacy)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unknown field") {
 		t.Fatalf("legacy request status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	invalidShapes := []string{
+		`{"organisation_id":"org_acme","name":"public","ecosystem":"npm","version":"1.0.0","mode":"public","upstream_url":"https://packages.example.com/artifact","credential":""}`,
+		`{"organisation_id":"org_acme","name":"proxy","ecosystem":"npm","version":"1.0.0","mode":"proxy","upstream_url":"https://packages.example.com/artifact","download_url":""}`,
+		`{"organisation_id":"org_acme","name":"download","ecosystem":"npm","version":"1.0.0","external_package_id":"vendor-artifact","mode":"download","upstream_url":"","download_url":"https://packages.example.com/v1/package/download","credential":"token"}`,
+	}
+	for _, invalid := range invalidShapes {
+		w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", invalid)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "do not match") {
+			t.Fatalf("invalid shape status = %d, body = %s", w.Code, w.Body.String())
+		}
 	}
 }
 

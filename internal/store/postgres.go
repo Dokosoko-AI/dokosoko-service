@@ -589,7 +589,7 @@ func (p *Postgres) CreateCrawlJob(ctx context.Context, value model.CrawlJob) (mo
 func scanPackage(row interface{ Scan(...any) error }) (model.Package, error) {
 	var value model.Package
 	var state string
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Name, &value.Ecosystem, &value.Version, &value.Mode, &value.Location, &value.DownloadURL, &value.CredentialID, &value.ChecksumSHA256, &value.ExpectedSize, &value.Visibility, &state, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Name, &value.Ecosystem, &value.Version, &value.ExternalPackageID, &value.Mode, &value.Location, &value.DownloadURL, &value.CredentialID, &value.ChecksumSHA256, &value.ExpectedSize, &value.Visibility, &state, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	value.Published = state == "published"
 	return value, databaseError(err)
 }
@@ -615,14 +615,14 @@ func (p *Postgres) Package(ctx context.Context, productID, id string) (model.Pac
 	return scanPackage(p.pool.QueryRow(ctx, packageSelect+` WHERE product_id = $1 AND id = $2`, productID, id))
 }
 
-const packageSelect = `SELECT id::text, organisation_id::text, product_id::text, name, ecosystem, version, mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at FROM packages`
+const packageSelect = `SELECT id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at FROM packages`
 
 func (p *Postgres) CreatePackage(ctx context.Context, value model.Package) (model.Package, error) {
-	return scanPackage(p.pool.QueryRow(ctx, `INSERT INTO packages(id, organisation_id, product_id, ecosystem, name, version, mode, visibility, state, upstream_url, download_url, credential_secret_id, checksum_sha256, expected_size) VALUES ($1,$2,$3,$4,$5,$6,$7,'private','draft',nullif($8,''),nullif($9,''),nullif($10,'')::uuid,nullif($11,''::bytea),nullif($12,0)) RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Ecosystem, value.Name, value.Version, value.Mode, value.Location, value.DownloadURL, value.CredentialID, value.ChecksumSHA256, value.ExpectedSize))
+	return scanPackage(p.pool.QueryRow(ctx, `INSERT INTO packages(id, organisation_id, product_id, ecosystem, name, version, external_package_id, mode, visibility, state, upstream_url, download_url, credential_secret_id, checksum_sha256, expected_size) VALUES ($1,$2,$3,$4,$5,$6,nullif($7,''),$8,'private','draft',nullif($9,''),nullif($10,''),nullif($11,'')::uuid,nullif($12,''::bytea),nullif($13,0)) RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Ecosystem, value.Name, value.Version, value.ExternalPackageID, value.Mode, value.Location, value.DownloadURL, value.CredentialID, value.ChecksumSHA256, value.ExpectedSize))
 }
 
 func (p *Postgres) UpdatePackage(ctx context.Context, value model.Package, expected int64) (model.Package, error) {
-	updated, err := scanPackage(p.pool.QueryRow(ctx, `UPDATE packages SET visibility = $3, revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $4 RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, value.ProductID, value.ID, value.Visibility, expected))
+	updated, err := scanPackage(p.pool.QueryRow(ctx, `UPDATE packages SET visibility = $3, revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $4 RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, value.ProductID, value.ID, value.Visibility, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.Package(ctx, value.ProductID, value.ID); lookupErr == nil {
 			return model.Package{}, ErrConflict
@@ -632,7 +632,7 @@ func (p *Postgres) UpdatePackage(ctx context.Context, value model.Package, expec
 }
 
 func (p *Postgres) PublishPackage(ctx context.Context, productID, packageID string, expected int64) (model.Package, error) {
-	updated, err := scanPackage(p.pool.QueryRow(ctx, `UPDATE packages SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $3 AND state <> 'quarantined' RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, productID, packageID, expected))
+	updated, err := scanPackage(p.pool.QueryRow(ctx, `UPDATE packages SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $3 AND state <> 'quarantined' RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, productID, packageID, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.Package(ctx, productID, packageID); lookupErr == nil {
 			return model.Package{}, ErrConflict

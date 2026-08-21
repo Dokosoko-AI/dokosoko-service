@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DokoSoko Vendor Integration APIs
-  version: 2026-08-22
+  version: 1.0.0
   description: >-
     Reference contract for the vendor endpoints DokoSoko calls to resolve
     entitlements, proxy customer usage reports, deliver consented bug reports
@@ -203,7 +203,8 @@ paths:
         Used only by download-mode packages. DokoSoko may retry network errors,
         429 responses, and 5xx responses with the same Idempotency-Key. The
         vendor must retain idempotency results for at least 24 hours and return
-        the same logical download for the same key. Return a
+        the same HTTP status and response body for the same key and payload.
+        Reusing a key with a different payload returns 409. Return a
         credential-free HTTPS URL with exact integrity metadata and an expiry at
         least five minutes and no more than one hour in the future. DokoSoko
         revalidates the destination, never forwards the service credential to
@@ -211,7 +212,6 @@ paths:
         responses should include Cache-Control: no-store.
       security: [{ serviceBearer: [] }]
       parameters:
-        - $ref: "#/components/parameters/DokoSokoVersion"
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/DokoSokoRequestID"
       requestBody:
@@ -220,11 +220,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/PackageDownloadRequest" }
             example:
-              package_id: pkg_01
-              product_id: prod_dokosoko
-              ecosystem: npm
-              name: "@vendor/sdk"
-              version: 2.4.1
+              external_package_id: vendor-sdk-node-2.4.1
       responses:
         "200":
           description: Short-lived, credential-free artifact location.
@@ -250,12 +246,6 @@ paths:
         "503": { $ref: "#/components/responses/Error" }
 components:
   parameters:
-    DokoSokoVersion:
-      name: DokoSoko-Version
-      in: header
-      required: true
-      description: Pinned package-download contract version.
-      schema: { const: "2026-08-22" }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -465,18 +455,18 @@ components:
       type: object
       additionalProperties: false
       properties:
-        package_id: { type: string, minLength: 1 }
-        product_id: { type: string, minLength: 1 }
-        ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
-        name: { type: string, minLength: 1 }
-        version: { type: string, minLength: 1 }
-      required: [package_id, product_id, ecosystem, name, version]
+        external_package_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Vendor-owned opaque identifier configured on the exact package artifact. It is not a DokoSoko resource ID.
+      required: [external_package_id]
     PackageDownload:
       type: object
       description: Clients must ignore fields they do not recognize so this response can evolve additively.
       properties:
         id: { type: string, minLength: 1, maxLength: 200 }
-        url: { type: string, format: uri, description: Short-lived credential-free HTTPS artifact URL. }
+        url: { type: string, format: uri, pattern: '^https://', description: Short-lived credential-free HTTPS artifact URL with no user information or fragment and no port other than 443. Query parameters are allowed for signed URLs. }
         sha256: { type: string, pattern: "^[A-Fa-f0-9]{64}$", description: Exact SHA-256 digest enforced by DokoSoko. }
         size_bytes: { type: integer, format: int64, minimum: 0, maximum: 1073741824, description: Exact artifact size in bytes; the current gateway limit is 1 GiB. }
         expires_at: { type: string, format: date-time, description: At least five minutes and no more than one hour after response creation. }
