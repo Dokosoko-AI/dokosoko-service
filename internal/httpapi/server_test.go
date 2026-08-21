@@ -689,7 +689,7 @@ func TestWidgetSnippetsContainNoSecretAndPublicLoaderFollowsMCPState(t *testing.
 func TestGoServiceServesStaticConsoleWithoutShadowingAPI(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
-	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("<!doctype html><title>DokoSoko console</title>"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("<!doctype html><title>DokoSoko console</title><script>window.__dokosoko_bootstrap=true</script>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(directory, "index.rsc"), []byte("0:{\"__route\":\"route:/\"}"), 0o600); err != nil {
@@ -701,8 +701,17 @@ func TestGoServiceServesStaticConsoleWithoutShadowingAPI(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "DokoSoko console") {
 		t.Fatalf("console status = %d, body = %s", w.Code, w.Body.String())
 	}
+	for _, path := range []string{"/overview", "/integrations/documentation", "/operations/reporting", "/integration/int_voice"} {
+		w = request(t, handler, http.MethodGet, path, "", "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "DokoSoko console") {
+			t.Fatalf("console route %s status = %d, body = %s", path, w.Code, w.Body.String())
+		}
+	}
 	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 		t.Fatalf("missing console CSP: %q", w.Header().Get("Content-Security-Policy"))
+	}
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "'sha256-") || strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("console CSP must hash its static bootstrap scripts: %q", w.Header().Get("Content-Security-Policy"))
 	}
 	if !strings.Contains(w.Header().Get("Vary"), "RSC") || !strings.Contains(w.Header().Get("Vary"), "Accept") {
 		t.Fatalf("console HTML does not vary from RSC: %q", w.Header().Get("Vary"))

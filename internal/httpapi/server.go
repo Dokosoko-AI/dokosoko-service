@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -121,6 +123,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 
 func staticConsole(directory string) http.Handler {
 	files := http.FileServer(http.Dir(directory))
+	contentSecurityPolicy := staticConsoleCSP(directory)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
@@ -166,7 +169,7 @@ func staticConsole(directory string) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		if extension := strings.ToLower(filepath.Ext(cleaned)); extension == ".html" || extension == ".rsc" {
 			w.Header().Set("Vary", "RSC, Accept")
 		}
@@ -187,6 +190,38 @@ func staticConsole(directory string) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+func staticConsoleCSP(directory string) string {
+	scriptSources := []string{"'self'"}
+	html, err := os.ReadFile(filepath.Join(directory, "index.html"))
+	if err == nil {
+		remaining := html
+		for {
+			start := bytes.Index(bytes.ToLower(remaining), []byte("<script"))
+			if start < 0 {
+				break
+			}
+			remaining = remaining[start:]
+			openEnd := bytes.IndexByte(remaining, '>')
+			if openEnd < 0 {
+				break
+			}
+			closeStart := bytes.Index(bytes.ToLower(remaining[openEnd+1:]), []byte("</script>"))
+			if closeStart < 0 {
+				break
+			}
+			closeStart += openEnd + 1
+			openTag := strings.ToLower(string(remaining[:openEnd+1]))
+			content := remaining[openEnd+1 : closeStart]
+			if !strings.Contains(openTag, " src=") && len(bytes.TrimSpace(content)) > 0 {
+				digest := sha256.Sum256(content)
+				scriptSources = append(scriptSources, "'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'")
+			}
+			remaining = remaining[closeStart+len("</script>"):]
+		}
+	}
+	return "default-src 'self'; script-src " + strings.Join(scriptSources, " ") + "; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 }
 
 func requestID(next http.Handler) http.Handler {

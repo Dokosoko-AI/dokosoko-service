@@ -96,20 +96,24 @@ The minimum bootstrap configuration is the database URL, master encryption key o
 
 ## Console information architecture
 
-- Overview
-- Integrations
-- Documentation library
-- Package library
-- Hooks & MCP
-- Access & API keys
-- Tool library
-- Connector releases
-- MCP & widgets
-- Connector runs
-- Support reporting
-- Analytics
-- Activity & audit
-- Settings
+Every console view has a canonical URL. Navigation uses ordinary anchors enhanced with client-side history, so deep links, refresh, open-in-new-tab, and browser back/forward all work.
+
+- Overview — `/overview`
+- Integrations — `/integrations`
+  - Documentation — `/integrations/documentation`
+  - Packages — `/integrations/packages`
+  - Tools — `/integrations/tools`
+  - Hooks & MCP — `/integrations/hooks-mcp`
+- Access — `/access`
+- Distribution — `/distribution`
+  - Connector releases — `/distribution/releases`
+- Operations — `/operations`
+  - Support reporting — `/operations/reporting`
+- Insights — `/insights`
+  - Activity & audit — `/insights/activity`
+- Settings — `/settings`
+
+Directory records also have singular, UID-addressed read-only URLs: `/integration/:uid`, `/resource-set/:uid`, `/source/:uid`, `/package/:uid`, `/tool/:uid`, `/connection/:uid`, `/access-definition/:uid`, `/access-connection/:uid`, `/installation/:uid`, `/release/:uid`, `/run/:uid`, `/support-route/:uid`, `/report/:uid`, `/audit-event/:uid`, and `/root-user/:uid`. The root path `/` canonicalizes to `/overview`; unrecognised console paths render a console-level not-found view without shadowing `/api`, `/mcp`, widget, health, OAuth, or artifact endpoints.
 
 ## Functional scope
 

@@ -13,23 +13,51 @@ async function render() {
   );
 }
 
-test("server-renders the DokoSoko distribution console", async () => {
+test("server-renders the DokoSoko console overview", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>DokoSoko — Agent delivery control plane<\/title>/i);
-  assert.match(html, /MCP &amp; widgets/);
-  assert.match(html, /Public MCP/);
-  assert.match(html, /authentication-free/);
-  assert.match(html, /Disabled by default/);
-  assert.match(html, /Developer documentation/);
-  assert.match(html, /@acme\/node/);
-  assert.match(html, /Public widget/);
-  assert.match(html, /Private widget/);
-  assert.match(html, /Copy private widget/);
+  assert.match(html, /Connector readiness/);
+  assert.match(html, /Quick actions/);
+  assert.match(html, /Integrations/);
+  assert.match(html, /Operations/);
+  assert.match(html, /Insights/);
+  assert.match(html, /href="\/overview"/);
+  assert.match(html, /href="\/integrations"/);
+  assert.match(html, /href="\/operations"/);
+  assert.match(html, /href="\/settings"/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
+});
+
+test("groups the console into workflow navigation with contextual sections", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
+
+  for (const label of ["Overview", "Integrations", "Access", "Distribution", "Operations", "Insights"]) {
+    assert.match(source, new RegExp(`label: "${label}"`));
+  }
+  for (const secondary of ["Documentation", "Packages", "Tools", "Hooks & MCP", "Connector releases", "Support reporting", "Activity & audit"]) {
+    assert.ok(source.includes(`label: "${secondary}"`));
+  }
+  assert.match(source, /useState<ConsoleRoute>/);
+  assert.doesNotMatch(source, /setSection/);
+  assert.match(source, /window\.history\[method\]/);
+  assert.match(source, /className="section-tabs"/);
+  assert.match(source, /className="mobile-navigation"/);
+  for (const path of ["/overview", "/integrations", "/integrations/documentation", "/access", "/distribution/releases", "/operations/reporting", "/insights/activity", "/settings"]) {
+    assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
+  }
+  for (const entity of ["integration", "resource-set", "source", "package", "tool", "connection", "release", "run", "support-route", "report", "audit-event", "root-user"]) {
+    assert.ok(routes.includes(`| "${entity}"`) || routes.includes(`  ${entity}:`), `${entity} should be routable`);
+  }
+  assert.match(styles, /\.sidebar > nav/);
+  assert.match(styles, /\.section-tab\.active/);
+  assert.match(styles, /\.entity-detail-grid/);
+  assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
 });
 
 test("keeps private defaults and guarded public transitions in the client contract", async () => {
