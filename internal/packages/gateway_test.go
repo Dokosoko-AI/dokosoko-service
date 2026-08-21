@@ -55,7 +55,7 @@ func packageFixture(t *testing.T, mode string, body []byte) (*store.Memory, *sec
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := memory.CreatePackage(context.Background(), model.Package{ID: "package-id", OrganisationID: "org_acme", ProductID: "prod_acme", Name: "@acme/sdk", Version: "1.2.3", Ecosystem: "npm", Mode: mode, Location: "https://packages.example.test/sdk.tgz", FetchHookURL: "https://api.example.test/fetch", CredentialID: credentialID, ChecksumSHA256: digest[:], ExpectedSize: int64(len(body))})
+	pkg, err := memory.CreatePackage(context.Background(), model.Package{ID: "package-id", OrganisationID: "org_acme", ProductID: "prod_acme", Name: "@acme/sdk", Version: "1.2.3", Ecosystem: "npm", Mode: mode, Location: "https://packages.example.test/sdk.tgz", DownloadURL: "https://api.example.test/v1/package/download", CredentialID: credentialID, ChecksumSHA256: digest[:], ExpectedSize: int64(len(body))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,23 +87,96 @@ func TestProxyModeUsesCredentialAndVerifiesArtifact(t *testing.T) {
 	}
 }
 
-func TestFetchModeDoesNotForwardHookCredentialToSignedURL(t *testing.T) {
+func TestDownloadModeUsesVersionedIdempotentContractAndDoesNotForwardCredential(t *testing.T) {
 	t.Parallel()
-	body := []byte("fetch package bytes")
-	memory, vault, pkg := packageFixture(t, "fetch", body)
+	body := []byte("download package bytes")
+	memory, vault, pkg := packageFixture(t, "download", body)
 	calls := 0
+	var idempotencyKey string
 	gateway := packages.New(memory, vault, packages.Config{DataDirectory: t.TempDir(), Resolver: resolver{net.ParseIP("1.1.1.1")}, Doer: doerFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
 		if calls == 1 {
-			if request.Header.Get("Authorization") != "Bearer vendor-token" || request.Method != http.MethodPost {
-				t.Fatalf("hook auth=%q method=%s", request.Header.Get("Authorization"), request.Method)
+			requestBody, _ := io.ReadAll(request.Body)
+			idempotencyKey = request.Header.Get("Idempotency-Key")
+			requestID := request.Header.Get("X-DokoSoko-Request-ID")
+			if request.URL.Path != "/v1/package/download" || request.Header.Get("Authorization") != "Bearer vendor-token" || request.Method != http.MethodPost || !strings.HasPrefix(idempotencyKey, "pkgdl_") || !strings.HasPrefix(requestID, "req_") || requestID == idempotencyKey || request.Header.Get("DokoSoko-Version") != "2026-08-22" || !strings.Contains(string(requestBody), `"product_id":"prod_acme"`) {
+				t.Fatalf("download request url=%s headers=%v body=%s", request.URL, request.Header, requestBody)
 			}
 			digest := sha256.Sum256(body)
-			payload := `{"url":"https://signed.example.test/artifact","sha256":"` + hex.EncodeToString(digest[:]) + `","size":` + fmt.Sprint(len(body)) + `,"expires_at":"` + time.Now().UTC().Add(time.Minute).Format(time.RFC3339) + `"}`
+			payload := `{"id":"download-01","url":"https://signed.example.test/artifact","sha256":"` + hex.EncodeToString(digest[:]) + `","size_bytes":` + fmt.Sprint(len(body)) + `,"expires_at":"` + time.Now().UTC().Add(10*time.Minute).Format(time.RFC3339) + `"}`
 			return response(http.StatusOK, payload, map[string]string{"Content-Type": "application/json"}), nil
 		}
 		if request.Header.Get("Authorization") != "" {
-			t.Fatalf("hook credential leaked to signed URL: %q", request.Header.Get("Authorization"))
+			t.Fatalf("download service credential leaked to signed URL: %q", request.Header.Get("Authorization"))
+		}
+		return response(http.StatusOK, string(body), nil), nil
+	})})
+	artifact, err := gateway.Acquire(context.Background(), pkg.ProductID, pkg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	if calls != 2 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestDownloadModeRetriesWithTheSameIdempotencyKey(t *testing.T) {
+	t.Parallel()
+	body := []byte("retry-safe package bytes")
+	memory, vault, pkg := packageFixture(t, "download", body)
+	var keys []string
+	var requestIDs []string
+	calls := 0
+	gateway := packages.New(memory, vault, packages.Config{DataDirectory: t.TempDir(), Resolver: resolver{net.ParseIP("1.1.1.1")}, Doer: doerFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.URL.Path == "/v1/package/download" {
+			keys = append(keys, request.Header.Get("Idempotency-Key"))
+			requestIDs = append(requestIDs, request.Header.Get("X-DokoSoko-Request-ID"))
+			if len(keys) == 1 {
+				return response(http.StatusServiceUnavailable, `{"error":{"code":"temporarily_unavailable","message":"retry"}}`, map[string]string{"Retry-After": "0"}), nil
+			}
+			digest := sha256.Sum256(body)
+			payload := `{"id":"download-retry","url":"https://signed.example.test/artifact","sha256":"` + hex.EncodeToString(digest[:]) + `","size_bytes":` + fmt.Sprint(len(body)) + `,"expires_at":"` + time.Now().UTC().Add(10*time.Minute).Format(time.RFC3339) + `"}`
+			return response(http.StatusOK, payload, nil), nil
+		}
+		return response(http.StatusOK, string(body), nil), nil
+	})})
+	artifact, err := gateway.Acquire(context.Background(), pkg.ProductID, pkg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	if calls != 3 || len(keys) != 2 || len(requestIDs) != 2 || keys[0] == "" || keys[0] != keys[1] || requestIDs[0] == "" || requestIDs[0] == requestIDs[1] {
+		t.Fatalf("calls=%d idempotency keys=%v request IDs=%v", calls, keys, requestIDs)
+	}
+}
+
+func TestDownloadModeRejectsContractDrift(t *testing.T) {
+	t.Parallel()
+	body := []byte("verified package bytes")
+	memory, vault, pkg := packageFixture(t, "download", body)
+	digest := sha256.Sum256(body)
+	invalid := `{"id":"download-01","url":"https://signed.example.test/artifact","sha256":"` + hex.EncodeToString(digest[:]) + `","size":` + fmt.Sprint(len(body)) + `,"expires_at":"` + time.Now().UTC().Add(10*time.Minute).Format(time.RFC3339) + `"}`
+	gateway := packages.New(memory, vault, packages.Config{DataDirectory: t.TempDir(), Resolver: resolver{net.ParseIP("1.1.1.1")}, Doer: doerFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusOK, invalid, nil), nil
+	})})
+	if _, err := gateway.Acquire(context.Background(), pkg.ProductID, pkg.ID); err == nil || !strings.Contains(err.Error(), "invalid size_bytes") {
+		t.Fatalf("contract drift error = %v", err)
+	}
+}
+
+func TestDownloadModeToleratesAdditiveResponseFields(t *testing.T) {
+	t.Parallel()
+	body := []byte("forward-compatible package bytes")
+	memory, vault, pkg := packageFixture(t, "download", body)
+	calls := 0
+	gateway := packages.New(memory, vault, packages.Config{DataDirectory: t.TempDir(), Resolver: resolver{net.ParseIP("1.1.1.1")}, Doer: doerFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.URL.Path == "/v1/package/download" {
+			digest := sha256.Sum256(body)
+			payload := `{"id":"download-forward","url":"https://signed.example.test/artifact","sha256":"` + hex.EncodeToString(digest[:]) + `","size_bytes":` + fmt.Sprint(len(body)) + `,"expires_at":"` + time.Now().UTC().Add(10*time.Minute).Format(time.RFC3339) + `","future_metadata":{"region":"nz"}}`
+			return response(http.StatusOK, payload, nil), nil
 		}
 		return response(http.StatusOK, string(body), nil), nil
 	})})

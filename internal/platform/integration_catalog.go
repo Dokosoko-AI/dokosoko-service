@@ -455,13 +455,13 @@ func buildIntegrationSnapshot(integration model.Integration) (json.RawMessage, [
 		return resources[i].Kind < resources[j].Kind
 	})
 	if len(integration.Resources) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation, package, or hook set is attached.", Tab: "resources"})
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation, package, or tool-backend set is attached.", Tab: "resources"})
 	}
 	if len(integration.AccessConnections) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No vendor access connection is allowed.", Tab: "access"})
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No service connection is attached.", Tab: "access"})
 	}
 	if integration.SupportRouteID == "" {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "support_inherited", Message: "Support uses the deployment default, if one is configured.", Tab: "support"})
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "support_inherited", Message: "Bug reports and feedback use the deployment default, if one is configured.", Tab: "overview"})
 	}
 	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
 	return snapshot, validations, err

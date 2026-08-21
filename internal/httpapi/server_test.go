@@ -465,6 +465,25 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 	}
 }
 
+func TestPackageControlAPIUsesDownloadContractVocabulary(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+	body := `{"organisation_id":"org_acme","name":"@acme/private","ecosystem":"npm","version":"1.0.0","mode":"download","download_url":"https://packages.example.com/v1/package/download","credential":"download-service-token","checksum_sha256":"","expected_size":0}`
+	w := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"mode":"download"`) || strings.Contains(w.Body.String(), "download_url") || strings.Contains(w.Body.String(), "download-service-token") {
+		t.Fatalf("unsafe or inconsistent package response: %s", w.Body.String())
+	}
+
+	legacy := `{"organisation_id":"org_acme","name":"@acme/legacy","ecosystem":"npm","version":"1.0.0","mode":"fetch","fetch_hook_url":"https://packages.example.com/package-fetch","credential":"token","checksum_sha256":"","expected_size":0}`
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", legacy)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unknown field") {
+		t.Fatalf("legacy request status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
 func TestPublicTransitionWarningsAreEnforcedByAPI(t *testing.T) {
 	t.Parallel()
 	handler := newServer()

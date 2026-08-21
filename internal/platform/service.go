@@ -353,7 +353,7 @@ type PackageInput struct {
 	Version        string
 	Mode           string
 	UpstreamURL    string
-	FetchHookURL   string
+	DownloadURL    string
 	Credential     string
 	ChecksumSHA256 string
 	ExpectedSize   int64
@@ -366,26 +366,29 @@ func (s *Service) CreatePackage(ctx context.Context, input PackageInput, actor A
 		return model.Package{}, errors.New("package name and version are required")
 	}
 	ecosystems := map[string]bool{"npm": true, "go": true, "git": true, "maven": true, "android": true, "swift": true, "nuget": true}
-	if !ecosystems[input.Ecosystem] || (input.Mode != "public" && input.Mode != "proxy" && input.Mode != "fetch") {
+	if !ecosystems[input.Ecosystem] || (input.Mode != "public" && input.Mode != "proxy" && input.Mode != "download") {
 		return model.Package{}, errors.New("unsupported package ecosystem or delivery mode")
 	}
 	endpoint := strings.TrimSpace(input.UpstreamURL)
-	if input.Mode == "fetch" {
-		endpoint = strings.TrimSpace(input.FetchHookURL)
+	if input.Mode == "download" {
+		endpoint = strings.TrimSpace(input.DownloadURL)
 	}
 	parsed, parseErr := url.Parse(endpoint)
-	if parseErr != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+	if parseErr != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.RawPath != "" || (parsed.Port() != "" && parsed.Port() != "443") {
 		return model.Package{}, errors.New("package delivery endpoints must use credential-free HTTPS URLs")
 	}
-	if input.ExpectedSize < 0 || input.ExpectedSize > 5_000_000_000 {
-		return model.Package{}, errors.New("expected package size must be between 0 and 5 GB")
+	if input.Mode == "download" && parsed.Path != "/v1/package/download" {
+		return model.Package{}, errors.New("download_url must use the fixed /v1/package/download path")
+	}
+	if input.ExpectedSize < 0 || input.ExpectedSize > 1<<30 {
+		return model.Package{}, errors.New("expected package size must be between 0 and 1 GiB")
 	}
 	if input.Mode != "public" {
 		if parseErr != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-			return model.Package{}, errors.New("proxy and fetch endpoints must use credential-free HTTPS URLs")
+			return model.Package{}, errors.New("proxy and download endpoints must use credential-free HTTPS URLs")
 		}
 		if strings.TrimSpace(input.Credential) == "" || s.vault == nil {
-			return model.Package{}, errors.New("credential encryption is required for proxy and fetch packages")
+			return model.Package{}, errors.New("credential encryption is required for proxy and download packages")
 		}
 	}
 	var checksum []byte
@@ -416,7 +419,7 @@ func (s *Service) CreatePackage(ctx context.Context, input PackageInput, actor A
 			return model.Package{}, err
 		}
 	}
-	value, err := s.store.CreatePackage(ctx, model.Package{ID: packageID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, Mode: input.Mode, Location: strings.TrimSpace(input.UpstreamURL), FetchHookURL: strings.TrimSpace(input.FetchHookURL), CredentialID: credentialID, ChecksumSHA256: checksum, ExpectedSize: input.ExpectedSize, Visibility: model.VisibilityPrivate})
+	value, err := s.store.CreatePackage(ctx, model.Package{ID: packageID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, Mode: input.Mode, Location: strings.TrimSpace(input.UpstreamURL), DownloadURL: strings.TrimSpace(input.DownloadURL), CredentialID: credentialID, ChecksumSHA256: checksum, ExpectedSize: input.ExpectedSize, Visibility: model.VisibilityPrivate})
 	if err != nil {
 		return model.Package{}, err
 	}

@@ -968,7 +968,7 @@ paths:
                 required: [items]
     post:
       operationId: createPackage
-      description: Creates a private, unpublished public-link, proxy, or fetch package.
+      description: Creates a private, unpublished public-link, proxy, or download-service package.
       requestBody:
         required: true
         content:
@@ -1003,7 +1003,7 @@ paths:
         schema: { type: string }
     patch:
       operationId: updatePackageVisibility
-      description: A private-to-public transition requires acknowledgement, including for credential-backed proxy and fetch packages.
+      description: A private-to-public transition requires acknowledgement, including for credential-backed proxy and download packages.
       requestBody:
         $ref: "#/components/requestBodies/VisibilityChange"
       responses:
@@ -1451,7 +1451,7 @@ paths:
         - dokoBearer: []
         - {}
       operationId: downloadPackage
-      description: Streams a published package through public-link, proxy, or fetch mode. Anonymous access requires explicit public visibility.
+      description: Streams a published package through public-link, proxy, or versioned download-service mode. Anonymous access requires explicit public visibility.
       responses:
         "200":
           description: Size- and checksum-validated artifact stream.
@@ -2161,25 +2161,25 @@ components:
     CreatePackageRequest:
       type: object
       additionalProperties: false
-      description: Proxy and fetch modes require credential. Public and proxy modes use upstream_url; fetch mode uses fetch_hook_url.
+      description: Proxy and download modes require a credential. Public and proxy modes use upstream_url; download mode calls the exact download_url endpoint.
       properties:
         organisation_id: { type: string }
         name: { type: string, minLength: 1, maxLength: 240 }
         ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
         version: { type: string, minLength: 1, maxLength: 120 }
-        mode: { type: string, enum: [public, proxy, fetch] }
+        mode: { type: string, enum: [public, proxy, download] }
         upstream_url: { type: string, format: uri, description: Fixed credential-free HTTPS origin for public and proxy modes. }
-        fetch_hook_url: { type: string, format: uri, description: Fixed credential-free HTTPS hook for fetch mode. }
-        credential: { type: string, format: password, writeOnly: true, description: Required for proxy and fetch modes; encrypted before persistence. }
+        download_url: { type: string, format: uri, pattern: '^https://[^/?#:]+(?::443)?/v1/package/download$', description: Exact vendor package-download endpoint. The path must be /v1/package/download, with no query or fragment and no port other than 443. }
+        credential: { type: string, format: password, writeOnly: true, description: Required for proxy and download modes; encrypted before persistence. }
         checksum_sha256: { type: string, pattern: "^[A-Fa-f0-9]{64}$" }
-        expected_size: { type: integer, format: int64, minimum: 0, maximum: 5000000000 }
+        expected_size: { type: integer, format: int64, minimum: 0, maximum: 1073741824, description: Optional exact artifact size in bytes; the gateway limit is 1 GiB. }
       required: [organisation_id, name, ecosystem, version, mode]
       allOf:
         - if:
             properties:
-              mode: { const: fetch }
+              mode: { const: download }
           then:
-            required: [fetch_hook_url, credential]
+            required: [download_url, credential]
           else:
             required: [upstream_url]
         - if:
@@ -3135,7 +3135,7 @@ components:
         name: { type: string }
         ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
         version: { type: string }
-        mode: { type: string, enum: [public, proxy, fetch] }
+        mode: { type: string, enum: [public, proxy, download] }
         visibility: { $ref: "#/components/schemas/Visibility" }
         published: { type: boolean }
         revision: { type: integer, format: int64 }

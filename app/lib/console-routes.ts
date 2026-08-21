@@ -1,6 +1,6 @@
-export type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
+export type Section = "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 
-export type IntegrationTab = "overview" | "resources" | "tools" | "access" | "usage" | "support" | "revisions";
+export type IntegrationTab = "overview" | "resources" | "access" | "history";
 
 export type EntityKind =
   | "integration"
@@ -23,29 +23,25 @@ export type ConsoleRoute =
   | { kind: "section"; section: Section; path: string }
   | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; path: string }
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
-  | { kind: "not-found"; section: "overview"; path: string };
+  | { kind: "not-found"; section: "product"; path: string };
 
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "resources", label: "Resources" },
-  { id: "tools", label: "Tools & hooks" },
   { id: "access", label: "Access" },
-  { id: "usage", label: "Usage" },
-  { id: "support", label: "Support" },
-  { id: "revisions", label: "Revisions" },
+  { id: "history", label: "History" },
 ];
 
 export const SECTION_PATHS: Record<Section, string> = {
-  overview: "/overview",
   product: "/integrations",
   sources: "/integrations/documentation",
   packages: "/integrations/packages",
   tools: "/integrations/tools",
   connections: "/integrations/hooks-mcp",
   projects: "/access",
-  distribution: "/distribution",
+  distribution: "/agent-access",
   releases: "/distribution/releases",
-  runs: "/operations",
+  runs: "/activity",
   reporting: "/operations/reporting",
   analytics: "/insights",
   activity: "/insights/activity",
@@ -106,19 +102,29 @@ export function routeForIntegration(uid: string, integrationTab: IntegrationTab 
 
 export function parseConsolePath(pathname: string): ConsoleRoute {
   const path = normalizePath(pathname);
-  if (path === "/") return routeForSection("overview");
+  if (path === "/" || path === "/overview") return routeForSection("product");
+
+  const legacySections: Record<string, Section> = {
+    "/distribution": "distribution",
+    "/operations": "runs",
+    "/insights": "runs",
+    "/insights/activity": "runs",
+  };
+  if (legacySections[path]) return routeForSection(legacySections[path]);
 
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (section) return routeForSection(section);
 
   const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?$/);
   if (integrationMatch) {
-    const tab = (integrationMatch[2] ?? "overview") as IntegrationTab;
-    if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "overview", path };
+    const requestedTab = integrationMatch[2] ?? "overview";
+    const legacyTabs: Record<string, IntegrationTab> = { tools: "resources", usage: "overview", support: "overview", revisions: "history" };
+    const tab = (legacyTabs[requestedTab] ?? requestedTab) as IntegrationTab;
+    if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "product", path };
     try {
       return routeForIntegration(decodeURIComponent(integrationMatch[1]), tab);
     } catch {
-      return { kind: "not-found", section: "overview", path };
+      return { kind: "not-found", section: "product", path };
     }
   }
 
@@ -127,9 +133,9 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
     try {
       return routeForEntity(match[1] as EntityKind, decodeURIComponent(match[2]));
     } catch {
-      return { kind: "not-found", section: "overview", path };
+      return { kind: "not-found", section: "product", path };
     }
   }
 
-  return { kind: "not-found", section: "overview", path };
+  return { kind: "not-found", section: "product", path };
 }

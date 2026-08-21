@@ -13,77 +13,76 @@ async function render() {
   );
 }
 
-test("server-renders the DokoSoko console overview", async () => {
+test("server-renders the DokoSoko API directory", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>DokoSoko — Agent delivery control plane<\/title>/i);
-  assert.match(html, /Connector readiness/);
-  assert.match(html, /Quick actions/);
-  assert.match(html, /Integrations/);
-  assert.match(html, /Operations/);
-  assert.match(html, /Insights/);
-  assert.match(html, /href="\/overview"/);
+  assert.match(html, />APIs</);
+  assert.match(html, /Agent access/);
+  assert.match(html, /Activity/);
+  assert.doesNotMatch(html, /Connector readiness|Quick actions|>Overview</);
   assert.match(html, /href="\/integrations"/);
-  assert.match(html, /href="\/operations"/);
+  assert.match(html, /href="\/agent-access"/);
+  assert.match(html, /href="\/activity"/);
   assert.match(html, /href="\/settings"/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("groups the console into workflow navigation with contextual sections", async () => {
+test("keeps the global navigation to four obvious destinations", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
 
-  for (const label of ["Overview", "Integrations", "Access", "Distribution", "Operations", "Insights"]) {
+  for (const label of ["APIs", "Agent access", "Activity"]) {
     assert.match(source, new RegExp(`label: "${label}"`));
   }
-  for (const secondary of ["Documentation", "Packages", "Tools", "Hooks & MCP", "Connector releases", "Support reporting", "Activity & audit"]) {
-    assert.ok(source.includes(`label: "${secondary}"`));
+  for (const removed of ["label: \"Overview\"", "label: \"Integrations\"", "label: \"Access\"", "label: \"Distribution\"", "label: \"Operations\"", "label: \"Insights\""]) {
+    assert.ok(!source.includes(removed), `${removed} should not remain in primary navigation`);
   }
   assert.match(source, /useState<ConsoleRoute>/);
   assert.doesNotMatch(source, /setSection/);
   assert.match(source, /window\.history\[method\]/);
-  assert.match(source, /className="section-tabs"/);
+  assert.match(source, /window\.history\.replaceState\(null, "", `\$\{next\.path\}/);
+  assert.doesNotMatch(source, /replaceState\(null, "", `\$\{sectionPath\("overview"\)/);
+  assert.doesNotMatch(source, /className="section-tabs"/);
   assert.match(source, /className="mobile-navigation"/);
-  for (const path of ["/overview", "/integrations", "/integrations/documentation", "/access", "/distribution/releases", "/operations/reporting", "/insights/activity", "/settings"]) {
+  for (const path of ["/integrations", "/agent-access", "/activity", "/settings"]) {
     assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
   }
   for (const entity of ["integration", "resource-set", "source", "package", "tool", "connection", "release", "run", "support-route", "report", "audit-event", "root-user"]) {
     assert.ok(routes.includes(`| "${entity}"`) || routes.includes(`  ${entity}:`), `${entity} should be routable`);
   }
   assert.match(styles, /\.sidebar > nav/);
-  assert.match(styles, /\.section-tab\.active/);
   assert.match(styles, /\.entity-detail-grid/);
   assert.match(styles, /\.package-columns \{ grid-template-columns: [^}]+ 104px; \}/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
 });
 
-test("uses an Integration directory and URL-addressed contextual workspace", async () => {
+test("uses an API directory and a four-tab contextual workspace", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  for (const label of ["Overview", "Resources", "Tools & hooks", "Access", "Usage", "Support", "Revisions"]) {
-    assert.ok(routes.includes(`label: "${label}"`), `${label} Integration tab should be registered`);
+  for (const label of ["Overview", "Resources", "Access", "History"]) {
+    assert.ok(routes.includes(`label: "${label}"`), `${label} API tab should be registered`);
   }
-  assert.match(source, /activeNavigation\.id !== "integrations"/);
+  for (const removed of ["Tools & hooks", "label: \"Usage\"", "label: \"Support\"", "label: \"Revisions\""]) assert.ok(!routes.includes(removed));
   assert.match(source, /className="integration-tabs"/);
   assert.match(source, /IntegrationDirectoryView/);
   assert.match(source, /IntegrationWorkspaceView/);
-  assert.match(source, /Published revision history/);
-  assert.match(source, /Switch Integration/);
-  assert.match(source, /Setup & health/);
-  assert.match(source, /Publish readiness/);
-  assert.match(source, /Review the complete draft-versus-published diff/);
-  assert.match(source, /Filter by API family/);
-  assert.match(source, /Filter by setup state/);
-  assert.match(source, /complete immutable snapshot/);
+  assert.match(source, /Published history/);
+  assert.match(source, /Switch API/);
+  assert.match(source, /Only unresolved actions appear here/);
+  assert.match(source, /Customer usage/);
+  assert.match(source, /Advanced details/);
+  assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state/);
   assert.match(styles, /\.integration-directory-columns/);
   assert.match(styles, /\.integration-tab\.active/);
+  assert.match(styles, /\.advanced-details/);
   assert.match(client, /integration: \(integrationID: string\)/);
   assert.match(client, /APIIntegrationRevision/);
   assert.match(client, /APIIntegrationPublishStatus/);
@@ -113,30 +112,30 @@ test("keeps private defaults and guarded public transitions in the client contra
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
 
-test("ships the automatic Product Definition review flow", async () => {
+test("imports APIs without exposing Product Definition as a product concept", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Build product automatically/);
+  assert.match(source, /title="Import APIs"/);
   assert.match(source, /Review exceptions, not configuration/);
-  assert.match(source, /Independent API tracks/);
   assert.match(source, /Voice API/);
   assert.match(source, /Messages API/);
   assert.match(source, /Stateless MCPv2 Only/);
+  assert.doesNotMatch(source, /Auto-magic|title="Product definition"|Build product automatically/);
   assert.match(client, /product-builds/);
   assert.match(client, /publishProductBuild/);
 });
 
-test("ships deployment-release discovery, lifecycle, pinning, and AI rewrite controls", async () => {
+test("keeps immutable publishing controls behind advanced settings", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Deployment discovery & connector releases/);
+  assert.match(source, /title="Advanced publishing"/);
+  assert.match(source, />Advanced publishing</);
   assert.match(source, /Rewrite for agents/);
-  assert.match(source, /Publish connector release/);
+  assert.match(source, /Publish compatibility snapshot/);
   assert.match(source, /Scoped version pins/);
-  assert.match(source, /immutable connector-release integrity/);
-  assert.match(source, /Integration installations/);
+  assert.match(source, /Customer installations/);
   assert.match(source, /generated release diff/);
   assert.match(source, /Independent approval required/);
   assert.match(source, /No silent migration/);
@@ -152,13 +151,13 @@ test("ships the private vendor-proxied usage report configuration", async () => 
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Usage report hook/);
+  assert.match(source, /Customer usage endpoint/);
+  assert.match(source, /Customer account data/);
   assert.match(source, /read-only usage\.get tool on Private MCP/);
-  assert.match(source, /Returned values are proxied without storage/);
+  assert.match(source, /customer-defined values are proxied without storage/i);
   assert.match(source, /Rotate usage credential/);
-  assert.match(source, /Vendor-owned, customer-defined, proxied only/);
-  assert.match(source, /Configure usage report proxy/);
-  assert.match(source, /Maximum values/);
+  assert.match(source, /Up to 50 customer-defined values/);
+  assert.doesNotMatch(source, /label: "Usage"/);
   assert.match(client, /usage_hook_url/);
   assert.match(client, /usage_credential/);
 });
@@ -167,34 +166,35 @@ test("ships consent-gated support reporting configuration and inbox", async () =
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Support reporting/);
-  assert.match(source, /support\.report_bug/);
-  assert.match(source, /support\.submit_feedback/);
-  assert.match(source, /encrypted holding/);
-  assert.match(source, /Submission inbox/);
+  assert.match(source, /Bug reports & feedback/);
+  assert.match(source, /Consent is enforced/);
+  assert.match(source, /Encrypted local holding/);
+  assert.match(source, /Delivery policies/);
   assert.match(source, />View<\/Button>/);
   assert.match(source, />Retry<\/Button>/);
-  assert.match(source, /Fixed agent policy/);
+  assert.match(source, /className="activity-toolbar"/);
   assert.match(client, /report-submissions/);
-  assert.match(source, /Default route for Integrations without an override/);
+  assert.match(source, /Use as the default for all APIs/);
+  assert.match(source, /Support webhook configured/);
   assert.match(source, /Leave empty to hold locally/);
   assert.match(client, /createSupportRoute/);
   assert.match(client, /updateSupportRoute/);
   assert.match(client, /retryReportSubmission/);
 });
 
-test("ships first-class Integration, reusable-set, and provider-access management", async () => {
+test("ships first-class API, reusable resource, and service-connection management", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /New Integration/);
+  assert.match(source, /Add API/);
   assert.match(source, /Create reusable resource set/);
   assert.match(source, /Duplicate resource set/);
   assert.match(source, /Pin the current revision instead of following latest/);
-  assert.match(source, /Create service definition/);
+  assert.match(source, /Create service type/);
   assert.match(source, /One fixed instance/);
   assert.match(source, /Multiple provider resources/);
-  assert.match(source, /Allowed Integrations/);
+  assert.match(source, /Allowed APIs/);
+  assert.match(source, /Tool backend/);
   assert.match(client, /createIntegration/);
   assert.match(client, /updateIntegration/);
   assert.match(client, /duplicateResourceSet/);

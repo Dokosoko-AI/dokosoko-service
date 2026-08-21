@@ -580,7 +580,7 @@ type Package struct {
 	Version        string     `json:"version"`
 	Mode           string     `json:"mode"`
 	Location       string     `json:"-"`
-	FetchHookURL   string     `json:"-"`
+	DownloadURL    string     `json:"-"`
 	CredentialID   string     `json:"-"`
 	ChecksumSHA256 []byte     `json:"-"`
 	ExpectedSize   int64      `json:"-"`

@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
-  title: DokoSoko Vendor Hooks API
-  version: 2026-08-19
+  title: DokoSoko Vendor Integration APIs
+  version: 2026-08-22
   description: >-
     Reference contract for the vendor endpoints DokoSoko calls to resolve
     entitlements, proxy customer usage reports, deliver consented bug reports
-    and feedback, authorize custom-tool execution, and obtain short-lived package URLs. The paths in this document
-    are examples: DokoSoko stores a fixed full HTTPS URL for each hook, so
-    vendors may choose different paths.
+    and feedback, authorize custom-tool execution, and create short-lived package downloads. The
+    /v1/package/download path is normative. DokoSoko stores a configurable fixed
+    HTTPS URL for every other operation, so their paths are illustrative.
 servers:
   - url: https://hooks.vendor.example.com
 tags:
@@ -194,42 +194,80 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
-  /package-fetch:
+  /v1/package/download:
     post:
       tags: [Package delivery]
       operationId: createPackageDownload
-      summary: Create a short-lived package download
+      summary: Create an idempotent short-lived package download
       description: >-
-        Used only by fetch-mode packages. Return a short-lived HTTPS URL and
-        integrity metadata. DokoSoko revalidates the destination, downloads the
-        artifact without forwarding this hook credential, and enforces the
-        returned checksum and size when provided.
+        Used only by download-mode packages. DokoSoko may retry network errors,
+        429 responses, and 5xx responses with the same Idempotency-Key. The
+        vendor must retain idempotency results for at least 24 hours and return
+        the same logical download for the same key. Return a
+        credential-free HTTPS URL with exact integrity metadata and an expiry at
+        least five minutes and no more than one hour in the future. DokoSoko
+        revalidates the destination, never forwards the service credential to
+        the returned URL, and enforces the checksum and size. Successful
+        responses should include Cache-Control: no-store.
       security: [{ serviceBearer: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DokoSokoVersion"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DokoSokoRequestID"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/PackageFetchRequest" }
+            schema: { $ref: "#/components/schemas/PackageDownloadRequest" }
             example:
               package_id: pkg_01
+              product_id: prod_dokosoko
               ecosystem: npm
               name: "@vendor/sdk"
               version: 2.4.1
       responses:
         "200":
           description: Short-lived, credential-free artifact location.
+          headers:
+            Cache-Control:
+              description: Prevents storage of short-lived artifact credentials by intermediaries.
+              schema: { type: string, const: no-store }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PackageFetchResponse" }
+              schema: { $ref: "#/components/schemas/PackageDownload" }
               example:
+                id: download_01
                 url: https://downloads.vendor.example.com/leases/download_01
                 sha256: 81b637d8f6d2c6b1f4e9d349a442e980a84161f96ea101da2c96cf86723bb7ef
-                size: 184320
-                expires_at: "2026-08-19T12:05:00Z"
+                size_bytes: 184320
+                expires_at: "2026-08-22T12:10:00Z"
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
 components:
+  parameters:
+    DokoSokoVersion:
+      name: DokoSoko-Version
+      in: header
+      required: true
+      description: Pinned package-download contract version.
+      schema: { const: "2026-08-22" }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable identifier reused for every retry of one logical download creation.
+      schema: { type: string, pattern: '^pkgdl_[a-f0-9]{32}$' }
+    DokoSokoRequestID:
+      name: X-DokoSoko-Request-ID
+      in: header
+      required: true
+      description: Unique correlation identifier for one HTTP attempt. A retry uses a new request ID and the same Idempotency-Key.
+      schema: { type: string, pattern: '^req_[a-f0-9]{32}$' }
   securitySchemes:
     vendorAccessToken:
       type: http
@@ -423,28 +461,26 @@ components:
       properties:
         external_id: { type: string, maxLength: 200 }
         external_url: { type: string, format: uri, pattern: '^https://', maxLength: 2000, description: Optional HTTPS link to the external ticket or feedback record. }
-    PackageFetchRequest:
+    PackageDownloadRequest:
       type: object
       additionalProperties: false
       properties:
         package_id: { type: string, minLength: 1 }
+        product_id: { type: string, minLength: 1 }
         ecosystem: { type: string, enum: [npm, go, git, maven, android, swift, nuget] }
         name: { type: string, minLength: 1 }
         version: { type: string, minLength: 1 }
-      required: [package_id, ecosystem, name, version]
-    PackageFetchResponse:
+      required: [package_id, product_id, ecosystem, name, version]
+    PackageDownload:
       type: object
-      additionalProperties: false
+      description: Clients must ignore fields they do not recognize so this response can evolve additively.
       properties:
+        id: { type: string, minLength: 1, maxLength: 200 }
         url: { type: string, format: uri, description: Short-lived credential-free HTTPS artifact URL. }
-        sha256:
-          oneOf:
-            - { type: string, pattern: "^[A-Fa-f0-9]{64}$" }
-            - { const: "" }
-          description: Empty disables checksum comparison; a SHA-256 digest is strongly recommended.
-        size: { type: integer, format: int64, minimum: 0, description: Zero means unknown; a positive size is enforced exactly. }
-        expires_at: { type: string, format: date-time }
-      required: [url, sha256, size, expires_at]
+        sha256: { type: string, pattern: "^[A-Fa-f0-9]{64}$", description: Exact SHA-256 digest enforced by DokoSoko. }
+        size_bytes: { type: integer, format: int64, minimum: 0, maximum: 1073741824, description: Exact artifact size in bytes; the current gateway limit is 1 GiB. }
+        expires_at: { type: string, format: date-time, description: At least five minutes and no more than one hour after response creation. }
+      required: [id, url, sha256, size_bytes, expires_at]
     ErrorEnvelope:
       type: object
       additionalProperties: false

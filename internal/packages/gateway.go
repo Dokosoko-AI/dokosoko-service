@@ -3,6 +3,7 @@ package packages
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,16 @@ import (
 var (
 	ErrUnsafeURL       = errors.New("package endpoint resolves to a disallowed network")
 	ErrArtifactInvalid = errors.New("package artifact failed integrity validation")
+)
+
+const (
+	packageDownloadAPIVersion = "2026-08-22"
+	packageDownloadPath       = "/v1/package/download"
+	maxDownloadResponseBytes  = 1 << 20
+	minDownloadLifetime       = 5 * time.Minute
+	maxDownloadLifetime       = time.Hour
+	maxDownloadAttempts       = 2
+	defaultMaxArtifactBytes   = 1 << 30
 )
 
 type Store interface {
@@ -78,7 +90,7 @@ func New(store Store, vault *secrets.Vault, config Config) *Gateway {
 		config.DataDirectory = os.TempDir()
 	}
 	if config.MaxBytes <= 0 {
-		config.MaxBytes = 1 << 30
+		config.MaxBytes = defaultMaxArtifactBytes
 	}
 	if config.Resolver == nil {
 		config.Resolver = net.DefaultResolver
@@ -193,11 +205,162 @@ func (g *Gateway) decryptCredential(ctx context.Context, pkg model.Package) (str
 	return string(plaintext), err
 }
 
-type fetchResponse struct {
+type downloadResponse struct {
+	ID        string `json:"id"`
 	URL       string `json:"url"`
 	SHA256    string `json:"sha256"`
-	Size      int64  `json:"size"`
+	SizeBytes *int64 `json:"size_bytes"`
 	ExpiresAt string `json:"expires_at"`
+}
+
+func packageDownloadIdentifier(prefix string) (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return prefix + hex.EncodeToString(value), nil
+}
+
+func packageDownloadRetryable(status int) bool {
+	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func packageDownloadRetryDelay(response *http.Response, attempt int) time.Duration {
+	if response != nil {
+		if raw := strings.TrimSpace(response.Header.Get("Retry-After")); raw != "" {
+			if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
+				delay := time.Duration(seconds) * time.Second
+				if delay > 2*time.Second {
+					return 2 * time.Second
+				}
+				return delay
+			}
+			if at, err := http.ParseTime(raw); err == nil {
+				delay := time.Until(at)
+				if delay < 0 {
+					return 0
+				}
+				if delay > 2*time.Second {
+					return 2 * time.Second
+				}
+				return delay
+			}
+		}
+	}
+	return time.Duration(attempt+1) * 50 * time.Millisecond
+}
+
+func waitForPackageDownloadRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (g *Gateway) requestPackageDownload(ctx context.Context, pkg model.Package, credential, idempotencyKey, requestID string, body []byte) (*http.Response, error) {
+	parsed, address, err := g.safeEndpoint(ctx, pkg.DownloadURL)
+	if err != nil || parsed.Path != packageDownloadPath || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, ErrUnsafeURL
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+credential)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	request.Header.Set("X-DokoSoko-Request-ID", requestID)
+	request.Header.Set("DokoSoko-Version", packageDownloadAPIVersion)
+	request.Header.Set("User-Agent", "DokoSokoPackageGateway/3.0")
+	return g.clientFor(parsed, address).Do(request)
+}
+
+func (g *Gateway) validatePackageDownload(pkg model.Package, response downloadResponse) (string, string, int64, error) {
+	if response.ID == "" || len(response.ID) > 200 {
+		return "", "", 0, errors.New("package download response has an invalid id")
+	}
+	digest, err := hex.DecodeString(response.SHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return "", "", 0, errors.New("package download response has an invalid sha256")
+	}
+	if response.SizeBytes == nil || *response.SizeBytes < 0 || *response.SizeBytes > g.maxBytes {
+		return "", "", 0, errors.New("package download response has an invalid size_bytes")
+	}
+	artifactURL, err := url.Parse(response.URL)
+	if err != nil || artifactURL.Scheme != "https" || artifactURL.Hostname() == "" || artifactURL.User != nil || artifactURL.Fragment != "" || (artifactURL.Port() != "" && artifactURL.Port() != "443") {
+		return "", "", 0, errors.New("package download response has an invalid url")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, response.ExpiresAt)
+	now := time.Now().UTC()
+	if err != nil || expiresAt.Before(now.Add(minDownloadLifetime)) || expiresAt.After(now.Add(maxDownloadLifetime)) {
+		return "", "", 0, errors.New("package download response has an invalid expires_at")
+	}
+	if len(pkg.ChecksumSHA256) > 0 && !strings.EqualFold(hex.EncodeToString(pkg.ChecksumSHA256), response.SHA256) {
+		return "", "", 0, fmt.Errorf("%w: package download checksum does not match the published package", ErrArtifactInvalid)
+	}
+	if pkg.ExpectedSize > 0 && pkg.ExpectedSize != *response.SizeBytes {
+		return "", "", 0, fmt.Errorf("%w: package download size does not match the published package", ErrArtifactInvalid)
+	}
+	return response.URL, strings.ToLower(response.SHA256), *response.SizeBytes, nil
+}
+
+func (g *Gateway) createPackageDownload(ctx context.Context, pkg model.Package, credential string) (string, string, int64, error) {
+	idempotencyKey, err := packageDownloadIdentifier("pkgdl_")
+	if err != nil {
+		return "", "", 0, err
+	}
+	payload, err := json.Marshal(map[string]string{"package_id": pkg.ID, "product_id": pkg.ProductID, "ecosystem": pkg.Ecosystem, "name": pkg.Name, "version": pkg.Version})
+	if err != nil {
+		return "", "", 0, err
+	}
+	for attempt := 0; attempt < maxDownloadAttempts; attempt++ {
+		requestID, err := packageDownloadIdentifier("req_")
+		if err != nil {
+			return "", "", 0, err
+		}
+		response, requestErr := g.requestPackageDownload(ctx, pkg, credential, idempotencyKey, requestID, payload)
+		if requestErr != nil {
+			if attempt+1 < maxDownloadAttempts {
+				if err := waitForPackageDownloadRetry(ctx, packageDownloadRetryDelay(nil, attempt)); err != nil {
+					return "", "", 0, err
+				}
+				continue
+			}
+			return "", "", 0, requestErr
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDownloadResponseBytes))
+			_ = response.Body.Close()
+			if attempt+1 < maxDownloadAttempts && packageDownloadRetryable(response.StatusCode) {
+				if err := waitForPackageDownloadRetry(ctx, packageDownloadRetryDelay(response, attempt)); err != nil {
+					return "", "", 0, err
+				}
+				continue
+			}
+			return "", "", 0, fmt.Errorf("package download endpoint returned %s", response.Status)
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxDownloadResponseBytes+1))
+		_ = response.Body.Close()
+		if readErr != nil || len(raw) > maxDownloadResponseBytes {
+			return "", "", 0, errors.New("package download response is too large")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		var value downloadResponse
+		if err := decoder.Decode(&value); err != nil {
+			return "", "", 0, fmt.Errorf("invalid package download response: %w", err)
+		}
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			return "", "", 0, errors.New("invalid package download response: trailing JSON content")
+		}
+		return g.validatePackageDownload(pkg, value)
+	}
+	return "", "", 0, errors.New("package download endpoint retry limit exceeded")
 }
 
 func (g *Gateway) resolve(ctx context.Context, pkg model.Package, credential string) (string, string, int64, error) {
@@ -206,27 +369,8 @@ func (g *Gateway) resolve(ctx context.Context, pkg model.Package, credential str
 		return pkg.Location, hex.EncodeToString(pkg.ChecksumSHA256), pkg.ExpectedSize, nil
 	case "proxy":
 		return pkg.Location, hex.EncodeToString(pkg.ChecksumSHA256), pkg.ExpectedSize, nil
-	case "fetch":
-		payload, _ := json.Marshal(map[string]string{"package_id": pkg.ID, "ecosystem": pkg.Ecosystem, "name": pkg.Name, "version": pkg.Version})
-		response, err := g.request(ctx, http.MethodPost, pkg.FetchHookURL, credential, bytes.NewReader(payload))
-		if err != nil {
-			return "", "", 0, err
-		}
-		defer response.Body.Close()
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return "", "", 0, fmt.Errorf("fetch hook returned %s", response.Status)
-		}
-		var value fetchResponse
-		decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&value); err != nil {
-			return "", "", 0, fmt.Errorf("invalid fetch hook response: %w", err)
-		}
-		expiresAt, err := time.Parse(time.RFC3339, value.ExpiresAt)
-		if err != nil || !expiresAt.After(time.Now().UTC()) {
-			return "", "", 0, errors.New("fetch hook returned an expired link")
-		}
-		return value.URL, value.SHA256, value.Size, nil
+	case "download":
+		return g.createPackageDownload(ctx, pkg, credential)
 	default:
 		return "", "", 0, errors.New("unsupported package mode")
 	}
@@ -249,7 +393,7 @@ func (g *Gateway) Acquire(ctx context.Context, productID, packageID string) (*Ar
 		return nil, err
 	}
 	artifactCredential := credential
-	if pkg.Mode == "fetch" {
+	if pkg.Mode == "download" {
 		artifactCredential = ""
 	}
 	response, err := g.request(ctx, http.MethodGet, endpoint, artifactCredential, nil)

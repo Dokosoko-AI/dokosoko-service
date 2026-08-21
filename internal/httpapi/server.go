@@ -1745,7 +1745,7 @@ func (s *Server) packages(w http.ResponseWriter, r *http.Request, productID stri
 			Version        string `json:"version"`
 			Mode           string `json:"mode"`
 			UpstreamURL    string `json:"upstream_url"`
-			FetchHookURL   string `json:"fetch_hook_url"`
+			DownloadURL    string `json:"download_url"`
 			Credential     string `json:"credential"`
 			ChecksumSHA256 string `json:"checksum_sha256"`
 			ExpectedSize   int64  `json:"expected_size"`
@@ -1754,7 +1754,7 @@ func (s *Server) packages(w http.ResponseWriter, r *http.Request, productID stri
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreatePackage(r.Context(), platform.PackageInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, Mode: input.Mode, UpstreamURL: input.UpstreamURL, FetchHookURL: input.FetchHookURL, Credential: input.Credential, ChecksumSHA256: input.ChecksumSHA256, ExpectedSize: input.ExpectedSize}, actor(r))
+		value, err := s.service.CreatePackage(r.Context(), platform.PackageInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, Mode: input.Mode, UpstreamURL: input.UpstreamURL, DownloadURL: input.DownloadURL, Credential: input.Credential, ChecksumSHA256: input.ChecksumSHA256, ExpectedSize: input.ExpectedSize}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return

@@ -111,6 +111,63 @@ func TestPackageCredentialIsEncryptedAndExcludedFromAPIRepresentation(t *testing
 	}
 }
 
+func TestPackageDownloadRequiresTheVersionedContractEndpoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x74}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVault(memory, vault)
+	input := platform.PackageInput{
+		OrganisationID: "org_acme",
+		ProductID:      "prod_acme",
+		Name:           "@acme/private",
+		Ecosystem:      "npm",
+		Version:        "1.0.0",
+		Mode:           "download",
+		DownloadURL:    "https://packages.example.com/v1/package/download",
+		Credential:     "download-service-token",
+	}
+	pkg, err := service.CreatePackage(ctx, input, platform.Actor{ID: "root", RequestID: "req_package_download"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.Mode != "download" || pkg.DownloadURL != input.DownloadURL {
+		t.Fatalf("package download configuration = %#v", pkg)
+	}
+	encoded, err := json.Marshal(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("download-service-token")) || bytes.Contains(encoded, []byte(input.DownloadURL)) {
+		t.Fatalf("download configuration leaked in JSON: %s", encoded)
+	}
+
+	invalid := []struct {
+		name string
+		mode string
+		url  string
+	}{
+		{name: "legacy mode", mode: "fetch", url: input.DownloadURL},
+		{name: "legacy path", mode: "download", url: "https://packages.example.com/package-fetch"},
+		{name: "encoded path", mode: "download", url: "https://packages.example.com/v1/package/%64ownload"},
+		{name: "query string", mode: "download", url: input.DownloadURL + "?tenant=acme"},
+		{name: "nonstandard port", mode: "download", url: "https://packages.example.com:8443/v1/package/download"},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := input
+			candidate.Mode = test.mode
+			candidate.DownloadURL = test.url
+			if _, err := service.CreatePackage(ctx, candidate, platform.Actor{ID: "root"}); err == nil {
+				t.Fatalf("CreatePackage accepted mode %q and URL %q", test.mode, test.url)
+			}
+		})
+	}
+}
+
 func TestUsageHookCredentialIsEncryptedAndExcludedFromIdentityAPI(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
