@@ -76,6 +76,35 @@ export type APIIntegrationRevision = {
   created_at: string;
 };
 
+export type APIIntegrationPublishChange = {
+  field: string;
+  before?: unknown;
+  after?: unknown;
+};
+
+export type APIIntegrationPublishValidation = {
+  level: "warning" | "error";
+  code: string;
+  message: string;
+  tab: string;
+};
+
+export type APIIntegrationPublishStatus = {
+  ready: boolean;
+  has_changes: boolean;
+  current_manifest_hash: string;
+  current_snapshot: Record<string, unknown>;
+  latest_revision?: APIIntegrationRevision;
+  changes: APIIntegrationPublishChange[];
+  validations: APIIntegrationPublishValidation[];
+};
+
+export type APIIntegrationDetail = {
+  integration: APIIntegration;
+  revisions: APIIntegrationRevision[];
+  publish_status: APIIntegrationPublishStatus;
+};
+
 export type APIResourceSet = {
   id: string;
   deployment_id: string;
@@ -711,10 +740,12 @@ export const api = {
   deploymentEnvironments: async () => (await request<{ items: APIEnvironment[] }>("/api/v1/environments")).items,
   createDeploymentEnvironment: (organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>("/api/v1/environments", { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   integrations: async () => (await request<{ items: APIIntegration[] }>("/api/v1/integrations")).items,
-  integration: (integrationID: string) => request<{ integration: APIIntegration; revisions: APIIntegrationRevision[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
+  integration: (integrationID: string) => request<APIIntegrationDetail>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "lifecycle" | "revision"> & { replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PATCH", body: JSON.stringify(input) }),
   publishIntegration: (integrationID: string) => request<APIIntegrationRevision>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
+  setIntegrationAccessConnections: (integrationID: string, accessConnectionIDs: string[]) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/access-connections`, { method: "PUT", body: JSON.stringify({ access_connection_ids: accessConnectionIDs }) }),
+  setIntegrationSupportRoute: (integrationID: string, supportRouteID: string) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/support-route`, { method: "PUT", body: JSON.stringify({ support_route_id: supportRouteID }) }),
   resourceSets: async (kind = "") => (await request<{ items: APIResourceSet[] }>(`/api/v1/resource-sets${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`)).items,
   createResourceSet: (input: { kind: APIResourceSet["kind"]; name: string; description: string; manifest: Array<Record<string, unknown>> }) => request<APIResourceSet>("/api/v1/resource-sets", { method: "POST", body: JSON.stringify(input) }),
   updateResourceSet: (setID: string, input: { name: string; description: string; state: APIResourceSet["state"]; manifest: Array<Record<string, unknown>>; revision: number }) => request<APIResourceSet>(`/api/v1/resource-sets/${encodeURIComponent(setID)}`, { method: "PATCH", body: JSON.stringify(input) }),

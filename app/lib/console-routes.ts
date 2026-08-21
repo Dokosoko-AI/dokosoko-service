@@ -1,6 +1,6 @@
 export type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 
-export type IntegrationTab = "overview" | "resources" | "tools" | "access" | "support" | "revisions";
+export type IntegrationTab = "overview" | "resources" | "tools" | "access" | "usage" | "support" | "revisions";
 
 export type EntityKind =
   | "integration"
@@ -30,6 +30,7 @@ export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
   { id: "resources", label: "Resources" },
   { id: "tools", label: "Tools & hooks" },
   { id: "access", label: "Access" },
+  { id: "usage", label: "Usage" },
   { id: "support", label: "Support" },
   { id: "revisions", label: "Revisions" },
 ];

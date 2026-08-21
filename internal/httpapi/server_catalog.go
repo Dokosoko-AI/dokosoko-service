@@ -128,7 +128,12 @@ func (s *Server) integration(w http.ResponseWriter, r *http.Request, integration
 			return
 		}
 		revisions, _ := s.service.Store().IntegrationRevisions(r.Context(), integrationID)
-		writeJSON(w, http.StatusOK, map[string]any{"integration": value, "revisions": revisions})
+		publishStatus, err := s.service.IntegrationPublishStatus(r.Context(), integrationID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"integration": value, "revisions": revisions, "publish_status": publishStatus})
 	case http.MethodPatch:
 		var input struct {
 			FamilyKey                string     `json:"family_key"`
@@ -154,6 +159,38 @@ func (s *Server) integration(w http.ResponseWriter, r *http.Request, integration
 		w.Header().Set("Allow", "GET, PATCH")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) integrationAccessConnections(w http.ResponseWriter, r *http.Request, integrationID string) {
+	var input struct {
+		AccessConnectionIDs []string `json:"access_connection_ids"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.SetIntegrationAccessConnections(r.Context(), integrationID, input.AccessConnectionIDs, actor(r))
+	if err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) integrationSupportRoute(w http.ResponseWriter, r *http.Request, integrationID string) {
+	var input struct {
+		SupportRouteID string `json:"support_route_id"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.SetIntegrationSupportRoute(r.Context(), integrationID, input.SupportRouteID, actor(r))
+	if err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) publishIntegration(w http.ResponseWriter, r *http.Request, integrationID string) {

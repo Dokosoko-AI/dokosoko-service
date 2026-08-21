@@ -557,6 +557,41 @@ func (p *Postgres) CreateAccessConnection(ctx context.Context, value model.Acces
 	return p.enrichAccessConnection(ctx, created)
 }
 
+func (p *Postgres) SetIntegrationAccessConnections(ctx context.Context, deploymentID, integrationID string, connectionIDs []string, createdBy string) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM integrations WHERE id=$1 AND deployment_id=$2)`, integrationID, deploymentID).Scan(&exists); err != nil {
+		return databaseError(err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	for _, connectionID := range connectionIDs {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM access_connections WHERE id=$1 AND deployment_id=$2)`, connectionID, deploymentID).Scan(&exists); err != nil {
+			return databaseError(err)
+		}
+		if !exists {
+			return ErrNotFound
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM integration_access_bindings WHERE integration_id=$1`, integrationID); err != nil {
+		return databaseError(err)
+	}
+	for _, connectionID := range connectionIDs {
+		if _, err := tx.Exec(ctx, `INSERT INTO integration_access_bindings(integration_id,access_connection_id,created_by) VALUES($1,$2,$3)`, integrationID, connectionID, createdBy); err != nil {
+			return databaseError(err)
+		}
+	}
+	if err := bumpDeploymentCatalog(ctx, tx, deploymentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 const accessInstanceSelect = `SELECT id::text,deployment_id::text,organisation_id::text,access_connection_id::text,environment_id::text,owner_type,owner_id,external_id,display_name,idempotency_key,state,provider_metadata,expires_at,created_at,updated_at FROM access_instances`
 
 func scanAccessInstance(row pgx.Row) (model.AccessInstance, error) {
@@ -794,4 +829,39 @@ func (p *Postgres) SaveSupportRoute(ctx context.Context, value model.SupportRout
 		return model.SupportRoute{}, err
 	}
 	return p.enrichSupportRoute(ctx, saved)
+}
+
+func (p *Postgres) SetIntegrationSupportRoute(ctx context.Context, deploymentID, integrationID, routeID, createdBy string) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM integrations WHERE id=$1 AND deployment_id=$2)`, integrationID, deploymentID).Scan(&exists); err != nil {
+		return databaseError(err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	if routeID != "" {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM support_routes WHERE id=$1 AND deployment_id=$2 AND state='active')`, routeID, deploymentID).Scan(&exists); err != nil {
+			return databaseError(err)
+		}
+		if !exists {
+			return ErrNotFound
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM integration_support_bindings WHERE integration_id=$1`, integrationID); err != nil {
+		return databaseError(err)
+	}
+	if routeID != "" {
+		if _, err := tx.Exec(ctx, `INSERT INTO integration_support_bindings(integration_id,support_route_id,created_by) VALUES($1,$2,$3)`, integrationID, routeID, createdBy); err != nil {
+			return databaseError(err)
+		}
+	}
+	if err := bumpDeploymentCatalog(ctx, tx, deploymentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

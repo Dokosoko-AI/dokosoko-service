@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -172,6 +173,67 @@ func (s *Service) UpdateIntegration(ctx context.Context, integrationID string, i
 	return updated, nil
 }
 
+func (s *Service) SetIntegrationAccessConnections(ctx context.Context, integrationID string, connectionIDs []string, actor Actor) (model.Integration, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return model.Integration{}, err
+	}
+	if _, err := s.store.Integration(ctx, deployment.ID, integrationID); err != nil {
+		return model.Integration{}, err
+	}
+	selected := make([]string, 0, len(connectionIDs))
+	seen := make(map[string]bool, len(connectionIDs))
+	for _, connectionID := range connectionIDs {
+		connectionID = strings.TrimSpace(connectionID)
+		if connectionID == "" || seen[connectionID] {
+			continue
+		}
+		if _, err := s.store.AccessConnection(ctx, deployment.ID, connectionID); err != nil {
+			return model.Integration{}, errors.New("every access binding must reference a connection in this deployment")
+		}
+		seen[connectionID] = true
+		selected = append(selected, connectionID)
+	}
+	if err := s.store.SetIntegrationAccessConnections(ctx, deployment.ID, integrationID, selected, actor.ID); err != nil {
+		return model.Integration{}, err
+	}
+	updated, err := s.store.Integration(ctx, deployment.ID, integrationID)
+	if err != nil {
+		return model.Integration{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.access_connections.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"access_connection_ids": updated.AccessConnections}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return updated, nil
+}
+
+func (s *Service) SetIntegrationSupportRoute(ctx context.Context, integrationID, routeID string, actor Actor) (model.Integration, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return model.Integration{}, err
+	}
+	if _, err := s.store.Integration(ctx, deployment.ID, integrationID); err != nil {
+		return model.Integration{}, err
+	}
+	routeID = strings.TrimSpace(routeID)
+	if routeID != "" {
+		route, err := s.store.SupportRoute(ctx, deployment.ID, routeID)
+		if err != nil || route.State != "active" {
+			return model.Integration{}, errors.New("support binding must reference an active route in this deployment")
+		}
+		if route.IsDefault {
+			routeID = ""
+		}
+	}
+	if err := s.store.SetIntegrationSupportRoute(ctx, deployment.ID, integrationID, routeID, actor.ID); err != nil {
+		return model.Integration{}, err
+	}
+	updated, err := s.store.Integration(ctx, deployment.ID, integrationID)
+	if err != nil {
+		return model.Integration{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.support_route.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"support_route_id": updated.SupportRouteID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return updated, nil
+}
+
 func normalizeManifest(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		raw = json.RawMessage(`[]`)
@@ -332,6 +394,137 @@ func (s *Service) DetachResourceSet(ctx context.Context, integrationID, setID st
 	return nil
 }
 
+type IntegrationPublishChange struct {
+	Field  string `json:"field"`
+	Before any    `json:"before,omitempty"`
+	After  any    `json:"after,omitempty"`
+}
+
+type IntegrationPublishValidation struct {
+	Level   string `json:"level"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Tab     string `json:"tab"`
+}
+
+type IntegrationPublishStatus struct {
+	Ready               bool                           `json:"ready"`
+	HasChanges          bool                           `json:"has_changes"`
+	CurrentManifestHash string                         `json:"current_manifest_hash"`
+	CurrentSnapshot     json.RawMessage                `json:"current_snapshot"`
+	LatestRevision      *model.IntegrationRevision     `json:"latest_revision,omitempty"`
+	Changes             []IntegrationPublishChange     `json:"changes"`
+	Validations         []IntegrationPublishValidation `json:"validations"`
+}
+
+type integrationResourceSnapshot struct {
+	SetID       string `json:"set_id"`
+	Kind        string `json:"kind"`
+	RevisionID  string `json:"revision_id"`
+	Revision    int64  `json:"revision"`
+	ContentHash string `json:"content_hash"`
+}
+
+type integrationSnapshot struct {
+	FamilyKey                string                        `json:"family_key"`
+	VersionKey               string                        `json:"version_key"`
+	DisplayName              string                        `json:"display_name"`
+	Description              string                        `json:"description"`
+	Lifecycle                string                        `json:"lifecycle"`
+	ReplacementIntegrationID string                        `json:"replacement_integration_id,omitempty"`
+	SunsetAt                 *time.Time                    `json:"sunset_at,omitempty"`
+	Resources                []integrationResourceSnapshot `json:"resource_sets"`
+	AccessConnectionIDs      []string                      `json:"access_connection_ids"`
+	SupportRouteID           string                        `json:"support_route_id,omitempty"`
+}
+
+func buildIntegrationSnapshot(integration model.Integration) (json.RawMessage, []IntegrationPublishValidation, error) {
+	validations := make([]IntegrationPublishValidation, 0)
+	resources := make([]integrationResourceSnapshot, 0, len(integration.Resources))
+	for _, link := range integration.Resources {
+		if link.ResolvedRevision == nil {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "resource_revision_unresolved", Message: fmt.Sprintf("%s has no resolvable revision", link.Name), Tab: "resources"})
+			continue
+		}
+		resources = append(resources, integrationResourceSnapshot{SetID: link.ResourceSetID, Kind: link.Kind, RevisionID: link.ResolvedRevision.ID, Revision: link.ResolvedRevision.Revision, ContentHash: link.ResolvedRevision.ContentHash})
+	}
+	sort.Slice(resources, func(i, j int) bool {
+		if resources[i].Kind == resources[j].Kind {
+			return resources[i].SetID < resources[j].SetID
+		}
+		return resources[i].Kind < resources[j].Kind
+	})
+	if len(integration.Resources) == 0 {
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation, package, or hook set is attached.", Tab: "resources"})
+	}
+	if len(integration.AccessConnections) == 0 {
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No vendor access connection is allowed.", Tab: "access"})
+	}
+	if integration.SupportRouteID == "" {
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "support_inherited", Message: "Support uses the deployment default, if one is configured.", Tab: "support"})
+	}
+	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
+	return snapshot, validations, err
+}
+
+func publishChanges(previous, current json.RawMessage) []IntegrationPublishChange {
+	var before, after map[string]any
+	_ = json.Unmarshal(previous, &before)
+	_ = json.Unmarshal(current, &after)
+	fields := []string{"family_key", "version_key", "display_name", "description", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "access_connection_ids", "support_route_id"}
+	changes := make([]IntegrationPublishChange, 0)
+	for _, field := range fields {
+		beforeJSON, _ := json.Marshal(before[field])
+		afterJSON, _ := json.Marshal(after[field])
+		if string(beforeJSON) != string(afterJSON) {
+			changes = append(changes, IntegrationPublishChange{Field: field, Before: before[field], After: after[field]})
+		}
+	}
+	return changes
+}
+
+func (s *Service) IntegrationPublishStatus(ctx context.Context, integrationID string) (IntegrationPublishStatus, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return IntegrationPublishStatus{}, err
+	}
+	integration, err := s.store.Integration(ctx, deployment.ID, integrationID)
+	if err != nil {
+		return IntegrationPublishStatus{}, err
+	}
+	if integration.Lifecycle == "draft" {
+		integration.Lifecycle = "active"
+	}
+	snapshot, validations, err := buildIntegrationSnapshot(integration)
+	if err != nil {
+		return IntegrationPublishStatus{}, err
+	}
+	revisions, err := s.store.IntegrationRevisions(ctx, integration.ID)
+	if err != nil {
+		return IntegrationPublishStatus{}, err
+	}
+	var latest *model.IntegrationRevision
+	for index := range revisions {
+		if revisions[index].State == "published" && (latest == nil || revisions[index].Revision > latest.Revision) {
+			copy := revisions[index]
+			latest = &copy
+		}
+	}
+	hash := contentHash(snapshot)
+	changes := publishChanges(nil, snapshot)
+	if latest != nil {
+		changes = publishChanges(latest.Snapshot, snapshot)
+	}
+	ready := true
+	for _, validation := range validations {
+		if validation.Level == "error" {
+			ready = false
+			break
+		}
+	}
+	return IntegrationPublishStatus{Ready: ready, HasChanges: latest == nil || latest.ManifestHash != hash, CurrentManifestHash: hash, CurrentSnapshot: snapshot, LatestRevision: latest, Changes: changes, Validations: validations}, nil
+}
+
 func (s *Service) PublishIntegration(ctx context.Context, integrationID string, actor Actor) (model.IntegrationRevision, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
@@ -348,34 +541,14 @@ func (s *Service) PublishIntegration(ctx context.Context, integrationID string, 
 			return model.IntegrationRevision{}, err
 		}
 	}
-	type resourceSnapshot struct {
-		SetID       string `json:"set_id"`
-		Kind        string `json:"kind"`
-		RevisionID  string `json:"revision_id"`
-		Revision    int64  `json:"revision"`
-		ContentHash string `json:"content_hash"`
-	}
-	resources := make([]resourceSnapshot, 0, len(integration.Resources))
-	for _, link := range integration.Resources {
-		if link.ResolvedRevision == nil {
-			return model.IntegrationRevision{}, fmt.Errorf("resource set %s has no resolvable revision", link.ResourceSetID)
-		}
-		resources = append(resources, resourceSnapshot{SetID: link.ResourceSetID, Kind: link.Kind, RevisionID: link.ResolvedRevision.ID, Revision: link.ResolvedRevision.Revision, ContentHash: link.ResolvedRevision.ContentHash})
-	}
-	snapshot, err := json.Marshal(struct {
-		FamilyKey                string             `json:"family_key"`
-		VersionKey               string             `json:"version_key"`
-		DisplayName              string             `json:"display_name"`
-		Description              string             `json:"description"`
-		Lifecycle                string             `json:"lifecycle"`
-		ReplacementIntegrationID string             `json:"replacement_integration_id,omitempty"`
-		SunsetAt                 *time.Time         `json:"sunset_at,omitempty"`
-		Resources                []resourceSnapshot `json:"resource_sets"`
-		AccessConnectionIDs      []string           `json:"access_connection_ids"`
-		SupportRouteID           string             `json:"support_route_id,omitempty"`
-	}{integration.FamilyKey, integration.VersionKey, integration.DisplayName, integration.Description, integration.Lifecycle, integration.ReplacementIntegrationID, integration.SunsetAt, resources, integration.AccessConnections, integration.SupportRouteID})
+	snapshot, validations, err := buildIntegrationSnapshot(integration)
 	if err != nil {
 		return model.IntegrationRevision{}, err
+	}
+	for _, validation := range validations {
+		if validation.Level == "error" {
+			return model.IntegrationRevision{}, errors.New(validation.Message)
+		}
 	}
 	revisions, err := s.store.IntegrationRevisions(ctx, integration.ID)
 	if err != nil {

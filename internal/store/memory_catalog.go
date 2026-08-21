@@ -504,6 +504,32 @@ func (m *Memory) CreateAccessConnection(_ context.Context, value model.AccessCon
 	return m.accessConnectionLocked(value), nil
 }
 
+func (m *Memory) SetIntegrationAccessConnections(_ context.Context, deploymentID, integrationID string, connectionIDs []string, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	integration, ok := m.integrations[integrationID]
+	if !ok || integration.DeploymentID != deploymentID {
+		return ErrNotFound
+	}
+	selected := make(map[string]bool, len(connectionIDs))
+	for _, connectionID := range connectionIDs {
+		connection, ok := m.accessConnections[connectionID]
+		if !ok || connection.DeploymentID != deploymentID {
+			return ErrNotFound
+		}
+		selected[connectionID] = true
+	}
+	for connectionID, links := range m.integrationAccessLinks {
+		if selected[connectionID] {
+			links[integrationID] = true
+		} else {
+			delete(links, integrationID)
+		}
+	}
+	m.deployment.CatalogRevision++
+	return nil
+}
+
 func (m *Memory) accessInstanceLocked(value model.AccessInstance) model.AccessInstance {
 	value.IntegrationIDs = nil
 	for integrationID := range m.instanceIntegrationLinks[value.ID] {
@@ -714,4 +740,25 @@ func (m *Memory) SaveSupportRoute(_ context.Context, value model.SupportRoute, e
 		}
 	}
 	return m.supportRouteLocked(value), nil
+}
+
+func (m *Memory) SetIntegrationSupportRoute(_ context.Context, deploymentID, integrationID, routeID, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	integration, ok := m.integrations[integrationID]
+	if !ok || integration.DeploymentID != deploymentID {
+		return ErrNotFound
+	}
+	if routeID == "" {
+		delete(m.integrationSupportRoutes, integrationID)
+		m.deployment.CatalogRevision++
+		return nil
+	}
+	route, ok := m.supportRoutes[routeID]
+	if !ok || route.DeploymentID != deploymentID || route.State != "active" {
+		return ErrNotFound
+	}
+	m.integrationSupportRoutes[integrationID] = routeID
+	m.deployment.CatalogRevision++
+	return nil
 }

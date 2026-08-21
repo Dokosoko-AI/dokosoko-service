@@ -104,6 +104,7 @@ Every console view has a canonical URL. Navigation uses ordinary anchors enhance
   - Resources — `/integration/:uid/resources`
   - Tools & hooks — `/integration/:uid/tools`
   - Access — `/integration/:uid/access`
+  - Usage report proxy — `/integration/:uid/usage`
   - Support — `/integration/:uid/support`
   - Immutable revisions — `/integration/:uid/revisions`
   - Shared documentation library — `/integrations/documentation`
@@ -119,7 +120,7 @@ Every console view has a canonical URL. Navigation uses ordinary anchors enhance
   - Activity & audit — `/insights/activity`
 - Settings — `/settings`
 
-Selecting an Integration opens a contextual workspace rather than a generic record page. Its tabs have their own URLs and expose the reusable resources, access connections, support route, and immutable revisions attached to that Integration. Shared libraries keep their existing URLs and ownership; the workspace proxies their attachments rather than moving those records under an Integration.
+Selecting an Integration opens a contextual workspace rather than a generic record page. Its tabs have their own URLs and expose reusable resources, contextual Access and Support assignments, the shared vendor usage-report proxy, and immutable revisions. The header provides a searchable/grouped Integration switcher; Overview shows setup health and publish readiness; publishing requires a draft-versus-published diff review; and each revision opens its complete immutable snapshot. Shared libraries keep their existing URLs and ownership—the workspace manages their attachments rather than moving those records under an Integration. The directory groups versions by API family and filters by family, lifecycle, and setup state.
 
 Other directory records have singular, UID-addressed read-only URLs: `/resource-set/:uid`, `/source/:uid`, `/package/:uid`, `/tool/:uid`, `/connection/:uid`, `/access-definition/:uid`, `/access-connection/:uid`, `/installation/:uid`, `/release/:uid`, `/run/:uid`, `/support-route/:uid`, `/report/:uid`, `/audit-event/:uid`, and `/root-user/:uid`. The root path `/` canonicalizes to `/overview`; unrecognised console paths render a console-level not-found view without shadowing `/api`, `/mcp`, widget, health, OAuth, or artifact endpoints.
 

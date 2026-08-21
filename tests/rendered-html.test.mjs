@@ -67,7 +67,7 @@ test("uses an Integration directory and URL-addressed contextual workspace", asy
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  for (const label of ["Overview", "Resources", "Tools & hooks", "Access", "Support", "Revisions"]) {
+  for (const label of ["Overview", "Resources", "Tools & hooks", "Access", "Usage", "Support", "Revisions"]) {
     assert.ok(routes.includes(`label: "${label}"`), `${label} Integration tab should be registered`);
   }
   assert.match(source, /activeNavigation\.id !== "integrations"/);
@@ -75,10 +75,20 @@ test("uses an Integration directory and URL-addressed contextual workspace", asy
   assert.match(source, /IntegrationDirectoryView/);
   assert.match(source, /IntegrationWorkspaceView/);
   assert.match(source, /Published revision history/);
+  assert.match(source, /Switch Integration/);
+  assert.match(source, /Setup & health/);
+  assert.match(source, /Publish readiness/);
+  assert.match(source, /Review the complete draft-versus-published diff/);
+  assert.match(source, /Filter by API family/);
+  assert.match(source, /Filter by setup state/);
+  assert.match(source, /complete immutable snapshot/);
   assert.match(styles, /\.integration-directory-columns/);
   assert.match(styles, /\.integration-tab\.active/);
   assert.match(client, /integration: \(integrationID: string\)/);
   assert.match(client, /APIIntegrationRevision/);
+  assert.match(client, /APIIntegrationPublishStatus/);
+  assert.match(client, /setIntegrationAccessConnections/);
+  assert.match(client, /setIntegrationSupportRoute/);
 });
 
 test("keeps private defaults and guarded public transitions in the client contract", async () => {
@@ -146,6 +156,9 @@ test("ships the private vendor-proxied usage report configuration", async () => 
   assert.match(source, /read-only usage\.get tool on Private MCP/);
   assert.match(source, /Returned values are proxied without storage/);
   assert.match(source, /Rotate usage credential/);
+  assert.match(source, /Vendor-owned, customer-defined, proxied only/);
+  assert.match(source, /Configure usage report proxy/);
+  assert.match(source, /Maximum values/);
   assert.match(client, /usage_hook_url/);
   assert.match(client, /usage_credential/);
 });

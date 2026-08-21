@@ -211,10 +211,47 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create access connection status = %d, body = %s", w.Code, w.Body.String())
 	}
+	var connection model.AccessConnection
+	if err := json.Unmarshal(w.Body.Bytes(), &connection); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPut, "/api/v1/integrations/"+integration.ID+"/access-connections", "doko_admin_demo", `{"access_connection_ids":[]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clear Integration access status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPut, "/api/v1/integrations/"+integration.ID+"/access-connections", "doko_admin_demo", `{"access_connection_ids":["`+connection.ID+`"]}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), connection.ID) {
+		t.Fatalf("assign Integration access status = %d, body = %s", w.Code, w.Body.String())
+	}
 
 	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Default support","is_default":true,"bug_reports_enabled":true,"feedback_enabled":true,"retention_days":30,"state":"active","integration_ids":[]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create support route status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Voice support","is_default":false,"bug_reports_enabled":true,"feedback_enabled":true,"retention_days":30,"state":"active","integration_ids":["`+integration.ID+`"]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create Integration support route status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var supportRoute model.SupportRoute
+	if err := json.Unmarshal(w.Body.Bytes(), &supportRoute); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPut, "/api/v1/integrations/"+integration.ID+"/support-route", "doko_admin_demo", `{"support_route_id":"`+supportRoute.ID+`"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), supportRoute.ID) {
+		t.Fatalf("assign Integration support route status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodGet, "/api/v1/integrations/"+integration.ID, "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"publish_status"`) || !strings.Contains(w.Body.String(), `"has_changes":true`) || !strings.Contains(w.Body.String(), `"access_connection_ids"`) {
+		t.Fatalf("Integration publish status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/publish", "doko_admin_demo", `{}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("publish updated Integration status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/integrations/"+integration.ID, "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"has_changes":false`) || !strings.Contains(w.Body.String(), `"latest_revision"`) {
+		t.Fatalf("clean Integration publish status = %d, body = %s", w.Code, w.Body.String())
 	}
 
 	w = request(t, handler, http.MethodGet, "/api/v1/integrations", "doko_admin_demo", "")

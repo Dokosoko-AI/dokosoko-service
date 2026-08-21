@@ -930,6 +930,10 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.integration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "publish" && r.Method == http.MethodPost:
 		s.publishIntegration(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "access-connections" && r.Method == http.MethodPut:
+		s.integrationAccessConnections(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "support-route" && r.Method == http.MethodPut:
+		s.integrationSupportRoute(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodPost:
 		s.attachResourceSet(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodDelete:

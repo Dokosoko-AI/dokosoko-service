@@ -98,7 +98,7 @@ paths:
       operationId: getIntegration
       responses:
         "200":
-          description: Integration and immutable revision history.
+          description: Integration, immutable revision history, and current publish readiness/diff.
           content:
             application/json:
               schema:
@@ -106,7 +106,8 @@ paths:
                 properties:
                   integration: { $ref: "#/components/schemas/Integration" }
                   revisions: { type: array, items: { $ref: "#/components/schemas/IntegrationRevision" } }
-                required: [integration, revisions]
+                  publish_status: { $ref: "#/components/schemas/IntegrationPublishStatus" }
+                required: [integration, revisions, publish_status]
     patch:
       operationId: updateIntegration
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationInput" } } } }
@@ -119,6 +120,40 @@ paths:
       operationId: publishIntegration
       responses:
         "201": { description: Immutable Integration revision., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationRevision" } } } }
+  /api/v1/integrations/{integration_id}/access-connections:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: setIntegrationAccessConnections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                access_connection_ids: { type: array, items: { type: string }, uniqueItems: true }
+              required: [access_connection_ids]
+      responses:
+        "200": { description: Integration with its explicit access assignments., content: { application/json: { schema: { $ref: "#/components/schemas/Integration" } } } }
+  /api/v1/integrations/{integration_id}/support-route:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: setIntegrationSupportRoute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                support_route_id: { type: string, description: Empty to inherit the Deployment default. }
+              required: [support_route_id]
+      responses:
+        "200": { description: Integration with its explicit support-route assignment., content: { application/json: { schema: { $ref: "#/components/schemas/Integration" } } } }
   /api/v1/integrations/{integration_id}/resource-sets:
     parameters:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
@@ -1797,6 +1832,35 @@ components:
         published_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
       required: [id, integration_id, revision, state, snapshot, manifest_hash, created_at]
+    IntegrationPublishChange:
+      type: object
+      additionalProperties: false
+      properties:
+        field: { type: string }
+        before: {}
+        after: {}
+      required: [field]
+    IntegrationPublishValidation:
+      type: object
+      additionalProperties: false
+      properties:
+        level: { type: string, enum: [warning, error] }
+        code: { type: string }
+        message: { type: string }
+        tab: { type: string, enum: [overview, resources, tools, access, usage, support, revisions] }
+      required: [level, code, message, tab]
+    IntegrationPublishStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        ready: { type: boolean }
+        has_changes: { type: boolean }
+        current_manifest_hash: { type: string }
+        current_snapshot: { type: object, additionalProperties: true }
+        latest_revision: { $ref: "#/components/schemas/IntegrationRevision" }
+        changes: { type: array, items: { $ref: "#/components/schemas/IntegrationPublishChange" } }
+        validations: { type: array, items: { $ref: "#/components/schemas/IntegrationPublishValidation" } }
+      required: [ready, has_changes, current_manifest_hash, current_snapshot, changes, validations]
     ResourceSetInput:
       type: object
       properties:

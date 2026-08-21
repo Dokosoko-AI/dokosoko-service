@@ -40,6 +40,7 @@ type Store interface {
 	AccessConnections(context.Context, string) ([]model.AccessConnection, error)
 	AccessConnection(context.Context, string, string) (model.AccessConnection, error)
 	CreateAccessConnection(context.Context, model.AccessConnection) (model.AccessConnection, error)
+	SetIntegrationAccessConnections(context.Context, string, string, []string, string) error
 	AccessInstances(context.Context, string, string) ([]model.AccessInstance, error)
 	AccessInstance(context.Context, string, string) (model.AccessInstance, error)
 	CreateAccessInstance(context.Context, model.AccessInstance) (model.AccessInstance, error)
@@ -51,6 +52,7 @@ type Store interface {
 	SupportRoute(context.Context, string, string) (model.SupportRoute, error)
 	SupportRouteForIntegration(context.Context, string, string) (model.SupportRoute, error)
 	SaveSupportRoute(context.Context, model.SupportRoute, int64) (model.SupportRoute, error)
+	SetIntegrationSupportRoute(context.Context, string, string, string, string) error
 	Products(context.Context, string) ([]model.Product, error)
 	CreateProduct(context.Context, model.Product) (model.Product, error)
 	Environments(context.Context, string) ([]model.Environment, error)
