@@ -99,11 +99,17 @@ The minimum bootstrap configuration is the database URL, master encryption key o
 Every console view has a canonical URL. Navigation uses ordinary anchors enhanced with client-side history, so deep links, refresh, open-in-new-tab, and browser back/forward all work.
 
 - Overview — `/overview`
-- Integrations — `/integrations`
-  - Documentation — `/integrations/documentation`
-  - Packages — `/integrations/packages`
-  - Tools — `/integrations/tools`
-  - Hooks & MCP — `/integrations/hooks-mcp`
+- Integrations directory — `/integrations`
+  - Selected Integration overview — `/integration/:uid`
+  - Resources — `/integration/:uid/resources`
+  - Tools & hooks — `/integration/:uid/tools`
+  - Access — `/integration/:uid/access`
+  - Support — `/integration/:uid/support`
+  - Immutable revisions — `/integration/:uid/revisions`
+  - Shared documentation library — `/integrations/documentation`
+  - Shared package library — `/integrations/packages`
+  - Shared tool library — `/integrations/tools`
+  - Shared hooks & MCP library — `/integrations/hooks-mcp`
 - Access — `/access`
 - Distribution — `/distribution`
   - Connector releases — `/distribution/releases`
@@ -113,7 +119,9 @@ Every console view has a canonical URL. Navigation uses ordinary anchors enhance
   - Activity & audit — `/insights/activity`
 - Settings — `/settings`
 
-Directory records also have singular, UID-addressed read-only URLs: `/integration/:uid`, `/resource-set/:uid`, `/source/:uid`, `/package/:uid`, `/tool/:uid`, `/connection/:uid`, `/access-definition/:uid`, `/access-connection/:uid`, `/installation/:uid`, `/release/:uid`, `/run/:uid`, `/support-route/:uid`, `/report/:uid`, `/audit-event/:uid`, and `/root-user/:uid`. The root path `/` canonicalizes to `/overview`; unrecognised console paths render a console-level not-found view without shadowing `/api`, `/mcp`, widget, health, OAuth, or artifact endpoints.
+Selecting an Integration opens a contextual workspace rather than a generic record page. Its tabs have their own URLs and expose the reusable resources, access connections, support route, and immutable revisions attached to that Integration. Shared libraries keep their existing URLs and ownership; the workspace proxies their attachments rather than moving those records under an Integration.
+
+Other directory records have singular, UID-addressed read-only URLs: `/resource-set/:uid`, `/source/:uid`, `/package/:uid`, `/tool/:uid`, `/connection/:uid`, `/access-definition/:uid`, `/access-connection/:uid`, `/installation/:uid`, `/release/:uid`, `/run/:uid`, `/support-route/:uid`, `/report/:uid`, `/audit-event/:uid`, and `/root-user/:uid`. The root path `/` canonicalizes to `/overview`; unrecognised console paths render a console-level not-found view without shadowing `/api`, `/mcp`, widget, health, OAuth, or artifact endpoints.
 
 ## Functional scope
 

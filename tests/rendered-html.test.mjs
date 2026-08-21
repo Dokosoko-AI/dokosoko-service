@@ -57,7 +57,28 @@ test("groups the console into workflow navigation with contextual sections", asy
   assert.match(styles, /\.sidebar > nav/);
   assert.match(styles, /\.section-tab\.active/);
   assert.match(styles, /\.entity-detail-grid/);
+  assert.match(styles, /\.package-columns \{ grid-template-columns: [^}]+ 104px; \}/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
+});
+
+test("uses an Integration directory and URL-addressed contextual workspace", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  for (const label of ["Overview", "Resources", "Tools & hooks", "Access", "Support", "Revisions"]) {
+    assert.ok(routes.includes(`label: "${label}"`), `${label} Integration tab should be registered`);
+  }
+  assert.match(source, /activeNavigation\.id !== "integrations"/);
+  assert.match(source, /className="integration-tabs"/);
+  assert.match(source, /IntegrationDirectoryView/);
+  assert.match(source, /IntegrationWorkspaceView/);
+  assert.match(source, /Published revision history/);
+  assert.match(styles, /\.integration-directory-columns/);
+  assert.match(styles, /\.integration-tab\.active/);
+  assert.match(client, /integration: \(integrationID: string\)/);
+  assert.match(client, /APIIntegrationRevision/);
 });
 
 test("keeps private defaults and guarded public transitions in the client contract", async () => {

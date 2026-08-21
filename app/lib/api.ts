@@ -64,6 +64,18 @@ export type APIIntegration = {
   support_route_id?: string;
 };
 
+export type APIIntegrationRevision = {
+  id: string;
+  integration_id: string;
+  revision: number;
+  state: string;
+  snapshot: Record<string, unknown>;
+  manifest_hash: string;
+  published_by?: string;
+  published_at?: string;
+  created_at: string;
+};
+
 export type APIResourceSet = {
   id: string;
   deployment_id: string;
@@ -699,9 +711,10 @@ export const api = {
   deploymentEnvironments: async () => (await request<{ items: APIEnvironment[] }>("/api/v1/environments")).items,
   createDeploymentEnvironment: (organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>("/api/v1/environments", { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   integrations: async () => (await request<{ items: APIIntegration[] }>("/api/v1/integrations")).items,
+  integration: (integrationID: string) => request<{ integration: APIIntegration; revisions: APIIntegrationRevision[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "lifecycle" | "revision"> & { replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PATCH", body: JSON.stringify(input) }),
-  publishIntegration: (integrationID: string) => request(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
+  publishIntegration: (integrationID: string) => request<APIIntegrationRevision>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
   resourceSets: async (kind = "") => (await request<{ items: APIResourceSet[] }>(`/api/v1/resource-sets${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`)).items,
   createResourceSet: (input: { kind: APIResourceSet["kind"]; name: string; description: string; manifest: Array<Record<string, unknown>> }) => request<APIResourceSet>("/api/v1/resource-sets", { method: "POST", body: JSON.stringify(input) }),
   updateResourceSet: (setID: string, input: { name: string; description: string; state: APIResourceSet["state"]; manifest: Array<Record<string, unknown>>; revision: number }) => request<APIResourceSet>(`/api/v1/resource-sets/${encodeURIComponent(setID)}`, { method: "PATCH", body: JSON.stringify(input) }),

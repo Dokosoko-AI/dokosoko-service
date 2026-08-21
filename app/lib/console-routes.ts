@@ -1,5 +1,7 @@
 export type Section = "overview" | "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 
+export type IntegrationTab = "overview" | "resources" | "tools" | "access" | "support" | "revisions";
+
 export type EntityKind =
   | "integration"
   | "resource-set"
@@ -19,8 +21,18 @@ export type EntityKind =
 
 export type ConsoleRoute =
   | { kind: "section"; section: Section; path: string }
-  | { kind: "entity"; section: Section; entity: EntityKind; uid: string; path: string }
+  | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; path: string }
+  | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
   | { kind: "not-found"; section: "overview"; path: string };
+
+export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
+  { id: "overview", label: "Overview" },
+  { id: "resources", label: "Resources" },
+  { id: "tools", label: "Tools & hooks" },
+  { id: "access", label: "Access" },
+  { id: "support", label: "Support" },
+  { id: "revisions", label: "Revisions" },
+];
 
 export const SECTION_PATHS: Record<Section, string> = {
   overview: "/overview",
@@ -73,12 +85,22 @@ export function entityPath(entity: EntityKind, uid: string): string {
   return `/${entity}/${encodeURIComponent(uid)}`;
 }
 
+export function integrationPath(uid: string, tab: IntegrationTab = "overview"): string {
+  const base = entityPath("integration", uid);
+  return tab === "overview" ? base : `${base}/${tab}`;
+}
+
 export function routeForSection(section: Section): ConsoleRoute {
   return { kind: "section", section, path: sectionPath(section) };
 }
 
 export function routeForEntity(entity: EntityKind, uid: string): ConsoleRoute {
-  return { kind: "entity", entity, uid, section: ENTITY_SECTIONS[entity], path: entityPath(entity, uid) };
+  if (entity === "integration") return routeForIntegration(uid);
+  return { kind: "entity", entity: entity as Exclude<EntityKind, "integration">, uid, section: ENTITY_SECTIONS[entity], path: entityPath(entity, uid) };
+}
+
+export function routeForIntegration(uid: string, integrationTab: IntegrationTab = "overview"): ConsoleRoute {
+  return { kind: "entity", entity: "integration", uid, integrationTab, section: "product", path: integrationPath(uid, integrationTab) };
 }
 
 export function parseConsolePath(pathname: string): ConsoleRoute {
@@ -87,6 +109,17 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
 
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (section) return routeForSection(section);
+
+  const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?$/);
+  if (integrationMatch) {
+    const tab = (integrationMatch[2] ?? "overview") as IntegrationTab;
+    if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "overview", path };
+    try {
+      return routeForIntegration(decodeURIComponent(integrationMatch[1]), tab);
+    } catch {
+      return { kind: "not-found", section: "overview", path };
+    }
+  }
 
   const match = path.match(/^\/([^/]+)\/([^/]+)$/);
   if (match && ENTITY_PREFIXES.includes(match[1] as EntityKind)) {

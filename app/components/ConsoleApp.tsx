@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Clock3,
   Copy,
   Database,
@@ -40,8 +41,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIReportingConfig, APIReportSubmission, APIResourceSet, APISupportRoute, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
-import { ConsoleRoute, EntityKind, Section, entityPath, parseConsolePath, routeForSection, sectionPath } from "../lib/console-routes";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationRevision, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBinding, APIProductBuild, APIProductBuildInput, APIProductComponent, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIReportingConfig, APIReportSubmission, APIResourceSet, APISupportRoute, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
+import { ConsoleRoute, EntityKind, INTEGRATION_TABS, IntegrationTab, Section, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath } from "../lib/console-routes";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
 type NavigationGroup = "overview" | "integrations" | "access" | "distribution" | "operations" | "insights";
@@ -1301,12 +1302,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </header>
 
         <div className="content">
-          {activeNavigation && activeNavigation.sections.length > 1 && (
+          {activeNavigation && activeNavigation.id !== "integrations" && activeNavigation.sections.length > 1 && (
             <nav className="section-tabs" aria-label={`${activeNavigation.label} sections`}>
               {activeNavigation.sections.map((item) => <ConsoleLink key={item.id} path={sectionPath(item.id)} onNavigate={navigateToPath} className={`section-tab ${section === item.id ? "active" : ""}`} ariaCurrent={section === item.id ? "page" : undefined}>{item.label}</ConsoleLink>)}
             </nav>
           )}
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
+          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} onBuild={() => setProductBuilderOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
           {section === "distribution" && (
             <DistributionView
               enabled={publicMCPEnabled}
@@ -1323,7 +1324,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
               onOpenSources={() => navigateToSection("sources")}
             />
           )}
-          {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} onBuild={() => setProductBuilderOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+          {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} onBuild={() => setProductBuilderOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "packages" && <PackagesView packages={packages} onAdd={() => setAddPackageOpen(true)} onPublish={publishPackage} onVisibilityChange={(id) => requestVisibility("package", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} hookSets={resourceSets.filter((set) => set.kind === "hook")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
@@ -1728,10 +1729,80 @@ function PackagesView({ packages, onAdd, onPublish, onVisibilityChange, onNaviga
   </>;
 }
 
-function IntegrationsView({ integrations, resourceSets, supportRoutes, connections, onBuild, onChanged, onMessage, onNavigate }: { integrations: APIIntegration[]; resourceSets: APIResourceSet[]; supportRoutes: APISupportRoute[]; connections: APIAccessConnection[]; onBuild: () => void; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function IntegrationDirectoryView({ integrations, resourceSets, connections, supportRoutes, query, onQueryChange, onCreate, onBuild, onNavigate }: { integrations: APIIntegration[]; resourceSets: APIResourceSet[]; connections: APIAccessConnection[]; supportRoutes: APISupportRoute[]; query: string; onQueryChange: (query: string) => void; onCreate: () => void; onBuild: () => void; onNavigate: (path: string) => void }) {
   const active = integrations.filter((integration) => integration.lifecycle === "active").length;
   const sharedSets = resourceSets.filter((set) => (set.integration_ids?.length ?? 0) > 1).length;
-  const routeName = (integration: APIIntegration) => supportRoutes.find((route) => route.id === integration.support_route_id)?.name ?? supportRoutes.find((route) => route.is_default)?.name ?? "No support route";
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredIntegrations = integrations.filter((integration) => !normalizedQuery || [integration.display_name, integration.family_key, integration.version_key, integration.description].some((value) => value.toLowerCase().includes(normalizedQuery)));
+  const connectionCount = (integration: APIIntegration) => connections.filter((connection) => connection.integration_ids?.includes(integration.id) || integration.access_connection_ids?.includes(connection.id)).length;
+  const supportName = (integration: APIIntegration) => supportRoutes.find((route) => route.id === integration.support_route_id || route.integration_ids?.includes(integration.id))?.name ?? supportRoutes.find((route) => route.is_default)?.name ?? "Not configured";
+
+  return <>
+    <PageHeading eyebrow="API catalog" title="Integrations" description="Choose an Integration to manage its resources, tools, access, support, and immutable revisions." action={<span className="heading-actions"><Button outline onClick={onCreate}><Plus data-slot="icon" />New Integration</Button><Button onClick={onBuild}><Sparkles data-slot="icon" />Discover catalog</Button></span>} />
+    <div className="metrics-grid"><Metric label="Integrations" value={String(integrations.length)} detail={`${active} active`} /><Metric label="Resource sets" value={String(resourceSets.length)} detail={`${sharedSets} deliberately shared`} /><Metric label="Access connections" value={String(connections.length)} detail="Attached explicitly" /><Metric label="Support routes" value={String(supportRoutes.length)} detail="Default or Integration-specific" /></div>
+    <div className="toolbar integration-toolbar"><div className="search-field"><Search /><input aria-label="Search integrations" placeholder="Search Integrations…" value={query} onChange={(event) => onQueryChange(event.target.value)} /></div><span>{filteredIntegrations.length} of {integrations.length}</span></div>
+    <div className="resource-table integration-directory">
+      <div className="table-head integration-directory-columns"><span>Integration</span><span>Lifecycle</span><span>Resources</span><span>Access</span><span>Support</span><span /></div>
+      {filteredIntegrations.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id)} onNavigate={onNavigate} className="table-row integration-directory-columns integration-directory-row">
+        <span className="resource-name"><span className="resource-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span></span>
+        <Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge>
+        <span><strong className="cell-value">{integration.resources?.length ?? 0}</strong><small className="cell-note">attached sets</small></span>
+        <span><strong className="cell-value">{connectionCount(integration)}</strong><small className="cell-note">connections</small></span>
+        <span className="integration-support-cell">{supportName(integration)}</span>
+        <ChevronRight />
+      </ConsoleLink>)}
+      {filteredIntegrations.length === 0 && <div className="empty-row">{integrations.length === 0 ? "No Integrations yet. Create one manually or discover the connector catalog." : "No Integrations match this search."}</div>}
+    </div>
+  </>;
+}
+
+function IntegrationWorkspaceView({ integration, integrationID, activeTab, loading, revisions, resourceSets, connections, supportRoutes, tools, mcpConnections, busy, onEdit, onPublish, onAttach, onCreateResource, onEditResource, onDuplicateResource, onDetachResource, onNavigate }: { integration: APIIntegration | null; integrationID: string; activeTab: IntegrationTab; loading: boolean; revisions: APIIntegrationRevision[]; resourceSets: APIResourceSet[]; connections: APIAccessConnection[]; supportRoutes: APISupportRoute[]; tools: APITool[]; mcpConnections: APIMCPConnection[]; busy: boolean; onEdit: (integration: APIIntegration) => void; onPublish: (integration: APIIntegration) => void; onAttach: (integration: APIIntegration, kind?: APIResourceSet["kind"]) => void; onCreateResource: () => void; onEditResource: (resource: APIResourceSet) => void; onDuplicateResource: (resource: APIResourceSet) => void; onDetachResource: (integrationID: string, resourceSetID: string) => void; onNavigate: (path: string) => void }) {
+  if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">Integration</p><h1>Loading Integration…</h1><p>Retrieving the Integration and its immutable revision history.</p></div></section>;
+  if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">Integration</p><h1>Integration unavailable</h1><p>No Integration with UID <code>{integrationID}</code> is available in this deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to Integrations</ConsoleLink></section>;
+
+  const integrationConnections = connections.filter((connection) => connection.integration_ids?.includes(integration.id) || integration.access_connection_ids?.includes(connection.id));
+  const supportRoute = supportRoutes.find((route) => route.id === integration.support_route_id || route.integration_ids?.includes(integration.id)) ?? supportRoutes.find((route) => route.is_default);
+  const attachedResources = integration.resources ?? [];
+  const attachedHooks = attachedResources.filter((resource) => resource.kind === "hook");
+  const sortedRevisions = [...revisions].sort((left, right) => right.revision - left.revision);
+
+  return <>
+    <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All Integrations</ConsoleLink><code>{integrationPath(integration.id, activeTab)}</code></div>
+    <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} description={integration.description || "No description has been added for this Integration."} action={<span className="heading-actions"><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge><Button outline onClick={() => onEdit(integration)}>Edit</Button><Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish revision</Button></span>} />
+    <nav className="integration-tabs" aria-label={`${integration.display_name} sections`}>{INTEGRATION_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, tab.id)} onNavigate={onNavigate} className={`integration-tab ${activeTab === tab.id ? "active" : ""}`} ariaCurrent={activeTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</nav>
+
+    {activeTab === "overview" && <div className="integration-tab-content">
+      <div className="metrics-grid"><Metric label="Resources" value={String(attachedResources.length)} detail="Explicitly attached" /><Metric label="Access" value={String(integrationConnections.length)} detail="Allowed connections" /><Metric label="Support" value={supportRoute?.name ?? "—"} detail={supportRoute ? supportRoute.is_default ? "Using default route" : "Integration-specific route" : "Not configured"} /><Metric label="Published revisions" value={String(revisions.length)} detail={`Current draft r${integration.revision}`} /></div>
+      <section className="panel"><div className="panel-heading"><div><h2>Integration identity</h2><p>The family and version identify this API independently from connector releases.</p></div><Badge color="violet">Stable UID</Badge></div><dl className="entity-detail-grid"><div><dt>UID</dt><dd>{integration.id}</dd></div><div><dt>API family</dt><dd>{integration.family_key}</dd></div><div><dt>API version</dt><dd>{integration.version_key}</dd></div><div><dt>Draft revision</dt><dd>{integration.revision}</dd></div><div><dt>Replacement</dt><dd>{integration.replacement_integration_id ?? "—"}</dd></div><div><dt>Sunset</dt><dd>{integration.sunset_at ? new Date(integration.sunset_at).toLocaleDateString() : "—"}</dd></div></dl></section>
+      <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "resources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Documentation, packages, and hooks attached to this Integration.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={integrationPath(integration.id, "access")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><KeyRound /></span><span><strong>Access & support</strong><small>Review the vendor connections and reporting route for this Integration.</small></span><ChevronRight /></ConsoleLink></div>
+    </div>}
+
+    {activeTab === "resources" && <div className="integration-tab-content">
+      <section className="panel"><div className="panel-heading"><div><h2>Attached resource sets</h2><p>Sets remain reusable objects. This page controls only their explicit attachment to this Integration.</p></div><span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create shared set</Button><Button disabled={resourceSets.every((set) => attachedResources.some((resource) => resource.resource_set_id === set.id))} onClick={() => onAttach(integration)}>Attach existing</Button></span></div>
+        {attachedResources.map((resource) => { const source = resourceSets.find((set) => set.id === resource.resource_set_id); return <div className="integration-resource-row" key={resource.resource_set_id}><span className="settings-icon">{resource.kind === "documentation" ? <BookOpen /> : resource.kind === "package" ? <PackageIcon /> : <Wrench />}</span><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>{resource.kind} · revision {resource.resolved_revision?.revision ?? "—"} · {resource.follow_latest ? "follows latest" : "pinned"}</small></span><Badge color={resource.kind === "documentation" ? "blue" : resource.kind === "package" ? "green" : "violet"}>{resource.kind}</Badge><span className="table-actions">{source && <Button outline onClick={() => onEditResource(source)}>New revision</Button>}{source && <Button outline onClick={() => onDuplicateResource(source)}>Duplicate</Button>}<button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => onDetachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span></div>; })}
+        {attachedResources.length === 0 && <div className="empty-row">No resources are attached. Attach an existing reusable set or create a new one.</div>}
+      </section>
+      <div className="integration-library-links"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Documentation library</strong><small>Manage the shared documentation source inventory.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("packages")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><PackageIcon /></span><span><strong>Package library</strong><small>Manage shared package delivery records.</small></span><ChevronRight /></ConsoleLink></div>
+    </div>}
+
+    {activeTab === "tools" && <div className="integration-tab-content">
+      <section className="panel"><div className="panel-heading"><div><h2>Integration hook sets</h2><p>Only hook resource sets attached here are part of this Integration revision.</p></div><Button disabled={!resourceSets.some((set) => set.kind === "hook" && !attachedResources.some((resource) => resource.resource_set_id === set.id))} onClick={() => onAttach(integration, "hook")}>Attach hook set</Button></div>{attachedHooks.map((resource) => <div className="lease-row" key={resource.resource_set_id}><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>revision {resource.resolved_revision?.revision ?? "—"} · {resource.follow_latest ? "follows latest" : "pinned"}</small></span><Badge color="violet">Hook set</Badge></div>)}{attachedHooks.length === 0 && <div className="empty-row">No hook set is attached to this Integration.</div>}</section>
+      <section className="panel"><div className="panel-heading"><div><h2>Shared agent tools</h2><p>Tools and MCP connections are deployment-level libraries. Attach hook sets above for Integration-specific routing.</p></div><span className="heading-actions"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Tool library</ConsoleLink><ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className="entity-back-link">Hooks & MCP</ConsoleLink></span></div><div className="integration-library-summary"><span><strong>{tools.length}</strong><small>tool definitions</small></span><span><strong>{mcpConnections.length}</strong><small>MCP connections</small></span><span><strong>{tools.filter((tool) => tool.state === "published").length}</strong><small>published tools</small></span></div></section>
+    </div>}
+
+    {activeTab === "access" && <div className="integration-tab-content"><section className="panel"><div className="panel-heading"><div><h2>Allowed access connections</h2><p>These vendor accounts may issue credentials or expose provider resources for this Integration.</p></div><ConsoleLink path={sectionPath("projects")} onNavigate={onNavigate} className="entity-back-link">Manage access</ConsoleLink></div>{integrationConnections.map((connection) => <div className="provider-row integration-connection-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.definition?.name ?? "Access service"}{connection.region ? ` · ${connection.region}` : ""}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge><code>{connection.id}</code></div>)}{integrationConnections.length === 0 && <div className="empty-row">No access connection is attached to this Integration.</div>}</section></div>}
+
+    {activeTab === "support" && <div className="integration-tab-content"><section className="panel"><div className="panel-heading"><div><h2>Bug reports & feedback</h2><p>An Integration-specific route wins; otherwise this Integration inherits the deployment default.</p></div><ConsoleLink path={sectionPath("reporting")} onNavigate={onNavigate} className="entity-back-link">Manage support routes</ConsoleLink></div>{supportRoute ? <><div className="support-route-summary"><span className="settings-icon"><Bug /></span><span><EntityLink entity="support-route" uid={supportRoute.id} onNavigate={onNavigate} className="entity-link"><strong>{supportRoute.name}</strong></EntityLink><small>{supportRoute.is_default ? "Deployment default" : "Integration-specific"} · {supportRoute.retention_days}-day encrypted retention</small></span><Badge color={supportRoute.state === "active" ? "green" : "zinc"}>{supportRoute.state}</Badge></div><dl className="entity-detail-grid"><div><dt>Bug reports</dt><dd>{supportRoute.bug_reports_enabled ? "Enabled" : "Disabled"}</dd></div><div><dt>Feedback</dt><dd>{supportRoute.feedback_enabled ? "Enabled" : "Disabled"}</dd></div><div><dt>Delivery</dt><dd>{supportRoute.bug_hook_url || supportRoute.feedback_hook_url ? "Webhook" : "Held locally"}</dd></div></dl></> : <div className="empty-row">No default or Integration-specific support route is configured.</div>}</section></div>}
+
+    {activeTab === "revisions" && <div className="integration-tab-content"><div className="notice"><GitBranch /><span><strong>Published revisions are immutable.</strong> Connector releases may select one of these Integration revisions alongside revisions from other Integrations.</span></div><section className="panel"><div className="panel-heading"><div><h2>Published revision history</h2><p>Each publish captures the Integration identity, resource attachments, access, and support routing.</p></div><ConsoleLink path={sectionPath("releases")} onNavigate={onNavigate} className="entity-back-link">Connector releases</ConsoleLink></div>{sortedRevisions.map((revision) => <div className="integration-revision-row" key={revision.id}><span className="revision-number">r{revision.revision}</span><span><strong>{revision.state}</strong><small>{revision.published_at || revision.created_at ? new Date(revision.published_at ?? revision.created_at).toLocaleString() : "Date unavailable"}{revision.published_by ? ` · ${revision.published_by}` : ""}</small></span><code>{revision.manifest_hash}</code></div>)}{sortedRevisions.length === 0 && <div className="empty-row">No immutable revision has been published yet.</div>}</section></div>}
+  </>;
+}
+
+function IntegrationsView({ integrations, resourceSets, supportRoutes, connections, tools, mcpConnections, selectedIntegrationID, activeTab = "overview", onBuild, onChanged, onMessage, onNavigate }: { integrations: APIIntegration[]; resourceSets: APIResourceSet[]; supportRoutes: APISupportRoute[]; connections: APIAccessConnection[]; tools: APITool[]; mcpConnections: APIMCPConnection[]; selectedIntegrationID?: string; activeTab?: IntegrationTab; onBuild: () => void; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
+  const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
+  const [loadedIntegrationID, setLoadedIntegrationID] = useState("");
   const [integrationOpen, setIntegrationOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<APIIntegration | null>(null);
   const [familyKey, setFamilyKey] = useState("");
@@ -1751,8 +1822,40 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
   const [duplicateName, setDuplicateName] = useState("");
   const [attachIntegration, setAttachIntegration] = useState<APIIntegration | null>(null);
   const [attachSetID, setAttachSetID] = useState("");
+  const [attachKind, setAttachKind] = useState<APIResourceSet["kind"] | "">("");
   const [pinAttachedSet, setPinAttachedSet] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!selectedIntegrationID) return;
+    let cancelled = false;
+    api.integration(selectedIntegrationID).then((value) => {
+      if (cancelled) return;
+      setSelectedDetail(value.integration);
+      setSelectedRevisions(value.revisions);
+      setLoadedIntegrationID(selectedIntegrationID);
+    }).catch(() => {
+      if (cancelled) return;
+      setSelectedDetail(null);
+      setSelectedRevisions([]);
+      setLoadedIntegrationID(selectedIntegrationID);
+    });
+    return () => { cancelled = true; };
+  }, [selectedIntegrationID]);
+
+  async function refreshSelectedIntegration(integrationID = selectedIntegrationID) {
+    if (!integrationID) return;
+    try {
+      const value = await api.integration(integrationID);
+      setSelectedDetail(value.integration);
+      setSelectedRevisions(value.revisions);
+      setLoadedIntegrationID(integrationID);
+    } catch {
+      setSelectedDetail(null);
+      setSelectedRevisions([]);
+      setLoadedIntegrationID(integrationID);
+    }
+  }
 
   function openIntegration(value?: APIIntegration) {
     setEditingIntegration(value ?? null);
@@ -1764,15 +1867,20 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
     setBusy(true);
     try {
       const base = { family_key: familyKey, version_key: versionKey, display_name: displayName, description, lifecycle };
-      if (editingIntegration) await api.updateIntegration(editingIntegration.id, { ...base, replacement_integration_id: replacementID || undefined, sunset_at: sunsetAt ? new Date(`${sunsetAt}T00:00:00Z`).toISOString() : undefined, revision: editingIntegration.revision });
-      else await api.createIntegration(base);
-      await onChanged(); setIntegrationOpen(false); onMessage(editingIntegration ? "Integration updated." : "Integration created as a reviewable draft.");
+      const saved = editingIntegration
+        ? await api.updateIntegration(editingIntegration.id, { ...base, replacement_integration_id: replacementID || undefined, sunset_at: sunsetAt ? new Date(`${sunsetAt}T00:00:00Z`).toISOString() : undefined, revision: editingIntegration.revision })
+        : await api.createIntegration(base);
+      setSelectedDetail(saved);
+      await onChanged();
+      setIntegrationOpen(false);
+      onMessage(editingIntegration ? "Integration updated." : `Integration created with ${saved.lifecycle} lifecycle.`);
+      if (!editingIntegration) onNavigate(integrationPath(saved.id));
     } catch (error) { onMessage(error instanceof APIError ? error.message : "Integration could not be saved."); } finally { setBusy(false); }
   }
 
   async function publishIntegration(value: APIIntegration) {
     setBusy(true);
-    try { await api.publishIntegration(value.id); await onChanged(); onMessage("Immutable Integration revision published."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Integration could not be published."); } finally { setBusy(false); }
+    try { await api.publishIntegration(value.id); await onChanged(); await refreshSelectedIntegration(value.id); onMessage("Immutable Integration revision published."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Integration could not be published."); } finally { setBusy(false); }
   }
 
   function openResource(value?: APIResourceSet) {
@@ -1800,24 +1908,32 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
     const resource = resourceSets.find((value) => value.id === attachSetID);
     if (!attachIntegration || !resource) return;
     setBusy(true);
-    try { await api.attachResourceSet(attachIntegration.id, resource.id, pinAttachedSet ? resource.latest_revision?.id ?? "" : ""); await onChanged(); setAttachIntegration(null); onMessage(pinAttachedSet ? "Resource revision pinned to Integration." : "Resource set attached and following latest."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Resource set could not be attached."); } finally { setBusy(false); }
+    try { await api.attachResourceSet(attachIntegration.id, resource.id, pinAttachedSet ? resource.latest_revision?.id ?? "" : ""); await onChanged(); await refreshSelectedIntegration(attachIntegration.id); setAttachIntegration(null); onMessage(pinAttachedSet ? "Resource revision pinned to Integration." : "Resource set attached and following latest."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Resource set could not be attached."); } finally { setBusy(false); }
   }
 
   async function detachResource(integrationID: string, setID: string) {
     setBusy(true);
-    try { await api.detachResourceSet(integrationID, setID); await onChanged(); onMessage("Resource set detached from Integration."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Resource set could not be detached."); } finally { setBusy(false); }
+    try { await api.detachResourceSet(integrationID, setID); await onChanged(); await refreshSelectedIntegration(integrationID); onMessage("Resource set detached from Integration."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Resource set could not be detached."); } finally { setBusy(false); }
+  }
+
+  const selectedIntegration = selectedDetail?.id === selectedIntegrationID ? selectedDetail : integrations.find((integration) => integration.id === selectedIntegrationID) ?? null;
+  const selectedLoading = Boolean(selectedIntegrationID && loadedIntegrationID !== selectedIntegrationID);
+
+  function openAttachDialog(integration: APIIntegration, kind: APIResourceSet["kind"] | "" = "") {
+    const availableSets = resourceSets.filter((set) => (!kind || set.kind === kind) && !(integration.resources ?? []).some((resource) => resource.resource_set_id === set.id));
+    setAttachIntegration(integration);
+    setAttachKind(kind);
+    setAttachSetID(availableSets[0]?.id ?? "");
+    setPinAttachedSet(false);
   }
 
   return <>
-    <PageHeading eyebrow="API catalog" title="Integrations" description="Each Integration is one API family and version. Attach reusable documentation, package, and hook sets explicitly; sharing is never inferred." action={<span className="heading-actions"><Button outline onClick={() => openIntegration()}><Plus data-slot="icon" />New Integration</Button><Button onClick={onBuild}><Sparkles data-slot="icon" />Discover catalog</Button></span>} />
-    <div className="metrics-grid"><Metric label="Integrations" value={String(integrations.length)} detail={`${active} active`} /><Metric label="Reusable sets" value={String(resourceSets.length)} detail={`${sharedSets} shared deliberately`} /><Metric label="Access connections" value={String(connections.length)} detail="Attached per Integration" /><Metric label="Support routes" value={String(supportRoutes.length)} detail="Bug and feedback delivery" /></div>
-    <section className="panel"><div className="panel-heading"><div><h2>API families and versions</h2><p>Lifecycle, replacement, attached resource revisions, access, and support routing are revisioned together.</p></div><Badge color="violet">Independent versions</Badge></div>{integrations.map((integration) => <div className="provider-row" key={integration.id}><span className="settings-icon"><GitBranch /></span><span><EntityLink entity="integration" uid={integration.id} onNavigate={onNavigate} className="entity-link"><strong>{integration.display_name} <code>{integration.version_key}</code></strong></EntityLink><small>{integration.family_key} · revision {integration.revision}{integration.replacement_integration_id ? ` · replacement ${integration.replacement_integration_id}` : ""}</small><span className="integration-set-list">{(integration.resources ?? []).map((resource) => <span key={resource.resource_set_id}><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><Badge color={resource.kind === "documentation" ? "blue" : resource.kind === "package" ? "green" : "violet"}>{resource.kind}: {resource.name} r{resource.resolved_revision?.revision ?? "—"}</Badge></EntityLink><button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => detachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span>)}</span></span><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge><span className="table-actions"><small>{integration.access_connection_ids?.length ?? 0} access · {routeName(integration)}</small><Button outline onClick={() => { setAttachIntegration(integration); setAttachSetID(resourceSets.find((set) => !(integration.resources ?? []).some((link) => link.resource_set_id === set.id))?.id ?? ""); }}>Attach set</Button><Button outline onClick={() => openIntegration(integration)}>Edit</Button><Button color="indigo" disabled={busy} onClick={() => publishIntegration(integration)}>Publish</Button></span></div>)}{integrations.length === 0 && <div className="empty-row">No Integrations yet. Create one manually or discover the connector catalog.</div>}</section>
-    <section className="panel"><div className="panel-heading"><div><h2>Reusable resource directory</h2><p>Updating a shared set updates every Integration following latest. Duplicate a set before making version-specific changes.</p></div><Button outline onClick={() => openResource()}><Plus data-slot="icon" />New set</Button></div>{resourceSets.map((set) => <div className="lease-row" key={set.id}><span><EntityLink entity="resource-set" uid={set.id} onNavigate={onNavigate} className="entity-link"><strong>{set.name}</strong></EntityLink><small>{set.kind} · revision {set.latest_revision?.revision ?? set.revision} · {(set.integration_ids?.length ?? 0)} Integration(s)</small></span><span className="table-actions"><Badge color={(set.integration_ids?.length ?? 0) > 1 ? "violet" : "zinc"}>{(set.integration_ids?.length ?? 0) > 1 ? "Shared" : "Independent"}</Badge><Button outline onClick={() => openResource(set)}>New revision</Button><Button outline onClick={() => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }}>Duplicate</Button></span></div>)}{resourceSets.length === 0 && <div className="empty-row">Create documentation, package, or hook sets here, then attach them explicitly.</div>}</section>
+    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrationID={selectedIntegrationID} activeTab={activeTab} loading={selectedLoading} revisions={selectedRevisions} resourceSets={resourceSets} connections={connections} supportRoutes={supportRoutes} tools={tools} mcpConnections={mcpConnections} busy={busy} onEdit={openIntegration} onPublish={publishIntegration} onAttach={openAttachDialog} onCreateResource={() => openResource()} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} resourceSets={resourceSets} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
 
     <Dialog open={integrationOpen} onClose={setIntegrationOpen} title={editingIntegration ? "Edit Integration" : "Create Integration"} description="An Integration is exactly one API family and one API version." actions={<><Button outline onClick={() => setIntegrationOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !familyKey.trim() || !versionKey.trim() || !displayName.trim()} onClick={saveIntegration}>{busy ? "Saving…" : "Save Integration"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>API family key</span><input value={familyKey} onChange={(event) => setFamilyKey(event.target.value)} placeholder="voice-api" /></label><label className="auth-field"><span>API version</span><input value={versionKey} onChange={(event) => setVersionKey(event.target.value)} placeholder="v2" /></label></div><label className="auth-field"><span>Display name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Voice API v2" /></label><label className="auth-field"><span>Description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Lifecycle</span><select value={lifecycle} onChange={(event) => setLifecycle(event.target.value as APIIntegration["lifecycle"])}><option value="draft">Draft</option><option value="active">Active</option><option value="deprecated">Deprecated</option><option value="retired">Retired</option></select></label><label className="auth-field"><span>Replacement</span><select disabled={lifecycle !== "deprecated" && lifecycle !== "retired"} value={replacementID} onChange={(event) => setReplacementID(event.target.value)}><option value="">None</option>{integrations.filter((value) => value.id !== editingIntegration?.id).map((value) => <option key={value.id} value={value.id}>{value.display_name} {value.version_key}</option>)}</select></label></div>{(lifecycle === "deprecated" || lifecycle === "retired") && <label className="auth-field"><span>Sunset date</span><input type="date" value={sunsetAt} onChange={(event) => setSunsetAt(event.target.value)} /></label>}</div></Dialog>
     <Dialog open={resourceOpen} onClose={setResourceOpen} title={editingSet ? `Create revision for ${editingSet.name}` : "Create reusable resource set"} description="Sets are reusable by explicit attachment. Each save creates immutable content." actions={<><Button outline onClick={() => setResourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !setName.trim()} onClick={saveResourceSet}>{busy ? "Saving…" : editingSet ? "Create revision" : "Create set"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Kind</span><select disabled={Boolean(editingSet)} value={setKind} onChange={(event) => setSetKind(event.target.value as APIResourceSet["kind"])}><option value="documentation">Documentation</option><option value="package">Package</option><option value="hook">Hook</option></select></label><label className="auth-field"><span>Name</span><input value={setName} onChange={(event) => setSetName(event.target.value)} /></label></div><label className="auth-field"><span>Description</span><textarea value={resourceDescription} onChange={(event) => setResourceDescription(event.target.value)} /></label><label className="auth-field"><span>Manifest (JSON array)</span><textarea className="code-input" value={setManifest} onChange={(event) => setSetManifest(event.target.value)} spellCheck={false} /></label></div></Dialog>
     <Dialog open={Boolean(duplicateSet)} onClose={(open) => { if (!open) setDuplicateSet(null); }} title="Duplicate resource set" description="Creates an independent copy so later edits do not affect Integrations using the original." actions={<><Button outline onClick={() => setDuplicateSet(null)}>Cancel</Button><Button color="indigo" disabled={busy || !duplicateName.trim()} onClick={duplicateResource}>Duplicate</Button></>}><label className="auth-field"><span>New set name</span><input value={duplicateName} onChange={(event) => setDuplicateName(event.target.value)} /></label></Dialog>
-    <Dialog open={Boolean(attachIntegration)} onClose={(open) => { if (!open) setAttachIntegration(null); }} title={`Attach resources to ${attachIntegration?.display_name ?? "Integration"}`} description="Follow latest for deliberate sharing, or pin the current immutable revision." actions={<><Button outline onClick={() => setAttachIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy || !attachSetID} onClick={attachResource}>Attach</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Resource set</span><select value={attachSetID} onChange={(event) => setAttachSetID(event.target.value)}><option value="">Select a set</option>{resourceSets.filter((set) => !(attachIntegration?.resources ?? []).some((link) => link.resource_set_id === set.id)).map((set) => <option key={set.id} value={set.id}>{set.kind} · {set.name}</option>)}</select></label><label className="compact-check"><input type="checkbox" checked={pinAttachedSet} onChange={(event) => setPinAttachedSet(event.target.checked)} /><span>Pin the current revision instead of following latest</span></label></div></Dialog>
+    <Dialog open={Boolean(attachIntegration)} onClose={(open) => { if (!open) setAttachIntegration(null); }} title={`Attach ${attachKind ? `${attachKind} ` : ""}resources to ${attachIntegration?.display_name ?? "Integration"}`} description="Follow latest for deliberate sharing, or pin the current immutable revision." actions={<><Button outline onClick={() => setAttachIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy || !attachSetID} onClick={attachResource}>Attach</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Resource set</span><select value={attachSetID} onChange={(event) => setAttachSetID(event.target.value)}><option value="">Select a set</option>{resourceSets.filter((set) => (!attachKind || set.kind === attachKind) && !(attachIntegration?.resources ?? []).some((link) => link.resource_set_id === set.id)).map((set) => <option key={set.id} value={set.id}>{set.kind} · {set.name}</option>)}</select></label><label className="compact-check"><input type="checkbox" checked={pinAttachedSet} onChange={(event) => setPinAttachedSet(event.target.checked)} /><span>Pin the current revision instead of following latest</span></label></div></Dialog>
   </>;
 }
 
