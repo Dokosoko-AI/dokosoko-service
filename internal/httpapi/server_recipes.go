@@ -1,0 +1,299 @@
+package httpapi
+
+import (
+	"context"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/store"
+)
+
+func (s *Server) publishedRecipes(ctx context.Context, productID string, public bool) ([]model.Recipe, error) {
+	values, err := s.service.ReconcileRecipeDrift(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]model.Recipe, 0, len(values))
+	for _, recipe := range values {
+		if recipe.State != "published" || recipe.NeedsAttention || (public && recipe.Visibility != model.VisibilityPublic) {
+			continue
+		}
+		result = append(result, recipe)
+	}
+	return result, nil
+}
+
+func (s *Server) publishedRecipeByURI(ctx context.Context, productID, uri string, public bool) (model.Recipe, error) {
+	values, err := s.publishedRecipes(ctx, productID, public)
+	if err != nil {
+		return model.Recipe{}, err
+	}
+	for _, recipe := range values {
+		if recipe.StableURI == uri {
+			return recipe, nil
+		}
+	}
+	return model.Recipe{}, store.ErrNotFound
+}
+
+func (s *Server) integrationAnalyses(w http.ResponseWriter, r *http.Request, productID string) {
+	switch r.Method {
+	case http.MethodGet:
+		values, err := s.service.Store().IntegrationAnalyses(r.Context(), productID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": values})
+	case http.MethodPost:
+		value, err := s.service.AnalyseIntegration(r.Context(), productID, actor(r))
+		if err != nil {
+			s.creationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, value)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) integrationAnalysis(w http.ResponseWriter, r *http.Request, productID, analysisID string) {
+	switch r.Method {
+	case http.MethodGet:
+		value, err := s.service.Store().IntegrationAnalysis(r.Context(), productID, analysisID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	case http.MethodPatch:
+		var input struct {
+			Answers map[string]string `json:"answers"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.service.AnswerIntegrationUnknowns(r.Context(), productID, analysisID, input.Answers, actor(r))
+		if err != nil {
+			s.creationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	default:
+		w.Header().Set("Allow", "GET, PATCH")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) generateRecipes(w http.ResponseWriter, r *http.Request, productID, analysisID string) {
+	values, err := s.service.GenerateRecipes(r.Context(), productID, analysisID, actor(r))
+	if err != nil {
+		s.creationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"items": values})
+}
+
+func (s *Server) recipes(w http.ResponseWriter, r *http.Request, productID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+		return
+	}
+	values, err := s.service.ReconcileRecipeDrift(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
+func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
+	switch r.Method {
+	case http.MethodGet:
+		value, err := s.service.Store().Recipe(r.Context(), productID, recipeID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		revisions, _ := s.service.Store().RecipeRevisions(r.Context(), value.ID)
+		writeJSON(w, http.StatusOK, map[string]any{"recipe": value, "revisions": revisions})
+	case http.MethodPatch:
+		var input struct {
+			Markdown   string                  `json:"markdown"`
+			References []model.RecipeReference `json:"references"`
+			Visibility model.Visibility        `json:"visibility"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.service.UpdateRecipeMarkdown(r.Context(), productID, recipeID, input.Markdown, input.References, input.Visibility, actor(r))
+		if err != nil {
+			s.creationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	default:
+		w.Header().Set("Allow", "GET, PATCH")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) reworkRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
+	var input struct {
+		Instruction string `json:"instruction"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.ReworkRecipe(r.Context(), productID, recipeID, input.Instruction, actor(r))
+	if err != nil {
+		s.creationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) approveRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
+	value, err := s.service.ApproveRecipe(r.Context(), productID, recipeID, actor(r))
+	if err != nil {
+		s.creationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) publishRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
+	value, err := s.service.PublishRecipe(r.Context(), productID, recipeID, actor(r))
+	if err != nil {
+		s.creationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) aiJobs(w http.ResponseWriter, r *http.Request, productID string) {
+	values, err := s.service.Store().AIJobs(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
+func (s *Server) attention(w http.ResponseWriter, r *http.Request, productID string) {
+	recipes, err := s.service.ReconcileRecipeDrift(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	analyses, err := s.service.Store().IntegrationAnalyses(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	attentionRecipes := make([]model.Recipe, 0)
+	for _, recipe := range recipes {
+		if recipe.NeedsAttention {
+			attentionRecipes = append(attentionRecipes, recipe)
+		}
+	}
+	questions := make([]map[string]any, 0)
+	for _, analysis := range analyses {
+		for _, unknown := range analysis.Unknowns {
+			if strings.TrimSpace(unknown.Answer) == "" {
+				questions = append(questions, map[string]any{"analysis_id": analysis.ID, "question": unknown})
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"recipes": attentionRecipes, "questions": questions, "count": len(attentionRecipes) + len(questions)})
+}
+
+func operationalSince(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
+	days := 30
+	if raw := strings.TrimSpace(r.URL.Query().Get("days")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 365 {
+			writeError(w, http.StatusBadRequest, "invalid_period", "days must be between 1 and 365.", nil)
+			return time.Time{}, false
+		}
+		days = value
+	}
+	return time.Now().UTC().AddDate(0, 0, -days), true
+}
+
+func (s *Server) recipeAnalytics(w http.ResponseWriter, r *http.Request, productID string) {
+	since, ok := operationalSince(w, r)
+	if !ok {
+		return
+	}
+	popularity, err := s.service.Store().RecipePopularity(r.Context(), productID, since)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	recipes, err := s.service.Store().Recipes(r.Context(), productID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	titles := make(map[string]string, len(recipes))
+	for _, recipe := range recipes {
+		titles[recipe.ID] = recipe.Title
+	}
+	items := make([]map[string]any, 0, len(popularity))
+	for _, value := range popularity {
+		items = append(items, map[string]any{
+			"recipe_id": value.RecipeID, "recipe_slug": value.RecipeSlug, "title": titles[value.RecipeID],
+			"views": value.Views, "plan_selections": value.PlanSelections,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "since": since, "generated_at": time.Now().UTC()})
+}
+
+func (s *Server) aiUsage(w http.ResponseWriter, r *http.Request, productID string) {
+	since, ok := operationalSince(w, r)
+	if !ok {
+		return
+	}
+	events, err := s.service.Store().AIUsageEvents(r.Context(), productID, since)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	type workloadUsage struct {
+		Workload     string `json:"workload"`
+		Calls        int64  `json:"calls"`
+		Errors       int64  `json:"errors"`
+		InputTokens  int64  `json:"input_tokens"`
+		OutputTokens int64  `json:"output_tokens"`
+		DurationMS   int64  `json:"duration_ms"`
+	}
+	byWorkload := map[string]workloadUsage{}
+	for _, event := range events {
+		value := byWorkload[event.Workload]
+		value.Workload = event.Workload
+		value.Calls++
+		if event.Outcome != "succeeded" {
+			value.Errors++
+		}
+		value.InputTokens += event.InputTokens
+		value.OutputTokens += event.OutputTokens
+		value.DurationMS += event.DurationMS
+		byWorkload[event.Workload] = value
+	}
+	workloads := make([]workloadUsage, 0, len(byWorkload))
+	for _, name := range []string{"extraction", "authoring", "review", "support"} {
+		if value, exists := byWorkload[name]; exists {
+			workloads = append(workloads, value)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": events, "workloads": workloads, "since": since, "generated_at": time.Now().UTC()})
+}

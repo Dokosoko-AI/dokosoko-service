@@ -13,6 +13,7 @@ import (
 	"time"
 
 	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
+	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
@@ -91,7 +92,21 @@ func run() error {
 	toolProxy.SetMCPExecutor(mcpBridge)
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
 	accessProxy := accessruntime.New(persistence, vault, nil, nil)
-	handler := httpapi.NewWithOptions(platform.NewWithVault(persistence, vault), httpapi.Options{
+	platformService := platform.NewWithVault(persistence, vault)
+	if err := platformService.ConfigureEnvironmentAI(ctx, platform.AIEnvironmentConfig{
+		Provider: os.Getenv("DOKOSOKO_AI_PROVIDER"),
+		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
+		Endpoint: os.Getenv("DOKOSOKO_AI_ENDPOINT"),
+		Models: map[airuntime.Workload]string{
+			airuntime.WorkloadExtraction: os.Getenv("DOKOSOKO_AI_MODEL_EXTRACTION"),
+			airuntime.WorkloadAuthoring:  os.Getenv("DOKOSOKO_AI_MODEL_AUTHORING"),
+			airuntime.WorkloadReview:     os.Getenv("DOKOSOKO_AI_MODEL_REVIEW"),
+			airuntime.WorkloadSupport:    os.Getenv("DOKOSOKO_AI_MODEL_SUPPORT"),
+		},
+	}); err != nil {
+		return fmt.Errorf("configure AI: %w", err)
+	}
+	handler := httpapi.NewWithOptions(platformService, httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
 		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
 	})

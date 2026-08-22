@@ -54,6 +54,15 @@ type Memory struct {
 	integrationRuns          map[string]map[string]model.IntegrationRun
 	reportSubmissions        map[string]map[string]model.ReportSubmission
 	llmProfiles              map[string]map[string]model.LLMProfile
+	aiProviderConnections    map[string]map[string]model.AIProviderConnection
+	aiWorkloadProfiles       map[string]map[string]model.AIWorkloadProfile
+	aiBudgetReservations     map[string]model.AIBudgetReservation
+	aiBudgetUsed             map[string]int64
+	aiUsage                  []model.AIUsageEvent
+	integrationAnalyses      map[string]map[string]model.IntegrationAnalysis
+	recipes                  map[string]map[string]model.Recipe
+	recipeRevisions          map[string]map[string]model.RecipeRevision
+	aiJobs                   map[string]map[string]model.AIJob
 	widgets                  map[string]model.Widget
 	widgetSecrets            map[string]model.WidgetSecret
 	widgetSecretDigests      map[string]string
@@ -123,6 +132,14 @@ func NewMemory() *Memory {
 		integrationRuns:          map[string]map[string]model.IntegrationRun{product.ID: {}},
 		reportSubmissions:        map[string]map[string]model.ReportSubmission{product.ID: {}},
 		llmProfiles:              map[string]map[string]model.LLMProfile{product.ID: {}},
+		aiProviderConnections:    map[string]map[string]model.AIProviderConnection{product.ID: {}},
+		aiWorkloadProfiles:       map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
+		aiBudgetReservations:     make(map[string]model.AIBudgetReservation),
+		aiBudgetUsed:             make(map[string]int64),
+		integrationAnalyses:      map[string]map[string]model.IntegrationAnalysis{product.ID: {}},
+		recipes:                  map[string]map[string]model.Recipe{product.ID: {}},
+		recipeRevisions:          make(map[string]map[string]model.RecipeRevision),
+		aiJobs:                   map[string]map[string]model.AIJob{product.ID: {}},
 		widgets:                  make(map[string]model.Widget),
 		widgetSecrets:            make(map[string]model.WidgetSecret),
 		widgetSecretDigests:      make(map[string]string),
@@ -220,6 +237,11 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 	m.integrationRuns[value.ID] = make(map[string]model.IntegrationRun)
 	m.reportSubmissions[value.ID] = make(map[string]model.ReportSubmission)
 	m.llmProfiles[value.ID] = make(map[string]model.LLMProfile)
+	m.aiProviderConnections[value.ID] = make(map[string]model.AIProviderConnection)
+	m.aiWorkloadProfiles[value.ID] = make(map[string]model.AIWorkloadProfile)
+	m.integrationAnalyses[value.ID] = make(map[string]model.IntegrationAnalysis)
+	m.recipes[value.ID] = make(map[string]model.Recipe)
+	m.aiJobs[value.ID] = make(map[string]model.AIJob)
 	return value, nil
 }
 
@@ -1510,6 +1532,44 @@ func (m *Memory) AnalyticsSummary(_ context.Context, productID string, since tim
 	}
 	sort.Slice(value.DailyRequests, func(i, j int) bool { return value.DailyRequests[i].Date < value.DailyRequests[j].Date })
 	return value, nil
+}
+
+func (m *Memory) RecipePopularity(_ context.Context, productID string, since time.Time) ([]model.RecipePopularity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	byID := map[string]model.RecipePopularity{}
+	for _, event := range m.analytics {
+		if event.ProductID != productID || event.CreatedAt.Before(since) || (event.EventName != "recipe.view" && event.EventName != "recipe.plan_selected") {
+			continue
+		}
+		recipeID, _ := event.Dimensions["recipe_id"].(string)
+		if recipeID == "" {
+			continue
+		}
+		value := byID[recipeID]
+		value.RecipeID = recipeID
+		value.RecipeSlug, _ = event.Dimensions["recipe_slug"].(string)
+		if event.EventName == "recipe.view" {
+			value.Views++
+		} else {
+			value.PlanSelections++
+		}
+		byID[recipeID] = value
+	}
+	result := make([]model.RecipePopularity, 0, len(byID))
+	for _, value := range byID {
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].PlanSelections == result[j].PlanSelections {
+			if result[i].Views == result[j].Views {
+				return result[i].RecipeSlug < result[j].RecipeSlug
+			}
+			return result[i].Views > result[j].Views
+		}
+		return result[i].PlanSelections > result[j].PlanSelections
+	})
+	return result, nil
 }
 
 func (m *Memory) AppendAudit(_ context.Context, event model.AuditEvent) error {

@@ -101,6 +101,24 @@ func newProductionAuthServer(t *testing.T) http.Handler {
 	})
 }
 
+func TestAIProfileConfigurationReturnsEndpointWithoutCredentialMaterial(t *testing.T) {
+	t.Parallel()
+	handler := newWidgetServer(t)
+	w := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/llm-profiles", "doko_admin_demo", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("AI profiles status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"endpoint":"https://llm.example.com"`) || !strings.Contains(body, `"model":"widget-assistant-1"`) {
+		t.Fatalf("AI profile omitted editable configuration: %s", body)
+	}
+	for _, forbidden := range []string{"provider-secret", "credential_secret_id", "ciphertext", "nonce"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("AI profile leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
 func requestWithCookies(t *testing.T, handler http.Handler, method, path, body string, cookies []*http.Cookie, csrf string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, bytes.NewBufferString(body))
@@ -746,6 +764,60 @@ func TestSupportReportingToolsRequireConsentQueueEncryptedReportsAndStayPrivate(
 	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}`)
 	if strings.Contains(w.Body.String(), "support.report_bug") || strings.Contains(w.Body.String(), "support.submit_feedback") {
 		t.Fatalf("support reporting tools leaked to Public MCP: %s", w.Body.String())
+	}
+}
+
+func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "root-test", RequestID: "req-recipe-resource"}
+	analysis, err := service.AnalyseIntegration(ctx, "prod_acme", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipes, err := service.GenerateRecipes(ctx, "prod_acme", analysis.ID, actor)
+	if err != nil || len(recipes) != 1 {
+		t.Fatalf("generate recipes: values=%#v err=%v", recipes, err)
+	}
+	recipe, err := service.ApproveRecipe(ctx, "prod_acme", recipes[0].ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe, err = service.PublishRecipe(ctx, "prod_acme", recipe.ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true})
+
+	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"mimeType":"text/markdown"`) {
+		t.Fatalf("recipe resource list status=%d body=%s", w.Code, w.Body.String())
+	}
+	readBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": map[string]any{"uri": recipe.StableURI}})
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(readBody))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), "## Implementation") {
+		t.Fatalf("recipe resource read status=%d body=%s", w.Code, w.Body.String())
+	}
+	planBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "integration.plan", "arguments": map[string]any{"outcome": recipe.Outcome}}})
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(planBody))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) {
+		t.Fatalf("recipe plan status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/recipe-analytics?days=30", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"views":1`) || !strings.Contains(w.Body.String(), `"plan_selections":1`) {
+		t.Fatalf("recipe analytics status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	product, _ := memory.Product(ctx, "prod_acme")
+	product.PublicMCPEnabled = true
+	if _, err := memory.UpdateProduct(ctx, product, product.Revision); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":4,"method":"resources/list","params":{}}`)
+	if strings.Contains(w.Body.String(), recipe.StableURI) {
+		t.Fatalf("private recipe leaked through Public MCP: %s", w.Body.String())
 	}
 }
 

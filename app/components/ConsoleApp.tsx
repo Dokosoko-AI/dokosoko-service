@@ -39,12 +39,40 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
-import { ConsoleRoute, EntityKind, INTEGRATION_TABS, IntegrationTab, Section, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath } from "../lib/console-routes";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAIProviderConnection, APIAIWorkloadProfile, APIAIWorkloadUsage, APIAnalytics, APIAuditEvent, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationAnalysis, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIRecipe, APIRecipePopularity, APIRecipeReference, APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
+import { ConsoleRoute, EntityKind, INTEGRATION_TABS, IntegrationTab, SETTINGS_TABS, Section, SettingsTab, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath, settingsPath } from "../lib/console-routes";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
 type NavigationGroup = "apis" | "agent-access" | "activity";
 type Visibility = "private" | "public";
+type AIWorkload = APIAIWorkloadProfile["workload"];
+
+const aiWorkloads: Array<{
+  role: AIWorkload;
+  name: string;
+  description: string;
+  icon: typeof Bot;
+}> = [
+  { role: "extraction", name: "Extraction", description: "Turns product evidence into a bounded integration plan.", icon: Sparkles },
+  { role: "authoring", name: "Authoring", description: "Writes and reworks implementation recipes in Markdown.", icon: BookOpen },
+  { role: "review", name: "Review", description: "Challenges generated recipes for unsupported claims and security mistakes.", icon: ShieldCheck },
+  { role: "support", name: "Support", description: "Answers Widget questions and rewrites agent-facing descriptions.", icon: Bot },
+];
+
+const aiModelDefaults: Record<APIAIProviderConnection["provider"], Record<AIWorkload, string>> = {
+  openai: { extraction: "gpt-5.6-luna", authoring: "gpt-5.6-terra", review: "gpt-5.6-sol", support: "gpt-5.6-terra" },
+  google: { extraction: "gemini-3.5-flash-lite", authoring: "gemini-3.6-flash", review: "gemini-3.5-flash", support: "gemini-3.6-flash" },
+  anthropic: { extraction: "claude-haiku-4-5", authoring: "claude-sonnet-5", review: "claude-opus-5", support: "claude-sonnet-5" },
+  "openai-compatible": { extraction: "", authoring: "", review: "", support: "" },
+};
+
+function aiProviderLabel(provider: string) {
+  return provider === "openai" ? "OpenAI" : provider === "google" ? "Google" : provider === "anthropic" ? "Anthropic" : provider === "openai-compatible" ? "OpenAI-compatible" : provider;
+}
+
+function aiProviderOrigin(provider: APIAIProviderConnection["provider"]) {
+  return provider === "openai" ? "https://api.openai.com" : provider === "google" ? "https://generativelanguage.googleapis.com" : provider === "anthropic" ? "https://api.anthropic.com" : "";
+}
 
 type Source = {
   id: string;
@@ -74,7 +102,7 @@ const navigation: Array<{
   defaultSection: Section;
   sections: Array<{ id: Section; label: string }>;
 }> = [
-  { id: "apis", label: "APIs", icon: Sparkles, defaultSection: "product", sections: [{ id: "product", label: "APIs" }] },
+  { id: "apis", label: "APIs", icon: Sparkles, defaultSection: "product", sections: [{ id: "product", label: "APIs" }, { id: "recipes", label: "Recipes" }] },
   { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }, { id: "widgets", label: "Widgets" }] },
   { id: "activity", label: "Activity", icon: Activity, defaultSection: "runs", sections: [{ id: "runs", label: "Activity" }] },
 ];
@@ -261,6 +289,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	const [supportRoutes, setSupportRoutes] = useState<APISupportRoute[]>([]);
   const [consoleRoute, setConsoleRoute] = useState<ConsoleRoute>(() => routeForSection("product"));
   const section = consoleRoute.section;
+  const settingsTab: SettingsTab = consoleRoute.kind === "section" && consoleRoute.section === "settings" ? consoleRoute.settingsTab ?? "overview" : "overview";
   const [productDefinition, setProductDefinition] = useState<APIProductDefinition | null>(fixtureDefinition);
   const [, setLatestProductBuild] = useState<APIProductBuild | null>(fixtureProductBuild);
   const [productBuilderOpen, setProductBuilderOpen] = useState(false);
@@ -343,15 +372,24 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const [rootCode, setRootCode] = useState("");
 	  const [rootEnrollment, setRootEnrollment] = useState<SetupEnrollment | null>(null);
 	  const [rootRecoveryCodes, setRootRecoveryCodes] = useState<string[]>([]);
-	  const [llmProfiles, setLLMProfiles] = useState<APILLMProfile[]>([]);
+	  const [aiConnections, setAIConnections] = useState<APIAIProviderConnection[]>([]);
+	  const [aiProfiles, setAIProfiles] = useState<APIAIWorkloadProfile[]>([]);
+	  const [analyses, setAnalyses] = useState<APIIntegrationAnalysis[]>([]);
+	  const [recipes, setRecipes] = useState<APIRecipe[]>([]);
+	  const [recipeAnalytics, setRecipeAnalytics] = useState<APIRecipePopularity[]>([]);
+	  const [aiUsage, setAIUsage] = useState<APIAIWorkloadUsage[]>([]);
+	  const [recipeBusy, setRecipeBusy] = useState(false);
 	  const [llmOpen, setLLMOpen] = useState(false);
 	  const [llmBusy, setLLMBusy] = useState(false);
-	  const [llmRole, setLLMRole] = useState("embedding");
-	  const [llmProvider, setLLMProvider] = useState("openai-compatible");
-	  const [llmEndpoint, setLLMEndpoint] = useState("");
-	  const [llmModel, setLLMModel] = useState("");
+	  const [llmRole, setLLMRole] = useState<AIWorkload>("support");
+	  const [llmConnectionID, setLLMConnectionID] = useState("");
+	  const [providerOpen, setProviderOpen] = useState(false);
+	  const [providerBusy, setProviderBusy] = useState(false);
+	  const [providerEnabled, setProviderEnabled] = useState(true);
+	  const [llmProvider, setLLMProvider] = useState<APIAIProviderConnection["provider"]>("openai");
+	  const [llmEndpoint, setLLMEndpoint] = useState(aiProviderOrigin("openai"));
+	  const [llmModel, setLLMModel] = useState(aiModelDefaults.openai.support);
 	  const [llmCredential, setLLMCredential] = useState("");
-	  const [llmDimensions, setLLMDimensions] = useState("1536");
 	  const [llmInputTokens, setLLMInputTokens] = useState("8192");
 	  const [llmOutputTokens, setLLMOutputTokens] = useState("1024");
 	  const [llmDailyBudget, setLLMDailyBudget] = useState("1000000");
@@ -473,7 +511,8 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	      const credentialGroups = await Promise.all(connectionValues.map((connection) => api.accessCredentials(connection.id).catch(() => [])));
 	      if (!cancelled) { setAccessInstances(instanceGroups.flat()); setAccessCredentials(credentialGroups.flat()); }
 	    }).catch(() => {});
-	    api.llmProfiles(product.id).then((values) => { if (!cancelled) setLLMProfiles(values); }).catch(() => {});
+	    Promise.all([api.aiConnections(), api.aiProfiles(product.id)]).then(([connections, profiles]) => { if (!cancelled) { setAIConnections(connections); setAIProfiles(profiles); } }).catch(() => {});
+	    Promise.all([api.analyses(product.id), api.recipes(product.id), api.recipeAnalytics(product.id), api.aiUsage(product.id)]).then(([analysisValues, recipeValues, popularityValues, usageValues]) => { if (!cancelled) { setAnalyses(analysisValues); setRecipes(recipeValues); setRecipeAnalytics(popularityValues); setAIUsage(usageValues); } }).catch(() => {});
 	    api.productDefinition(product.id).then((value) => { if (!cancelled) setProductDefinition(value); }).catch((error) => { if (!cancelled && error instanceof APIError && error.status === 404) setProductDefinition(null); });
 	    api.productBuilds(product.id).then((values) => { if (!cancelled) setLatestProductBuild(values[0] ?? null); }).catch(() => {});
 	    api.productVersions(product.id).then((values) => { if (!cancelled) { setProductVersions(values); setPinVersionID(values.find((value) => value.is_latest)?.id ?? values[0]?.id ?? ""); } }).catch(() => {});
@@ -1053,22 +1092,169 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     }
   }
 
-  async function saveLLMProfile() {
-    setLLMBusy(true);
-    try {
-      const value = await api.saveLLMProfile(product.id, { organisation_id: product.organisation_id, role: llmRole, provider: llmProvider, endpoint: llmEndpoint, model: llmModel, credential: llmCredential, embedding_dimensions: llmRole === "embedding" ? Number(llmDimensions) : 0, max_input_tokens: Number(llmInputTokens), max_output_tokens: Number(llmOutputTokens), daily_token_budget: Number(llmDailyBudget), enabled: llmEnabled });
-      setLLMProfiles((items) => [...items.filter((item) => item.role !== value.role), value].sort((a, b) => a.role.localeCompare(b.role)));
-      setLLMCredential("");
-      setLLMOpen(false);
-      showToast(`${value.role} model profile saved with mandatory untrusted-context hardening.`);
+	  function openAIConnection(provider: APIAIProviderConnection["provider"]) {
+	    const connection = aiConnections.find((item) => item.provider === provider);
+	    setLLMProvider(provider);
+	    setLLMEndpoint(connection?.endpoint ?? aiProviderOrigin(provider));
+	    setLLMCredential("");
+	    setProviderEnabled(connection?.enabled ?? true);
+	    setProviderOpen(true);
+	  }
+
+	  function openLLMProfile(role: AIWorkload) {
+	    const profile = aiProfiles.find((item) => item.workload === role);
+	    const connection = aiConnections.find((item) => item.id === profile?.provider_connection_id) ?? aiConnections.find((item) => item.enabled);
+	    setLLMRole(role);
+	    setLLMConnectionID(connection?.id ?? "");
+	    setLLMModel(profile?.model ?? (connection ? aiModelDefaults[connection.provider][role] : ""));
+	    setLLMInputTokens(String(profile?.max_input_tokens ?? 128000));
+	    setLLMOutputTokens(String(profile?.max_output_tokens ?? (role === "support" ? 1024 : 4096)));
+	    setLLMDailyBudget(String(profile?.daily_token_budget ?? 0));
+	    setLLMEnabled(profile?.enabled ?? false);
+	    setLLMOpen(true);
+	  }
+
+	  function changeLLMConnection(connectionID: string) {
+	    setLLMConnectionID(connectionID);
+	    const connection = aiConnections.find((item) => item.id === connectionID);
+	    if (connection) setLLMModel(aiModelDefaults[connection.provider][llmRole]);
+	  }
+
+	  async function saveAIConnection() {
+	    setProviderBusy(true);
+	    try {
+	      const current = aiConnections.find((item) => item.provider === llmProvider);
+	      const value = await api.saveAIConnection({ organisation_id: product.organisation_id, provider: llmProvider, endpoint: llmEndpoint, credential: llmCredential, enabled: providerEnabled, revision: current?.revision ?? 0 });
+	      setAIConnections((items) => [...items.filter((item) => item.id !== value.id && item.provider !== value.provider), value]);
+	      setLLMCredential("");
+	      setProviderOpen(false);
+	      showToast(`${aiProviderLabel(value.provider)} connected.`);
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not connect AI provider.");
+	    } finally {
+	      setProviderBusy(false);
+	    }
+	  }
+
+	  async function testAIConnection(connection: APIAIProviderConnection) {
+	    try {
+	      const value = await api.testAIConnection(connection.id);
+	      setAIConnections((items) => items.map((item) => item.id === value.id ? value : item));
+	      showToast(`${aiProviderLabel(value.provider)} connection works.`);
+	    } catch (error) {
+	      const updated = await api.aiConnections().catch(() => aiConnections);
+	      setAIConnections(updated);
+	      showToast(error instanceof APIError ? error.message : "Connection test failed.");
+	    }
+	  }
+
+	  async function saveLLMProfile() {
+	    setLLMBusy(true);
+	    try {
+	      const current = aiProfiles.find((item) => item.workload === llmRole);
+	      const value = await api.saveAIProfile(product.id, llmRole, { organisation_id: product.organisation_id, provider_connection_id: llmConnectionID, model: llmModel, max_input_tokens: Number(llmInputTokens), max_output_tokens: Number(llmOutputTokens), daily_token_budget: Number(llmDailyBudget), enabled: llmEnabled, revision: current?.revision ?? 0 });
+	      setAIProfiles((items) => [...items.filter((item) => item.workload !== value.workload), value].sort((a, b) => a.workload.localeCompare(b.workload)));
+	      setLLMOpen(false);
+	      showToast(`${aiWorkloads.find((workload) => workload.role === value.workload)?.name ?? value.workload} workload saved.`);
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not save LLM profile.");
+      showToast(error instanceof APIError ? error.message : "Could not save AI model.");
     } finally {
       setLLMBusy(false);
     }
-  }
+	  }
 
-  async function runSystemDoctor() {
+	  async function analyseIntegration() {
+	    setRecipeBusy(true);
+	    try {
+	      const value = await api.analyseIntegration(product.id);
+	      setAnalyses((items) => [value, ...items]);
+	      showToast(value.generated_by === "ai_assisted" ? "Integration analysis is ready for review." : "Deterministic analysis is ready; AI extraction was unavailable.");
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not analyse this integration.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function generateRecipes(analysis: APIIntegrationAnalysis) {
+	    setRecipeBusy(true);
+	    try {
+	      const values = await api.generateRecipes(product.id, analysis.id);
+	      setRecipes((items) => [...values, ...items.filter((item) => !values.some((value) => value.id === item.id))]);
+	      showToast(`${values.length} recipe${values.length === 1 ? "" : "s"} generated for review.`);
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not generate recipes.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function answerAnalysis(analysis: APIIntegrationAnalysis, answers: Record<string, string>) {
+	    setRecipeBusy(true);
+	    try {
+	      const value = await api.answerAnalysis(product.id, analysis.id, answers);
+	      setAnalyses((items) => items.map((item) => item.id === value.id ? value : item));
+	      showToast("Integration answers saved.");
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not save integration answers.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function reworkRecipe(recipe: APIRecipe, instruction: string) {
+	    setRecipeBusy(true);
+	    try {
+	      const value = await api.reworkRecipe(product.id, recipe.id, instruction);
+	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+	      showToast("A new recipe revision is ready for review.");
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not rework this recipe.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function editRecipe(recipe: APIRecipe, markdown: string, references: APIRecipeReference[], visibility: APIRecipe["visibility"]) {
+	    setRecipeBusy(true);
+	    try {
+	      const value = await api.updateRecipe(product.id, recipe.id, markdown, references, visibility);
+	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+	      showToast("Human-authored recipe revision saved for review.");
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not save this recipe revision.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function approveRecipe(recipe: APIRecipe) {
+	    setRecipeBusy(true);
+	    try {
+	      const value = await api.approveRecipe(product.id, recipe.id);
+	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+	      showToast("Current recipe revision approved.");
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not approve this recipe.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function publishRecipe(recipe: APIRecipe) {
+	    setRecipeBusy(true);
+	    try {
+	      const value = await api.publishRecipe(product.id, recipe.id);
+	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+	      showToast("Recipe published to MCP resources.");
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Could not publish this recipe.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
+	  async function runSystemDoctor() {
     try {
       const value = await api.systemDoctor();
       const passing = value.checks.filter((check) => check.status === "ok").length;
@@ -1306,7 +1492,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </header>
 
         <div className="content">
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={llmProfiles.some((profile) => profile.role === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { setLLMRole("assistant"); setLLMOpen(true); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
+          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={aiProfiles.some((profile) => profile.workload === "support" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("support"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
           {section === "distribution" && (
             <DistributionView
               enabled={publicMCPEnabled}
@@ -1329,6 +1515,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           )}
           {section === "widgets" && <WidgetsView widgets={widgets} integrations={integrations} onCreate={() => setWidgetCreateOpen(true)} onNavigate={navigateToPath} />}
           {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+          {section === "recipes" && <RecipesView analyses={analyses} recipes={recipes} popularity={recipeAnalytics} aiUsage={aiUsage} busy={recipeBusy} onAnalyse={analyseIntegration} onAnswer={answerAnalysis} onGenerate={generateRecipes} onEdit={editRecipe} onRework={reworkRecipe} onApprove={approveRecipe} onPublish={publishRecipe} onNavigate={navigateToPath} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
@@ -1336,7 +1523,8 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           {section === "releases" && <ConnectorReleasesView versions={productVersions} integrations={integrations} onConfigure={openProductCatalog} onNavigate={navigateToPath} />}
           {section === "runs" && <ActivityHubView runs={integrationRuns} environments={environments} submissions={reportSubmissions} events={auditEvents} analytics={analytics} supportRoutes={supportRoutes} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} onView={openSupportSubmission} onRetry={createSupportDeliveryAttempt} onNavigate={navigateToPath} />}
           {section === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} backendConnections={backendConnections} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
-          {section === "settings" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} customerAccounts={customerAccounts} identity={identityConfig} llmProfiles={llmProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onConfigureIdentity={() => setIdentityOpen(true)} onConfigureLLM={() => setLLMOpen(true)} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
+          {section === "settings" && settingsTab === "overview" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} customerAccounts={customerAccounts} identity={identityConfig} aiProfiles={aiProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onConfigureIdentity={() => setIdentityOpen(true)} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
+          {section === "settings" && settingsTab === "ai" && <AISettingsView profiles={aiProfiles} connections={aiConnections} onConfigure={openLLMProfile} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
           </>}
         </div>
       </main>
@@ -1589,11 +1777,33 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       <Dialog
         open={llmOpen}
         onClose={setLLMOpen}
-        title="Configure LLM profile"
-        description="Models are optional accelerators for embedding, extraction, reranking, evaluation, or assistance. They never authorize tools or choose network destinations."
-        actions={<><Button outline onClick={() => setLLMOpen(false)}>Cancel</Button><Button color="indigo" disabled={llmBusy || !llmEndpoint.trim() || !llmModel.trim() || (llmEnabled && !llmCredential.trim() && !llmProfiles.some((profile) => profile.role === llmRole))} onClick={saveLLMProfile}>{llmBusy ? "Validating…" : "Save profile"}</Button></>}
+        title={`Configure ${aiWorkloads.find((workload) => workload.role === llmRole)?.name ?? llmRole}`}
+        description={aiWorkloads.find((workload) => workload.role === llmRole)?.description ?? "Choose the provider and model for this workload."}
+        actions={<><Button outline onClick={() => setLLMOpen(false)}>Cancel</Button><Button color="indigo" disabled={llmBusy || !llmConnectionID || !llmModel.trim()} onClick={saveLLMProfile}>{llmBusy ? "Saving…" : "Save workload"}</Button></>}
       >
-        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Role</span><select value={llmRole} onChange={(event) => setLLMRole(event.target.value)}>{["embedding", "extraction", "reranking", "evaluation", "assistant"].map((role) => <option key={role}>{role}</option>)}</select></label><label className="auth-field"><span>Provider type</span><input name="llm-provider" autoComplete="off" value={llmProvider} onChange={(event) => setLLMProvider(event.target.value)} /></label></div><label className="auth-field"><span>Fixed HTTPS endpoint</span><input name="llm-endpoint" type="url" autoComplete="off" value={llmEndpoint} onChange={(event) => setLLMEndpoint(event.target.value)} placeholder="https://api.provider.com/v1" /></label><div className="two-fields"><label className="auth-field"><span>Model</span><input name="llm-model" autoComplete="off" value={llmModel} onChange={(event) => setLLMModel(event.target.value)} /></label>{llmRole === "embedding" && <label className="auth-field"><span>Embedding dimensions</span><input type="number" min={64} max={8192} value={llmDimensions} onChange={(event) => setLLMDimensions(event.target.value)} /></label>}</div><label className="auth-field"><span>Provider credential</span><input name="llm-credential" type="password" autoComplete="new-password" value={llmCredential} onChange={(event) => setLLMCredential(event.target.value)} /><small>Required when enabling a new profile; leave blank on an existing role to retain its encrypted credential.</small></label><div className="two-fields"><label className="auth-field"><span>Max input tokens</span><input type="number" value={llmInputTokens} onChange={(event) => setLLMInputTokens(event.target.value)} /></label><label className="auth-field"><span>Max output tokens</span><input type="number" value={llmOutputTokens} onChange={(event) => setLLMOutputTokens(event.target.value)} /></label></div><label className="auth-field"><span>Daily token budget</span><input type="number" value={llmDailyBudget} onChange={(event) => setLLMDailyBudget(event.target.value)} /></label><Switch checked={llmEnabled} onChange={setLLMEnabled} label="Enable this profile" /><div className="private-default-note"><ShieldCheck />Mandatory: context is untrusted, model tool calls and authorization decisions are disabled, citations are required, and low-confidence retrieval returns no answer.</div></div>
+        <div className="auth-form compact-form ai-model-form">
+          <div className="ai-dialog-workload"><span className="settings-icon">{(() => { const Icon = aiWorkloads.find((workload) => workload.role === llmRole)?.icon ?? Bot; return <Icon />; })()}</span><span><small>Workload</small><strong>{aiWorkloads.find((workload) => workload.role === llmRole)?.name ?? llmRole}</strong></span><Switch checked={llmEnabled} onChange={setLLMEnabled} label="Enabled" /></div>
+          <div className="two-fields"><label className="auth-field"><span>Provider connection</span><select name="llm-connection" value={llmConnectionID} onChange={(event) => changeLLMConnection(event.target.value)}><option value="">Choose a connection</option>{aiConnections.filter((connection) => connection.enabled).map((connection) => <option value={connection.id} key={connection.id}>{aiProviderLabel(connection.provider)}{connection.managed_by === "environment" ? " · environment" : ""}</option>)}</select></label><label className="auth-field"><span>Model</span><input name="llm-model" autoComplete="off" value={llmModel} onChange={(event) => setLLMModel(event.target.value)} placeholder="Provider model ID" /></label></div>
+          {aiConnections.length === 0 && <div className="private-default-note"><KeyRound />Connect one provider before enabling a workload.</div>}
+          <details className="advanced-details ai-model-advanced"><summary>Limits and budget</summary><div className="ai-model-advanced-body"><div className="two-fields"><label className="auth-field"><span>Max input tokens</span><input type="number" min={256} max={1000000} value={llmInputTokens} onChange={(event) => setLLMInputTokens(event.target.value)} /></label><label className="auth-field"><span>Max output tokens</span><input type="number" min={1} max={32768} value={llmOutputTokens} onChange={(event) => setLLMOutputTokens(event.target.value)} /></label></div><label className="auth-field"><span>Daily token budget</span><input type="number" min={0} max={10000000000} value={llmDailyBudget} onChange={(event) => setLLMDailyBudget(event.target.value)} /><small>Set to 0 for no daily cap. Budget reservations are atomic across concurrent jobs.</small></label></div></details>
+          <div className="ai-dialog-safeguards"><span><ShieldCheck />Untrusted context</span><span><LockKeyhole />No authorization</span><span><TerminalSquare />No tool calls</span><span><BookOpen />Citations required</span></div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={providerOpen}
+        onClose={setProviderOpen}
+        title={`Connect ${aiProviderLabel(llmProvider)}`}
+        description="One provider connection owns one credential. Workloads reuse it without copying secrets."
+        actions={<><Button outline onClick={() => setProviderOpen(false)}>Cancel</Button><Button color="indigo" disabled={providerBusy || !llmEndpoint.trim() || (providerEnabled && !llmCredential.trim() && !aiConnections.some((connection) => connection.provider === llmProvider)) || aiConnections.some((connection) => connection.provider === llmProvider && connection.managed_by === "environment")} onClick={saveAIConnection}>{providerBusy ? "Saving…" : "Save connection"}</Button></>}
+      >
+        <div className="auth-form compact-form ai-model-form">
+          <div className="ai-dialog-workload"><span className={`ai-provider-mark ${llmProvider}`}>{llmProvider === "openai-compatible" ? <Server /> : aiProviderLabel(llmProvider).slice(0, 1)}</span><span><small>Provider</small><strong>{aiProviderLabel(llmProvider)}</strong></span><Switch checked={providerEnabled} onChange={setProviderEnabled} label="Enabled" /></div>
+          {aiConnections.some((connection) => connection.provider === llmProvider && connection.managed_by === "environment") ? <div className="private-default-note"><TerminalSquare />This connection is managed by DOKOSOKO_AI_* environment variables. Change it in deployment configuration and restart DokoSoko.</div> : <>
+            <label className="auth-field"><span>Provider origin</span><input name="ai-provider-endpoint" type="url" autoComplete="off" readOnly={llmProvider !== "openai-compatible"} value={llmEndpoint} onChange={(event) => setLLMEndpoint(event.target.value)} placeholder="https://api.provider.com" /><small>{llmProvider === "openai-compatible" ? "A fixed public HTTPS origin. Private-network destinations, redirects, paths, and non-default ports are rejected." : "The native provider origin is fixed by DokoSoko."}</small></label>
+            <label className="auth-field"><span>API credential</span><input name="ai-provider-credential" type="password" autoComplete="new-password" value={llmCredential} onChange={(event) => setLLMCredential(event.target.value)} placeholder={aiConnections.some((connection) => connection.provider === llmProvider) ? "Leave blank to keep the stored credential" : "Required before enabling"} /><small>Encrypted at rest, redacted from every response, and shared only with the selected provider.</small></label>
+          </>}
+        </div>
       </Dialog>
 
       {toast && <div className="toast" role="status"><Check />{toast}</div>}
@@ -1854,7 +2064,7 @@ function IntegrationDirectoryView({ integrations, connections, supportRoutes, qu
     .filter((group) => group.integrations.length > 0);
 
   return <>
-    <PageHeading eyebrow="Catalog" title="APIs" description="Choose an API to configure what developers and agents can use." action={<span className="heading-actions"><Button outline onClick={onCreate}><Plus data-slot="icon" />Add API</Button><Button onClick={onBuild}><Sparkles data-slot="icon" />Import APIs</Button></span>} />
+    <PageHeading eyebrow="Catalog" title="APIs" description="Choose an API to configure what developers and agents can use." action={<span className="heading-actions"><Button outline onClick={() => onNavigate(sectionPath("recipes"))}><BookOpen data-slot="icon" />Recipes</Button><Button outline onClick={onCreate}><Plus data-slot="icon" />Add API</Button><Button onClick={onBuild}><Sparkles data-slot="icon" />Import APIs</Button></span>} />
     <div className="toolbar integration-toolbar">
       <div className="search-field"><Search /><input aria-label="Search APIs" placeholder="Search APIs…" value={query} onChange={(event) => onQueryChange(event.target.value)} /></div>
       <span className="toolbar-count">{filteredIntegrations.length} API{filteredIntegrations.length === 1 ? "" : "s"}</span>
@@ -2271,22 +2481,180 @@ function ToolsView({ tools, onAdd, onPublish, onNavigate }: { tools: APITool[]; 
 }
 
 
-function SettingsView({ product, versions, pins, customerAccounts, identity, llmProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onConfigureIdentity, onConfigureLLM, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; customerAccounts: APICustomerAccount[]; identity: APIIdentity | null; llmProfiles: APILLMProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onConfigureIdentity: () => void; onConfigureLLM: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
+function SettingsTabs({ active, onNavigate }: { active: SettingsTab; onNavigate: (path: string) => void }) {
+  return <nav className="settings-tabs" aria-label="Settings sections">{SETTINGS_TABS.map((tab) => <ConsoleLink key={tab.id} path={settingsPath(tab.id)} onNavigate={onNavigate} className={`settings-tab ${active === tab.id ? "active" : ""}`} ariaCurrent={active === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</nav>;
+}
+
+function RecipesView({ analyses, recipes, popularity, aiUsage, busy, onAnalyse, onAnswer, onGenerate, onEdit, onRework, onApprove, onPublish, onNavigate }: {
+  analyses: APIIntegrationAnalysis[];
+  recipes: APIRecipe[];
+  popularity: APIRecipePopularity[];
+  aiUsage: APIAIWorkloadUsage[];
+  busy: boolean;
+  onAnalyse: () => void;
+  onAnswer: (analysis: APIIntegrationAnalysis, answers: Record<string, string>) => void;
+  onGenerate: (analysis: APIIntegrationAnalysis) => void;
+  onEdit: (recipe: APIRecipe, markdown: string, references: APIRecipeReference[], visibility: APIRecipe["visibility"]) => void;
+  onRework: (recipe: APIRecipe, instruction: string) => void;
+  onApprove: (recipe: APIRecipe) => void;
+  onPublish: (recipe: APIRecipe) => void;
+  onNavigate: (path: string) => void;
+}) {
+  const analysis = analyses[0];
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [instructions, setInstructions] = useState<Record<string, string>>({});
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [visibilities, setVisibilities] = useState<Record<string, APIRecipe["visibility"]>>({});
+  const [referenceSelections, setReferenceSelections] = useState<Record<string, string[]>>({});
+  const unansweredBlocking = analysis?.unknowns.some((unknown) => unknown.blocking && !unknown.answer);
+  const attention = recipes.filter((recipe) => recipe.needs_attention).length + (analysis?.unknowns.filter((unknown) => !unknown.answer).length ?? 0);
+  const popular = popularity[0];
+  const aiCalls = aiUsage.reduce((total, value) => total + value.calls, 0);
+  const aiErrors = aiUsage.reduce((total, value) => total + value.errors, 0);
+
+  return <>
+    <PageHeading eyebrow="Integration workspace" title="Recipes" description="Analyse the real integration surface, generate implementation guidance, then review every claim before publication." action={<span className="heading-actions"><Button outline onClick={() => onNavigate(sectionPath("product"))}><ArrowLeft data-slot="icon" />APIs</Button><Button disabled={busy} onClick={onAnalyse}><Sparkles data-slot="icon" />{analysis ? "Analyse again" : "Analyse integration"}</Button></span>} />
+    <div className="metrics-grid">
+      <Metric label="Recipes" value={String(recipes.length)} detail={`${recipes.filter((recipe) => recipe.state === "published").length} published`} />
+      <Metric label="Needs attention" value={String(attention)} detail={attention ? "Review before publishing" : "Nothing pending"} />
+      <Metric label="Most used · 30 days" value={popular?.title || "No usage yet"} detail={popular ? `${popular.views} views · ${popular.plan_selections} selected` : "Measured from MCP usage"} />
+      <Metric label="AI operations · 30 days" value={String(aiCalls)} detail={aiErrors ? `${aiErrors} need investigation` : "No provider errors"} positive={aiErrors === 0} />
+    </div>
+    {attention > 0 && <div className="notice recipe-attention"><TriangleAlert /><span><strong>{attention} item{attention === 1 ? "" : "s"} need attention.</strong> Resolve unknowns or refresh outdated recipes before they can be published to developers.</span></div>}
+
+    {!analysis ? <section className="panel empty-state"><span className="empty-icon"><Sparkles /></span><h2>Start from evidence, not a blank prompt</h2><p>DokoSoko will inspect known sources, API definitions, tools, and identity configuration. It will call out what it cannot know.</p><small>When extraction AI is enabled, bounded source excerpts and configured API/tool contracts are sent to that provider as untrusted evidence.</small><Button disabled={busy} onClick={onAnalyse}>Analyse integration</Button></section> : <section className="panel recipe-analysis">
+      <div className="panel-heading"><div><span className="title-row"><h2>Integration plan</h2><Badge color={analysis.generated_by === "ai_assisted" ? "violet" : "zinc"}>{analysis.generated_by === "ai_assisted" ? "AI-assisted" : "Deterministic"}</Badge></span><p>{analysis.plan.summary}</p></div><Button disabled={busy || Boolean(unansweredBlocking)} onClick={() => onGenerate(analysis)}>Generate recipes</Button></div>
+      {analysis.error_code && <div className="notice"><TriangleAlert /><span><strong>AI analysis did not complete.</strong>DokoSoko kept the deterministic plan instead. Provider code: <code>{analysis.error_code}</code>.</span></div>}
+      <div className="contract-grid"><span><small>Identity</small><strong>{analysis.plan.identity.mode}</strong></span><span><small>Endpoints</small><strong>{analysis.plan.endpoints.length}</strong></span><span><small>Recipe proposals</small><strong>{analysis.plan.recipes.length}</strong></span><span><small>Evidence</small><strong>{analysis.evidence.length}</strong></span></div>
+      <div className="recipe-endpoints">{analysis.plan.endpoints.map((endpoint) => <div className="provider-row" key={endpoint.name}><code>{endpoint.method}</code><span><strong>{endpoint.path}</strong><small>{endpoint.purpose}</small></span><Badge color={endpoint.identity === "none" ? "zinc" : "blue"}>{endpoint.identity}</Badge></div>)}</div>
+      {analysis.unknowns.length > 0 && <div className="recipe-questions"><h3>Questions to resolve</h3>{analysis.unknowns.map((unknown) => <label className="auth-field" key={unknown.id}><span>{unknown.question}{unknown.blocking ? " · Required" : ""}</span><textarea value={answers[unknown.id] ?? unknown.answer ?? ""} onChange={(event) => setAnswers((values) => ({ ...values, [unknown.id]: event.target.value }))} placeholder={unknown.why} /><small>{unknown.why}</small></label>)}<Button outline disabled={busy || analysis.unknowns.every((unknown) => !(answers[unknown.id] ?? "").trim())} onClick={() => onAnswer(analysis, answers)}>Save answers</Button></div>}
+    </section>}
+
+    <section className="recipe-list">
+      <div className="section-heading"><div><h2>Review queue</h2><p>Generated means “drafted by a model,” never “approved.” Publication requires an explicit human action.</p></div></div>
+      {recipes.map((recipe) => {
+        const revision = recipe.current_revision;
+        const findings = revision?.validation ?? [];
+        const errors = findings.filter((finding) => finding.level === "error");
+        const recipeAnalysis = analyses.find((value) => value.id === recipe.analysis_id) ?? analysis;
+        const availableReferences = (recipeAnalysis?.evidence ?? []).flatMap((evidence): APIRecipeReference[] => [
+          ...(evidence.location?.startsWith("https://") ? [{ label: evidence.label, url: evidence.location, kind: evidence.location.includes("github.com") ? "code" : "documentation", resource_id: evidence.resource_id }] : []),
+          ...(evidence.references ?? []),
+        ]);
+        const currentReferenceIDs = (revision?.references ?? []).map((reference) => reference.resource_id).filter(Boolean) as string[];
+        const selectedReferenceIDs = referenceSelections[recipe.id] ?? currentReferenceIDs;
+        const markdown = edits[recipe.id] ?? revision?.markdown ?? "";
+        const visibility = visibilities[recipe.id] ?? recipe.visibility;
+        const references = [
+          ...(revision?.references ?? []).filter((reference) => !reference.resource_id),
+          ...availableReferences.filter((reference) => reference.resource_id && selectedReferenceIDs.includes(reference.resource_id)).map((reference) => revision?.references.find((current) => current.resource_id === reference.resource_id) ?? reference),
+        ];
+        const referencesChanged = [...selectedReferenceIDs].sort().join("\u0000") !== [...currentReferenceIDs].sort().join("\u0000");
+        const manualChanged = markdown !== (revision?.markdown ?? "") || visibility !== recipe.visibility || referencesChanged;
+        return <article className={`panel recipe-card ${recipe.needs_attention ? "attention" : ""}`} key={recipe.id}>
+          <div className="panel-heading"><div><span className="title-row"><h3>{recipe.title}</h3>{recipe.generated && <Badge color="violet">Generated</Badge>}<Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : recipe.state === "outdated" ? "red" : "amber"}>{recipe.state}</Badge></span><p>{recipe.outcome}</p></div><code>{recipe.stable_uri}</code></div>
+          <details className="advanced-details" open={recipe.state === "review"}>
+            <summary>Recipe revision {revision?.revision ?? "—"}</summary>
+            <div className="recipe-markdown-preview">
+              <pre>{revision?.markdown ?? "No recipe content yet."}</pre>
+              {(revision?.references.length ?? 0) > 0 && <div className="recipe-reference-list"><strong>Verified references</strong>{revision?.references.map((reference) => <a href={reference.url} target="_blank" rel="noreferrer" key={`${reference.resource_id}:${reference.url}`}><ExternalLink />{reference.label}</a>)}</div>}
+              {revision?.review && <div className="notice"><ShieldCheck /><span><strong>Model review</strong>{revision.review}</span></div>}
+              {findings.map((finding) => <div className={`publish-validation ${finding.level}`} key={`${finding.code}:${finding.message}`}><span>{finding.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{finding.code.replaceAll("_", " ")}</strong><small>{finding.message}</small></span></div>)}
+            </div>
+          </details>
+          <details className="advanced-details recipe-manual-editor">
+            <summary>Edit Markdown and references</summary>
+            <div className="recipe-manual-editor-body">
+              <label className="auth-field"><span>Markdown</span><textarea value={markdown} onChange={(event) => setEdits((values) => ({ ...values, [recipe.id]: event.target.value }))} /></label>
+              <div className="recipe-manual-options">
+                <label className="auth-field"><span>Visibility</span><select value={visibility} onChange={(event) => setVisibilities((values) => ({ ...values, [recipe.id]: event.target.value as APIRecipe["visibility"] }))}><option value="private">Private</option><option value="public">Public</option></select><small>Public publication also requires every selected source to be public and published.</small></label>
+                <fieldset className="catalog-settings-section"><legend>Verified references</legend>{availableReferences.map((reference) => <label className="compact-check" key={`${reference.resource_id}:${reference.url}`}><input type="checkbox" checked={Boolean(reference.resource_id && selectedReferenceIDs.includes(reference.resource_id))} onChange={() => { if (!reference.resource_id) return; setReferenceSelections((values) => ({ ...values, [recipe.id]: selectedReferenceIDs.includes(reference.resource_id!) ? selectedReferenceIDs.filter((id) => id !== reference.resource_id) : [...selectedReferenceIDs, reference.resource_id!] })); }} /><span>{reference.label}<small>{reference.url}</small></span></label>)}{availableReferences.length === 0 && <small>No analysed HTTPS sources are available.</small>}</fieldset>
+              </div>
+              <Button outline disabled={busy || !manualChanged || !markdown.trim()} onClick={() => onEdit(recipe, markdown, references, visibility)}>Save human revision</Button>
+            </div>
+          </details>
+          <div className="recipe-editor"><label className="auth-field"><span>Ask AI to rework this revision</span><textarea value={instructions[recipe.id] ?? ""} onChange={(event) => setInstructions((values) => ({ ...values, [recipe.id]: event.target.value }))} placeholder="For example: make the identity hand-off explicit and remove the SDK assumption." /></label><div className="heading-actions"><Button outline disabled={busy || !(instructions[recipe.id] ?? "").trim()} onClick={() => onRework(recipe, instructions[recipe.id])}><Sparkles data-slot="icon" />Create revision</Button>{recipe.state === "review" && <Button disabled={busy || errors.length > 0} onClick={() => onApprove(recipe)}>Approve revision</Button>}{recipe.state === "approved" && <Button color="indigo" disabled={busy} onClick={() => onPublish(recipe)}>Publish to MCP</Button>}</div></div>
+        </article>;
+      })}
+      {recipes.length === 0 && analysis && <div className="panel empty-row">No recipes yet. Review the analysis, resolve required questions, then generate the first set.</div>}
+    </section>
+  </>;
+}
+
+function SettingsView({ product, versions, pins, customerAccounts, identity, aiProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onConfigureIdentity, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; customerAccounts: APICustomerAccount[]; identity: APIIdentity | null; aiProfiles: APIAIWorkloadProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onConfigureIdentity: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
   const activeRoots = rootUsers.filter((user) => !user.revoked_at);
   return <>
     <PageHeading eyebrow="Administration" title="Settings" description="Shared configuration for identity, customer data, service connections, and security." action={<Button outline onClick={onDoctor}><Activity data-slot="icon" />Run System Doctor</Button>} />
+    <SettingsTabs active="overview" onNavigate={onNavigate} />
     <div className="settings-grid">
       <button type="button" className="settings-button" onClick={onConfigureIdentity}><SettingsCard icon={<Users />} title="Customer identity (optional)" detail={identity ? `OIDC ${identity.state} · ${customerAccounts.length} account${customerAccounts.length === 1 ? "" : "s"}` : "Configure delegated customer identity only when private access is needed"} status={identity ? identity.state : "Optional"} /></button>
       <button type="button" className="settings-button" onClick={() => onNavigate(sectionPath("projects"))}><SettingsCard icon={<KeyRound />} title="Service connections" detail="Encrypted vendor credentials shared explicitly with APIs" status="Manage" /></button>
       <button type="button" className="settings-button" onClick={() => onNavigate(sectionPath("reporting"))}><SettingsCard icon={<MessageSquareText />} title="Bug reports & feedback" detail="Consent-gated reporting policies and secure delivery endpoints" status="Manage" /></button>
       <SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted local object storage" status="Healthy" />
-      <button type="button" className="settings-button" onClick={onConfigureLLM}><SettingsCard icon={<Bot />} title="LLM profiles & hardening" detail={`${llmProfiles.length} optional profile${llmProfiles.length === 1 ? "" : "s"} · model authority disabled`} status="Enforced" /></button>
+      <button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("ai"))}><SettingsCard icon={<Bot />} title="AI providers" detail={`${aiProfiles.filter((profile) => profile.enabled).length} active workload${aiProfiles.filter((profile) => profile.enabled).length === 1 ? "" : "s"} · one credential per provider`} status="Manage" /></button>
       <SettingsCard icon={<ShieldCheck />} title="Root access" detail={`${activeRoots.length} MFA-protected administrator${activeRoots.length === 1 ? "" : "s"} · append-only audit`} status="Secure" />
     </div>
     <section className="panel identity-contract"><div className="panel-heading"><div><h2>Customer identity contract</h2><p>The optional OIDC organisation claim resolves to a durable internal account. Suspended accounts and a disabled identity provider fail closed immediately.</p></div><Button onClick={onConfigureIdentity}>{identity ? "Configure" : "Get started"}</Button></div><div className="contract-grid"><span><small>Customer accounts</small><strong>{customerAccounts.length}</strong></span><span><small>Active</small><strong>{customerAccounts.filter((account) => account.state === "active").length}</strong></span><span><small>Access evaluation</small><strong>POST /v1/access/evaluations</strong></span><span><small>Tool identity</small><strong>Delegated user token</strong></span></div><details className="advanced-details inline-advanced"><summary>Identity and API details</summary><div className="contract-grid"><span><small>OIDC issuer</small><code>{identity?.issuer ?? "Not configured"}</code></span><span><small>Organisation claim</small><code>{identity?.organisation_claim || "Not configured"}</code></span><span><small>Installation claim</small><code>{identity?.installation_claim || "Not configured"}</code></span><span><small>Delegated API origin</small><code>{identity?.delegated_api_origin || "Not configured"}</code></span></div></details></section>
     <details className="panel advanced-details"><summary>Advanced publishing</summary><div className="advanced-details-body"><div className="panel-heading"><div><h2>Publishing snapshots</h2><p>Immutable compatibility snapshots and scoped pins are retained for deterministic delivery. Most teams do not need to manage these directly.</p></div><Button outline onClick={onConfigureProduct}>Open advanced publishing</Button></div><div className="activity-summary"><span>{versions.length} published snapshot{versions.length === 1 ? "" : "s"}</span><span>{pins.length} scoped pin{pins.length === 1 ? "" : "s"}</span><span>Default {product.default_version_policy.toUpperCase()}</span></div></div></details>
     <section className="panel root-management"><div className="panel-heading"><div><h2>Root administrators</h2><p>Root access is independent from vendor identities and always requires MFA.</p></div><Button onClick={onAddRoot}><Plus data-slot="icon" />Add root</Button></div>{rootUsers.map((user) => <div className="root-row" key={user.id}><span className="avatar">{user.display_name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><span><EntityLink entity="root-user" uid={user.id} onNavigate={onNavigate} className="entity-link"><strong>{user.display_name}</strong></EntityLink><small>{user.email}</small></span><Badge color={user.revoked_at ? "zinc" : "green"}>{user.revoked_at ? "Revoked" : "MFA active"}</Badge>{!user.revoked_at && user.id !== currentUser?.id ? <Button outline onClick={() => onRevokeRoot(user)}>Revoke</Button> : <span />}</div>)}</section>
   </>;
+}
+
+function AISettingsView({ profiles, connections, onConfigure, onConnect, onTest, onNavigate }: { profiles: APIAIWorkloadProfile[]; connections: APIAIProviderConnection[]; onConfigure: (role: AIWorkload) => void; onConnect: (provider: APIAIProviderConnection["provider"]) => void; onTest: (connection: APIAIProviderConnection) => void; onNavigate: (path: string) => void }) {
+  const enabledProfiles = profiles.filter((profile) => profile.enabled);
+  const providerWorkloads = (connectionID: string) => profiles.filter((profile) => profile.provider_connection_id === connectionID).length;
+  const providers: Array<{ id: APIAIProviderConnection["provider"]; name: string; mark: string; description: string }> = [
+    { id: "openai", name: "OpenAI", mark: "O", description: "Native Responses API with structured outputs." },
+    { id: "google", name: "Google", mark: "G", description: "Native Gemini API with JSON-schema output." },
+    { id: "anthropic", name: "Anthropic", mark: "A", description: "Native Messages API with structured output." },
+    { id: "openai-compatible", name: "OpenAI-compatible", mark: "", description: "A fixed public HTTPS chat-completions endpoint." },
+  ];
+
+  return <>
+    <PageHeading eyebrow="Settings" title="AI providers" description="Connect a provider once, then choose a model for each bounded job. Models never receive authority over identity, tools, or publication." action={<Button onClick={() => onConnect("openai")}><Plus data-slot="icon" />Connect provider</Button>} />
+    <SettingsTabs active="ai" onNavigate={onNavigate} />
+
+    <section className="ai-settings-hero">
+      <span className="ai-hero-mark"><Sparkles /></span>
+      <div>
+        <Badge color={enabledProfiles.length ? "green" : "zinc"}>{enabledProfiles.length ? "AI ready" : "Optional"}</Badge>
+        <h2>Use AI where it removes work</h2>
+        <p>Fetching, authorization, validation, and publication stay deterministic. Models are used for extraction, recipe authoring, review, and support.</p>
+      </div>
+      <div className="ai-hero-stat"><strong>{enabledProfiles.length}</strong><span>of {aiWorkloads.length}<small>workloads enabled</small></span></div>
+    </section>
+
+    <div className="ai-security-rail" aria-label="Mandatory AI safeguards">
+      <span><ShieldCheck /><strong>Untrusted context</strong></span>
+      <span><LockKeyhole /><strong>No authorization</strong></span>
+      <span><TerminalSquare /><strong>No model tools</strong></span>
+      <span><BookOpen /><strong>Citations required</strong></span>
+    </div>
+
+    <section className="ai-settings-section">
+      <div className="section-heading"><div><h2>Workloads</h2><p>Configure only the jobs this deployment uses. Widgets require an enabled Assistant model.</p></div></div>
+      <div className="ai-workload-grid">{aiWorkloads.map((workload) => <AIWorkloadCard key={workload.role} workload={workload} profile={profiles.find((profile) => profile.workload === workload.role)} connection={connections.find((connection) => connection.id === profiles.find((profile) => profile.workload === workload.role)?.provider_connection_id)} onConfigure={onConfigure} />)}</div>
+    </section>
+
+    <section className="ai-settings-section">
+      <div className="section-heading"><div><h2>Provider connections</h2><p>Credentials live here, not in each workload. Environment-managed connections are visible but read-only.</p></div></div>
+      <div className="ai-provider-grid">
+        {providers.map((provider) => { const connection = connections.find((item) => item.provider === provider.id); const workloadCount = connection ? providerWorkloads(connection.id) : 0; const canTest = connection?.enabled && (provider.id !== "openai-compatible" || workloadCount > 0); return <article className="panel ai-provider-card" key={provider.id}><span className={`ai-provider-mark ${provider.id}`}>{provider.id === "openai-compatible" ? <Server /> : provider.mark}</span><div><span className="title-row"><h3>{provider.name}</h3><Badge color={connection?.enabled ? "green" : connection ? "amber" : "zinc"}>{connection ? connection.managed_by === "environment" ? "Environment" : connection.enabled ? "Connected" : "Paused" : provider.id === "openai-compatible" ? "Custom" : "Native"}</Badge></span><p>{provider.description}</p><small>{connection ? `${workloadCount} workload${workloadCount === 1 ? "" : "s"}${connection.last_error_code ? ` · ${connection.last_error_code}` : ""}` : "No credential stored"}</small></div><div className="ai-provider-actions"><Button outline onClick={() => onConnect(provider.id)}>{connection ? "Manage" : "Connect"}</Button>{canTest && <Button outline onClick={() => onTest(connection)}>Test</Button>}</div></article>; })}
+      </div>
+    </section>
+  </>;
+}
+
+function AIWorkloadCard({ workload, profile, connection, onConfigure }: { workload: (typeof aiWorkloads)[number]; profile?: APIAIWorkloadProfile; connection?: APIAIProviderConnection; onConfigure: (role: AIWorkload) => void }) {
+  const Icon = workload.icon;
+  const state = !profile ? "Not configured" : profile.enabled ? "Enabled" : "Paused";
+  return <article className={`panel ai-workload-card ${profile?.enabled ? "enabled" : ""}`}>
+    <div className="ai-workload-heading"><span className="settings-icon"><Icon /></span><Badge color={!profile ? "zinc" : profile.enabled ? "green" : "amber"}>{state}</Badge></div>
+    <h3>{workload.name}</h3>
+    <p>{workload.description}</p>
+    <div className="ai-workload-model">{profile ? <><small>{connection ? aiProviderLabel(connection.provider) : "Missing connection"}</small><strong>{profile.model}</strong></> : <><small>No provider selected</small><strong>AI remains off</strong></>}</div>
+    <Button outline onClick={() => onConfigure(workload.role)}>{profile ? "Edit workload" : "Configure"}</Button>
+  </article>;
 }
 
 function WarningContent({ children }: { children: React.ReactNode }) { return <div className="warning-content"><div className="warning-icon"><TriangleAlert /></div><div>{children}</div></div>; }

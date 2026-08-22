@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	secretvault "github.com/dokosoko/dokosoko-service/internal/secrets"
@@ -34,25 +35,26 @@ type Actor struct {
 }
 
 type Service struct {
-	store              store.Store
-	vault              *secretvault.Vault
-	productBuilderDoer ProductBuilderDoer
-	now                func() time.Time
+	store                    store.Store
+	vault                    *secretvault.Vault
+	aiRuntime                airuntime.Runtime
+	aiEnvironmentCredentials map[string]string
+	now                      func() time.Time
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func New(storage store.Store) *Service {
-	return &Service{store: storage, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{store: storage, aiRuntime: newAIRuntime(nil), aiEnvironmentCredentials: make(map[string]string), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewWithVault(storage store.Store, vault *secretvault.Vault) *Service {
-	return &Service{store: storage, vault: vault, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{store: storage, vault: vault, aiRuntime: newAIRuntime(nil), aiEnvironmentCredentials: make(map[string]string), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewWithVaultAndProductBuilderDoer(storage store.Store, vault *secretvault.Vault, doer ProductBuilderDoer) *Service {
-	return &Service{store: storage, vault: vault, productBuilderDoer: doer, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{store: storage, vault: vault, aiRuntime: newAIRuntime(doer), aiEnvironmentCredentials: make(map[string]string), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *Service) Store() store.Store { return s.store }
@@ -421,7 +423,7 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 	input.Role, input.Provider = strings.ToLower(strings.TrimSpace(input.Role)), strings.ToLower(strings.TrimSpace(input.Provider))
 	input.Endpoint, input.Model, input.Credential = strings.TrimSpace(input.Endpoint), strings.TrimSpace(input.Model), strings.TrimSpace(input.Credential)
 	roles := map[string]bool{"embedding": true, "extraction": true, "reranking": true, "evaluation": true, "assistant": true}
-	if !roles[input.Role] || input.Provider == "" || input.Model == "" || !validHTTPSOrigin(input.Endpoint) {
+	if !roles[input.Role] || input.Provider == "" || input.Model == "" || !validHTTPSBaseOrigin(input.Endpoint) {
 		return model.LLMProfile{}, errors.New("LLM role, provider, model, and fixed HTTPS endpoint are required")
 	}
 	if input.Role == "embedding" && (input.EmbeddingDimensions < 64 || input.EmbeddingDimensions > 8192) {
@@ -440,6 +442,9 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 			current = profile
 			break
 		}
+	}
+	if current.ID != "" && current.Provider != input.Provider && input.Credential == "" {
+		return model.LLMProfile{}, errors.New("changing the AI provider requires a new credential")
 	}
 	profileID, credentialID := current.ID, current.CredentialID
 	var err error
@@ -472,6 +477,48 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 	value, err := s.store.SaveLLMProfile(ctx, model.LLMProfile{ID: profileID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Role: input.Role, Provider: input.Provider, Endpoint: input.Endpoint, Model: input.Model, CredentialID: credentialID, EmbeddingDimensions: input.EmbeddingDimensions, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Hardening: hardening, Enabled: input.Enabled})
 	if err != nil {
 		return model.LLMProfile{}, err
+	}
+	workloads := map[string]string{"extraction": "extraction", "evaluation": "review", "assistant": "support"}
+	if workload := workloads[input.Role]; workload != "" {
+		connections, connectionErr := s.store.AIProviderConnections(ctx, input.ProductID)
+		if connectionErr != nil && !errors.Is(connectionErr, store.ErrNotFound) {
+			return model.LLMProfile{}, connectionErr
+		}
+		var connection model.AIProviderConnection
+		for _, candidate := range connections {
+			if candidate.Provider == input.Provider {
+				connection = candidate
+				break
+			}
+		}
+		connectionRevision := connection.Revision
+		if connection.ID == "" {
+			connection.ID, err = randomUUID()
+			if err != nil {
+				return model.LLMProfile{}, err
+			}
+		}
+		if input.Credential == "" && connection.CredentialID != "" {
+			credentialID = connection.CredentialID
+		}
+		connection, err = s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connection.ID, OrganisationID: input.OrganisationID, DeploymentID: input.ProductID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: true, LastTestedAt: connection.LastTestedAt, LastErrorCode: connection.LastErrorCode}, connectionRevision)
+		if err != nil {
+			return model.LLMProfile{}, err
+		}
+		currentAIProfile, profileErr := s.store.AIWorkloadProfile(ctx, input.ProductID, workload)
+		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
+			return model.LLMProfile{}, profileErr
+		}
+		aiProfileID, aiProfileRevision := currentAIProfile.ID, currentAIProfile.Revision
+		if aiProfileID == "" {
+			aiProfileID, err = randomUUID()
+			if err != nil {
+				return model.LLMProfile{}, err
+			}
+		}
+		if _, err = s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: aiProfileID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Workload: workload, ProviderConnectionID: connection.ID, Model: input.Model, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Hardening: hardening, Enabled: input.Enabled}, aiProfileRevision); err != nil {
+			return model.LLMProfile{}, err
+		}
 	}
 	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "llm.profile.saved", TargetType: "llm_profile", TargetID: value.ID, Current: map[string]any{"role": value.Role, "provider": value.Provider, "model": value.Model, "enabled": value.Enabled, "credential_rotated": input.Credential != "", "hardening": map[string]bool{"context_is_untrusted": true, "tool_calls_disabled": true, "authorization_disabled": true, "require_citations": true}}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, nil

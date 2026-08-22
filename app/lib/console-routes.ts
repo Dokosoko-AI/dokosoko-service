@@ -1,6 +1,7 @@
-export type Section = "product" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "analytics" | "activity" | "settings";
+export type Section = "product" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 
 export type IntegrationTab = "overview" | "resources" | "access" | "history";
+export type SettingsTab = "overview" | "ai";
 
 export type EntityKind =
   | "integration"
@@ -20,7 +21,7 @@ export type EntityKind =
   | "root-user";
 
 export type ConsoleRoute =
-  | { kind: "section"; section: Section; path: string }
+  | { kind: "section"; section: Section; path: string; settingsTab?: SettingsTab }
   | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; path: string }
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
   | { kind: "not-found"; section: "product"; path: string };
@@ -32,8 +33,14 @@ export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
   { id: "history", label: "History" },
 ];
 
+export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: "overview", label: "Overview" },
+  { id: "ai", label: "AI providers" },
+];
+
 export const SECTION_PATHS: Record<Section, string> = {
   product: "/integrations",
+  recipes: "/recipes",
   sources: "/integrations/documentation",
   tools: "/integrations/tools",
   connections: "/integrations/mcp",
@@ -78,6 +85,10 @@ export function sectionPath(section: Section): string {
   return SECTION_PATHS[section];
 }
 
+export function settingsPath(tab: SettingsTab = "overview"): string {
+  return tab === "overview" ? SECTION_PATHS.settings : `${SECTION_PATHS.settings}/${tab}`;
+}
+
 export function entityPath(entity: EntityKind, uid: string): string {
   return `/${entity}/${encodeURIComponent(uid)}`;
 }
@@ -103,6 +114,13 @@ export function routeForIntegration(uid: string, integrationTab: IntegrationTab 
 export function parseConsolePath(pathname: string): ConsoleRoute {
   const path = normalizePath(pathname);
 	if (path === "/") return routeForSection("product");
+
+  const settingsMatch = path.match(/^\/settings\/([^/]+)$/);
+  if (settingsMatch) {
+    const tab = settingsMatch[1] as SettingsTab;
+    if (!SETTINGS_TABS.some((candidate) => candidate.id === tab) || tab === "overview") return { kind: "not-found", section: "product", path };
+    return { kind: "section", section: "settings", settingsTab: tab, path: settingsPath(tab) };
+  }
 
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (section) return routeForSection(section);

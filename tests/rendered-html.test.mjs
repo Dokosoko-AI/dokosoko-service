@@ -61,6 +61,53 @@ test("keeps the global navigation to four obvious destinations", async () => {
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
 });
 
+test("gives AI providers a dedicated, guarded settings workspace", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
+
+  assert.match(routes, /label: "AI providers"/);
+  assert.match(routes, /settingsPath/);
+  assert.match(source, /title="AI providers"/);
+  assert.match(source, /Use AI where it removes work/);
+  assert.match(source, /Widgets require an enabled Assistant model/);
+  assert.match(source, /OpenAI-compatible/);
+  assert.match(source, /No model tools/);
+  assert.match(source, /Citations required/);
+  assert.match(source, /title=\{`Configure \$\{/);
+  assert.match(source, /Leave blank to keep the stored credential/);
+  assert.doesNotMatch(source, /title="Configure LLM profile"/);
+  assert.match(styles, /\.ai-settings-hero/);
+  assert.match(styles, /\.ai-workload-grid/);
+  assert.match(styles, /\.ai-provider-card/);
+  assert.match(api, /Credential-redacted role-based AI profiles/);
+  assert.match(api, /endpoint: \{ type: string, format: uri, description: Fixed HTTPS provider origin/);
+});
+
+test("ships one evidence-to-recipe review workflow", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
+
+  assert.match(routes, /recipes: "\/recipes"/);
+  assert.match(source, /Start from evidence, not a blank prompt/);
+  assert.match(source, /Generated means “drafted by a model,” never “approved.”/);
+  assert.match(source, /Edit Markdown and references/);
+  assert.match(source, /Ask AI to rework this revision/);
+  assert.match(source, /Save human revision/);
+  assert.match(source, /Publish to MCP/);
+  assert.match(source, /Most used · 30 days/);
+  assert.match(styles, /\.recipe-markdown-preview/);
+  assert.match(styles, /\.recipe-reference-list/);
+  assert.match(client, /recipeAnalytics/);
+  assert.match(client, /aiUsage/);
+  assert.match(api, /\/api\/v1\/products\/\{product_id\}\/recipes:/);
+  assert.match(api, /resources\/list, resources\/read/);
+});
+
 test("uses an API directory and a four-tab contextual workspace", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");

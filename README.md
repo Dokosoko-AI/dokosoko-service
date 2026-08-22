@@ -87,6 +87,50 @@ For the UI development server:
 DOKOSOKO_DEV_PROXY=http://127.0.0.1:8080 pnpm dev
 ```
 
+## AI providers and recipes
+
+AI is optional. Without it, DokoSoko still produces a deterministic integration plan and reviewable Markdown recipes. With it, four narrow workloads can use different models: extraction, authoring, review, and support. Provider credentials are stored once per provider; workload profiles only select a connection, model, token limits, and daily budget.
+
+Configure OpenAI, Google, Anthropic, or a fixed HTTPS OpenAI-compatible endpoint in **Settings → AI providers**. Environment-managed installations use one provider connection at a time:
+
+The bundled presets follow the current [OpenAI model guidance](https://developers.openai.com/api/docs/guides/latest-model), [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models), and [Claude model catalog](https://platform.claude.com/docs/en/about-claude/models/overview). They are defaults, not a hidden routing service; every model ID remains visible and editable.
+
+```bash
+# OpenAI defaults: Luna for extraction, Terra for authoring/support, Sol for review.
+export DOKOSOKO_AI_PROVIDER=openai
+export DOKOSOKO_AI_API_KEY='...'
+export DOKOSOKO_AI_MODEL_EXTRACTION=gpt-5.6-luna
+export DOKOSOKO_AI_MODEL_AUTHORING=gpt-5.6-terra
+export DOKOSOKO_AI_MODEL_REVIEW=gpt-5.6-sol
+export DOKOSOKO_AI_MODEL_SUPPORT=gpt-5.6-terra
+```
+
+```bash
+# Google defaults use stable Gemini models.
+export DOKOSOKO_AI_PROVIDER=google
+export DOKOSOKO_AI_API_KEY='...'
+export DOKOSOKO_AI_MODEL_EXTRACTION=gemini-3.5-flash-lite
+export DOKOSOKO_AI_MODEL_AUTHORING=gemini-3.6-flash
+export DOKOSOKO_AI_MODEL_REVIEW=gemini-3.5-flash
+export DOKOSOKO_AI_MODEL_SUPPORT=gemini-3.6-flash
+```
+
+```bash
+# Anthropic defaults follow the same cheap / balanced / strongest split.
+export DOKOSOKO_AI_PROVIDER=anthropic
+export DOKOSOKO_AI_API_KEY='...'
+export DOKOSOKO_AI_MODEL_EXTRACTION=claude-haiku-4-5
+export DOKOSOKO_AI_MODEL_AUTHORING=claude-sonnet-5
+export DOKOSOKO_AI_MODEL_REVIEW=claude-opus-5
+export DOKOSOKO_AI_MODEL_SUPPORT=claude-sonnet-5
+```
+
+For an OpenAI-compatible service, also set `DOKOSOKO_AI_ENDPOINT` to its fixed public HTTPS origin and provide the model IDs it exposes. Native provider origins are fixed and cannot be redirected. DokoSoko sends no model tools, treats retrieved content as untrusted, requires structured extraction, records usage and normalized failures, and never silently falls back to another provider.
+
+Recipes are immutable, versioned Markdown revisions. Generated content is visibly marked, validated, reviewed, and held for human approval. Published recipes appear as MCP resources with stable `dokosoko://products/{product}/recipes/{recipe}` URIs. A recipe may link to an exact canonical documentation or sample-code page only when that published page was included in the analysis evidence; there is no arbitrary URL-fetch tool and no automatic publication.
+
+Integration analysis uses bounded API manifests, tool schemas and authorization policy, identity configuration, and excerpts from already-published knowledge. When extraction AI is enabled, that material is sent to the configured provider as untrusted evidence: at most three documents and 6,000 characters per source, with a 32,000-character total cap across knowledge, APIs, and tools. The exact evidence fingerprint is retained as the recipe dependency so a changed crawl or contract moves published guidance into the attention queue.
+
 ## Deploy
 
 ```bash

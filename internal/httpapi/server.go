@@ -1078,6 +1078,10 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.rootUsers(w, r)
 	case len(parts) == 4 && parts[2] == "system" && parts[3] == "doctor" && r.Method == http.MethodGet:
 		s.systemDoctor(w, r)
+	case len(parts) == 4 && parts[2] == "ai" && parts[3] == "connections":
+		s.aiProviderConnections(w, r)
+	case len(parts) == 6 && parts[2] == "ai" && parts[3] == "connections" && parts[5] == "test" && r.Method == http.MethodPost:
+		s.testAIProviderConnection(w, r, parts[4])
 	case len(parts) == 5 && parts[2] == "root" && parts[3] == "users" && r.Method == http.MethodDelete:
 		s.revokeRootUser(w, r, parts[4])
 	case len(parts) == 3 && parts[2] == "organisations":
@@ -1226,6 +1230,34 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.credentials(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "llm-profiles":
 		s.llmProfiles(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "ai-profiles" && r.Method == http.MethodGet:
+		s.aiWorkloadProfiles(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "ai-profiles" && r.Method == http.MethodPut:
+		s.aiWorkloadProfile(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "analyses":
+		s.integrationAnalyses(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "analyses":
+		s.integrationAnalysis(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "analyses" && parts[6] == "recipes" && r.Method == http.MethodPost:
+		s.generateRecipes(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "recipes":
+		s.recipes(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "recipes":
+		s.recipe(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "recipes" && parts[6] == "rework" && r.Method == http.MethodPost:
+		s.reworkRecipe(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "recipes" && parts[6] == "approve" && r.Method == http.MethodPost:
+		s.approveRecipe(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "recipes" && parts[6] == "publish" && r.Method == http.MethodPost:
+		s.publishRecipe(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "ai-jobs" && r.Method == http.MethodGet:
+		s.aiJobs(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "attention" && r.Method == http.MethodGet:
+		s.attention(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "recipe-analytics" && r.Method == http.MethodGet:
+		s.recipeAnalytics(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "ai-usage" && r.Method == http.MethodGet:
+		s.aiUsage(w, r, parts[3])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "publish" && r.Method == http.MethodPost:
 		s.publishTool(w, r, parts[3], parts[5])
 	default:
@@ -2286,7 +2318,33 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				instructions += reportingAgentInstructions
 			}
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}, "resources": map[string]any{"listChanged": true}}, "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
+	case "resources/list":
+		values, err := s.publishedRecipes(r.Context(), productID, public)
+		if err != nil {
+			writeRPCError(w, request.ID, -32603, "Recipe resources could not be listed")
+			return
+		}
+		resources := make([]map[string]any, 0, len(values))
+		for _, recipe := range values {
+			resources = append(resources, map[string]any{"uri": recipe.StableURI, "name": recipe.Slug, "title": recipe.Title, "description": recipe.Outcome, "mimeType": "text/markdown", "_meta": map[string]any{"generated": recipe.Generated, "state": recipe.State, "revision_id": recipe.CurrentRevisionID}})
+		}
+		writeRPC(w, request.ID, map[string]any{"resources": resources})
+	case "resources/read":
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if json.Unmarshal(request.Params, &params) != nil || params.URI == "" {
+			writeRPCError(w, request.ID, -32602, "A recipe URI is required")
+			return
+		}
+		recipe, err := s.publishedRecipeByURI(r.Context(), productID, params.URI, public)
+		if err != nil || recipe.CurrentRevision == nil {
+			writeRPCError(w, request.ID, -32004, "Recipe resource not found")
+			return
+		}
+		s.recordAnalytics(r.Context(), productID, "recipe.view", actorKind, actorID, map[string]any{"recipe_id": recipe.ID, "recipe_slug": recipe.Slug, "channel": channel})
+		writeRPC(w, request.ID, map[string]any{"contents": []map[string]any{{"uri": recipe.StableURI, "mimeType": "text/markdown", "text": recipe.CurrentRevision.Markdown, "_meta": map[string]any{"revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt}}}})
 	case "tools/list":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")
@@ -2296,6 +2354,9 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment, its applicable Integration revisions, effective pinned or default connector release, and available releases.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "deployment.releases.list", "description": "List published connector releases and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "search_knowledge", "description": "Search published connector knowledge.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+			{"name": "integration.recipes.list", "description": "List published implementation recipes and their stable MCP resource URIs.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
+			{"name": "integration.plan", "description": "Choose the closest published recipe for a requested integration outcome. This returns a plan reference, not a claim that work was completed.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"outcome"}}},
+			{"name": "integration.check", "description": "Check whether a published recipe URI is current or needs attention before implementation.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"recipe_uri": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"recipe_uri"}}},
 		}
 		if !public {
 			principal, _ := r.Context().Value(principalKey).(identity.Principal)
@@ -2466,6 +2527,46 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 	}
 	s.recordAnalytics(ctx, productID, "tool.called", actorKind, actorID, dimensions)
 	switch params.Name {
+	case "integration.recipes.list":
+		values, err := s.publishedRecipes(ctx, productID, public)
+		if err != nil {
+			writeRPCError(w, request.ID, -32603, "Recipes could not be listed")
+			return
+		}
+		writeToolResult(w, request.ID, map[string]any{"recipes": values})
+	case "integration.plan":
+		outcome, _ := params.Arguments["outcome"].(string)
+		values, err := s.publishedRecipes(ctx, productID, public)
+		if err != nil || strings.TrimSpace(outcome) == "" {
+			writeRPCError(w, request.ID, -32602, "A valid integration outcome is required")
+			return
+		}
+		var selected *model.Recipe
+		needle := strings.ToLower(strings.TrimSpace(outcome))
+		for index := range values {
+			candidate := strings.ToLower(values[index].Title + " " + values[index].Outcome)
+			if selected == nil || strings.Contains(candidate, needle) || strings.Contains(needle, strings.ToLower(values[index].Slug)) {
+				copy := values[index]
+				selected = &copy
+				if strings.Contains(candidate, needle) {
+					break
+				}
+			}
+		}
+		if selected == nil {
+			writeRPCError(w, request.ID, -32004, "No published recipe matches this outcome")
+			return
+		}
+		s.recordAnalytics(ctx, productID, "recipe.plan_selected", actorKind, actorID, map[string]any{"recipe_id": selected.ID, "recipe_slug": selected.Slug, "channel": channel})
+		writeToolResult(w, request.ID, map[string]any{"recipe_uri": selected.StableURI, "title": selected.Title, "outcome": selected.Outcome, "revision_id": selected.CurrentRevisionID, "next_step": "Read the recipe resource, verify its prerequisites, then implement and validate each step."})
+	case "integration.check":
+		recipeURI, _ := params.Arguments["recipe_uri"].(string)
+		recipe, err := s.publishedRecipeByURI(ctx, productID, recipeURI, public)
+		if err != nil {
+			writeRPCError(w, request.ID, -32004, "Recipe resource not found")
+			return
+		}
+		writeToolResult(w, request.ID, map[string]any{"recipe_uri": recipe.StableURI, "state": recipe.State, "current": recipe.State == "published" && !recipe.NeedsAttention, "needs_attention": recipe.NeedsAttention, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt})
 	case "deployment.get_manifest", "product.get_manifest":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")

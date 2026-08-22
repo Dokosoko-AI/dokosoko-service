@@ -564,6 +564,150 @@ type ProductBuild struct {
 	CompletedAt    *time.Time                 `json:"completed_at,omitempty"`
 }
 
+type IntegrationEvidence struct {
+	Kind        string            `json:"kind"`
+	ResourceID  string            `json:"resource_id"`
+	Label       string            `json:"label"`
+	Location    string            `json:"location,omitempty"`
+	Excerpt     string            `json:"excerpt,omitempty"`
+	References  []RecipeReference `json:"references,omitempty"`
+	Version     string            `json:"version,omitempty"`
+	Visibility  Visibility        `json:"visibility"`
+	Fingerprint string            `json:"fingerprint"`
+}
+
+type IntegrationUnknown struct {
+	ID       string `json:"id"`
+	Question string `json:"question"`
+	Why      string `json:"why"`
+	Blocking bool   `json:"blocking"`
+	Answer   string `json:"answer,omitempty"`
+}
+
+type IntegrationEndpointPlan struct {
+	Name     string   `json:"name"`
+	Method   string   `json:"method"`
+	Path     string   `json:"path"`
+	Purpose  string   `json:"purpose"`
+	Identity string   `json:"identity"`
+	Evidence []string `json:"evidence"`
+}
+
+type IntegrationIdentityPlan struct {
+	Mode        string   `json:"mode"`
+	Issuer      string   `json:"issuer,omitempty"`
+	Audience    string   `json:"audience,omitempty"`
+	Grants      []string `json:"grants,omitempty"`
+	Explanation string   `json:"explanation"`
+}
+
+type RecipeSeed struct {
+	Slug        string   `json:"slug"`
+	Title       string   `json:"title"`
+	Outcome     string   `json:"outcome"`
+	Audience    string   `json:"audience"`
+	EndpointIDs []string `json:"endpoint_ids,omitempty"`
+}
+
+type IntegrationPlan struct {
+	Summary   string                    `json:"summary"`
+	Identity  IntegrationIdentityPlan   `json:"identity"`
+	Endpoints []IntegrationEndpointPlan `json:"endpoints"`
+	Recipes   []RecipeSeed              `json:"recipes"`
+}
+
+type IntegrationAnalysis struct {
+	ID             string                `json:"id"`
+	OrganisationID string                `json:"organisation_id"`
+	ProductID      string                `json:"product_id"`
+	SchemaVersion  int                   `json:"schema_version"`
+	State          string                `json:"state"`
+	GeneratedBy    string                `json:"generated_by"`
+	Evidence       []IntegrationEvidence `json:"evidence"`
+	Plan           IntegrationPlan       `json:"plan"`
+	Unknowns       []IntegrationUnknown  `json:"unknowns"`
+	ErrorCode      string                `json:"error_code,omitempty"`
+	Revision       int64                 `json:"revision"`
+	CreatedAt      time.Time             `json:"created_at"`
+	CompletedAt    *time.Time            `json:"completed_at,omitempty"`
+}
+
+type RecipeReference struct {
+	Label      string `json:"label"`
+	URL        string `json:"url"`
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id,omitempty"`
+	Anchor     string `json:"anchor,omitempty"`
+}
+
+type RecipeDependency struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Version    string `json:"version"`
+}
+
+type RecipeValidationFinding struct {
+	Level   string `json:"level"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type RecipeRevision struct {
+	ID          string                    `json:"id"`
+	RecipeID    string                    `json:"recipe_id"`
+	Revision    int                       `json:"revision"`
+	Markdown    string                    `json:"markdown"`
+	References  []RecipeReference         `json:"references"`
+	Validation  []RecipeValidationFinding `json:"validation"`
+	Review      string                    `json:"review,omitempty"`
+	GeneratedBy string                    `json:"generated_by"`
+	Model       string                    `json:"model,omitempty"`
+	CreatedBy   string                    `json:"created_by"`
+	CreatedAt   time.Time                 `json:"created_at"`
+}
+
+type Recipe struct {
+	ID                string             `json:"id"`
+	OrganisationID    string             `json:"organisation_id"`
+	ProductID         string             `json:"product_id"`
+	AnalysisID        string             `json:"analysis_id,omitempty"`
+	Slug              string             `json:"slug"`
+	Title             string             `json:"title"`
+	Outcome           string             `json:"outcome"`
+	Audience          string             `json:"audience"`
+	State             string             `json:"state"`
+	Generated         bool               `json:"generated"`
+	NeedsAttention    bool               `json:"needs_attention"`
+	Visibility        Visibility         `json:"visibility"`
+	Dependencies      []RecipeDependency `json:"dependencies"`
+	CurrentRevisionID string             `json:"current_revision_id"`
+	CurrentRevision   *RecipeRevision    `json:"current_revision,omitempty"`
+	StableURI         string             `json:"stable_uri"`
+	ApprovedBy        string             `json:"approved_by,omitempty"`
+	ApprovedAt        *time.Time         `json:"approved_at,omitempty"`
+	PublishedAt       *time.Time         `json:"published_at,omitempty"`
+	Revision          int64              `json:"revision"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+}
+
+type AIJob struct {
+	ID             string          `json:"id"`
+	OrganisationID string          `json:"organisation_id"`
+	ProductID      string          `json:"product_id"`
+	Kind           string          `json:"kind"`
+	TargetID       string          `json:"target_id,omitempty"`
+	State          string          `json:"state"`
+	Attempt        int             `json:"attempt"`
+	Input          json.RawMessage `json:"input"`
+	Output         json.RawMessage `json:"output,omitempty"`
+	ErrorCode      string          `json:"error_code,omitempty"`
+	CreatedBy      string          `json:"created_by"`
+	CreatedAt      time.Time       `json:"created_at"`
+	StartedAt      *time.Time      `json:"started_at,omitempty"`
+	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
+}
+
 type Source struct {
 	ID             string     `json:"id"`
 	OrganisationID string     `json:"organisation_id"`
@@ -848,7 +992,7 @@ type LLMProfile struct {
 	ProductID           string          `json:"product_id"`
 	Role                string          `json:"role"`
 	Provider            string          `json:"provider"`
-	Endpoint            string          `json:"-"`
+	Endpoint            string          `json:"endpoint"`
 	Model               string          `json:"model"`
 	CredentialID        string          `json:"-"`
 	EmbeddingDimensions int             `json:"embedding_dimensions,omitempty"`
@@ -860,6 +1004,74 @@ type LLMProfile struct {
 	Revision            int64           `json:"revision"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
+}
+
+// AIProviderConnection owns one provider credential and its transport
+// boundary. Workload profiles reference this record so the same credential is
+// not copied for extraction, authoring, review, and support.
+type AIProviderConnection struct {
+	ID             string     `json:"id"`
+	OrganisationID string     `json:"organisation_id"`
+	DeploymentID   string     `json:"deployment_id"`
+	Provider       string     `json:"provider"`
+	Endpoint       string     `json:"endpoint"`
+	CredentialID   string     `json:"-"`
+	ManagedBy      string     `json:"managed_by"`
+	Enabled        bool       `json:"enabled"`
+	LastTestedAt   *time.Time `json:"last_tested_at,omitempty"`
+	LastErrorCode  string     `json:"last_error_code,omitempty"`
+	Revision       int64      `json:"revision"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type AIWorkloadProfile struct {
+	ID                   string          `json:"id"`
+	OrganisationID       string          `json:"organisation_id"`
+	ProductID            string          `json:"product_id"`
+	Workload             string          `json:"workload"`
+	ProviderConnectionID string          `json:"provider_connection_id"`
+	Model                string          `json:"model"`
+	MaxInputTokens       int             `json:"max_input_tokens"`
+	MaxOutputTokens      int             `json:"max_output_tokens"`
+	DailyTokenBudget     int64           `json:"daily_token_budget"`
+	Hardening            json.RawMessage `json:"hardening"`
+	Enabled              bool            `json:"enabled"`
+	Revision             int64           `json:"revision"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+}
+
+// AIBudgetReservation makes daily limits concurrency-safe. The caller must
+// finish the reservation after every provider attempt; abandoned reservations
+// expire automatically and stop counting against the budget.
+type AIBudgetReservation struct {
+	ID             string    `json:"id"`
+	ProductID      string    `json:"product_id"`
+	Workload       string    `json:"workload"`
+	Day            time.Time `json:"day"`
+	ReservedTokens int64     `json:"reserved_tokens"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+type AIUsageEvent struct {
+	ID                string        `json:"id"`
+	OrganisationID    string        `json:"organisation_id"`
+	ProductID         string        `json:"product_id"`
+	Workload          string        `json:"workload"`
+	Action            string        `json:"action"`
+	Provider          string        `json:"provider"`
+	RequestedModel    string        `json:"requested_model"`
+	ResolvedModel     string        `json:"resolved_model"`
+	ProviderRequestID string        `json:"provider_request_id,omitempty"`
+	InputTokens       int64         `json:"input_tokens"`
+	OutputTokens      int64         `json:"output_tokens"`
+	Duration          time.Duration `json:"-"`
+	DurationMS        int64         `json:"duration_ms"`
+	Outcome           string        `json:"outcome"`
+	ErrorCode         string        `json:"error_code,omitempty"`
+	PromptVersion     string        `json:"prompt_version"`
+	CreatedAt         time.Time     `json:"created_at"`
 }
 
 type AuditEvent struct {
@@ -902,6 +1114,16 @@ type AnalyticsEvent struct {
 type AnalyticsPoint struct {
 	Date  string `json:"date"`
 	Count int64  `json:"count"`
+}
+
+// RecipePopularity measures which published guidance developers actually use.
+// Views and plan selections are kept separate so opening a recipe is not
+// mistaken for choosing it as the implementation path.
+type RecipePopularity struct {
+	RecipeID       string `json:"recipe_id"`
+	RecipeSlug     string `json:"recipe_slug"`
+	Views          int64  `json:"views"`
+	PlanSelections int64  `json:"plan_selections"`
 }
 
 type AnalyticsSummary struct {

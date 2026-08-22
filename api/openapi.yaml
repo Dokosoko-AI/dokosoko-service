@@ -1297,7 +1297,7 @@ paths:
       operationId: listLLMProfiles
       responses:
         "200":
-          description: Redacted role-based LLM profiles and mandatory hardening policy.
+          description: Credential-redacted role-based AI profiles and mandatory hardening policy.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LLMProfileList" }
@@ -1316,6 +1316,237 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/LLMProfile" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/connections:
+    get:
+      operationId: listAIProviderConnections
+      description: Lists credential-redacted provider connections shared by the four AI workloads.
+      responses:
+        "200": { description: AI provider connections., content: { application/json: { schema: { $ref: "#/components/schemas/AIProviderConnectionList" } } } }
+    post:
+      operationId: saveAIProviderConnection
+      description: Creates, updates, or rotates one provider connection. Native provider origins are fixed; credentials are encrypted and never returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveAIProviderConnectionRequest" }
+      responses:
+        "200": { description: Existing connection updated., content: { application/json: { schema: { $ref: "#/components/schemas/AIProviderConnection" } } } }
+        "201": { description: Connection created., content: { application/json: { schema: { $ref: "#/components/schemas/AIProviderConnection" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/connections/{connection_id}/test:
+    parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: testAIProviderConnection
+      description: Makes a minimal provider request and stores only normalized health metadata.
+      responses:
+        "200": { description: Connection accepted by the provider., content: { application/json: { schema: { $ref: "#/components/schemas/AIProviderConnection" } } } }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/ai-profiles:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listAIWorkloadProfiles
+      description: Lists the provider, model, limits, and immutable hardening policy for each narrow workload.
+      responses:
+        "200": { description: Workload profiles., content: { application/json: { schema: { $ref: "#/components/schemas/AIWorkloadProfileList" } } } }
+  /api/v1/products/{product_id}/ai-profiles/{workload}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: workload
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/AIWorkload" }
+    put:
+      operationId: saveAIWorkloadProfile
+      description: Selects a provider connection and model for one workload. No model tools or authorization decisions are enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveAIWorkloadProfileRequest" }
+      responses:
+        "200": { description: Workload profile saved., content: { application/json: { schema: { $ref: "#/components/schemas/AIWorkloadProfile" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/analyses:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listIntegrationAnalyses
+      responses:
+        "200": { description: Newest evidence-backed analyses first., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationAnalysisList" } } } }
+    post:
+      operationId: analyseIntegration
+      description: Builds a versioned plan from known DokoSoko evidence. AI extraction may enrich the plan but cannot invent references or hide unknowns.
+      responses:
+        "201": { description: Analysis ready for human review., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationAnalysis" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/analyses/{analysis_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: analysis_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getIntegrationAnalysis
+      responses:
+        "200": { description: Analysis and its explicit unknowns., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationAnalysis" } } } }
+    patch:
+      operationId: answerIntegrationUnknowns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                answers: { type: object, additionalProperties: { type: string, maxLength: 8000 } }
+              required: [answers]
+      responses:
+        "200": { description: Analysis with supplied answers., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationAnalysis" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/analyses/{analysis_id}/recipes:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: analysis_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: generateRecipes
+      description: Creates review-state Markdown recipes and durable job records. Blocking unknowns prevent generation.
+      responses:
+        "201": { description: Generated recipes., content: { application/json: { schema: { $ref: "#/components/schemas/RecipeList" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/recipes:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listRecipes
+      description: Reconciles source drift before returning the human review queue.
+      responses:
+        "200": { description: Recipes with their current immutable revision., content: { application/json: { schema: { $ref: "#/components/schemas/RecipeList" } } } }
+  /api/v1/products/{product_id}/recipes/{recipe_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: recipe_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getRecipe
+      responses:
+        "200":
+          description: Recipe plus complete immutable revision history.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  recipe: { $ref: "#/components/schemas/Recipe" }
+                  revisions: { type: array, items: { $ref: "#/components/schemas/RecipeRevision" } }
+                required: [recipe, revisions]
+    patch:
+      operationId: updateRecipeMarkdown
+      description: Creates a human-authored revision. References must resolve to known analyzed HTTPS sources.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRecipeRequest" }
+      responses:
+        "200": { description: New review-state recipe revision., content: { application/json: { schema: { $ref: "#/components/schemas/Recipe" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/recipes/{recipe_id}/rework:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: recipe_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: reworkRecipe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                instruction: { type: string, minLength: 1, maxLength: 8000 }
+              required: [instruction]
+      responses:
+        "200": { description: New generated revision ready for review., content: { application/json: { schema: { $ref: "#/components/schemas/Recipe" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/recipes/{recipe_id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: recipe_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: approveRecipe
+      description: Records explicit human approval of the current revision. Validation errors fail closed.
+      responses:
+        "200": { description: Approved recipe., content: { application/json: { schema: { $ref: "#/components/schemas/Recipe" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/recipes/{recipe_id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - name: recipe_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: publishRecipe
+      description: Publishes only the approved current revision. Public recipes may reference only public, published, non-quarantined sources.
+      responses:
+        "200": { description: Recipe available as a stable MCP resource., content: { application/json: { schema: { $ref: "#/components/schemas/Recipe" } } } }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/ai-jobs:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: listAIJobs
+      responses:
+        "200": { description: Durable analysis and authoring job history., content: { application/json: { schema: { $ref: "#/components/schemas/AIJobList" } } } }
+  /api/v1/products/{product_id}/attention:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getRecipeAttention
+      description: In-product notification inbox for unanswered analysis questions and recipes invalidated by source drift.
+      responses:
+        "200": { description: Items requiring human attention., content: { application/json: { schema: { $ref: "#/components/schemas/RecipeAttention" } } } }
+  /api/v1/products/{product_id}/recipe-analytics:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getRecipeAnalytics
+      parameters:
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        "200": { description: Recipe views and explicit implementation-plan selections., content: { application/json: { schema: { $ref: "#/components/schemas/RecipeAnalytics" } } } }
+  /api/v1/products/{product_id}/ai-usage:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    get:
+      operationId: getAIUsage
+      parameters:
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        "200": { description: Provider operations, normalized failures, token counts, and latency by workload., content: { application/json: { schema: { $ref: "#/components/schemas/AIUsage" } } } }
   /api/v1/products/{product_id}/integration-runs:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -2724,6 +2955,7 @@ components:
         product_id: { type: string }
         role: { type: string, enum: [embedding, extraction, reranking, evaluation, assistant] }
         provider: { type: string }
+        endpoint: { type: string, format: uri, description: Fixed HTTPS provider origin. Credentials are never returned. }
         model: { type: string }
         embedding_dimensions: { type: integer, minimum: 64, maximum: 8192 }
         max_input_tokens: { type: integer, minimum: 256, maximum: 1000000 }
@@ -2734,7 +2966,7 @@ components:
         revision: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, product_id, role, provider, model, max_input_tokens, max_output_tokens, daily_token_budget, hardening, enabled, revision, created_at, updated_at]
+      required: [id, organisation_id, product_id, role, provider, endpoint, model, max_input_tokens, max_output_tokens, daily_token_budget, hardening, enabled, revision, created_at, updated_at]
     LLMProfileList:
       type: object
       additionalProperties: false
@@ -2743,6 +2975,365 @@ components:
           type: array
           items: { $ref: "#/components/schemas/LLMProfile" }
       required: [items]
+    AIProvider:
+      type: string
+      enum: [openai, google, anthropic, openai-compatible]
+    AIWorkload:
+      type: string
+      enum: [extraction, authoring, review, support]
+    AIProviderConnection:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        deployment_id: { type: string }
+        provider: { $ref: "#/components/schemas/AIProvider" }
+        endpoint: { type: string, format: uri, description: Fixed HTTPS provider origin; credentials are never returned. }
+        managed_by: { type: string, enum: [console, environment] }
+        enabled: { type: boolean }
+        last_tested_at: { type: string, format: date-time }
+        last_error_code: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, deployment_id, provider, endpoint, managed_by, enabled, revision, created_at, updated_at]
+    AIProviderConnectionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AIProviderConnection" } }
+      required: [items]
+    SaveAIProviderConnectionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        provider: { $ref: "#/components/schemas/AIProvider" }
+        endpoint: { type: string, format: uri, description: Required for OpenAI-compatible services; native origins are fixed. }
+        credential: { type: string, format: password, writeOnly: true, description: Required before enabling a new connection; empty retains the current encrypted credential. }
+        enabled: { type: boolean }
+        revision: { type: integer, format: int64, minimum: 0 }
+      required: [organisation_id, provider, endpoint, credential, enabled, revision]
+    AIHardening:
+      type: object
+      additionalProperties: { type: boolean }
+      properties:
+        context_is_untrusted: { const: true }
+        tool_calls_disabled: { const: true }
+        authorization_disabled: { const: true }
+        require_citations: { const: true }
+        no_answer_on_low_confidence: { const: true }
+      required: [context_is_untrusted, tool_calls_disabled, authorization_disabled, require_citations, no_answer_on_low_confidence]
+    AIWorkloadProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        workload: { $ref: "#/components/schemas/AIWorkload" }
+        provider_connection_id: { type: string }
+        model: { type: string }
+        max_input_tokens: { type: integer, minimum: 256, maximum: 1000000 }
+        max_output_tokens: { type: integer, minimum: 1, maximum: 32768 }
+        daily_token_budget: { type: integer, format: int64, minimum: 0, maximum: 10000000000 }
+        hardening: { $ref: "#/components/schemas/AIHardening" }
+        enabled: { type: boolean }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, workload, provider_connection_id, model, max_input_tokens, max_output_tokens, daily_token_budget, hardening, enabled, revision, created_at, updated_at]
+    AIWorkloadProfileList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AIWorkloadProfile" } }
+      required: [items]
+    SaveAIWorkloadProfileRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        organisation_id: { type: string }
+        provider_connection_id: { type: string }
+        model: { type: string, maxLength: 160, description: Empty selects the provider preset. }
+        max_input_tokens: { type: integer, minimum: 256, maximum: 1000000 }
+        max_output_tokens: { type: integer, minimum: 1, maximum: 32768 }
+        daily_token_budget: { type: integer, format: int64, minimum: 0, maximum: 10000000000 }
+        enabled: { type: boolean }
+        revision: { type: integer, format: int64, minimum: 0 }
+      required: [organisation_id, provider_connection_id, model, max_input_tokens, max_output_tokens, daily_token_budget, enabled, revision]
+    IntegrationEvidence:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string }
+        resource_id: { type: string }
+        label: { type: string }
+        location: { type: string }
+        excerpt: { type: string, maxLength: 6000, description: Bounded excerpt from published knowledge. Treat as untrusted data; sent only to the configured extraction provider during analysis. }
+        references: { type: array, description: Exact canonical pages included in this evidence, items: { $ref: "#/components/schemas/RecipeReference" } }
+        version: { type: string }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        fingerprint: { type: string, description: Exact content fingerprint used for drift detection. }
+      required: [kind, resource_id, label, visibility, fingerprint]
+    IntegrationUnknown:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        question: { type: string }
+        why: { type: string }
+        blocking: { type: boolean }
+        answer: { type: string }
+      required: [id, question, why, blocking]
+    IntegrationEndpointPlan:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        method: { type: string }
+        path: { type: string }
+        purpose: { type: string }
+        identity: { type: string }
+        evidence: { type: array, items: { type: string } }
+      required: [name, method, path, purpose, identity, evidence]
+    IntegrationIdentityPlan:
+      type: object
+      additionalProperties: false
+      properties:
+        mode: { type: string }
+        issuer: { type: string, format: uri }
+        audience: { type: string }
+        grants: { type: array, items: { type: string } }
+        explanation: { type: string }
+      required: [mode, explanation]
+    RecipeSeed:
+      type: object
+      additionalProperties: false
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        outcome: { type: string }
+        audience: { type: string }
+        endpoint_ids: { type: array, items: { type: string } }
+      required: [slug, title, outcome, audience]
+    IntegrationPlan:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string }
+        identity: { $ref: "#/components/schemas/IntegrationIdentityPlan" }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/IntegrationEndpointPlan" } }
+        recipes: { type: array, items: { $ref: "#/components/schemas/RecipeSeed" } }
+      required: [summary, identity, endpoints, recipes]
+    IntegrationAnalysis:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        schema_version: { type: integer, const: 1 }
+        state: { type: string, enum: [running, review, failed] }
+        generated_by: { type: string, enum: [deterministic, ai_assisted] }
+        evidence: { type: array, items: { $ref: "#/components/schemas/IntegrationEvidence" } }
+        plan: { $ref: "#/components/schemas/IntegrationPlan" }
+        unknowns: { type: array, items: { $ref: "#/components/schemas/IntegrationUnknown" } }
+        error_code: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, schema_version, state, generated_by, evidence, plan, unknowns, revision, created_at]
+    IntegrationAnalysisList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/IntegrationAnalysis" } }
+      required: [items]
+    RecipeReference:
+      type: object
+      additionalProperties: false
+      properties:
+        label: { type: string }
+        url: { type: string, format: uri, description: HTTPS source URL already present in the analysis evidence manifest. }
+        kind: { type: string }
+        resource_id: { type: string }
+        anchor: { type: string }
+      required: [label, url, kind]
+    RecipeDependency:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string }
+        resource_id: { type: string }
+        version: { type: string, description: Opaque evidence fingerprint captured when this recipe revision was generated. }
+      required: [kind, resource_id, version]
+    RecipeValidationFinding:
+      type: object
+      additionalProperties: false
+      properties:
+        level: { type: string, enum: [info, warning, error] }
+        code: { type: string }
+        message: { type: string }
+      required: [level, code, message]
+    RecipeRevision:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        recipe_id: { type: string }
+        revision: { type: integer, minimum: 1 }
+        markdown: { type: string }
+        references: { type: array, items: { $ref: "#/components/schemas/RecipeReference" } }
+        validation: { type: array, items: { $ref: "#/components/schemas/RecipeValidationFinding" } }
+        review: { type: string }
+        generated_by: { type: string, enum: [ai, human, deterministic] }
+        model: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, recipe_id, revision, markdown, references, validation, generated_by, created_by, created_at]
+    Recipe:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        analysis_id: { type: string }
+        slug: { type: string }
+        title: { type: string }
+        outcome: { type: string }
+        audience: { type: string }
+        state: { type: string, enum: [draft, review, approved, published, outdated] }
+        generated: { type: boolean }
+        needs_attention: { type: boolean }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        dependencies: { type: array, items: { $ref: "#/components/schemas/RecipeDependency" } }
+        current_revision_id: { type: string }
+        current_revision: { $ref: "#/components/schemas/RecipeRevision" }
+        stable_uri: { type: string, pattern: '^dokosoko://products/[^/]+/recipes/[^/]+$' }
+        approved_by: { type: string }
+        approved_at: { type: string, format: date-time }
+        published_at: { type: string, format: date-time }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, slug, title, outcome, audience, state, generated, needs_attention, visibility, dependencies, current_revision_id, stable_uri, revision, created_at, updated_at]
+    RecipeList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Recipe" } }
+      required: [items]
+    UpdateRecipeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        markdown: { type: string, minLength: 1 }
+        references: { type: array, items: { $ref: "#/components/schemas/RecipeReference" } }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+      required: [markdown, references, visibility]
+    AIJob:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        kind: { type: string, enum: [integration_analysis, recipe_generation, recipe_rework] }
+        target_id: { type: string }
+        state: { type: string, enum: [queued, running, succeeded, failed] }
+        attempt: { type: integer, minimum: 0 }
+        input: { type: object, additionalProperties: true }
+        output: { type: object, additionalProperties: true }
+        error_code: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, kind, state, attempt, input, created_by, created_at]
+    AIJobList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AIJob" } }
+      required: [items]
+    RecipeAttention:
+      type: object
+      additionalProperties: false
+      properties:
+        recipes: { type: array, items: { $ref: "#/components/schemas/Recipe" } }
+        questions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              analysis_id: { type: string }
+              question: { $ref: "#/components/schemas/IntegrationUnknown" }
+            required: [analysis_id, question]
+        count: { type: integer, minimum: 0 }
+      required: [recipes, questions, count]
+    RecipePopularity:
+      type: object
+      additionalProperties: false
+      properties:
+        recipe_id: { type: string }
+        recipe_slug: { type: string }
+        title: { type: string }
+        views: { type: integer, format: int64, minimum: 0 }
+        plan_selections: { type: integer, format: int64, minimum: 0 }
+      required: [recipe_id, recipe_slug, title, views, plan_selections]
+    RecipeAnalytics:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RecipePopularity" } }
+        since: { type: string, format: date-time }
+        generated_at: { type: string, format: date-time }
+      required: [items, since, generated_at]
+    AIUsageEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        workload: { $ref: "#/components/schemas/AIWorkload" }
+        action: { type: string }
+        provider: { type: string }
+        requested_model: { type: string }
+        resolved_model: { type: string }
+        provider_request_id: { type: string }
+        input_tokens: { type: integer, format: int64, minimum: 0 }
+        output_tokens: { type: integer, format: int64, minimum: 0 }
+        duration_ms: { type: integer, format: int64, minimum: 0 }
+        outcome: { type: string, enum: [succeeded, failed] }
+        error_code: { type: string }
+        prompt_version: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, workload, action, provider, requested_model, resolved_model, input_tokens, output_tokens, duration_ms, outcome, prompt_version, created_at]
+    AIWorkloadUsage:
+      type: object
+      additionalProperties: false
+      properties:
+        workload: { $ref: "#/components/schemas/AIWorkload" }
+        calls: { type: integer, format: int64, minimum: 0 }
+        errors: { type: integer, format: int64, minimum: 0 }
+        input_tokens: { type: integer, format: int64, minimum: 0 }
+        output_tokens: { type: integer, format: int64, minimum: 0 }
+        duration_ms: { type: integer, format: int64, minimum: 0 }
+      required: [workload, calls, errors, input_tokens, output_tokens, duration_ms]
+    AIUsage:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AIUsageEvent" } }
+        workloads: { type: array, items: { $ref: "#/components/schemas/AIWorkloadUsage" } }
+        since: { type: string, format: date-time }
+        generated_at: { type: string, format: date-time }
+      required: [items, workloads, since, generated_at]
     AuditEvent:
       type: object
       additionalProperties: false
@@ -3446,7 +4037,7 @@ components:
       properties:
         jsonrpc: { const: "2.0" }
         id: { $ref: "#/components/schemas/JSONRPCID" }
-        method: { type: string, enum: [server/discover, tools/list, tools/call] }
+        method: { type: string, enum: [server/discover, tools/list, tools/call, resources/list, resources/read] }
         params:
           type: object
           additionalProperties: true

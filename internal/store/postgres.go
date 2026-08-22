@@ -1360,6 +1360,27 @@ func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since
 	return value, rows.Err()
 }
 
+func (p *Postgres) RecipePopularity(ctx context.Context, productID string, since time.Time) ([]model.RecipePopularity, error) {
+	rows, err := p.pool.Query(ctx, `SELECT dimensions->>'recipe_id', max(dimensions->>'recipe_slug'), count(*) FILTER (WHERE event_name='recipe.view'), count(*) FILTER (WHERE event_name='recipe.plan_selected')
+		FROM analytics_events
+		WHERE product_id=$1 AND created_at >= $2 AND event_name = ANY($3) AND coalesce(dimensions->>'recipe_id','')<>''
+		GROUP BY dimensions->>'recipe_id'
+		ORDER BY count(*) FILTER (WHERE event_name='recipe.plan_selected') DESC, count(*) FILTER (WHERE event_name='recipe.view') DESC, max(dimensions->>'recipe_slug')`, productID, since, []string{"recipe.view", "recipe.plan_selected"})
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.RecipePopularity, 0)
+	for rows.Next() {
+		var value model.RecipePopularity
+		if err := rows.Scan(&value.RecipeID, &value.RecipeSlug, &value.Views, &value.PlanSelections); err != nil {
+			return nil, databaseError(err)
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
 func (p *Postgres) AppendAudit(ctx context.Context, event model.AuditEvent) error {
 	prior, _ := json.Marshal(event.Prior)
 	current, _ := json.Marshal(event.Current)

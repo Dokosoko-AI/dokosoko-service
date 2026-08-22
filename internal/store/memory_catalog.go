@@ -87,6 +87,8 @@ func (m *Memory) CreateDeployment(_ context.Context, value model.Deployment) (mo
 	m.integrationRuns[value.ID] = make(map[string]model.IntegrationRun)
 	m.reportSubmissions[value.ID] = make(map[string]model.ReportSubmission)
 	m.llmProfiles[value.ID] = make(map[string]model.LLMProfile)
+	m.aiProviderConnections[value.ID] = make(map[string]model.AIProviderConnection)
+	m.aiWorkloadProfiles[value.ID] = make(map[string]model.AIWorkloadProfile)
 	return value, nil
 }
 

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   INTEGRATION_TABS,
+  SETTINGS_TABS,
   SECTION_PATHS,
   entityPath,
   integrationPath,
@@ -10,6 +11,7 @@ import {
   routeForEntity,
   routeForIntegration,
   sectionPath,
+  settingsPath,
 } from "../app/lib/console-routes";
 
 test("primary console sections have canonical, round-trippable URLs", () => {
@@ -50,6 +52,33 @@ test("API workspaces have four stable, round-trippable tab URLs", () => {
     assert.deepEqual(parseConsolePath(path), routeForIntegration(uid, tab.id));
     assert.deepEqual(parseConsolePath(`${path}/`), routeForIntegration(uid, tab.id));
   }
+});
+
+test("settings has an explicit, stable AI provider sub-tab", () => {
+  assert.deepEqual(SETTINGS_TABS, [
+    { id: "overview", label: "Overview" },
+    { id: "ai", label: "AI providers" },
+  ]);
+  assert.equal(settingsPath(), "/settings");
+  assert.equal(settingsPath("ai"), "/settings/ai");
+  assert.deepEqual(parseConsolePath("/settings/ai"), {
+    kind: "section",
+    section: "settings",
+    settingsTab: "ai",
+    path: "/settings/ai",
+  });
+  assert.deepEqual(parseConsolePath("/settings/ai/"), parseConsolePath("/settings/ai"));
+  assert.equal(parseConsolePath("/settings/models").kind, "not-found");
+});
+
+test("recipes have one stable product-level workspace", () => {
+  assert.equal(sectionPath("recipes"), "/recipes");
+  assert.deepEqual(parseConsolePath("/recipes"), {
+    kind: "section",
+    section: "recipes",
+    path: "/recipes",
+  });
+  assert.deepEqual(parseConsolePath("/recipes/"), parseConsolePath("/recipes"));
 });
 
 test("unknown API tabs do not create compatibility aliases", () => {

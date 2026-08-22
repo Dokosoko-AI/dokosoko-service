@@ -541,7 +541,11 @@ func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
 	if !bytes.Contains(encodedAudits, []byte("mcp-product-description-v1")) || bytes.Contains(encodedAudits, []byte("Voice API v3 and Messages API v2 for developers.")) {
 		t.Fatalf("rewrite audit omitted prompt version or retained raw draft: %s", encodedAudits)
 	}
-	if err := memory.AppendAnalytics(ctx, model.AnalyticsEvent{OrganisationID: product.OrganisationID, ProductID: product.ID, EventName: "llm.tokens", Dimensions: map[string]any{"role": "assistant"}, Value: 10000, CreatedAt: time.Now().UTC()}); err != nil {
+	supportProfile, err := memory.AIWorkloadProfile(ctx, product.ID, "support")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "support", ProviderConnectionID: supportProfile.ProviderConnectionID, Model: supportProfile.Model, MaxInputTokens: supportProfile.MaxInputTokens, MaxOutputTokens: supportProfile.MaxOutputTokens, DailyTokenBudget: 1, Enabled: true, Revision: supportProfile.Revision}, actor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.RewriteProductDescription(ctx, product.ID, "A second bounded draft.", actor); err == nil || !strings.Contains(err.Error(), "daily token budget") {
@@ -568,7 +572,7 @@ func TestWidgetActivationRequiresAHardenedAssistantAndAnswersWithoutIdentityOrCr
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SetWidgetState(ctx, provisioning.Widget.ID, "active", provisioning.Widget.Revision, actor); err == nil || !strings.Contains(err.Error(), "assistant model") {
+	if _, err := service.SetWidgetState(ctx, provisioning.Widget.ID, "active", provisioning.Widget.Revision, actor); err == nil || !strings.Contains(err.Error(), "support AI workload") {
 		t.Fatalf("activation without assistant error = %v", err)
 	}
 	if _, err := service.SaveLLMProfile(ctx, platform.LLMProfileInput{OrganisationID: provisioning.Widget.OrganisationID, ProductID: provisioning.Widget.DeploymentID, Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "widget-assistant-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 512, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {

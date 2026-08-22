@@ -15,6 +15,9 @@ One DokoSoko installation is one vendor deployment. Its integration surface cons
 - `tool` — a published operation with fixed destination, schemas, and authorization policy;
 - `support_submission` — one consented, encrypted bug report or feedback item;
 - `support_route` — reporting policy that references, but never owns, a backend connection;
+- optional `ai_provider_connection` and four `ai_workload_profile` records for extraction, authoring, review, and support;
+- `integration_analysis` — a versioned evidence manifest, endpoint and identity plan, and explicit unknowns;
+- `recipe` and immutable `recipe_revision` — reviewed Markdown implementation guidance published as an MCP resource;
 - optional `access_definition`, `access_connection`, `access_instance`, and `access_credential` resources for provider-owned lifecycle management.
 
 Package ecosystems are not a DokoSoko resource. An HTTP capability belongs in an API or tool contract. Generated SDKs may be published separately, but they are not needed to expose an endpoint and do not shape runtime authorization.
@@ -128,7 +131,21 @@ Every mutation is authorized independently. Create and issue operations require 
 - Servers ignore unknown additive response fields from vendor APIs. Vendors must tolerate additive request headers but may reject unknown body fields according to the published schema.
 - Breaking changes require a new versioned path or explicit API version. Implementation details and database identifiers are not promoted into the public contract accidentally.
 
-## 8. Acceptance invariants
+## 8. AI analysis and recipes
+
+DokoSoko uses a small provider-neutral interface implemented directly with the official OpenAI, Google, and Anthropic SDKs plus one OpenAI-compatible adapter. There is no agent framework, model-owned tool loop, hidden cross-provider fallback, or second workflow engine. The boundary is intentionally replaceable if a framework later solves a measured problem.
+
+One encrypted credential belongs to one provider connection. Workload profiles reference that connection and select a visible model ID, input and output limits, daily token budget, and enabled state. Extraction may use an efficient model, authoring and support a balanced model, and review a strongest model. These are editable presets, not automatic routing. Every attempt records normalized outcome, provider, requested and resolved model, tokens, latency, error code, and prompt version.
+
+Analysis starts from resources DokoSoko already knows. The result contains the evidence manifest and fingerprints, identity boundary, proposed endpoints, recipe proposals, and questions for anything not justified by evidence. Blocking questions prevent generation. Only bounded API manifests, tool schemas and authorization policy, and excerpts from already-published knowledge may be sent to the configured extraction provider: at most three documents and 6,000 characters per source, with a 32,000-character total cap across all evidence. Retrieved content is untrusted data, never instructions, and there is no arbitrary URL fetch path.
+
+A recipe is Markdown with structured references and dependencies. Model output is visibly generated and always enters review. Direct human edits and AI rework both create immutable revisions and run the same deterministic checks. Model review is advisory; only a human can approve the current revision, and only an approved current revision can be published.
+
+References may select only analysed HTTPS sources or exact canonical documentation and sample-code pages included in their bounded evidence. Markdown URLs outside that allowlist are blocking findings. Public recipes may reference only public, published, non-quarantined sources and pages. Published recipes use stable `dokosoko://products/{product}/recipes/{recipe}` URIs and appear through MCP `resources/list` and `resources/read`. Exact evidence-fingerprint drift marks dependent recipes outdated and removes them from MCP until reviewed again.
+
+The in-product attention inbox contains unanswered questions and drifted recipes. Recipe views and explicit plan selections are distinct analytics events; popularity does not imply correctness or approval.
+
+## 9. Acceptance invariants
 
 The integration is acceptable only while all of these remain true:
 
@@ -145,3 +162,6 @@ The integration is acceptable only while all of these remain true:
 11. Identity, backend connectivity, and public visibility are independent axes.
 12. Integrations default private; public transition requires acknowledgement and the global Public MCP switch remains a master kill switch.
 13. Support routes contain backend-connection references, never plaintext credentials or copied secret identifiers.
+14. AI provider credentials exist once per provider connection and are never returned or copied into workload profiles.
+15. Model output cannot authorize, publish, add an arbitrary reference, or silently select another provider.
+16. Every published recipe has an explicitly approved immutable revision and is removed from discovery when its evidence drifts.
