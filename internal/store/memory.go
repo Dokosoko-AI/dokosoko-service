@@ -54,6 +54,11 @@ type Memory struct {
 	integrationRuns          map[string]map[string]model.IntegrationRun
 	reportSubmissions        map[string]map[string]model.ReportSubmission
 	llmProfiles              map[string]map[string]model.LLMProfile
+	widgets                  map[string]model.Widget
+	widgetSecrets            map[string]model.WidgetSecret
+	widgetSecretDigests      map[string]string
+	widgetBootstraps         map[string]model.WidgetBootstrap
+	widgetSessions           map[string]model.WidgetSession
 	knowledge                map[string][]model.KnowledgeRecord
 	crawls                   map[string][]model.CrawlJob
 	audit                    []model.AuditEvent
@@ -118,6 +123,11 @@ func NewMemory() *Memory {
 		integrationRuns:          map[string]map[string]model.IntegrationRun{product.ID: {}},
 		reportSubmissions:        map[string]map[string]model.ReportSubmission{product.ID: {}},
 		llmProfiles:              map[string]map[string]model.LLMProfile{product.ID: {}},
+		widgets:                  make(map[string]model.Widget),
+		widgetSecrets:            make(map[string]model.WidgetSecret),
+		widgetSecretDigests:      make(map[string]string),
+		widgetBootstraps:         make(map[string]model.WidgetBootstrap),
+		widgetSessions:           make(map[string]model.WidgetSession),
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},
@@ -1446,7 +1456,7 @@ func (m *Memory) LLMTokensUsed(_ context.Context, productID, role string, since 
 func (m *Memory) AnalyticsSummary(_ context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
 	actors := map[string]bool{}
 	daily := map[string]int64{}
 	for _, event := range m.analytics {

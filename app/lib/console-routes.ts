@@ -1,9 +1,10 @@
-export type Section = "product" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
+export type Section = "product" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 
 export type IntegrationTab = "overview" | "resources" | "access" | "history";
 
 export type EntityKind =
   | "integration"
+  | "widget"
   | "resource-set"
   | "source"
   | "tool"
@@ -38,6 +39,7 @@ export const SECTION_PATHS: Record<Section, string> = {
   connections: "/integrations/mcp",
   projects: "/access",
   distribution: "/agent-access",
+  widgets: "/widgets",
   releases: "/distribution/releases",
   runs: "/activity",
   reporting: "/operations/reporting",
@@ -48,6 +50,7 @@ export const SECTION_PATHS: Record<Section, string> = {
 
 const ENTITY_SECTIONS: Record<EntityKind, Section> = {
   integration: "product",
+  widget: "widgets",
   "resource-set": "product",
   source: "sources",
   tool: "tools",

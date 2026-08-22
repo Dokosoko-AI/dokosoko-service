@@ -686,6 +686,64 @@ type MCPAuthorizationState struct {
 	ExpiresAt    time.Time
 }
 
+// Widget is an authenticated delivery channel. It references integrations
+// that already belong to the deployment; session callers cannot expand this
+// allow-list while minting a token.
+type Widget struct {
+	ID             string          `json:"id"`
+	DeploymentID   string          `json:"deployment_id"`
+	OrganisationID string          `json:"organisation_id"`
+	Name           string          `json:"name"`
+	State          string          `json:"state"`
+	AllowedOrigins []string        `json:"allowed_origins"`
+	IntegrationIDs []string        `json:"integration_ids"`
+	Appearance     json.RawMessage `json:"appearance"`
+	Revision       int64           `json:"revision"`
+	ActivatedAt    *time.Time      `json:"activated_at,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+// WidgetSecret stores only a SHA-256 digest. The raw credential is returned
+// exactly once by the control-plane operation that creates it.
+type WidgetSecret struct {
+	ID          string     `json:"id"`
+	WidgetID    string     `json:"widget_id"`
+	Digest      []byte     `json:"-"`
+	Fingerprint string     `json:"fingerprint"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// WidgetBootstrap is a one-time, origin-bound token created by a customer's
+// trusted backend. It never carries customer credentials or requested scopes.
+type WidgetBootstrap struct {
+	Digest                 []byte
+	WidgetID               string
+	UserID                 string
+	CustomerOrganisationID string
+	Origin                 string
+	ExpiresAt              time.Time
+	UsedAt                 *time.Time
+	CreatedAt              time.Time
+}
+
+// WidgetSession is the short-lived bearer accepted by the hosted widget
+// runtime. Authorization remains the current Widget configuration.
+type WidgetSession struct {
+	ID                     string     `json:"id"`
+	WidgetID               string     `json:"widget_id"`
+	Digest                 []byte     `json:"-"`
+	UserID                 string     `json:"user_id"`
+	CustomerOrganisationID string     `json:"customer_organisation_id,omitempty"`
+	Origin                 string     `json:"origin"`
+	ExpiresAt              time.Time  `json:"expires_at"`
+	RevokedAt              *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt              time.Time  `json:"created_at"`
+	LastSeenAt             *time.Time `json:"last_seen_at,omitempty"`
+}
+
 type Provider struct {
 	ID             string          `json:"id"`
 	OrganisationID string          `json:"organisation_id"`

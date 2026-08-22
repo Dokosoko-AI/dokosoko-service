@@ -113,7 +113,11 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("POST /mcp/public", server.publicMCP)
 	mux.HandleFunc("POST /mcp", server.privateMCP)
 	mux.HandleFunc("GET /agent-setup/{kind}/prompt.md", server.agentSetupPrompt)
-	mux.HandleFunc("GET /widgets/{productID}/{asset}", server.widgetScript)
+	mux.HandleFunc("GET /v1/widgets/{widgetID}/configuration", server.widgetConfiguration)
+	mux.HandleFunc("POST /v1/widget-sessions", server.createWidgetSession)
+	mux.HandleFunc("POST /v1/widget-sessions/exchange", server.exchangeWidgetSession)
+	mux.HandleFunc("GET /v1/widget-session", server.currentWidgetSession)
+	mux.HandleFunc("POST /v1/widget-chat", server.widgetChat)
 	if options.UIDirectory != "" {
 		mux.Handle("/", staticConsole(options.UIDirectory))
 	}
@@ -1084,6 +1088,22 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.deploymentEnvironments(w, r)
 	case len(parts) == 3 && parts[2] == "integrations":
 		s.integrations(w, r)
+	case len(parts) == 3 && parts[2] == "widgets":
+		s.adminWidgets(w, r)
+	case len(parts) == 4 && parts[2] == "widgets":
+		s.adminWidget(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "activate" && r.Method == http.MethodPost:
+		s.setAdminWidgetState(w, r, parts[3], "active")
+	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "disable" && r.Method == http.MethodPost:
+		s.setAdminWidgetState(w, r, parts[3], "disabled")
+	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "secrets":
+		s.adminWidgetSecrets(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "widgets" && parts[4] == "secrets" && r.Method == http.MethodDelete:
+		s.revokeAdminWidgetSecret(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "sessions" && r.Method == http.MethodGet:
+		s.adminWidgetSessions(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "widgets" && parts[4] == "sessions" && r.Method == http.MethodDelete:
+		s.revokeAdminWidgetSession(w, r, parts[3], parts[5])
 	case len(parts) == 4 && parts[2] == "integrations":
 		s.integration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "publish" && r.Method == http.MethodPost:
@@ -1182,8 +1202,6 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.publishSource(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawls" && r.Method == http.MethodGet:
 		s.crawlJobs(w, r, parts[3], parts[5])
-	case len(parts) == 5 && parts[2] == "products" && parts[4] == "widgets" && r.Method == http.MethodGet:
-		s.widgets(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "tools":
 		s.tools(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "mcp-connections":
@@ -2019,7 +2037,7 @@ func (s *Server) sourceVisibility(w http.ResponseWriter, r *http.Request, produc
 	}
 	value, err := s.service.SetSourceVisibility(r.Context(), productID, sourceID, input.Visibility, input.AcknowledgePublic, input.Revision, actor(r))
 	if err != nil {
-		s.platformError(w, err, "This source's published content will be accessible without authentication through Public MCP and the public widget.")
+		s.platformError(w, err, "This source's published content will be accessible without authentication through Public MCP.")
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
@@ -2032,20 +2050,6 @@ func actor(r *http.Request) platform.Actor {
 		actorID = "anonymous"
 	}
 	return platform.Actor{ID: actorID, RequestID: requestID}
-}
-
-func (s *Server) widgets(w http.ResponseWriter, r *http.Request, productID string) {
-	product, err := s.service.Store().Product(r.Context(), productID)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	publicSnippet := fmt.Sprintf(`<script async src="%s/widgets/%s/public.js" data-product="%s"></script>`, s.baseURL, productID, productID)
-	privateSnippet := fmt.Sprintf(`<script async src="%s/widgets/%s/private.js" data-product="%s"></script>`, s.baseURL, productID, productID)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"public":  map[string]any{"enabled": product.PublicMCPEnabled, "snippet": publicSnippet, "contains_secret": false},
-		"private": map[string]any{"enabled": true, "snippet": privateSnippet, "contains_secret": false},
-	})
 }
 
 type rpcRequest struct {
@@ -2889,29 +2893,6 @@ func providerRPCError(w http.ResponseWriter, id any, err error) {
 		return
 	}
 	writeRPCError(w, id, -32603, "Provider operation failed closed")
-}
-
-func (s *Server) widgetScript(w http.ResponseWriter, r *http.Request) {
-	productID := r.PathValue("productID")
-	asset := r.PathValue("asset")
-	if !strings.HasSuffix(asset, ".js") {
-		http.NotFound(w, r)
-		return
-	}
-	kind := strings.TrimSuffix(asset, ".js")
-	if kind != "public" && kind != "private" {
-		http.NotFound(w, r)
-		return
-	}
-	product, err := s.service.Store().Product(r.Context(), productID)
-	if err != nil || (kind == "public" && !product.PublicMCPEnabled) {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	fmt.Fprintf(w, `(function(){const s=document.currentScript;if(!s)return;const b=document.createElement('button');b.type='button';b.textContent='Ask %s';b.setAttribute('aria-label','Open %s DokoSoko assistant');b.style.cssText='position:fixed;right:20px;bottom:20px;border:0;border-radius:999px;padding:12px 16px;background:#18181b;color:#fff;font:600 14px system-ui;box-shadow:0 8px 30px rgba(0,0,0,.18);z-index:2147483647';b.onclick=function(){window.dispatchEvent(new CustomEvent('dokosoko:open',{detail:{product:%q,kind:%q}}))};document.body.appendChild(b)})();`, product.Name, kind, productID, kind)
 }
 
 func decodeJSON(reader io.Reader, value any) error {

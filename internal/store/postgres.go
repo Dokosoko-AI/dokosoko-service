@@ -1289,7 +1289,7 @@ func (p *Postgres) LLMTokensUsed(ctx context.Context, productID, role string, si
 }
 
 func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
-	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
 	err := p.pool.QueryRow(ctx, `SELECT count(DISTINCT actor_pseudonym) FILTER (WHERE actor_pseudonym IS NOT NULL), count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called') FROM analytics_events WHERE product_id=$1 AND created_at >= $2`, productID, since).Scan(&value.ActiveDevelopers, &value.MCPRequests, &value.ToolCalls)
 	if err != nil {
 		return value, databaseError(err)

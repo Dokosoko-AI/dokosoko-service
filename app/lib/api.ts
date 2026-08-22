@@ -106,6 +106,58 @@ export type APIIntegrationDetail = {
   publish_status: APIIntegrationPublishStatus;
 };
 
+export type APIWidgetAppearance = {
+  theme: "auto" | "light" | "dark";
+  accentColour?: string;
+  launcherPosition: "left" | "right";
+  greeting?: string;
+};
+
+export type APIWidget = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  name: string;
+  state: "draft" | "active" | "disabled";
+  allowed_origins: string[];
+  integration_ids: string[];
+  appearance: APIWidgetAppearance;
+  revision: number;
+  activated_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIWidgetSecret = {
+  id: string;
+  widget_id: string;
+  fingerprint: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  created_at: string;
+};
+
+export type APIWidgetSession = {
+  id: string;
+  widget_id: string;
+  user_id: string;
+  customer_organisation_id?: string;
+  origin: string;
+  expires_at: string;
+  revoked_at?: string;
+  created_at: string;
+  last_seen_at?: string;
+};
+
+export type APIWidgetProvisioning = { widget: APIWidget; secret: string };
+export type APIWidgetSecretProvisioning = { credential: APIWidgetSecret; secret: string };
+export type APIWidgetInput = {
+  name: string;
+  allowed_origins: string[];
+  integration_ids: string[];
+  appearance: { theme: APIWidgetAppearance["theme"]; accent_colour?: string; launcher_position: APIWidgetAppearance["launcherPosition"]; greeting?: string };
+};
+
 export type APIResourceSet = {
   id: string;
   deployment_id: string;
@@ -530,17 +582,6 @@ export type APIAgentSetupLinks = {
   private: APIAgentSetupLink;
 };
 
-export type APIWidgetSnippet = {
-  enabled: boolean;
-  snippet: string;
-  contains_secret: false;
-};
-
-export type APIWidgetSnippets = {
-  public: APIWidgetSnippet;
-  private: APIWidgetSnippet;
-};
-
 export type APIIdentity = {
   id: string;
   organisation_id: string;
@@ -761,6 +802,17 @@ export const api = {
   deploymentEnvironments: async () => (await request<{ items: APIEnvironment[] }>("/api/v1/environments")).items,
   createDeploymentEnvironment: (organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>("/api/v1/environments", { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   integrations: async () => (await request<{ items: APIIntegration[] }>("/api/v1/integrations")).items,
+  widgets: async () => (await request<{ items: APIWidget[] }>("/api/v1/widgets")).items,
+  widget: (widgetID: string) => request<APIWidget>(`/api/v1/widgets/${encodeURIComponent(widgetID)}`),
+  createWidget: (input: APIWidgetInput) => request<APIWidgetProvisioning>("/api/v1/widgets", { method: "POST", body: JSON.stringify(input) }),
+  updateWidget: (widgetID: string, input: APIWidgetInput & { revision: number }) => request<APIWidget>(`/api/v1/widgets/${encodeURIComponent(widgetID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  activateWidget: (widgetID: string, revision: number) => request<APIWidget>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/activate`, { method: "POST", body: JSON.stringify({ revision }) }),
+  disableWidget: (widgetID: string, revision: number) => request<APIWidget>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/disable`, { method: "POST", body: JSON.stringify({ revision }) }),
+  widgetSecrets: async (widgetID: string) => (await request<{ items: APIWidgetSecret[] }>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/secrets`)).items,
+  createWidgetSecret: (widgetID: string) => request<APIWidgetSecretProvisioning>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/secrets`, { method: "POST" }),
+  revokeWidgetSecret: (widgetID: string, secretID: string) => request<APIWidgetSecret>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/secrets/${encodeURIComponent(secretID)}`, { method: "DELETE" }),
+  widgetSessions: async (widgetID: string) => (await request<{ items: APIWidgetSession[] }>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/sessions`)).items,
+  revokeWidgetSession: (widgetID: string, sessionID: string) => request<APIWidgetSession>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/sessions/${encodeURIComponent(sessionID)}`, { method: "DELETE" }),
   integration: (integrationID: string) => request<APIIntegrationDetail>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; visibility?: APIVisibility; acknowledge_public?: boolean; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "visibility" | "lifecycle" | "revision"> & { acknowledge_public?: boolean; replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PUT", body: JSON.stringify(input) }),
@@ -812,7 +864,6 @@ export const api = {
   environments: async (productID: string) => (await request<{ items: APIEnvironment[] }>(`${productPath(productID)}/environments`)).items,
   createEnvironment: (productID: string, organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>(`${productPath(productID)}/environments`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   distribution: (productID: string) => request<Distribution>(`${productPath(productID)}/distribution`),
-  widgets: (productID: string) => request<APIWidgetSnippets>(`${productPath(productID)}/widgets`),
   identity: () => request<APIIdentity>("/api/v1/identity-provider"),
   configureIdentity: (input: { issuer: string; client_id: string; client_secret: string; scopes: string[]; audience: string; oauth_resource: string; organisation_claim: string; installation_claim: string; delegated_api_origin: string; state: APIIdentity["state"]; revision: number }) => request<APIIdentity>("/api/v1/identity-provider", { method: "PUT", body: JSON.stringify(input) }),
   supportSubmissions: async () => (await request<{ items: APISupportSubmission[]; has_more: boolean }>("/api/v1/support-submissions?limit=200")).items,

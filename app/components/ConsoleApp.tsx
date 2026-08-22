@@ -39,7 +39,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
 import { ConsoleRoute, EntityKind, INTEGRATION_TABS, IntegrationTab, Section, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath } from "../lib/console-routes";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
@@ -75,7 +75,7 @@ const navigation: Array<{
   sections: Array<{ id: Section; label: string }>;
 }> = [
   { id: "apis", label: "APIs", icon: Sparkles, defaultSection: "product", sections: [{ id: "product", label: "APIs" }] },
-  { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }] },
+  { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }, { id: "widgets", label: "Widgets" }] },
   { id: "activity", label: "Activity", icon: Activity, defaultSection: "runs", sections: [{ id: "runs", label: "Activity" }] },
 ];
 
@@ -173,8 +173,8 @@ const fixtureProductPins: APIProductVersionPin[] = [
 const fixtureCustomerAccounts: APICustomerAccount[] = [{ id: "account_contoso", organisation_id: "org_acme", product_id: "prod_acme", issuer: "https://identity.acme.example", external_id: "contoso", state: "active", revision: 1, created_at: "2026-08-19T12:24:00Z", updated_at: "2026-08-19T12:24:00Z", last_authenticated_at: "2026-08-19T12:24:00Z" }];
 const fixtureInstallations: APIProductInstallation[] = [{ id: "installation_contoso_voice", organisation_id: "org_acme", product_id: "prod_acme", customer_account_id: "account_contoso", environment_id: "env_prod", external_id: "contoso-voice-prod", name: "Contoso voice production", state: "active", revision: 1, created_at: "2026-08-19T12:24:00Z", updated_at: "2026-08-19T12:24:00Z" }];
 
-function ConsoleLink({ path, onNavigate, className, children, ariaCurrent }: { path: string; onNavigate: (path: string) => void; className?: string; children: React.ReactNode; ariaCurrent?: "page" }) {
-  return <a href={path} className={className} aria-current={ariaCurrent} onClick={(event) => {
+function ConsoleLink({ path, onNavigate, className, children, ariaCurrent, ariaLabel }: { path: string; onNavigate: (path: string) => void; className?: string; children: React.ReactNode; ariaCurrent?: "page"; ariaLabel?: string }) {
+  return <a href={path} className={className} aria-current={ariaCurrent} aria-label={ariaLabel} onClick={(event) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     onNavigate(path);
@@ -251,6 +251,7 @@ function deploymentAsLegacyProduct(value: APIDeployment): APIProduct {
 export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { currentUser?: APIUser | null; currentDeployment?: APIDeployment | null; onLogout?: () => void | Promise<void> }) {
 	const [product, setProduct] = useState<APIProduct>(deploymentAsLegacyProduct(currentDeployment ?? fixtureDeployment));
 	const [integrations, setIntegrations] = useState<APIIntegration[]>([]);
+	const [widgets, setWidgets] = useState<APIWidget[]>([]);
 	const [resourceSets, setResourceSets] = useState<APIResourceSet[]>([]);
 	const [accessDefinitions, setAccessDefinitions] = useState<APIAccessDefinition[]>([]);
 	const [accessConnections, setAccessConnections] = useState<APIAccessConnection[]>([]);
@@ -288,7 +289,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [mcpConfirmationRequired, setMCPConfirmationRequired] = useState(true);
   const [publicMCPEnabled, setPublicMCPEnabled] = useState(false);
   const [distribution, setDistribution] = useState<Distribution | null>(null);
-  const [widgetSnippets, setWidgetSnippets] = useState<APIWidgetSnippets | null>(null);
+  const [widgetCreateOpen, setWidgetCreateOpen] = useState(false);
+  const [widgetBusy, setWidgetBusy] = useState(false);
+  const [widgetName, setWidgetName] = useState("Customer assistant");
+  const [widgetOrigins, setWidgetOrigins] = useState("http://localhost:3000");
+  const [widgetIntegrationIDs, setWidgetIntegrationIDs] = useState<string[]>([]);
+  const [widgetCredential, setWidgetCredential] = useState<{ widgetID: string; secret: string } | null>(null);
   const [pendingPublication, setPendingPublication] = useState<PendingPublication | null>(null);
   const [pendingMCPEnable, setPendingMCPEnable] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -421,11 +427,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     }
 
     let cancelled = false;
-	    Promise.all([api.distribution(product.id), api.widgets(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(([distributionValue, widgetValues, remoteSources, remoteTools, remoteMCPConnections]) => {
+	    Promise.all([api.distribution(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(([distributionValue, remoteSources, remoteTools, remoteMCPConnections]) => {
       if (cancelled) return;
       setDistribution(distributionValue);
       setProduct(distributionValue.product);
-      setWidgetSnippets(widgetValues);
       setPublicMCPEnabled(distributionValue.product.public_mcp_enabled);
       setProductRevision(distributionValue.product.revision);
       setSources((current) => remoteSources.map((source) => {
@@ -461,9 +466,9 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	      if (!cancelled) setReportSubmissions(submissions);
 	    }).catch(() => {});
 	    api.rootUsers().then((value) => { if (!cancelled) setRootUsers(value); }).catch(() => {});
-	    Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]).then(async ([integrationValues, setValues, definitionValues, connectionValues, backendValues, routeValues]) => {
+	    Promise.all([api.integrations(), api.widgets(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]).then(async ([integrationValues, widgetValues, setValues, definitionValues, connectionValues, backendValues, routeValues]) => {
 	      if (cancelled) return;
-	      setIntegrations(integrationValues); setResourceSets(setValues); setAccessDefinitions(definitionValues); setAccessConnections(connectionValues); setBackendConnections(backendValues); setSupportRoutes(routeValues);
+	      setIntegrations(integrationValues); setWidgets(widgetValues); setResourceSets(setValues); setAccessDefinitions(definitionValues); setAccessConnections(connectionValues); setBackendConnections(backendValues); setSupportRoutes(routeValues);
 	      const instanceGroups = await Promise.all(connectionValues.map((connection) => api.accessInstances(connection.id).catch(() => [])));
 	      const credentialGroups = await Promise.all(connectionValues.map((connection) => api.accessCredentials(connection.id).catch(() => [])));
 	      if (!cancelled) { setAccessInstances(instanceGroups.flat()); setAccessCredentials(credentialGroups.flat()); }
@@ -1105,9 +1110,73 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	}
   }
 
+  async function createWidget() {
+    const allowedOrigins = widgetOrigins.split(/[\n,]/).map((value) => value.trim()).filter(Boolean);
+    if (!widgetName.trim() || allowedOrigins.length === 0 || widgetIntegrationIDs.length === 0) {
+      showToast("Add a name, an allowed origin, and at least one API.");
+      return;
+    }
+    setWidgetBusy(true);
+    try {
+      const input: APIWidgetInput = { name: widgetName.trim(), allowed_origins: allowedOrigins, integration_ids: widgetIntegrationIDs, appearance: { theme: "auto", launcher_position: "right", greeting: "How can I help?" } };
+      const created = await api.createWidget(input);
+      setWidgets((items) => [...items, created.widget]);
+      setWidgetCreateOpen(false);
+      setWidgetCredential({ widgetID: created.widget.id, secret: created.secret });
+      setWidgetName("Customer assistant");
+      setWidgetOrigins("http://localhost:3000");
+      setWidgetIntegrationIDs([]);
+      navigateToPath(entityPath("widget", created.widget.id));
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "Could not create the widget.");
+    } finally {
+      setWidgetBusy(false);
+    }
+  }
+
+  async function updateWidget(widget: APIWidget, input: APIWidgetInput): Promise<APIWidget | null> {
+    setWidgetBusy(true);
+    try {
+      const updated = await api.updateWidget(widget.id, { ...input, revision: widget.revision });
+      setWidgets((items) => items.map((item) => item.id === updated.id ? updated : item));
+      showToast("Widget settings saved.");
+      return updated;
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "Could not update the widget.");
+      return null;
+    } finally {
+      setWidgetBusy(false);
+    }
+  }
+
+  async function setWidgetState(widget: APIWidget, state: "active" | "disabled"): Promise<APIWidget | null> {
+    setWidgetBusy(true);
+    try {
+      const updated = state === "active" ? await api.activateWidget(widget.id, widget.revision) : await api.disableWidget(widget.id, widget.revision);
+      setWidgets((items) => items.map((item) => item.id === updated.id ? updated : item));
+      showToast(state === "active" ? "Widget is live." : "Widget disabled immediately.");
+      return updated;
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "Could not change widget state.");
+      return null;
+    } finally {
+      setWidgetBusy(false);
+    }
+  }
+
+  async function rotateWidgetSecret(widget: APIWidget) {
+    setWidgetBusy(true);
+    try {
+      const created = await api.createWidgetSecret(widget.id);
+      setWidgetCredential({ widgetID: widget.id, secret: created.secret });
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "Could not create a new widget secret.");
+    } finally {
+      setWidgetBusy(false);
+    }
+  }
+
   const publicEndpoint = distribution?.public_mcp_endpoint ?? "/mcp/public";
-  const publicSnippet = widgetSnippets?.public.snippet ?? `<script async src="/widgets/${product.id}/public.js" data-product="${product.id}"></script>`;
-  const privateSnippet = widgetSnippets?.private.snippet ?? `<script async src="/widgets/${product.id}/private.js" data-product="${product.id}"></script>`;
   const publicAgentSetupURL = distribution?.agent_setup?.public.url ?? "/agent-setup/public/prompt.md";
   const privateAgentSetupURL = distribution?.agent_setup?.private.url ?? "/agent-setup/private/prompt.md";
   const publicAgentSetup = distribution?.agent_setup?.public ?? { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, publicAgentSetupURL, "public"), contains_secret: false as const };
@@ -1122,6 +1191,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       case "integration": {
         const value = integrations.find((item) => item.id === consoleRoute.uid);
         return value ? { eyebrow: "API", title: value.display_name, description: `${value.family_key} · ${value.version_key}`, fields: fields([["API ID", value.id], ["Lifecycle", value.lifecycle], ["Revision", value.revision], ["Resources", value.resources?.length ?? 0], ["Access connections", value.access_connection_ids?.length ?? 0], ["Sunset", date(value.sunset_at)]]) } : null;
+      }
+      case "widget": {
+        const value = widgets.find((item) => item.id === consoleRoute.uid);
+        return value ? { eyebrow: "Authenticated widget", title: value.name, description: `${value.integration_ids.length} APIs · ${value.allowed_origins.length} origins`, fields: fields([["UID", value.id], ["State", value.state], ["Revision", value.revision]]) } : null;
       }
       case "resource-set": {
         const value = resourceSets.find((item) => item.id === consoleRoute.uid);
@@ -1176,7 +1249,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         return value ? { eyebrow: "Root administrator", title: value.display_name, description: value.email, fields: fields([["UID", value.id], ["Role", value.role], ["Status", value.revoked_at ? "Revoked" : "MFA active"], ["Revoked", date(value.revoked_at)]]) } : null;
       }
     }
-  }, [consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, accessDefinitions, accessConnections, productInstallations, productVersions, integrationRuns, supportRoutes, reportSubmissions, auditEvents, rootUsers]);
+  }, [consoleRoute, integrations, widgets, resourceSets, sources, tools, mcpConnections, accessDefinitions, accessConnections, productInstallations, productVersions, integrationRuns, supportRoutes, reportSubmissions, auditEvents, rootUsers]);
 
   function routeURL(path: string) {
     const preview = process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("preview") === "fixtures" ? window.location.search : "";
@@ -1233,7 +1306,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </header>
 
         <div className="content">
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
+          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={llmProfiles.some((profile) => profile.role === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { setLLMRole("assistant"); setLLMOpen(true); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
           {section === "distribution" && (
             <DistributionView
               enabled={publicMCPEnabled}
@@ -1244,16 +1317,17 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
               publicResourceCount={publicResourceCount}
               onVisibilityChange={requestVisibility}
               onCopied={showToast}
-              publicSnippet={publicSnippet}
-              privateSnippet={privateSnippet}
               publicEndpoint={publicEndpoint}
               tenantName={product.name}
               publicAgentSetup={publicAgentSetup}
               privateAgentSetup={privateAgentSetup}
               onConfigureIdentity={() => navigateToSection("settings")}
               onOpenSources={() => navigateToSection("sources")}
+              widgetCount={widgets.length}
+              onOpenWidgets={() => navigateToSection("widgets")}
             />
           )}
+          {section === "widgets" && <WidgetsView widgets={widgets} integrations={integrations} onCreate={() => setWidgetCreateOpen(true)} onNavigate={navigateToPath} />}
           {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
@@ -1268,6 +1342,30 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       </main>
 
       <Dialog
+        open={widgetCreateOpen}
+        onClose={setWidgetCreateOpen}
+        title="Create widget"
+        description="Start with one authenticated widget, then connect only the APIs it should expose."
+        actions={<><Button outline onClick={() => setWidgetCreateOpen(false)}>Cancel</Button><Button color="indigo" disabled={widgetBusy || !widgetName.trim() || !widgetOrigins.trim() || widgetIntegrationIDs.length === 0} onClick={createWidget}>{widgetBusy ? "Creating…" : "Create widget"}</Button></>}
+      >
+        <div className="auth-form compact-form">
+          <label className="auth-field"><span>Name</span><input value={widgetName} maxLength={120} onChange={(event) => setWidgetName(event.target.value)} placeholder="Customer assistant" /></label>
+          <label className="auth-field"><span>Allowed application origins</span><textarea value={widgetOrigins} onChange={(event) => setWidgetOrigins(event.target.value)} placeholder={"https://app.example.com\nhttp://localhost:3000"} /><small>One exact origin per line. Paths and wildcard domains are not accepted.</small></label>
+          <fieldset className="widget-api-picker"><legend>APIs this widget can use</legend>{integrations.filter((integration) => integration.lifecycle === "active").map((integration) => <label key={integration.id}><input aria-label={`Allow ${integration.display_name}`} type="checkbox" checked={widgetIntegrationIDs.includes(integration.id)} onChange={(event) => setWidgetIntegrationIDs((values) => event.target.checked ? [...values, integration.id] : values.filter((id) => id !== integration.id))} /><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span></label>)}{integrations.filter((integration) => integration.lifecycle === "active").length === 0 && <p className="empty-picker">Publish an API before creating a widget.</p>}</fieldset>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(widgetCredential)}
+        onClose={(open) => { if (!open) setWidgetCredential(null); }}
+        title="Save the widget secret"
+        description="This server-only credential is shown once. DokoSoko stores only its hash."
+        actions={<Button color="indigo" onClick={() => setWidgetCredential(null)}>I saved it</Button>}
+      >
+        <div className="one-time-secret"><div><KeyRound /><span><strong>Server only</strong><small>Never place this value in browser code or NEXT_PUBLIC variables.</small></span></div><code>{widgetCredential?.secret}</code><CopyButton text={widgetCredential?.secret ?? ""} label="Copy secret" onCopied={showToast} /></div>
+      </Dialog>
+
+      <Dialog
         open={Boolean(pendingPublication)}
         onClose={(open) => { if (!open) setPendingPublication(null); }}
         title={`Make ${pendingPublication?.name ?? "resource"} public?`}
@@ -1275,7 +1373,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         actions={<><Button outline onClick={() => setPendingPublication(null)}>Keep private</Button><Button color="red" disabled={!acknowledged} onClick={confirmPublication}>Make public</Button></>}
       >
         <WarningContent>
-          <p><strong>{pendingPublication?.detail}</strong> Public MCP and the public widget do not require users to sign in.</p>
+          <p><strong>{pendingPublication?.detail}</strong> Public MCP does not require users to sign in.</p>
           <p>DokoSoko will record your identity, the prior revision, and this decision in the audit log.</p>
           <Confirmation checked={acknowledged} onChange={setAcknowledged}>I understand this published {pendingPublication?.kind} will be available without authentication.</Confirmation>
         </WarningContent>
@@ -1495,7 +1593,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         description="Models are optional accelerators for embedding, extraction, reranking, evaluation, or assistance. They never authorize tools or choose network destinations."
         actions={<><Button outline onClick={() => setLLMOpen(false)}>Cancel</Button><Button color="indigo" disabled={llmBusy || !llmEndpoint.trim() || !llmModel.trim() || (llmEnabled && !llmCredential.trim() && !llmProfiles.some((profile) => profile.role === llmRole))} onClick={saveLLMProfile}>{llmBusy ? "Validating…" : "Save profile"}</Button></>}
       >
-        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Role</span><select value={llmRole} onChange={(event) => setLLMRole(event.target.value)}>{["embedding", "extraction", "reranking", "evaluation", "assistant"].map((role) => <option key={role}>{role}</option>)}</select></label><label className="auth-field"><span>Provider type</span><input value={llmProvider} onChange={(event) => setLLMProvider(event.target.value)} /></label></div><label className="auth-field"><span>Fixed HTTPS endpoint</span><input type="url" value={llmEndpoint} onChange={(event) => setLLMEndpoint(event.target.value)} placeholder="https://api.provider.com/v1" /></label><div className="two-fields"><label className="auth-field"><span>Model</span><input value={llmModel} onChange={(event) => setLLMModel(event.target.value)} /></label>{llmRole === "embedding" && <label className="auth-field"><span>Embedding dimensions</span><input type="number" min={64} max={8192} value={llmDimensions} onChange={(event) => setLLMDimensions(event.target.value)} /></label>}</div><label className="auth-field"><span>Provider credential</span><input type="password" autoComplete="off" value={llmCredential} onChange={(event) => setLLMCredential(event.target.value)} /><small>Required when enabling a new profile; leave blank on an existing role to retain its encrypted credential.</small></label><div className="two-fields"><label className="auth-field"><span>Max input tokens</span><input type="number" value={llmInputTokens} onChange={(event) => setLLMInputTokens(event.target.value)} /></label><label className="auth-field"><span>Max output tokens</span><input type="number" value={llmOutputTokens} onChange={(event) => setLLMOutputTokens(event.target.value)} /></label></div><label className="auth-field"><span>Daily token budget</span><input type="number" value={llmDailyBudget} onChange={(event) => setLLMDailyBudget(event.target.value)} /></label><Switch checked={llmEnabled} onChange={setLLMEnabled} label="Enable this profile" /><div className="private-default-note"><ShieldCheck />Mandatory: context is untrusted, model tool calls and authorization decisions are disabled, citations are required, and low-confidence retrieval returns no answer.</div></div>
+        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Role</span><select value={llmRole} onChange={(event) => setLLMRole(event.target.value)}>{["embedding", "extraction", "reranking", "evaluation", "assistant"].map((role) => <option key={role}>{role}</option>)}</select></label><label className="auth-field"><span>Provider type</span><input name="llm-provider" autoComplete="off" value={llmProvider} onChange={(event) => setLLMProvider(event.target.value)} /></label></div><label className="auth-field"><span>Fixed HTTPS endpoint</span><input name="llm-endpoint" type="url" autoComplete="off" value={llmEndpoint} onChange={(event) => setLLMEndpoint(event.target.value)} placeholder="https://api.provider.com/v1" /></label><div className="two-fields"><label className="auth-field"><span>Model</span><input name="llm-model" autoComplete="off" value={llmModel} onChange={(event) => setLLMModel(event.target.value)} /></label>{llmRole === "embedding" && <label className="auth-field"><span>Embedding dimensions</span><input type="number" min={64} max={8192} value={llmDimensions} onChange={(event) => setLLMDimensions(event.target.value)} /></label>}</div><label className="auth-field"><span>Provider credential</span><input name="llm-credential" type="password" autoComplete="new-password" value={llmCredential} onChange={(event) => setLLMCredential(event.target.value)} /><small>Required when enabling a new profile; leave blank on an existing role to retain its encrypted credential.</small></label><div className="two-fields"><label className="auth-field"><span>Max input tokens</span><input type="number" value={llmInputTokens} onChange={(event) => setLLMInputTokens(event.target.value)} /></label><label className="auth-field"><span>Max output tokens</span><input type="number" value={llmOutputTokens} onChange={(event) => setLLMOutputTokens(event.target.value)} /></label></div><label className="auth-field"><span>Daily token budget</span><input type="number" value={llmDailyBudget} onChange={(event) => setLLMDailyBudget(event.target.value)} /></label><Switch checked={llmEnabled} onChange={setLLMEnabled} label="Enable this profile" /><div className="private-default-note"><ShieldCheck />Mandatory: context is untrusted, model tool calls and authorization decisions are disabled, citations are required, and low-confidence retrieval returns no answer.</div></div>
       </Dialog>
 
       {toast && <div className="toast" role="status"><Check />{toast}</div>}
@@ -1528,6 +1626,103 @@ function ConsoleNotFoundView({ path, onNavigate }: { path: string; onNavigate: (
   return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">Navigation</p><h1>Page not found</h1><p><code>{path}</code> is not a recognised console URL.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 }
 
+function widgetOriginLabel(origin: string): string {
+  try { return new URL(origin).host; } catch { return "Invalid origin"; }
+}
+
+function WidgetsView({ widgets, integrations, onCreate, onNavigate }: { widgets: APIWidget[]; integrations: APIIntegration[]; onCreate: () => void; onNavigate: (path: string) => void }) {
+  const integrationName = (id: string) => integrations.find((integration) => integration.id === id)?.display_name ?? id;
+  return <>
+    <PageHeading eyebrow="Agent access" title="Widgets" description="Authenticated assistants embedded in your customers' applications." action={<Button color="indigo" onClick={onCreate}><Plus data-slot="icon" />Create widget</Button>} />
+    <div className="widget-principle"><ShieldCheck /><span><strong>One identity boundary.</strong> Your backend authenticates the user; DokoSoko limits every session to the APIs configured here.</span></div>
+    <div className="resource-table widget-directory">
+      <div className="table-head widget-columns"><span>Widget</span><span>Application</span><span>APIs</span><span>Status</span><span /></div>
+      {widgets.map((widget) => <div className="table-row widget-columns" key={widget.id}>
+        <span className="resource-name"><span className="resource-icon"><MessageSquareText /></span><span><ConsoleLink path={entityPath("widget", widget.id)} onNavigate={onNavigate} className="entity-link"><strong>{widget.name}</strong></ConsoleLink><small>{widget.id}</small></span></span>
+        <span><strong className="cell-value">{widget.allowed_origins[0] ? widgetOriginLabel(widget.allowed_origins[0]) : "Not configured"}</strong><small className="cell-note">{widget.allowed_origins.length === 1 ? "1 allowed origin" : `${widget.allowed_origins.length} allowed origins`}</small></span>
+        <span><strong className="cell-value">{widget.integration_ids.length}</strong><small className="cell-note">{widget.integration_ids.slice(0, 2).map(integrationName).join(", ") || "No access"}</small></span>
+        <Badge color={widget.state === "active" ? "green" : widget.state === "disabled" ? "red" : "zinc"}>{widget.state}</Badge>
+        <ConsoleLink path={entityPath("widget", widget.id)} onNavigate={onNavigate} className="row-arrow" ariaLabel={`Open ${widget.name}`}><ChevronRight /></ConsoleLink>
+      </div>)}
+      {widgets.length === 0 && <div className="widget-empty"><span className="entity-missing-icon"><MessageSquareText /></span><div><h2>No widgets yet</h2><p>Create one authenticated widget, connect the APIs it needs, and verify the installation before going live.</p></div><Button color="indigo" onClick={onCreate}><Plus data-slot="icon" />Create widget</Button></div>}
+    </div>
+  </>;
+}
+
+function WidgetDetailView({ widget, integrations, assistantAvailable, busy, onUpdate, onSetState, onRotateSecret, onConfigureAssistant, onMessage, onNavigate }: { widget: APIWidget | null; integrations: APIIntegration[]; assistantAvailable: boolean; busy: boolean; onUpdate: (widget: APIWidget, input: APIWidgetInput) => Promise<APIWidget | null>; onSetState: (widget: APIWidget, state: "active" | "disabled") => Promise<APIWidget | null>; onRotateSecret: (widget: APIWidget) => void | Promise<void>; onConfigureAssistant: () => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const [name, setName] = useState(widget?.name ?? "");
+  const [origins, setOrigins] = useState(widget?.allowed_origins.join("\n") ?? "");
+  const [integrationIDs, setIntegrationIDs] = useState<string[]>(widget?.integration_ids ?? []);
+  const [theme, setTheme] = useState<"auto" | "light" | "dark">(widget?.appearance.theme ?? "auto");
+  const [accent, setAccent] = useState(widget?.appearance.accentColour ?? "");
+  const [greeting, setGreeting] = useState(widget?.appearance.greeting ?? "");
+  const [secrets, setSecrets] = useState<APIWidgetSecret[]>([]);
+  const [sessions, setSessions] = useState<APIWidgetSession[]>([]);
+  const [securityRefresh, setSecurityRefresh] = useState(0);
+  const [securityObservedAt, setSecurityObservedAt] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    if (!widget) return;
+    Promise.all([api.widgetSecrets(widget.id), api.widgetSessions(widget.id)])
+      .then(([nextSecrets, nextSessions]) => { if (!cancelled) { setSecrets(nextSecrets); setSessions(nextSessions); setSecurityObservedAt(Date.now()); } })
+      .catch(() => { if (!cancelled) { setSecrets([]); setSessions([]); } });
+    return () => { cancelled = true; };
+  }, [widget, securityRefresh]);
+  if (!widget) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Widget unavailable</h1><p>This widget does not exist or is still loading.</p></div><ConsoleLink path={sectionPath("widgets")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to widgets</ConsoleLink></section>;
+  const input: APIWidgetInput = {
+    name: name.trim(),
+    allowed_origins: origins.split(/[\n,]/).map((value) => value.trim()).filter(Boolean).sort(),
+    integration_ids: [...integrationIDs].sort(),
+    appearance: { theme, accent_colour: accent.trim() || undefined, launcher_position: widget.appearance.launcherPosition ?? "right", greeting: greeting.trim() || undefined },
+  };
+  const persistedInput: APIWidgetInput = {
+    name: widget.name,
+    allowed_origins: [...widget.allowed_origins].sort(),
+    integration_ids: [...widget.integration_ids].sort(),
+    appearance: { theme: widget.appearance.theme, accent_colour: widget.appearance.accentColour || undefined, launcher_position: widget.appearance.launcherPosition, greeting: widget.appearance.greeting || undefined },
+  };
+  const dirty = JSON.stringify(input) !== JSON.stringify(persistedInput);
+  const activeSecrets = secrets.filter((secret) => !secret.revoked_at);
+  const activeSessions = sessions.filter((session) => !session.revoked_at && new Date(session.expires_at).getTime() > securityObservedAt);
+  const frontendSnippet = `import { mountWidget } from "@dokosoko/widget";\n\nmountWidget({\n  widgetId: "${widget.id}",\n  getToken: async () => {\n    const response = await fetch("/api/dokosoko/widget-token", {\n      method: "POST",\n      credentials: "same-origin",\n    });\n    if (!response.ok) throw new Error("Sign in required");\n    return response.json();\n  },\n});`;
+  const backendSnippet = `import DokoSokoWidgetBackend from "@dokosoko/widget-backend";\n\nconst dokosoko = new DokoSokoWidgetBackend({\n  widgetSecret: process.env.DOKOSOKO_WIDGET_SECRET!,\n});\n\nexport async function POST(request: Request) {\n  const user = await requireAuthenticatedUser(request);\n  const token = await dokosoko.widgetSessions.create({\n    widgetId: "${widget.id}",\n    userId: user.id,\n    organizationId: user.organizationId,\n    origin: new URL(request.url).origin,\n  }, { idempotencyKey: crypto.randomUUID() });\n\n  return Response.json(token, {\n    headers: { "cache-control": "no-store" },\n  });\n}`;
+  const save = () => onUpdate(widget, input);
+  const activate = async () => {
+    const saved = dirty ? await onUpdate(widget, input) : widget;
+    if (saved) await onSetState(saved, "active");
+  };
+  const rotateSecret = async () => { await onRotateSecret(widget); setSecurityRefresh((value) => value + 1); };
+  const revokeSecret = async (secret: APIWidgetSecret) => {
+    try {
+      const updated = await api.revokeWidgetSecret(widget.id, secret.id);
+      setSecrets((values) => values.map((value) => value.id === updated.id ? updated : value));
+      onMessage("Widget secret revoked.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Could not revoke the widget secret."); }
+  };
+  const revokeSession = async (session: APIWidgetSession) => {
+    try {
+      const updated = await api.revokeWidgetSession(widget.id, session.id);
+      setSessions((values) => values.map((value) => value.id === updated.id ? updated : value));
+      onMessage("Widget session revoked.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Could not revoke the widget session."); }
+  };
+  return <>
+    <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("widgets")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to widgets</ConsoleLink><code>/widget/{widget.id}</code></div>
+    <PageHeading eyebrow="Authenticated widget" title={widget.name} description="Install once, authenticate through your backend, then expose only the APIs this assistant needs." action={widget.state === "active" ? <Button outline disabled={busy} onClick={() => onSetState(widget, "disabled")}>Disable</Button> : !assistantAvailable ? <Button outline onClick={onConfigureAssistant}>Configure assistant</Button> : <Button color="indigo" disabled={busy || !input.name || input.allowed_origins.length === 0 || input.integration_ids.length === 0} onClick={activate}>{busy ? "Saving…" : dirty ? "Save and activate" : "Activate widget"}</Button>} />
+    <div className="widget-status-line"><Badge color={widget.state === "active" ? "green" : widget.state === "disabled" ? "red" : "zinc"}>{widget.state}</Badge><code>{widget.id}</code><span>Revision {widget.revision}</span></div>
+    <ol className="widget-setup-steps">
+      <li className={input.allowed_origins.length ? "complete" : ""}><span>{input.allowed_origins.length ? <Check /> : "1"}</span><div><strong>Allow your application</strong><small>{input.allowed_origins.length ? `${input.allowed_origins.length} exact origin${input.allowed_origins.length === 1 ? "" : "s"}` : "Add the domains that may embed this widget."}</small></div></li>
+      <li className="complete"><span><Check /></span><div><strong>Authenticate users</strong><small>A server-only widget secret was created. Use it only through the backend SDK.</small></div></li>
+      <li className={input.integration_ids.length ? "complete" : ""}><span>{input.integration_ids.length ? <Check /> : "3"}</span><div><strong>Connect APIs</strong><small>{input.integration_ids.length ? `${input.integration_ids.length} API${input.integration_ids.length === 1 ? "" : "s"} allowed` : "No API access is granted by default."}</small></div></li>
+      <li className={assistantAvailable ? "complete" : ""}><span>{assistantAvailable ? <Check /> : "4"}</span><div><strong>Connect assistant</strong><small>{assistantAvailable ? "The hardened assistant model is ready." : "Configure an assistant model in Settings."}</small></div></li>
+      <li className={widget.state === "active" ? "complete" : ""}><span>{widget.state === "active" ? <Check /> : "5"}</span><div><strong>Go live</strong><small>{widget.state === "active" ? "New authenticated sessions are accepted." : "Activate after the installation is ready."}</small></div></li>
+    </ol>
+    <section className="panel widget-settings-panel"><div className="panel-heading"><div><h2>Access and appearance</h2><p>These settings are enforced again on every session and message.</p></div><Button color="indigo" disabled={busy || !dirty || !input.name || input.allowed_origins.length === 0 || (widget.state === "active" && input.integration_ids.length === 0)} onClick={save}>Save changes</Button></div><div className="widget-settings-grid"><div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={name} maxLength={120} onChange={(event) => setName(event.target.value)} /></label><label className="auth-field"><span>Allowed origins</span><textarea value={origins} onChange={(event) => setOrigins(event.target.value)} /><small>Exact origins only; one per line.</small></label><fieldset className="widget-api-picker"><legend>Allowed APIs</legend>{integrations.filter((integration) => integration.lifecycle === "active").map((integration) => <label key={integration.id}><input aria-label={`Allow ${integration.display_name}`} type="checkbox" checked={integrationIDs.includes(integration.id)} onChange={(event) => setIntegrationIDs((values) => event.target.checked ? [...values, integration.id] : values.filter((id) => id !== integration.id))} /><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span></label>)}{integrations.filter((integration) => integration.lifecycle === "active").length === 0 && <p className="empty-picker">Publish an API before activating this widget.</p>}</fieldset></div><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Theme</span><select value={theme} onChange={(event) => setTheme(event.target.value as typeof theme)}><option value="auto">Automatic</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label className="auth-field"><span>Accent</span><input value={accent} placeholder="#5b5cf0" onChange={(event) => setAccent(event.target.value)} /></label></div><label className="auth-field"><span>Greeting</span><input value={greeting} placeholder="How can I help?" maxLength={160} onChange={(event) => setGreeting(event.target.value)} /></label><div className="widget-live-preview" style={{ "--widget-accent": accent || "#5b5cf0" } as React.CSSProperties}><span>D</span><div><strong>{name || "Customer assistant"}</strong><small>{greeting || "How can I help?"}</small></div></div></div></div></section>
+    <section className="panel widget-install-panel"><div className="panel-heading"><div><h2>Install</h2><p>One browser loader and one authenticated backend endpoint.</p></div></div><div className="install-snippets"><article><div><strong>1. Browser</strong><CopyButton text={frontendSnippet} label="Copy browser code" onCopied={() => onMessage("Browser code copied.")} /></div><pre>{frontendSnippet}</pre></article><article><div><strong>2. Backend</strong><CopyButton text={backendSnippet} label="Copy backend code" onCopied={() => onMessage("Backend code copied.")} /></div><pre>{backendSnippet}</pre></article></div></section>
+    <section className="panel widget-security-panel"><div className="panel-heading"><div><h2>Security</h2><p>Rotate backend credentials deliberately and revoke a customer session immediately.</p></div><Button outline disabled={busy} onClick={rotateSecret}>Create new secret</Button></div><div className="widget-security-grid"><article><div className="widget-security-title"><KeyRound /><span><strong>Backend secrets</strong><small>{activeSecrets.length} active</small></span></div><div className="widget-security-list">{secrets.map((secret) => <div key={secret.id}><span><code>••••{secret.fingerprint}</code><small>{secret.last_used_at ? `Last used ${new Date(secret.last_used_at).toLocaleString()}` : `Created ${new Date(secret.created_at).toLocaleString()}`}</small></span>{secret.revoked_at ? <Badge color="zinc">Revoked</Badge> : <Button outline disabled={busy || activeSecrets.length < 2} onClick={() => revokeSecret(secret)}>Revoke</Button>}</div>)}{secrets.length === 0 && <p className="empty-picker">Credential metadata is unavailable.</p>}</div></article><article><div className="widget-security-title"><ShieldCheck /><span><strong>Recent sessions</strong><small>{activeSessions.length} active</small></span></div><div className="widget-security-list">{sessions.slice(0, 8).map((session) => { const expired = new Date(session.expires_at).getTime() <= securityObservedAt; return <div key={session.id}><span><strong>{session.user_id}</strong><small>{widgetOriginLabel(session.origin)} · expires {new Date(session.expires_at).toLocaleString()}</small></span>{session.revoked_at || expired ? <Badge color="zinc">{session.revoked_at ? "Revoked" : "Expired"}</Badge> : <Button outline disabled={busy} onClick={() => revokeSession(session)}>Revoke</Button>}</div>; })}{sessions.length === 0 && <p className="empty-picker">No customer sessions yet.</p>}</div></article></div></section>
+  </>;
+}
+
 function DistributionView({
   enabled,
   onEnabledChange,
@@ -1537,14 +1732,14 @@ function DistributionView({
   publicResourceCount,
   onVisibilityChange,
   onCopied,
-  publicSnippet,
-  privateSnippet,
   publicEndpoint,
   tenantName,
   publicAgentSetup,
   privateAgentSetup,
   onConfigureIdentity,
   onOpenSources,
+  widgetCount,
+  onOpenWidgets,
 }: {
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
@@ -1554,14 +1749,14 @@ function DistributionView({
   publicResourceCount: number;
   onVisibilityChange: (kind: "source", id: string) => void;
   onCopied: (label: string) => void;
-  publicSnippet: string;
-  privateSnippet: string;
   publicEndpoint: string;
   tenantName: string;
   publicAgentSetup: Distribution["agent_setup"]["public"];
   privateAgentSetup: Distribution["agent_setup"]["private"];
   onConfigureIdentity: () => void;
   onOpenSources: () => void;
+  widgetCount: number;
+  onOpenWidgets: () => void;
 }) {
   return <>
     <PageHeading eyebrow="Delivery" title="Agent access" description="Control how authenticated and public agents reach your APIs and knowledge." action={<Button outline disabled={!privateAgentSetup.available} onClick={() => window.open(privateAgentSetup.url, "_blank", "noopener,noreferrer")}><ExternalLink data-slot="icon" />Private MCP setup</Button>} />
@@ -1595,19 +1790,7 @@ function DistributionView({
       </div>
     </section>
 
-    <section className="section-block widgets-section">
-      <div className="section-heading"><div><h2>Copy widget</h2><p>Embed connector guidance in your developer portal or application. Snippets never contain a secret.</p></div></div>
-      <div className="widget-grid">
-        <article className={`widget-card ${!enabled ? "widget-disabled" : ""}`}>
-          <WidgetPreview kind="public" />
-          <div className="widget-copy"><Badge color="blue"><Globe2 />Public</Badge><h3>Public widget</h3><p>No sign-in. Answers only from public, published sources.</p>{!enabled && <div className="inline-warning"><TriangleAlert />Enable Public MCP before embedding.</div>}<CopyButton text={publicSnippet} label="Copy public widget" disabled={!enabled} onCopied={onCopied} /></div>
-        </article>
-        <article className="widget-card">
-          <WidgetPreview kind="private" />
-          <div className="widget-copy"><Badge color="violet"><LockKeyhole />Private</Badge><h3>Private widget</h3><p>Uses your identity flow for private knowledge, tools, provider resources, and credentials.</p><CopyButton text={privateSnippet} label="Copy private widget" onCopied={onCopied} /></div>
-        </article>
-      </div>
-    </section>
+    <section className="section-block widget-channel-card"><span className="icon-tile"><MessageSquareText /></span><div><h2>Embedded widgets</h2><p>Authenticated assistants for customer applications. Each widget has its own origins, server secret, and API allow-list.</p></div><Badge color={widgetCount > 0 ? "violet" : "zinc"}>{widgetCount}</Badge><Button outline onClick={onOpenWidgets}>{widgetCount > 0 ? "Manage widgets" : "Create widget"}<ChevronRight data-slot="icon" /></Button></section>
   </>;
 }
 
@@ -1632,11 +1815,6 @@ function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity
       <CopyButton text={setup.embed_html} label={`Copy ${kind} MCP button`} disabled={!setup.available} onCopied={() => onCopied(`${isPublic ? "Public" : "Private"} MCP button copied.`)} />
     </div>
   </article>;
-}
-
-function WidgetPreview({ kind }: { kind: "public" | "private" }) {
-  const privateWidget = kind === "private";
-  return <div className={`widget-preview ${privateWidget ? "dark-preview" : ""}`}><div className="mini-chat"><span className={`mini-brand ${privateWidget ? "light" : ""}`}>D</span><span><strong>{privateWidget ? "Acme developer assistant" : "Ask Acme"}</strong><small>{privateWidget ? "Signed in as Alex" : "Powered by DokoSoko"}</small></span><button type="button" aria-label="Close widget preview">×</button></div><div className={`mini-message ${privateWidget ? "dark-message" : ""}`}>{privateWidget ? "Show my sandbox credentials" : "How do I create an API key?"}</div><div className={`mini-answer ${privateWidget ? "dark-answer" : ""}`}>{privateWidget ? "I can provision credentials after checking your access." : "I can help with Acme&apos;s public documentation."}</div><div className={`mini-input ${privateWidget ? "dark-input" : ""}`}>Ask a question… <span>↑</span></div></div>;
 }
 
 function SourcesView({ sources, onAdd, onCrawl, onPublish, onVisibilityChange, onNavigate }: { sources: Source[]; onAdd: () => void; onCrawl: (id: string) => void; onPublish: (source: Source) => void; onVisibilityChange: (id: string) => void; onNavigate: (path: string) => void }) {

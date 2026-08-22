@@ -100,10 +100,12 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.match(source, /Make public/);
   assert.match(source, /available without authentication/);
   assert.match(source, /setPublicMCPEnabled\(false\)/);
-  assert.match(source, /api\.widgets\(product\.id\)/);
+  assert.match(source, /api\.widgets\(\)/);
+  assert.match(source, /api\.createWidget/);
+  assert.match(source, /api\.widgetSessions/);
   assert.match(source, /distribution\?\.public_mcp_endpoint/);
-  assert.match(source, /widgetSnippets\?\.public\.snippet/);
-  assert.match(source, /widgetSnippets\?\.private\.snippet/);
+  assert.match(source, /@dokosoko\/widget/);
+  assert.match(source, /@dokosoko\/widget-backend/);
   assert.match(source, /distribution\?\.agent_setup\?\.public/);
   assert.match(source, /distribution\?\.agent_setup\?\.private/);
   assert.match(source, /Copy MCP button/);
@@ -116,8 +118,8 @@ test("keeps private defaults and guarded public transitions in the client contra
   for (const placeholder of ["◉", "✳", "◆", "▣"]) assert.doesNotMatch(source, new RegExp(placeholder));
   assert.match(source, /disabled=\{!setup\.available\}/);
   assert.match(source, /Configure and activate customer identity/);
-  assert.match(source, /widgets\/\$\{product\.id\}\/public\.js/);
-  assert.match(source, /widgets\/\$\{product\.id\}\/private\.js/);
+  assert.doesNotMatch(source, /widgets\/\$\{product\.id\}\/public\.js/);
+  assert.doesNotMatch(source, /widgets\/\$\{product\.id\}\/private\.js/);
   assert.doesNotMatch(source, /dokosoko\.acme\.dev/);
   assert.match(packageJson, /"@headlessui\/react"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

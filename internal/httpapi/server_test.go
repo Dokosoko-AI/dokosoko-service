@@ -43,6 +43,12 @@ func (accessDoerStub) Do(request *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
 
+type widgetAssistantDoerStub struct{}
+
+func (widgetAssistantDoerStub) Do(request *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"Widget API."}}],"usage":{"total_tokens":12}}`)), Request: request}, nil
+}
+
 func newServer() http.Handler {
 	return httpapi.New(platform.New(store.NewMemory()), "https://dokosoko.example")
 }
@@ -60,6 +66,20 @@ func newCatalogServer(t *testing.T) http.Handler {
 	service := platform.NewWithVault(memory, vault)
 	broker := identity.NewBroker(memory, vault, "https://dokosoko.example", nil, nil, nil)
 	return httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", IdentityBroker: broker, Reporting: reporting.New(memory, vault), AllowDemoTokens: true})
+}
+
+func newWidgetServer(t *testing.T) http.Handler {
+	t.Helper()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x67}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, widgetAssistantDoerStub{})
+	if _, err := service.SaveLLMProfile(context.Background(), platform.LLMProfileInput{OrganisationID: "org_acme", ProductID: "prod_acme", Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "widget-assistant-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 512, DailyTokenBudget: 10000, Enabled: true}, platform.Actor{ID: "root"}); err != nil {
+		t.Fatal(err)
+	}
+	return httpapi.New(service, "https://dokosoko.example")
 }
 
 func newProductionAuthServer(t *testing.T) http.Handler {
@@ -729,37 +749,125 @@ func TestSupportReportingToolsRequireConsentQueueEncryptedReportsAndStayPrivate(
 	}
 }
 
-func TestWidgetSnippetsContainNoSecretAndPublicLoaderFollowsMCPState(t *testing.T) {
+func TestAuthenticatedWidgetSessionIsOriginBoundSingleUseAndSecretSafe(t *testing.T) {
 	t.Parallel()
-	handler := newServer()
-	w := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/widgets", "doko_admin_demo", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d", w.Code)
+	handler := newWidgetServer(t)
+	w := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"widget-api","version_key":"v1","display_name":"Widget API","description":"Widget test API","lifecycle":"active"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("integration status = %d, body = %s", w.Code, w.Body.String())
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+	var integration model.Integration
+	if err := json.Unmarshal(w.Body.Bytes(), &integration); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.ToLower(w.Body.String()), "token") || strings.Contains(w.Body.String(), "doko_private_demo") {
-		t.Fatalf("snippet response contains credential material: %s", w.Body.String())
+
+	w = request(t, handler, http.MethodPost, "/api/v1/widgets", "doko_admin_demo", `{"name":"Customer assistant","allowed_origins":["https://app.customer.example"],"integration_ids":["`+integration.ID+`"],"appearance":{"theme":"auto","launcher_position":"right"}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("widget status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"enabled":false`) || !strings.Contains(w.Body.String(), "/widgets/prod_acme/public.js") || !strings.Contains(w.Body.String(), "/widgets/prod_acme/private.js") {
-		t.Fatalf("widget response is incomplete: %s", w.Body.String())
+	var provisioned struct {
+		Widget model.Widget `json:"widget"`
+		Secret string       `json:"secret"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &provisioned); err != nil {
+		t.Fatal(err)
+	}
+	if provisioned.Widget.State != "draft" || !strings.HasPrefix(provisioned.Secret, "doko_wsk_") {
+		t.Fatalf("unexpected provisioning response: %s", w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodGet, "/widgets/prod_acme/public.js", "", "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("disabled public widget status = %d", w.Code)
+	w = request(t, handler, http.MethodPost, "/api/v1/widgets/"+provisioned.Widget.ID+"/activate", "doko_admin_demo", `{"revision":1}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"active"`) {
+		t.Fatalf("activate status = %d, body = %s", w.Code, w.Body.String())
 	}
-	request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/distribution", "doko_admin_demo", `{"public_mcp_enabled":true,"acknowledge_public":true,"revision":1}`)
-	w = request(t, handler, http.MethodGet, "/widgets/prod_acme/public.js", "", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "dokosoko:open") {
-		t.Fatalf("enabled public widget status = %d, body = %s", w.Code, w.Body.String())
+	w = request(t, handler, http.MethodGet, "/v1/widgets/"+provisioned.Widget.ID+"/configuration", "", "")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), integration.ID) {
+		t.Fatalf("public config status = %d, body = %s", w.Code, w.Body.String())
 	}
-	request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/distribution", "doko_admin_demo", `{"public_mcp_enabled":false,"revision":2}`)
-	w = request(t, handler, http.MethodGet, "/widgets/prod_acme/public.js", "", "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("re-disabled public widget status = %d, body = %s", w.Code, w.Body.String())
+
+	w = request(t, handler, http.MethodPost, "/v1/widget-sessions", provisioned.Secret, `{"widgetId":"`+provisioned.Widget.ID+`","userId":"user-123","organizationId":"org-456","origin":"https://app.customer.example"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("bootstrap status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var bootstrap struct {
+		BootstrapToken string `json:"bootstrapToken"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(bootstrap.BootstrapToken, "doko_wbt_") {
+		t.Fatalf("invalid bootstrap: %s", w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodPost, "/v1/widget-sessions/exchange", "", `{"bootstrapToken":"`+bootstrap.BootstrapToken+`","origin":"https://evil.example"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("wrong-origin exchange status = %d, body = %s", w.Code, w.Body.String())
+	}
+	// Origin denial consumes the one-time token so a stolen token cannot be retried.
+	w = request(t, handler, http.MethodPost, "/v1/widget-sessions/exchange", "", `{"bootstrapToken":"`+bootstrap.BootstrapToken+`","origin":"https://app.customer.example"}`)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("consumed bootstrap status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	createIdempotentBootstrap := func() *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/v1/widget-sessions", bytes.NewBufferString(`{"widgetId":"`+provisioned.Widget.ID+`","userId":"user-123","organizationId":"org-456","origin":"https://app.customer.example"}`))
+		r.Header.Set("Authorization", "Bearer "+provisioned.Secret)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Idempotency-Key", "login-session-123456")
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, r)
+		return result
+	}
+	w = createIdempotentBootstrap()
+	if err := json.Unmarshal(w.Body.Bytes(), &bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	firstIdempotentBody := w.Body.String()
+	if retry := createIdempotentBootstrap(); retry.Code != http.StatusCreated || retry.Body.String() != firstIdempotentBody {
+		t.Fatalf("idempotent retry status = %d, first=%s retry=%s", retry.Code, firstIdempotentBody, retry.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/v1/widget-sessions/exchange", "", `{"bootstrapToken":"`+bootstrap.BootstrapToken+`","origin":"https://app.customer.example"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("exchange status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var session struct {
+		SessionToken string `json:"sessionToken"`
+		SessionID    string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodGet, "/v1/widget-session", session.SessionToken, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"userId":"user-123"`) || !strings.Contains(w.Body.String(), integration.ID) {
+		t.Fatalf("session status = %d, body = %s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/v1/widget-chat", session.SessionToken, `{"message":"What can I access?"}`)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/event-stream; charset=utf-8" || !strings.Contains(w.Body.String(), `{"text":"Widget"}`) || !strings.Contains(w.Body.String(), `{"text":" API."}`) || !strings.Contains(w.Body.String(), "[DONE]") {
+		t.Fatalf("widget chat status = %d, headers=%v body=%s", w.Code, w.Header(), w.Body.String())
+	}
+
+	w = request(t, handler, http.MethodGet, "/api/v1/widgets/"+provisioned.Widget.ID+"/secrets", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), provisioned.Secret) || strings.Contains(w.Body.String(), "digest") {
+		t.Fatalf("secret list leaked material: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/widgets/"+provisioned.Widget.ID+"/sessions", "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), session.SessionID) || strings.Contains(w.Body.String(), session.SessionToken) || strings.Contains(w.Body.String(), "digest") {
+		t.Fatalf("session list status = %d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodDelete, "/api/v1/widgets/"+provisioned.Widget.ID+"/sessions/"+session.SessionID, "doko_admin_demo", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("session revoke status = %d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/v1/widget-session", session.SessionToken, "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status = %d body=%s", w.Code, w.Body.String())
+	}
+	if legacy := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/widgets", "doko_admin_demo", ""); legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy widget endpoint status = %d", legacy.Code)
+	}
+	if legacy := request(t, handler, http.MethodGet, "/widgets/prod_acme/public.js", "", ""); legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy loader status = %d", legacy.Code)
 	}
 }
 

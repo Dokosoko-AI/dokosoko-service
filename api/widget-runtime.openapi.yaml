@@ -1,0 +1,286 @@
+openapi: 3.1.0
+info:
+  title: DokoSoko Widget Runtime API
+  version: 1.0.0-beta.1
+  description: >-
+    Authenticated data-plane contract for DokoSoko widgets. Customer backends
+    create one-time bootstrap tokens with a widget secret. Browser-facing
+    widget hosts exchange those tokens for short-lived sessions. Widget access
+    is always the intersection of the active widget configuration and the
+    authenticated session; callers cannot request additional integrations.
+servers:
+  - url: https://api.dokosoko.com
+tags:
+  - name: Widget configuration
+  - name: Widget sessions
+paths:
+  /v1/widgets/{widgetId}/configuration:
+    get:
+      operationId: retrieveWidgetConfiguration
+      tags: [Widget configuration]
+      summary: Retrieve safe public widget configuration
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/WidgetID"
+      responses:
+        "200":
+          description: Public presentation configuration for an active widget.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestID" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WidgetConfiguration" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/widget-sessions:
+    post:
+      operationId: createWidgetSession
+      x-stainless-method: widget_sessions.create
+      tags: [Widget sessions]
+      summary: Create a one-time widget bootstrap token
+      description: >-
+        Call only from the customer's authenticated backend. userId and
+        organizationId must be derived from that backend's trusted session,
+        never copied from an untrusted browser request.
+      security:
+        - widgetSecret: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateWidgetSessionRequest" }
+            examples:
+              authenticatedUser:
+                value:
+                  widgetId: 0a4ff131-7f2c-46d9-a43c-356e21092f7d
+                  userId: customer-user-123
+                  organizationId: customer-org-456
+                  origin: https://app.customer.example
+      responses:
+        "201":
+          description: Short-lived, single-use bootstrap token.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestID" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateWidgetSessionResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /v1/widget-sessions/exchange:
+    post:
+      operationId: exchangeWidgetSession
+      tags: [Widget sessions]
+      summary: Exchange a bootstrap token for a widget session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExchangeWidgetSessionRequest" }
+      responses:
+        "201":
+          description: Short-lived widget bearer session.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestID" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExchangeWidgetSessionResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/widget-session:
+    get:
+      operationId: retrieveCurrentWidgetSession
+      tags: [Widget sessions]
+      summary: Resolve the current widget session and effective integrations
+      security:
+        - widgetSession: []
+      responses:
+        "200":
+          description: Current, active widget session.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestID" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WidgetSession" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/widget-chat:
+    post:
+      operationId: createWidgetChatResponse
+      tags: [Widget sessions]
+      summary: Stream a response within the current widget authorization
+      description: >-
+        DokoSoko resolves the active widget configuration on every request.
+        The caller cannot select integrations or expand the session's access.
+        An enabled, hardened assistant LLM profile is required. The model
+        receives only the current question and safe metadata for integrations
+        on the widget allow-list; customer identity values and credentials are
+        not included.
+        Each SSE data frame is either a JSON object with a text property or the
+        terminal marker [DONE].
+      security:
+        - widgetSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WidgetChatRequest" }
+      responses:
+        "200":
+          description: AI SDK-compatible text stream consumed by the hosted Chat SDK adapter.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestID" }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    widgetSecret:
+      type: http
+      scheme: bearer
+      bearerFormat: doko_wsk
+      description: Server-only credential scoped to one widget.
+    widgetSession:
+      type: http
+      scheme: bearer
+      bearerFormat: doko_wss
+      description: Short-lived session held in widget iframe memory.
+  parameters:
+    WidgetID:
+      name: widgetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        Unique key for safely retrying this exact request. Reusing a key with
+        different identity or origin values creates a different token and is
+        therefore not a valid retry.
+      schema: { type: string, minLength: 1, maxLength: 255, pattern: "^[!-~]+$" }
+  headers:
+    RequestID:
+      description: Correlation identifier for support and audit records.
+      schema: { type: string, minLength: 1, maxLength: 200 }
+  responses:
+    Error:
+      description: The request failed.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+  schemas:
+    CreateWidgetSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        widgetId: { type: string, format: uuid }
+        userId:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Stable customer-side user identifier derived by the trusted backend.
+        organizationId:
+          type: string
+          maxLength: 255
+          description: Optional stable customer-side organization identifier.
+        origin:
+          type: string
+          format: uri
+          maxLength: 500
+          description: Exact HTTPS application origin; localhost HTTP is accepted for development.
+      required: [widgetId, userId, origin]
+    CreateWidgetSessionResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        bootstrapToken:
+          type: string
+          pattern: "^doko_wbt_[A-Za-z0-9_-]{40,}$"
+          description: Single-use credential. Never place it in a URL or persistent browser storage.
+        expiresAt: { type: string, format: date-time }
+      required: [bootstrapToken, expiresAt]
+    ExchangeWidgetSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        bootstrapToken: { type: string, pattern: "^doko_wbt_[A-Za-z0-9_-]{40,}$" }
+        origin: { type: string, format: uri, maxLength: 500 }
+      required: [bootstrapToken, origin]
+    ExchangeWidgetSessionResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionToken:
+          type: string
+          pattern: "^doko_wss_[A-Za-z0-9_-]{40,}$"
+          description: Short-lived bearer held only in iframe memory.
+        sessionId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+      required: [sessionToken, sessionId, expiresAt]
+    WidgetAppearance:
+      type: object
+      additionalProperties: false
+      properties:
+        theme: { type: string, enum: [auto, light, dark] }
+        accentColour: { type: string, pattern: "^#[0-9A-Fa-f]{6}$" }
+        launcherPosition: { type: string, enum: [left, right] }
+        greeting: { type: string, maxLength: 160 }
+      required: [theme, launcherPosition]
+    WidgetConfiguration:
+      type: object
+      additionalProperties: false
+      properties:
+        widgetId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        appearance: { $ref: "#/components/schemas/WidgetAppearance" }
+        protocolVersion: { const: "1" }
+      required: [widgetId, name, appearance, protocolVersion]
+    WidgetSession:
+      type: object
+      additionalProperties: false
+      properties:
+        widgetId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        userId: { type: string, minLength: 1, maxLength: 255 }
+        organizationId: { type: string, maxLength: 255 }
+        origin: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+        integrationIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+      required: [widgetId, sessionId, userId, organizationId, origin, expiresAt, integrationIds]
+    WidgetChatRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        message: { type: string, minLength: 1, maxLength: 4000 }
+      required: [message]
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          properties:
+            code: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+            message: { type: string }
+            details: { type: [object, "null"], additionalProperties: true }
+          required: [code, message, details]
+      required: [error]

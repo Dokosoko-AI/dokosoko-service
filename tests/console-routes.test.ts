@@ -13,7 +13,7 @@ import {
 } from "../app/lib/console-routes";
 
 test("primary console sections have canonical, round-trippable URLs", () => {
-  for (const section of ["product", "distribution", "runs", "settings"] as const) {
+  for (const section of ["product", "distribution", "widgets", "runs", "settings"] as const) {
     const path = SECTION_PATHS[section];
     assert.equal(sectionPath(section as keyof typeof SECTION_PATHS), path);
     assert.deepEqual(parseConsolePath(path), { kind: "section", section, path });
@@ -37,6 +37,8 @@ test("entity URLs encode UIDs and resolve to their owning section", () => {
   assert.equal(entityPath("integration", uid), "/integration/voice%20api%2Fv3");
   assert.deepEqual(parseConsolePath(entityPath("integration", uid)), routeForEntity("integration", uid));
   assert.equal(routeForEntity("source", "src_docs").section, "sources");
+  assert.equal(entityPath("widget", "widget_123"), "/widget/widget_123");
+  assert.equal(routeForEntity("widget", "widget_123").section, "widgets");
   assert.equal(routeForEntity("report", "report_123").section, "reporting");
 });
 

@@ -8,6 +8,7 @@ The public contracts are deliberately small:
 - [Customer Identity Integration API](api/identity-integration-openapi.yaml) — the optional delegated-user access evaluation contract.
 - [Backend Integration API](api/backend-integration-openapi.yaml) — the separately authenticated service-to-service support delivery contract.
 - [Access Provider API](api/provider-openapi.yaml) — optional provider-owned instance and credential lifecycle.
+- [Widget Runtime API](api/widget-runtime.openapi.yaml) — short-lived authenticated sessions and streamed assistant replies for embedded customer applications.
 
 Each integration contract is independently deployable and independently code-generatable. A vendor can generate a server stub for the contract it implements; DokoSoko does not require a package. There is no package registry abstraction and no per-operation hook configuration. If an integration is an HTTP API, expose it as an API or a tool. Client libraries are optional generated artifacts outside the runtime contract.
 
@@ -59,6 +60,7 @@ Usage, if a vendor chooses to expose it, is an ordinary API operation or tool. I
 | OAuth | `/oauth/register`, `/oauth/authorize`, `/oauth/callback`, `/oauth/token` |
 | Private MCP | `/mcp` |
 | Public MCP | `/mcp/public` |
+| Widget runtime | `/v1/widgets/{widgetID}/configuration`, `/v1/widget-sessions`, `/v1/widget-chat` |
 | Agent setup prompts | `/agent-setup/private/prompt.md`, `/agent-setup/public/prompt.md` |
 | Administration | `/api/v1/...` |
 

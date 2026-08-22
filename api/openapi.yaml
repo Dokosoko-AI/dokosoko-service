@@ -1390,22 +1390,94 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AnalyticsSummary" }
         "400": { $ref: "#/components/responses/Error" }
-  /api/v1/products/{product_id}/widgets:
-    parameters:
-      - $ref: "#/components/parameters/ProductID"
+  /api/v1/widgets:
     get:
-      operationId: getWidgetSnippets
+      operationId: listWidgets
       responses:
         "200":
-          description: Public and private widget snippets. Snippets contain public identifiers only and never a credential.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  public: { $ref: "#/components/schemas/WidgetSnippet" }
-                  private: { $ref: "#/components/schemas/WidgetSnippet" }
-                required: [public, private]
+          description: Authenticated widget delivery channels.
+          content: { application/json: { schema: { $ref: "#/components/schemas/WidgetList" } } }
+    post:
+      operationId: createWidget
+      description: Creates a draft widget and returns its first server-only secret exactly once.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateWidgetRequest" } } } }
+      responses:
+        "201": { description: Widget and one-time secret., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetProvisioning" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getWidget
+      responses:
+        "200": { description: Widget configuration., content: { application/json: { schema: { $ref: "#/components/schemas/Widget" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateWidget
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateWidgetRequest" } } } }
+      responses:
+        "200": { description: Updated widget., content: { application/json: { schema: { $ref: "#/components/schemas/Widget" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}/activate:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: activateWidget
+      description: Requires at least one allowed origin, one active integration, and an enabled assistant LLM profile.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionRequest" } } } }
+      responses:
+        "200": { description: Active widget., content: { application/json: { schema: { $ref: "#/components/schemas/Widget" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}/disable:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: disableWidget
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RevisionRequest" } } } }
+      responses:
+        "200": { description: Disabled widget., content: { application/json: { schema: { $ref: "#/components/schemas/Widget" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}/secrets:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listWidgetSecrets
+      responses:
+        "200": { description: Non-secret credential metadata., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetSecretList" } } } }
+    post:
+      operationId: createWidgetSecret
+      description: Returns a new server-only credential exactly once. Existing credentials remain active until explicitly revoked.
+      responses:
+        "201": { description: One-time secret and its metadata., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetSecretProvisioning" } } } }
+  /api/v1/widgets/{widget_id}/secrets/{secret_id}:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+      - { name: secret_id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: revokeWidgetSecret
+      responses:
+        "200": { description: Revoked credential metadata., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetSecret" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}/sessions:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listWidgetSessions
+      responses:
+        "200": { description: Recent widget sessions without bearer material., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetSessionList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}/sessions/{session_id}:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+      - { name: session_id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: revokeWidgetSession
+      responses:
+        "200": { description: Revoked widget session metadata., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetSession" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /.well-known/oauth-authorization-server:
     get:
       security: []
@@ -1519,23 +1591,6 @@ paths:
             text/markdown:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Error" }
-  /widgets/{product_id}/{asset}:
-    parameters:
-      - $ref: "#/components/parameters/ProductID"
-      - name: asset
-        in: path
-        required: true
-        schema: { type: string, enum: [public.js, private.js] }
-    get:
-      security: []
-      operationId: widgetLoader
-      responses:
-        "200":
-          description: Secret-free JavaScript loader.
-          content:
-            text/javascript:
-              schema: { type: string }
-        "404": { description: Invalid asset, product missing, or Public MCP disabled for public.js. }
   /mcp/public:
     parameters:
       - $ref: "#/components/parameters/MCPProtocolVersion"
@@ -3269,14 +3324,122 @@ components:
         embed_html: { type: string, description: Self-contained secret-free anchor markup. }
         contains_secret: { const: false }
       required: [available, url, embed_html, contains_secret]
-    WidgetSnippet:
+    WidgetAppearance:
       type: object
       additionalProperties: false
       properties:
-        enabled: { type: boolean }
-        snippet: { type: string }
-        contains_secret: { const: false }
-      required: [enabled, snippet, contains_secret]
+        theme: { type: string, enum: [auto, light, dark] }
+        accentColour: { type: string, pattern: "^#[0-9A-Fa-f]{6}$" }
+        launcherPosition: { type: string, enum: [left, right] }
+        greeting: { type: string, maxLength: 160 }
+      required: [theme, launcherPosition]
+    Widget:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        state: { type: string, enum: [draft, active, disabled] }
+        allowed_origins: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uri } }
+        integration_ids: { type: array, uniqueItems: true, items: { type: string } }
+        appearance: { $ref: "#/components/schemas/WidgetAppearance" }
+        revision: { type: integer, minimum: 1 }
+        activated_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, name, state, allowed_origins, integration_ids, appearance, revision, created_at, updated_at]
+    WidgetList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Widget" } }
+      required: [items]
+    WidgetInputProperties:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        allowed_origins: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uri } }
+        integration_ids: { type: array, uniqueItems: true, items: { type: string } }
+        appearance:
+          type: object
+          additionalProperties: false
+          properties:
+            theme: { type: string, enum: [auto, light, dark] }
+            accent_colour: { type: string, pattern: "^#[0-9A-Fa-f]{6}$" }
+            launcher_position: { type: string, enum: [left, right] }
+            greeting: { type: string, maxLength: 160 }
+      required: [name, allowed_origins, integration_ids, appearance]
+    CreateWidgetRequest:
+      allOf:
+        - $ref: "#/components/schemas/WidgetInputProperties"
+      unevaluatedProperties: false
+    UpdateWidgetRequest:
+      allOf:
+        - $ref: "#/components/schemas/WidgetInputProperties"
+        - type: object
+          properties:
+            revision: { type: integer, minimum: 1 }
+          required: [revision]
+      unevaluatedProperties: false
+    RevisionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, minimum: 1 }
+      required: [revision]
+    WidgetProvisioning:
+      type: object
+      additionalProperties: false
+      properties:
+        widget: { $ref: "#/components/schemas/Widget" }
+        secret: { type: string, pattern: "^doko_wsk_[A-Za-z0-9_-]{40,}$", writeOnly: true }
+      required: [widget, secret]
+    WidgetSecret:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        widget_id: { type: string }
+        fingerprint: { type: string }
+        last_used_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, widget_id, fingerprint, created_at]
+    WidgetSecretList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/WidgetSecret" } }
+      required: [items]
+    WidgetSecretProvisioning:
+      type: object
+      additionalProperties: false
+      properties:
+        secret: { type: string, pattern: "^doko_wsk_[A-Za-z0-9_-]{40,}$", writeOnly: true }
+        credential: { $ref: "#/components/schemas/WidgetSecret" }
+      required: [secret, credential]
+    WidgetSession:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        widget_id: { type: string }
+        user_id: { type: string }
+        customer_organisation_id: { type: string }
+        origin: { type: string, format: uri }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: [string, "null"], format: date-time }
+      required: [id, widget_id, user_id, origin, expires_at, created_at]
+    WidgetSessionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/WidgetSession" } }
+      required: [items]
     JSONRPCRequest:
       type: object
       additionalProperties: false
