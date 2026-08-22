@@ -1553,7 +1553,7 @@ function DistributionView({
     </section>
 
     <section className="section-block agent-setup-section">
-      <div className="section-heading"><div><h2>Copy agent setup button</h2><p>Add a secret-free onboarding link to your developer portal. It opens exact setup instructions for Codex, Claude Code, Cursor, and OpenCode.</p></div></div>
+      <div className="section-heading"><div><h2>Copy MCP button</h2><p>Add a secret-free MCP connection button to your developer portal. It opens exact setup instructions for Codex, Claude Code, Cursor, and OpenCode.</p></div></div>
       <div className="agent-setup-grid">
         <AgentSetupCard kind="public" tenantName={tenantName} setup={publicAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
         <AgentSetupCard kind="private" tenantName={tenantName} setup={privateAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
@@ -1613,7 +1613,7 @@ function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity
       <p>{isPublic ? "Anonymous, read-only access to explicitly public resources." : "Customer access through the configured identity provider and browser OAuth."}</p>
       {setup.available ? <a className="agent-setup-guide-link" href={setup.url} target="_blank" rel="noopener noreferrer"><ExternalLink />Open setup instructions</a> : <div className="inline-warning"><TriangleAlert />{isPublic ? "Enable Public MCP before distributing this button." : "Configure and activate customer identity before distributing this button."}</div>}
       {!isPublic && !setup.available && <Button outline className="agent-identity-action" onClick={onConfigureIdentity}>Configure identity</Button>}
-      <CopyButton text={setup.embed_html} label={`Copy ${kind} button`} disabled={!setup.available} onCopied={() => onCopied(`${isPublic ? "Public" : "Private"} agent setup button copied.`)} />
+      <CopyButton text={setup.embed_html} label={`Copy ${kind} MCP button`} disabled={!setup.available} onCopied={() => onCopied(`${isPublic ? "Public" : "Private"} MCP button copied.`)} />
     </div>
   </article>;
 }

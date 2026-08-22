@@ -106,8 +106,8 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.match(source, /widgetSnippets\?\.private\.snippet/);
   assert.match(source, /distribution\?\.agent_setup\?\.public/);
   assert.match(source, /distribution\?\.agent_setup\?\.private/);
-  assert.match(source, /Copy agent setup button/);
-  assert.match(source, /Copy \$\{kind\} button/);
+  assert.match(source, /Copy MCP button/);
+  assert.match(source, /Copy \$\{kind\} MCP button/);
   for (const client of ["Codex", "Claude Code", "Cursor", "OpenCode"]) assert.match(source, new RegExp(`aria-label="${client}"`));
   assert.match(source, /disabled=\{!setup\.available\}/);
   assert.match(source, /Configure and activate customer identity/);
