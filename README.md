@@ -56,12 +56,13 @@ Usage, if a vendor chooses to expose it, is an ordinary API operation or tool. I
 | Health and readiness | `/healthz`, `/readyz` |
 | OAuth authorization-server metadata | `/.well-known/oauth-authorization-server` |
 | MCP protected-resource metadata | `/.well-known/oauth-protected-resource/mcp` |
-| OAuth | `/oauth/authorize`, `/oauth/callback`, `/oauth/token` |
+| OAuth | `/oauth/register`, `/oauth/authorize`, `/oauth/callback`, `/oauth/token` |
 | Private MCP | `/mcp` |
 | Public MCP | `/mcp/public` |
+| Agent setup prompts | `/agent-setup/private/prompt.md`, `/agent-setup/public/prompt.md` |
 | Administration | `/api/v1/...` |
 
-Private MCP requires the optional identity integration and a resource-bound DokoSoko token. Public MCP is independent of identity: it is anonymous, read-only, rate-limited, and globally disabled by default. An Integration is private by default and appears publicly only after an explicit per-Integration visibility acknowledgement and publication. The global Public MCP setting is the emergency master switch. Both endpoints implement only the pinned Stateless MCPv2 protocol revision.
+Private MCP requires the optional identity integration and a resource-bound DokoSoko token. Downstream clients use either Client ID Metadata Documents or idempotent RFC 7591 public-client registration; both require PKCE and exact redirect matching, and neither issues a client secret. Public MCP is independent of identity: it is anonymous, read-only, rate-limited, and globally disabled by default. An Integration is private by default and appears publicly only after an explicit per-Integration visibility acknowledgement and publication. The global Public MCP setting is the emergency master switch. Both endpoints implement only the pinned Stateless MCPv2 protocol revision.
 
 ## Run locally
 
@@ -99,9 +100,9 @@ Required configuration:
 | `DOKOSOKO_DATABASE_PASSWORD` | Compose PostgreSQL password. |
 | `DOKOSOKO_MASTER_KEY` | Standard-base64 encoding of exactly 32 random bytes. Keep it stable and backed up. |
 | `DOKOSOKO_SETUP_TOKEN` | Strong one-time first-run secret. Remove or rotate it after setup. |
-| `DOKOSOKO_PUBLIC_URL` | Exact external origin. HTTPS is required outside localhost. |
+| `DOKOSOKO_PUBLIC_URL` | Exact external origin used for OAuth metadata, MCP endpoints, setup prompts, and copied embed HTML. HTTPS is required outside localhost. |
 
-Back up PostgreSQL, artifact data, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly.
+Back up PostgreSQL, artifact data, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly. Configure the browser-reachable origin here—not an internal container hostname—because copied setup buttons deliberately ignore request `Host` and forwarding headers.
 
 ### Breaking v3 upgrade
 

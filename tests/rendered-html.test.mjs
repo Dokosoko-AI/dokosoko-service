@@ -57,6 +57,7 @@ test("keeps the global navigation to four obvious destinations", async () => {
   }
   assert.match(styles, /\.sidebar > nav/);
   assert.match(styles, /\.entity-detail-grid/);
+  assert.match(styles, /\.agent-setup-grid/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
 });
 
@@ -103,6 +104,13 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.match(source, /distribution\?\.public_mcp_endpoint/);
   assert.match(source, /widgetSnippets\?\.public\.snippet/);
   assert.match(source, /widgetSnippets\?\.private\.snippet/);
+  assert.match(source, /distribution\?\.agent_setup\?\.public/);
+  assert.match(source, /distribution\?\.agent_setup\?\.private/);
+  assert.match(source, /Copy agent setup button/);
+  assert.match(source, /Copy \$\{kind\} button/);
+  for (const client of ["Codex", "Claude Code", "Cursor", "OpenCode"]) assert.match(source, new RegExp(`aria-label="${client}"`));
+  assert.match(source, /disabled=\{!setup\.available\}/);
+  assert.match(source, /Configure and activate customer identity/);
   assert.match(source, /widgets\/\$\{product\.id\}\/public\.js/);
   assert.match(source, /widgets\/\$\{product\.id\}\/private\.js/);
   assert.doesNotMatch(source, /dokosoko\.acme\.dev/);

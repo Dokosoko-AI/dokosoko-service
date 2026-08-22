@@ -1429,14 +1429,34 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OAuthProtectedResourceMetadata" }
         "404": { $ref: "#/components/responses/Error" }
+  /oauth/register:
+    post:
+      security: []
+      operationId: registerOAuthClient
+      description: Registers a public PKCE client under RFC 7591. Identical normalized metadata returns the same durable client identifier, making network retries safe. No client secret is issued.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OAuthClientRegistrationRequest" }
+      responses:
+        "201":
+          description: Idempotent public-client registration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthClientRegistration" }
+        "400": { $ref: "#/components/responses/OAuthError" }
+        "404": { $ref: "#/components/responses/OAuthError" }
+        "429": { $ref: "#/components/responses/OAuthRateLimit" }
+        "503": { $ref: "#/components/responses/OAuthError" }
   /oauth/authorize:
     get:
       security: []
       operationId: oauthAuthorize
-      description: Starts authorization-code OAuth using HTTPS client metadata documents, mandatory RFC 8707 resource binding, PKCE S256, upstream vendor OIDC, and fail-closed access evaluation.
+      description: Starts authorization-code OAuth using a registered public client or HTTPS client metadata document, mandatory RFC 8707 resource binding, PKCE S256, upstream vendor OIDC, and fail-closed access evaluation.
       parameters:
         - { name: response_type, in: query, required: true, schema: { const: code } }
-        - { name: client_id, in: query, required: true, schema: { type: string, format: uri, description: HTTPS URL of the client's OAuth metadata document. } }
+        - { name: client_id, in: query, required: true, schema: { type: string, description: Durable RFC 7591 client identifier or HTTPS URL of a client metadata document. } }
         - { name: redirect_uri, in: query, required: true, schema: { type: string, format: uri } }
         - { name: resource, in: query, required: true, schema: { type: string, format: uri, description: Exact Private MCP resource URL advertised by protected-resource metadata. } }
         - { name: scope, in: query, required: false, schema: { type: string, default: "mcp:private" } }
@@ -1482,6 +1502,23 @@ paths:
         "400": { $ref: "#/components/responses/OAuthError" }
         "502": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /agent-setup/{kind}/prompt.md:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [public, private] }
+    get:
+      security: []
+      operationId: getAgentSetupPrompt
+      description: Secret-free, client-specific setup instructions derived from the canonical configured public origin. Public setup is unavailable while Public MCP is disabled; private setup is unavailable while customer identity is inactive.
+      responses:
+        "200":
+          description: Setup prompt for Codex, Claude Code, Cursor, and OpenCode.
+          content:
+            text/markdown:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Error" }
   /widgets/{product_id}/{asset}:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1665,6 +1702,21 @@ components:
             additionalProperties: false
             properties:
               error: { type: string }
+              error_description: { type: string }
+            required: [error, error_description]
+    OAuthRateLimit:
+      description: OAuth client registration rate limit exceeded. Retrying after the advertised delay is safe.
+      headers:
+        Retry-After:
+          required: true
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              error: { const: temporarily_unavailable }
               error_description: { type: string }
             required: [error, error_description]
     MFAEnrollment:
@@ -2699,6 +2751,7 @@ components:
         issuer: { type: string, format: uri }
         authorization_endpoint: { type: string, format: uri }
         token_endpoint: { type: string, format: uri }
+        registration_endpoint: { type: string, format: uri }
         response_types_supported: { type: array, items: { type: string }, contains: { const: code } }
         grant_types_supported: { type: array, items: { type: string }, contains: { const: authorization_code } }
         code_challenge_methods_supported: { type: array, items: { type: string }, contains: { const: S256 } }
@@ -2706,7 +2759,31 @@ components:
         scopes_supported: { type: array, items: { type: string }, contains: { const: "mcp:private" } }
         resource_parameter_supported: { const: true }
         client_id_metadata_document_supported: { const: true }
-      required: [issuer, authorization_endpoint, token_endpoint, response_types_supported, grant_types_supported, code_challenge_methods_supported, token_endpoint_auth_methods_supported, scopes_supported, resource_parameter_supported, client_id_metadata_document_supported]
+      required: [issuer, authorization_endpoint, token_endpoint, registration_endpoint, response_types_supported, grant_types_supported, code_challenge_methods_supported, token_endpoint_auth_methods_supported, scopes_supported, resource_parameter_supported, client_id_metadata_document_supported]
+    OAuthClientRegistrationRequest:
+      type: object
+      additionalProperties: true
+      properties:
+        redirect_uris: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, format: uri } }
+        client_name: { type: string, maxLength: 200 }
+        token_endpoint_auth_method: { type: string, const: none, default: none }
+        grant_types: { type: array, maxItems: 1, items: { const: authorization_code } }
+        response_types: { type: array, maxItems: 1, items: { const: code } }
+        scope: { type: string, const: "mcp:private" }
+      required: [redirect_uris]
+    OAuthClientRegistration:
+      type: object
+      additionalProperties: false
+      properties:
+        client_id: { type: string }
+        client_id_issued_at: { type: integer, format: int64 }
+        client_name: { type: string }
+        redirect_uris: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, format: uri } }
+        token_endpoint_auth_method: { type: string, const: none }
+        grant_types: { type: array, items: { const: authorization_code } }
+        response_types: { type: array, items: { const: code } }
+        scope: { type: string, const: "mcp:private" }
+      required: [client_id, client_id_issued_at, client_name, redirect_uris, token_endpoint_auth_method, grant_types, response_types, scope]
     OAuthProtectedResourceMetadata:
       type: object
       additionalProperties: true
@@ -3174,7 +3251,24 @@ components:
         public_mcp_endpoint: { type: string, format: uri }
         private_mcp_endpoint: { type: string, format: uri }
         public_sources: { type: integer, minimum: 0 }
-      required: [product, public_mcp_endpoint, private_mcp_endpoint, public_sources]
+        agent_setup:
+          type: object
+          additionalProperties: false
+          properties:
+            public: { $ref: "#/components/schemas/AgentSetupLink" }
+            private: { $ref: "#/components/schemas/AgentSetupLink" }
+          required: [public, private]
+      required: [product, public_mcp_endpoint, private_mcp_endpoint, public_sources, agent_setup]
+    AgentSetupLink:
+      type: object
+      additionalProperties: false
+      properties:
+        available: { type: boolean }
+        unavailable_reason: { type: string, enum: [public_mcp_disabled, identity_unavailable] }
+        url: { type: string, format: uri }
+        embed_html: { type: string, description: Self-contained secret-free anchor markup. }
+        contains_secret: { const: false }
+      required: [available, url, embed_html, contains_secret]
     WidgetSnippet:
       type: object
       additionalProperties: false

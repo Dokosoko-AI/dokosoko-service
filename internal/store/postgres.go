@@ -1089,6 +1089,28 @@ func (p *Postgres) SaveIdentityProvider(ctx context.Context, value identity.Prov
 	return updated, err
 }
 
+func scanOAuthClient(row interface{ Scan(...any) error }) (identity.OAuthClient, error) {
+	var value identity.OAuthClient
+	err := row.Scan(&value.ClientID, &value.DeploymentID, &value.ClientName, &value.RedirectURIs, &value.CreatedAt)
+	return value, databaseError(err)
+}
+
+const oauthClientSelect = `SELECT client_id, deployment_id::text, client_name, redirect_uris, created_at FROM mcp_oauth_clients`
+
+func (p *Postgres) OAuthClient(ctx context.Context, deploymentID, clientID string) (identity.OAuthClient, error) {
+	return scanOAuthClient(p.pool.QueryRow(ctx, oauthClientSelect+` WHERE deployment_id=$1 AND client_id=$2`, deploymentID, clientID))
+}
+
+func (p *Postgres) CreateOAuthClient(ctx context.Context, value identity.OAuthClient) (identity.OAuthClient, error) {
+	created, err := scanOAuthClient(p.pool.QueryRow(ctx, `INSERT INTO mcp_oauth_clients(client_id,deployment_id,client_name,redirect_uris) VALUES($1,$2,$3,$4) ON CONFLICT(client_id) DO UPDATE SET client_id=excluded.client_id WHERE mcp_oauth_clients.deployment_id=excluded.deployment_id AND mcp_oauth_clients.client_name=excluded.client_name AND mcp_oauth_clients.redirect_uris=excluded.redirect_uris RETURNING client_id,deployment_id::text,client_name,redirect_uris,created_at`, value.ClientID, value.DeploymentID, value.ClientName, value.RedirectURIs))
+	if errors.Is(err, ErrNotFound) {
+		if _, lookupErr := p.OAuthClient(ctx, value.DeploymentID, value.ClientID); lookupErr == nil {
+			return identity.OAuthClient{}, ErrConflict
+		}
+	}
+	return created, err
+}
+
 func scanCustomerAccount(row interface{ Scan(...any) error }) (identity.CustomerAccount, error) {
 	var value identity.CustomerAccount
 	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Issuer, &value.ExternalID, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt, &value.LastAuthenticatedAt)

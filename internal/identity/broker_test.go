@@ -301,6 +301,19 @@ func TestAccessEvaluationRejectsPrivateResolution(t *testing.T) {
 	}
 }
 
+func TestBrokerAcceptsDurablyRegisteredPublicClient(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	registeredID := "mcp_client_0123456789abcdefghijklmnopqrstuvwxyz"
+	if _, err := memory.CreateOAuthClient(context.Background(), identity.OAuthClient{ClientID: registeredID, DeploymentID: productID, ClientName: "Cursor", RedirectURIs: []string{redirect}}); err != nil {
+		t.Fatal(err)
+	}
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, &identity.HTTPClientMetadataResolver{})
+	redirectURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: registeredID, RedirectURI: redirect, Resource: resource, Scope: "mcp:private", State: "client-state", CodeChallenge: challenge(strings.Repeat("v", 48))})
+	if err != nil || !strings.HasPrefix(redirectURL, "https://idp.example/authorize?") {
+		t.Fatalf("registered client redirect = %q, error = %v", redirectURL, err)
+	}
+}
+
 func TestClientMetadataResolverRequiresExactMetadata(t *testing.T) {
 	metadataURL := "https://client.example/oauth/client-metadata.json"
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

@@ -213,6 +213,19 @@ function CopyButton({ text, label, disabled = false, onCopied }: { text: string;
   return <Button outline className="full" disabled={disabled} onClick={copy}><Copy data-slot="icon" />{label}</Button>;
 }
 
+function escapeEmbedHTML(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
+}
+
+function buildAgentSetupEmbedHTML(tenantName: string, setupURL: string, kind: "public" | "private") {
+  const name = escapeEmbedHTML(tenantName);
+  const url = escapeEmbedHTML(setupURL);
+  const label = kind === "public" ? "Public" : "Private";
+  const chipColor = kind === "public" ? "#4338ca" : "#3f3f46";
+  const chipBackground = kind === "public" ? "#eef2ff" : "#f4f4f5";
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" aria-label="Connect your agent to ${name} using ${kind} MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to ${name}</span><span style="padding:4px 8px;border-radius:999px;color:${chipColor};background:${chipBackground};font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">${label}</span><span role="img" aria-label="Codex" title="Codex" data-agent-client="codex" style="display:grid;place-items:center;width:25px;height:25px;border-radius:50%;color:#fff;background:#18181b;font-size:15px">◉</span><span role="img" aria-label="Claude Code" title="Claude Code" data-agent-client="claude-code" style="display:grid;place-items:center;width:25px;height:25px;color:#d97757;font-size:24px">✳</span><span role="img" aria-label="Cursor" title="Cursor" data-agent-client="cursor" style="display:grid;place-items:center;width:25px;height:25px;color:#18181b;font-size:21px">◆</span><span role="img" aria-label="OpenCode" title="OpenCode" data-agent-client="opencode" style="display:grid;place-items:center;width:25px;height:25px;color:#18181b;font-size:22px">▣</span></a>`;
+}
+
 function deploymentAsLegacyProduct(value: APIDeployment): APIProduct {
   return { id: value.id, organisation_id: value.organisation_id, name: value.name, slug: value.slug, description: value.description, default_version_policy: value.default_release_policy, catalog_revision: value.catalog_revision, require_promotion_approval: value.require_promotion_approval, public_mcp_enabled: value.public_mcp_enabled, revision: value.revision };
 }
@@ -1077,6 +1090,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const publicEndpoint = distribution?.public_mcp_endpoint ?? "/mcp/public";
   const publicSnippet = widgetSnippets?.public.snippet ?? `<script async src="/widgets/${product.id}/public.js" data-product="${product.id}"></script>`;
   const privateSnippet = widgetSnippets?.private.snippet ?? `<script async src="/widgets/${product.id}/private.js" data-product="${product.id}"></script>`;
+  const publicAgentSetupURL = distribution?.agent_setup?.public.url ?? "/agent-setup/public/prompt.md";
+  const privateAgentSetupURL = distribution?.agent_setup?.private.url ?? "/agent-setup/private/prompt.md";
+  const publicAgentSetup = distribution?.agent_setup?.public ?? { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, publicAgentSetupURL, "public"), contains_secret: false as const };
+  const privateAgentSetup = distribution?.agent_setup?.private ?? { available: identityConfig?.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, privateAgentSetupURL, "private"), contains_secret: false as const };
   const mcpConnectionReady = Boolean(mcpName.trim() && mcpNamespace.trim() && mcpEndpoint.trim() && (mcpAuthMode !== "service" || mcpCredential.trim()) && (mcpAuthMode !== "delegated_oauth" || (mcpOAuthClientID.trim() && mcpOAuthClientSecret.trim() && mcpOAuthIssuer.trim() && mcpAuthorizationURL.trim() && mcpTokenURL.trim())));
   const activeNavigation = navigation.find((item) => item.sections.some((candidate) => candidate.id === section));
   const entityDetail = useMemo<EntityDetail | null>(() => {
@@ -1212,6 +1229,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
               publicSnippet={publicSnippet}
               privateSnippet={privateSnippet}
               publicEndpoint={publicEndpoint}
+              tenantName={product.name}
+              publicAgentSetup={publicAgentSetup}
+              privateAgentSetup={privateAgentSetup}
+              onConfigureIdentity={() => navigateToSection("settings")}
               onOpenSources={() => navigateToSection("sources")}
             />
           )}
@@ -1501,6 +1522,10 @@ function DistributionView({
   publicSnippet,
   privateSnippet,
   publicEndpoint,
+  tenantName,
+  publicAgentSetup,
+  privateAgentSetup,
+  onConfigureIdentity,
   onOpenSources,
 }: {
   enabled: boolean;
@@ -1514,13 +1539,25 @@ function DistributionView({
   publicSnippet: string;
   privateSnippet: string;
   publicEndpoint: string;
+  tenantName: string;
+  publicAgentSetup: Distribution["agent_setup"]["public"];
+  privateAgentSetup: Distribution["agent_setup"]["private"];
+  onConfigureIdentity: () => void;
   onOpenSources: () => void;
 }) {
   return <>
-    <PageHeading eyebrow="Delivery" title="Agent access" description="Control how authenticated and public agents reach your APIs and knowledge." action={<Button outline><ExternalLink data-slot="icon" />Private MCP setup</Button>} />
+    <PageHeading eyebrow="Delivery" title="Agent access" description="Control how authenticated and public agents reach your APIs and knowledge." action={<Button outline disabled={!privateAgentSetup.available} onClick={() => window.open(privateAgentSetup.url, "_blank", "noopener,noreferrer")}><ExternalLink data-slot="icon" />Private MCP setup</Button>} />
     <section className={`public-mcp-card ${enabled ? "enabled" : ""}`}>
       <div className="public-mcp-copy"><div className="icon-tile"><Globe2 /></div><div><div className="title-row"><h2>Public MCP</h2><Badge color={enabled ? "green" : "zinc"}>{enabled ? "Live" : "Off"}</Badge></div><p>Offer an authentication-free, read-only MCP endpoint. Its server-side policy can retrieve only published sources that you explicitly mark public.</p><div className="endpoint"><code>{publicEndpoint}</code><button type="button" aria-label="Copy public MCP endpoint" onClick={() => { navigator.clipboard.writeText(publicEndpoint); onCopied("Public MCP endpoint copied."); }}><Copy />Copy</button></div></div></div>
       <div className="switch-stack"><Switch checked={enabled} onChange={onEnabledChange} label="Enable Public MCP" /><small>{enabled ? "Accepting anonymous requests" : "Disabled by default"}</small></div>
+    </section>
+
+    <section className="section-block agent-setup-section">
+      <div className="section-heading"><div><h2>Copy agent setup button</h2><p>Add a secret-free onboarding link to your developer portal. It opens exact setup instructions for Codex, Claude Code, Cursor, and OpenCode.</p></div></div>
+      <div className="agent-setup-grid">
+        <AgentSetupCard kind="public" tenantName={tenantName} setup={publicAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
+        <AgentSetupCard kind="private" tenantName={tenantName} setup={privateAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
+      </div>
     </section>
 
     <section className="section-block">
@@ -1554,6 +1591,31 @@ function DistributionView({
       </div>
     </section>
   </>;
+}
+
+function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity }: { kind: "public" | "private"; tenantName: string; setup: Distribution["agent_setup"]["public"]; onCopied: (label: string) => void; onConfigureIdentity: () => void }) {
+  const isPublic = kind === "public";
+  const title = isPublic ? "Public MCP button" : "Private MCP button";
+  return <article className={`agent-setup-card ${!setup.available ? "agent-setup-disabled" : ""}`}>
+    <div className={`agent-setup-preview ${isPublic ? "public-agent-preview" : "private-agent-preview"}`}>
+      <a href={setup.available ? setup.url : undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!setup.available} aria-label={`Connect your agent to ${tenantName} using ${kind} MCP`} onClick={(event) => { if (!setup.available) event.preventDefault(); }}>
+        <span className="agent-setup-label">Connect your agent to {tenantName}</span>
+        <span className={`agent-access-chip ${kind}`}>{isPublic ? "Public" : "Private"}</span>
+        <span className="agent-client-mark codex-mark" role="img" aria-label="Codex" title="Codex">◉</span>
+        <span className="agent-client-mark claude-mark" role="img" aria-label="Claude Code" title="Claude Code">✳</span>
+        <span className="agent-client-mark cursor-mark" role="img" aria-label="Cursor" title="Cursor">◆</span>
+        <span className="agent-client-mark opencode-mark" role="img" aria-label="OpenCode" title="OpenCode">▣</span>
+      </a>
+    </div>
+    <div className="agent-setup-copy">
+      <Badge color={isPublic ? "blue" : "violet"}>{isPublic ? <Globe2 /> : <LockKeyhole />}{isPublic ? "Public" : "Private"}</Badge>
+      <h3>{title}</h3>
+      <p>{isPublic ? "Anonymous, read-only access to explicitly public resources." : "Customer access through the configured identity provider and browser OAuth."}</p>
+      {setup.available ? <a className="agent-setup-guide-link" href={setup.url} target="_blank" rel="noopener noreferrer"><ExternalLink />Open setup instructions</a> : <div className="inline-warning"><TriangleAlert />{isPublic ? "Enable Public MCP before distributing this button." : "Configure and activate customer identity before distributing this button."}</div>}
+      {!isPublic && !setup.available && <Button outline className="agent-identity-action" onClick={onConfigureIdentity}>Configure identity</Button>}
+      <CopyButton text={setup.embed_html} label={`Copy ${kind} button`} disabled={!setup.available} onCopied={() => onCopied(`${isPublic ? "Public" : "Private"} agent setup button copied.`)} />
+    </div>
+  </article>;
 }
 
 function WidgetPreview({ kind }: { kind: "public" | "private" }) {

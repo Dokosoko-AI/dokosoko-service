@@ -134,6 +134,8 @@ type Store interface {
 	SaveLLMProfile(context.Context, model.LLMProfile) (model.LLMProfile, error)
 	IdentityProvider(context.Context, string) (identity.ProviderConfig, error)
 	SaveIdentityProvider(context.Context, identity.ProviderConfig) (identity.ProviderConfig, error)
+	OAuthClient(context.Context, string, string) (identity.OAuthClient, error)
+	CreateOAuthClient(context.Context, identity.OAuthClient) (identity.OAuthClient, error)
 	CustomerAccounts(context.Context, string, string, int) ([]identity.CustomerAccount, bool, error)
 	CustomerAccount(context.Context, string, string) (identity.CustomerAccount, error)
 	UpdateCustomerAccount(context.Context, identity.CustomerAccount, int64) (identity.CustomerAccount, error)

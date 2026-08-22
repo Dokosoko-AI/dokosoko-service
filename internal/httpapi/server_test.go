@@ -58,7 +58,8 @@ func newCatalogServer(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	service := platform.NewWithVault(memory, vault)
-	return httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", Reporting: reporting.New(memory, vault), AllowDemoTokens: true})
+	broker := identity.NewBroker(memory, vault, "https://dokosoko.example", nil, nil, nil)
+	return httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", IdentityBroker: broker, Reporting: reporting.New(memory, vault), AllowDemoTokens: true})
 }
 
 func newProductionAuthServer(t *testing.T) http.Handler {
@@ -759,6 +760,96 @@ func TestWidgetSnippetsContainNoSecretAndPublicLoaderFollowsMCPState(t *testing.
 	w = request(t, handler, http.MethodGet, "/widgets/prod_acme/public.js", "", "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("re-disabled public widget status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentSetupDistributionAndPromptsFollowReadiness(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+
+	distribution := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/distribution", "doko_admin_demo", "")
+	if distribution.Code != http.StatusOK {
+		t.Fatalf("distribution status = %d, body = %s", distribution.Code, distribution.Body.String())
+	}
+	var payload struct {
+		AgentSetup map[string]struct {
+			Available         bool   `json:"available"`
+			UnavailableReason string `json:"unavailable_reason"`
+			URL               string `json:"url"`
+			EmbedHTML         string `json:"embed_html"`
+			ContainsSecret    bool   `json:"contains_secret"`
+		} `json:"agent_setup"`
+	}
+	if err := json.Unmarshal(distribution.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.AgentSetup["public"].Available || payload.AgentSetup["public"].UnavailableReason != "public_mcp_disabled" {
+		t.Fatalf("unexpected public setup state: %#v", payload.AgentSetup["public"])
+	}
+	private := payload.AgentSetup["private"]
+	if !private.Available || private.ContainsSecret || private.URL != "https://dokosoko.example/agent-setup/private/prompt.md" {
+		t.Fatalf("unexpected private setup state: %#v", private)
+	}
+	for _, marker := range []string{"data-dokosoko-agent-setup=", "data-agent-client=\"codex\"", "data-agent-client=\"claude-code\"", "data-agent-client=\"cursor\"", "data-agent-client=\"opencode\""} {
+		if !strings.Contains(private.EmbedHTML, marker) {
+			t.Fatalf("private embed omitted %q: %s", marker, private.EmbedHTML)
+		}
+	}
+
+	publicPrompt := request(t, handler, http.MethodGet, "/agent-setup/public/prompt.md", "", "")
+	if publicPrompt.Code != http.StatusNotFound {
+		t.Fatalf("disabled public prompt status = %d, body = %s", publicPrompt.Code, publicPrompt.Body.String())
+	}
+	privatePrompt := request(t, handler, http.MethodGet, "/agent-setup/private/prompt.md", "", "")
+	if privatePrompt.Code != http.StatusOK || !strings.HasPrefix(privatePrompt.Header().Get("Content-Type"), "text/markdown") {
+		t.Fatalf("private prompt status = %d, content-type = %q, body = %s", privatePrompt.Code, privatePrompt.Header().Get("Content-Type"), privatePrompt.Body.String())
+	}
+	for _, expected := range []string{"https://dokosoko.example/mcp", "## Codex", "## Claude Code", "## Cursor", "## OpenCode", "codex mcp login acme-private", "opencode mcp auth acme-private"} {
+		if !strings.Contains(privatePrompt.Body.String(), expected) {
+			t.Fatalf("private prompt omitted %q: %s", expected, privatePrompt.Body.String())
+		}
+	}
+	if strings.Contains(privatePrompt.Body.String(), "doko_at_") || strings.Contains(privatePrompt.Body.String(), "doko_private_demo") {
+		t.Fatalf("private setup leaked a credential: %s", privatePrompt.Body.String())
+	}
+
+	request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/distribution", "doko_admin_demo", `{"public_mcp_enabled":true,"acknowledge_public":true,"revision":1}`)
+	publicPrompt = request(t, handler, http.MethodGet, "/agent-setup/public/prompt.md", "", "")
+	if publicPrompt.Code != http.StatusOK || !strings.Contains(publicPrompt.Body.String(), "https://dokosoko.example/mcp/public") || strings.Contains(publicPrompt.Body.String(), "mcp login") || strings.Contains(publicPrompt.Body.String(), "mcp auth") {
+		t.Fatalf("enabled public prompt status = %d, body = %s", publicPrompt.Code, publicPrompt.Body.String())
+	}
+
+	withoutIdentity := request(t, newServer(), http.MethodGet, "/agent-setup/private/prompt.md", "", "")
+	if withoutIdentity.Code != http.StatusNotFound {
+		t.Fatalf("identity-free private prompt status = %d, body = %s", withoutIdentity.Code, withoutIdentity.Body.String())
+	}
+}
+
+func TestDynamicOAuthClientRegistrationIsPublicIdempotentAndPKCEOnly(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+	body := `{"client_name":"Cursor","redirect_uris":["http://localhost:8787/callback","https://www.cursor.com/agents/mcp/oauth/callback"],"token_endpoint_auth_method":"none","grant_types":["authorization_code"],"response_types":["code"],"scope":"mcp:private"}`
+	first := request(t, handler, http.MethodPost, "/oauth/register", "", body)
+	if first.Code != http.StatusCreated || first.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("registration status = %d, body = %s", first.Code, first.Body.String())
+	}
+	var firstRegistration struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstRegistration); err != nil || !strings.HasPrefix(firstRegistration.ClientID, "mcp_client_") {
+		t.Fatalf("registration = %#v, error = %v", firstRegistration, err)
+	}
+	retry := request(t, handler, http.MethodPost, "/oauth/register", "", body)
+	if retry.Code != http.StatusCreated || !strings.Contains(retry.Body.String(), `"client_id":"`+firstRegistration.ClientID+`"`) {
+		t.Fatalf("idempotent retry status = %d, body = %s", retry.Code, retry.Body.String())
+	}
+	invalid := request(t, handler, http.MethodPost, "/oauth/register", "", `{"redirect_uris":["https://client.example/callback#fragment"]}`)
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "invalid_redirect_uri") {
+		t.Fatalf("invalid redirect status = %d, body = %s", invalid.Code, invalid.Body.String())
+	}
+	metadata := request(t, handler, http.MethodGet, "/.well-known/oauth-authorization-server", "", "")
+	if !strings.Contains(metadata.Body.String(), `"registration_endpoint":"https://dokosoko.example/oauth/register"`) {
+		t.Fatalf("authorization metadata omitted registration endpoint: %s", metadata.Body.String())
 	}
 }
 

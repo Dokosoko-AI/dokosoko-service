@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -62,6 +63,7 @@ type Memory struct {
 	rootEmail                map[string]string
 	sessions                 map[string]auth.SessionRecord
 	idps                     map[string]identity.ProviderConfig
+	oauthClients             map[string]identity.OAuthClient
 	customerAccounts         map[string]identity.CustomerAccount
 	oauthState               map[string]identity.OAuthState
 	oauthCodes               map[string]identity.OAuthCode
@@ -125,6 +127,7 @@ func NewMemory() *Memory {
 		rootEmail:        make(map[string]string),
 		sessions:         make(map[string]auth.SessionRecord),
 		idps:             make(map[string]identity.ProviderConfig),
+		oauthClients:     make(map[string]identity.OAuthClient),
 		customerAccounts: make(map[string]identity.CustomerAccount),
 		oauthState:       make(map[string]identity.OAuthState),
 		oauthCodes:       make(map[string]identity.OAuthCode),
@@ -1665,6 +1668,36 @@ func (m *Memory) SaveIdentityProvider(_ context.Context, value identity.Provider
 	value.UpdatedAt = time.Now().UTC()
 	value.Scopes = append([]string(nil), value.Scopes...)
 	m.idps[value.DeploymentID] = value
+	return value, nil
+}
+
+func (m *Memory) OAuthClient(_ context.Context, deploymentID, clientID string) (identity.OAuthClient, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.oauthClients[clientID]
+	if !ok || value.DeploymentID != deploymentID {
+		return identity.OAuthClient{}, ErrNotFound
+	}
+	value.RedirectURIs = append([]string(nil), value.RedirectURIs...)
+	return value, nil
+}
+
+func (m *Memory) CreateOAuthClient(_ context.Context, value identity.OAuthClient) (identity.OAuthClient, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasDeployment || value.DeploymentID != m.deployment.ID {
+		return identity.OAuthClient{}, ErrNotFound
+	}
+	if current, ok := m.oauthClients[value.ClientID]; ok {
+		if current.DeploymentID != value.DeploymentID || current.ClientName != value.ClientName || !slices.Equal(current.RedirectURIs, value.RedirectURIs) {
+			return identity.OAuthClient{}, ErrConflict
+		}
+		current.RedirectURIs = append([]string(nil), current.RedirectURIs...)
+		return current, nil
+	}
+	value.CreatedAt = time.Now().UTC()
+	value.RedirectURIs = append([]string(nil), value.RedirectURIs...)
+	m.oauthClients[value.ClientID] = value
 	return value, nil
 }
 

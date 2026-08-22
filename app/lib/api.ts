@@ -514,6 +514,20 @@ export type Distribution = {
   public_mcp_endpoint: string;
   private_mcp_endpoint: string;
   public_sources: number;
+  agent_setup: APIAgentSetupLinks;
+};
+
+export type APIAgentSetupLink = {
+  available: boolean;
+  unavailable_reason?: "public_mcp_disabled" | "identity_unavailable";
+  url: string;
+  embed_html: string;
+  contains_secret: false;
+};
+
+export type APIAgentSetupLinks = {
+  public: APIAgentSetupLink;
+  private: APIAgentSetupLink;
 };
 
 export type APIWidgetSnippet = {

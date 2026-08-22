@@ -68,6 +68,10 @@ type ClientMetadataResolver interface {
 	Resolve(context.Context, string) (ClientMetadata, error)
 }
 
+type ClientRegistry interface {
+	OAuthClient(context.Context, string, string) (OAuthClient, error)
+}
+
 type Broker struct {
 	repository      Repository
 	vault           *secrets.Vault
@@ -150,6 +154,10 @@ func validRedirect(value string) bool {
 	return parsed.Scheme == "https" || (parsed.Scheme == "http" && (parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "localhost"))
 }
 
+// ValidRedirectURI applies the redirect policy shared by CIMD and dynamically
+// registered public MCP clients.
+func ValidRedirectURI(value string) bool { return validRedirect(value) }
+
 func normalizeScopes(raw string) ([]string, bool) {
 	fields := strings.Fields(raw)
 	if len(fields) == 0 {
@@ -177,7 +185,7 @@ func (b *Broker) Begin(ctx context.Context, request AuthorizationRequest) (strin
 	if request.Resource != b.canonicalResource(request.ProductID) {
 		return "", ErrInvalidOAuth
 	}
-	metadata, err := b.clients.Resolve(ctx, request.ClientID)
+	metadata, err := b.resolveClient(ctx, request.ProductID, request.ClientID)
 	if err != nil || metadata.ClientID != request.ClientID || !contains(metadata.RedirectURIs, request.RedirectURI) {
 		return "", ErrInvalidOAuth
 	}
@@ -202,6 +210,19 @@ func (b *Broker) Begin(ctx context.Context, request AuthorizationRequest) (strin
 	}
 	callback := b.publicURL + "/oauth/callback"
 	return b.upstream.AuthorizationURL(ctx, config, rawState, nonce, pkce(upstreamVerifier), callback)
+}
+
+func (b *Broker) resolveClient(ctx context.Context, productID, clientID string) (ClientMetadata, error) {
+	if registry, ok := b.repository.(ClientRegistry); ok {
+		registered, err := registry.OAuthClient(ctx, productID, clientID)
+		if err == nil {
+			return ClientMetadata{ClientID: registered.ClientID, ClientName: registered.ClientName, RedirectURIs: registered.RedirectURIs}, nil
+		}
+		if strings.HasPrefix(clientID, "mcp_client_") {
+			return ClientMetadata{}, ErrInvalidOAuth
+		}
+	}
+	return b.clients.Resolve(ctx, clientID)
 }
 
 func minTime(values ...time.Time) time.Time {

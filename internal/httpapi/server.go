@@ -15,10 +15,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
@@ -102,6 +104,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/session", server.currentSession)
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", server.oauthAuthorizationServerMetadata)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", server.oauthProtectedResourceMetadata)
+	mux.HandleFunc("POST /oauth/register", server.oauthRegister)
 	mux.HandleFunc("GET /oauth/authorize", server.oauthAuthorize)
 	mux.HandleFunc("GET /oauth/callback", server.oauthCallback)
 	mux.HandleFunc("POST /oauth/token", server.oauthToken)
@@ -109,6 +112,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("/api/v1/", server.adminAPI)
 	mux.HandleFunc("POST /mcp/public", server.publicMCP)
 	mux.HandleFunc("POST /mcp", server.privateMCP)
+	mux.HandleFunc("GET /agent-setup/{kind}/prompt.md", server.agentSetupPrompt)
 	mux.HandleFunc("GET /widgets/{productID}/{asset}", server.widgetScript)
 	if options.UIDirectory != "" {
 		mux.Handle("/", staticConsole(options.UIDirectory))
@@ -560,6 +564,7 @@ func (s *Server) oauthAuthorizationServerMetadata(w http.ResponseWriter, _ *http
 		"issuer":                                s.baseURL,
 		"authorization_endpoint":                s.baseURL + "/oauth/authorize",
 		"token_endpoint":                        s.baseURL + "/oauth/token",
+		"registration_endpoint":                 s.baseURL + "/oauth/register",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"code_challenge_methods_supported":      []string{"S256"},
@@ -570,7 +575,89 @@ func (s *Server) oauthAuthorizationServerMetadata(w http.ResponseWriter, _ *http
 	})
 }
 
+type oauthRegistrationRequest struct {
+	RedirectURIs            []string `json:"redirect_uris"`
+	ClientName              string   `json:"client_name"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	GrantTypes              []string `json:"grant_types"`
+	ResponseTypes           []string `json:"response_types"`
+	Scope                   string   `json:"scope"`
+}
+
+func onlyRegistrationValue(values []string, expected string) bool {
+	return len(values) == 0 || (len(values) == 1 && values[0] == expected)
+}
+
+func (s *Server) oauthRegister(w http.ResponseWriter, r *http.Request) {
+	if s.identityBroker == nil {
+		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Private MCP identity is not available.")
+		return
+	}
+	if !s.allowFixedWindow("oauth-register|"+remoteHost(r.RemoteAddr), 30, time.Now().UTC()) {
+		w.Header().Set("Retry-After", "60")
+		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable", "Client registration request limit exceeded.")
+		return
+	}
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		oauthError(w, http.StatusNotFound, "invalid_client_metadata", "Private MCP is not configured.")
+		return
+	}
+	provider, err := s.service.Store().IdentityProvider(r.Context(), deployment.ID)
+	if err != nil || provider.State != "active" {
+		oauthError(w, http.StatusNotFound, "invalid_client_metadata", "Private MCP identity is not available.")
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, (64<<10)+1))
+	if err != nil || len(raw) > 64<<10 {
+		oauthError(w, http.StatusBadRequest, "invalid_client_metadata", "Client metadata is too large.")
+		return
+	}
+	var input oauthRegistrationRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(&input); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		oauthError(w, http.StatusBadRequest, "invalid_client_metadata", "Client metadata must be one JSON object.")
+		return
+	}
+	input.ClientName = strings.TrimSpace(input.ClientName)
+	if len(input.RedirectURIs) == 0 || len(input.RedirectURIs) > 20 || utf8.RuneCountInString(input.ClientName) > 200 || (input.TokenEndpointAuthMethod != "" && input.TokenEndpointAuthMethod != "none") || !onlyRegistrationValue(input.GrantTypes, "authorization_code") || !onlyRegistrationValue(input.ResponseTypes, "code") || (input.Scope != "" && input.Scope != "mcp:private") {
+		oauthError(w, http.StatusBadRequest, "invalid_client_metadata", "Only public authorization-code clients using PKCE and the mcp:private scope are supported.")
+		return
+	}
+	redirects := append([]string(nil), input.RedirectURIs...)
+	sort.Strings(redirects)
+	for index, redirect := range redirects {
+		if !identity.ValidRedirectURI(redirect) || (index > 0 && redirects[index-1] == redirect) {
+			oauthError(w, http.StatusBadRequest, "invalid_redirect_uri", "Redirect URIs must be unique HTTPS or loopback HTTP URLs without fragments.")
+			return
+		}
+	}
+	fingerprint := sha256.Sum256([]byte(deployment.ID + "\x00" + input.ClientName + "\x00" + strings.Join(redirects, "\x00")))
+	clientID := "mcp_client_" + base64.RawURLEncoding.EncodeToString(fingerprint[:24])
+	client, err := s.service.Store().CreateOAuthClient(r.Context(), identity.OAuthClient{ClientID: clientID, DeploymentID: deployment.ID, ClientName: input.ClientName, RedirectURIs: redirects})
+	if err != nil {
+		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Client registration could not be completed. Retrying the same request is safe.")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"client_id":                  client.ClientID,
+		"client_id_issued_at":        client.CreatedAt.Unix(),
+		"client_name":                client.ClientName,
+		"redirect_uris":              client.RedirectURIs,
+		"token_endpoint_auth_method": "none",
+		"grant_types":                []string{"authorization_code"},
+		"response_types":             []string{"code"},
+		"scope":                      "mcp:private",
+	})
+}
+
 func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	if s.identityBroker == nil {
+		http.NotFound(w, r)
+		return
+	}
 	deployment, err := s.service.Store().Deployment(r.Context())
 	if err != nil {
 		http.NotFound(w, r)
@@ -1898,6 +1985,7 @@ func (s *Server) distribution(w http.ResponseWriter, r *http.Request, productID 
 			"public_mcp_endpoint":  s.baseURL + "/mcp/public",
 			"private_mcp_endpoint": s.baseURL + "/mcp",
 			"public_sources":       publicSources,
+			"agent_setup":          s.agentSetupLinks(r.Context(), product),
 		})
 	case http.MethodPatch:
 		var input distributionPatch

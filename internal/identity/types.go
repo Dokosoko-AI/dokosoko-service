@@ -142,3 +142,14 @@ type ClientMetadata struct {
 	ClientName   string   `json:"client_name,omitempty"`
 	RedirectURIs []string `json:"redirect_uris"`
 }
+
+// OAuthClient is a public downstream MCP client registration. It contains no
+// credential: DokoSoko supports public clients with PKCE and exact redirect URI
+// matching only.
+type OAuthClient struct {
+	ClientID     string
+	DeploymentID string
+	ClientName   string
+	RedirectURIs []string
+	CreatedAt    time.Time
+}
