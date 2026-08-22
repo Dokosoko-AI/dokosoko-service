@@ -26,14 +26,18 @@ func (s *Server) agentSetupURL(kind string) string {
 	return s.baseURL + "/agent-setup/" + kind + "/prompt.md"
 }
 
-func agentSetupEmbedHTML(tenantName, setupURL, kind string) string {
+func agentSetupEmbedHTML(tenantName, setupURL, assetOrigin, kind string) string {
 	name := html.EscapeString(promptLabel(tenantName))
 	url := html.EscapeString(setupURL)
 	label, chipBackground, chipColor := "Public", "#eef2ff", "#4338ca"
 	if kind == "private" {
 		label, chipBackground, chipColor = "Private", "#f4f4f5", "#3f3f46"
 	}
-	return fmt.Sprintf(`<a href="%s" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="%s" aria-label="Connect your agent to %s using %s MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to %s</span><span style="padding:4px 8px;border-radius:999px;color:%s;background:%s;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">%s</span><span role="img" aria-label="Codex" title="Codex" data-agent-client="codex" style="display:grid;place-items:center;width:25px;height:25px;border-radius:50%%;color:#fff;background:#18181b;font-size:15px">◉</span><span role="img" aria-label="Claude Code" title="Claude Code" data-agent-client="claude-code" style="display:grid;place-items:center;width:25px;height:25px;color:#d97757;font-size:24px">✳</span><span role="img" aria-label="Cursor" title="Cursor" data-agent-client="cursor" style="display:grid;place-items:center;width:25px;height:25px;color:#18181b;font-size:21px">◆</span><span role="img" aria-label="OpenCode" title="OpenCode" data-agent-client="opencode" style="display:grid;place-items:center;width:25px;height:25px;color:#18181b;font-size:22px">▣</span></a>`, url, kind, name, strings.ToLower(label), name, chipColor, chipBackground, label)
+	assetURL := func(filename string) string {
+		return html.EscapeString(strings.TrimRight(assetOrigin, "/") + "/agent-client-icons/" + filename)
+	}
+	clients := fmt.Sprintf(`<img src="%s" alt="Codex" title="Codex" data-agent-client="codex" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain"><img src="%s" alt="Claude Code" title="Claude Code" data-agent-client="claude-code" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain"><img src="%s" alt="Cursor" title="Cursor" data-agent-client="cursor" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain"><img src="%s" alt="OpenCode" title="OpenCode" data-agent-client="opencode" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain">`, assetURL("codex.svg"), assetURL("claude-code.svg"), assetURL("cursor.svg"), assetURL("opencode.svg"))
+	return fmt.Sprintf(`<a href="%s" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="%s" aria-label="Connect your agent to %s using %s MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to %s</span><span style="padding:4px 8px;border-radius:999px;color:%s;background:%s;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">%s</span>%s</a>`, url, kind, name, strings.ToLower(label), name, chipColor, chipBackground, label, clients)
 }
 
 func (s *Server) agentSetupLinks(ctx context.Context, product model.Product) map[string]agentSetupLink {
@@ -44,11 +48,11 @@ func (s *Server) agentSetupLinks(ctx context.Context, product model.Product) map
 		}
 	}
 	publicURL, privateURL := s.agentSetupURL("public"), s.agentSetupURL("private")
-	public := agentSetupLink{Available: product.PublicMCPEnabled, URL: publicURL, EmbedHTML: agentSetupEmbedHTML(product.Name, publicURL, "public")}
+	public := agentSetupLink{Available: product.PublicMCPEnabled, URL: publicURL, EmbedHTML: agentSetupEmbedHTML(product.Name, publicURL, s.baseURL, "public")}
 	if !public.Available {
 		public.UnavailableReason = "public_mcp_disabled"
 	}
-	private := agentSetupLink{Available: privateAvailable, URL: privateURL, EmbedHTML: agentSetupEmbedHTML(product.Name, privateURL, "private")}
+	private := agentSetupLink{Available: privateAvailable, URL: privateURL, EmbedHTML: agentSetupEmbedHTML(product.Name, privateURL, s.baseURL, "private")}
 	if !private.Available {
 		private.UnavailableReason = "identity_unavailable"
 	}

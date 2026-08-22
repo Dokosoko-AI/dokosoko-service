@@ -108,7 +108,12 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.match(source, /distribution\?\.agent_setup\?\.private/);
   assert.match(source, /Copy MCP button/);
   assert.match(source, /Copy \$\{kind\} MCP button/);
-  for (const client of ["Codex", "Claude Code", "Cursor", "OpenCode"]) assert.match(source, new RegExp(`aria-label="${client}"`));
+  for (const client of ["Codex", "Claude Code", "Cursor", "OpenCode"]) assert.match(source, new RegExp(`name: "${client}"`));
+  for (const asset of ["codex.svg", "claude-code.svg", "cursor.svg", "opencode.svg"]) {
+    assert.match(source, new RegExp(asset.replace(".", "\\.")));
+    assert.match(await readFile(new URL(`../public/agent-client-icons/${asset}`, import.meta.url), "utf8"), /<svg\b/);
+  }
+  for (const placeholder of ["◉", "✳", "◆", "▣"]) assert.doesNotMatch(source, new RegExp(placeholder));
   assert.match(source, /disabled=\{!setup\.available\}/);
   assert.match(source, /Configure and activate customer identity/);
   assert.match(source, /widgets\/\$\{product\.id\}\/public\.js/);

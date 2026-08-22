@@ -790,9 +790,14 @@ func TestAgentSetupDistributionAndPromptsFollowReadiness(t *testing.T) {
 	if !private.Available || private.ContainsSecret || private.URL != "https://dokosoko.example/agent-setup/private/prompt.md" {
 		t.Fatalf("unexpected private setup state: %#v", private)
 	}
-	for _, marker := range []string{"data-dokosoko-agent-setup=", "data-agent-client=\"codex\"", "data-agent-client=\"claude-code\"", "data-agent-client=\"cursor\"", "data-agent-client=\"opencode\""} {
+	for _, marker := range []string{"data-dokosoko-agent-setup=", "data-agent-client=\"codex\"", "data-agent-client=\"claude-code\"", "data-agent-client=\"cursor\"", "data-agent-client=\"opencode\"", "https://dokosoko.example/agent-client-icons/codex.svg", "https://dokosoko.example/agent-client-icons/claude-code.svg", "https://dokosoko.example/agent-client-icons/cursor.svg", "https://dokosoko.example/agent-client-icons/opencode.svg"} {
 		if !strings.Contains(private.EmbedHTML, marker) {
 			t.Fatalf("private embed omitted %q: %s", marker, private.EmbedHTML)
+		}
+	}
+	for _, placeholder := range []string{"◉", "✳", "◆", "▣"} {
+		if strings.Contains(private.EmbedHTML, placeholder) {
+			t.Fatalf("private embed contains placeholder glyph %q: %s", placeholder, private.EmbedHTML)
 		}
 	}
 

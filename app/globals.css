@@ -203,11 +203,7 @@ h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: -.035em; }
 .agent-access-chip { padding: 3px 6px; border-radius: 999px; font-size: 8px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .agent-access-chip.public { color: #4338ca; background: #eef2ff; }
 .agent-access-chip.private { color: #3f3f46; background: #f4f4f5; }
-.agent-client-mark { display: grid; place-items: center; width: 20px; height: 20px; color: #18181b; font-size: 17px; line-height: 1; }
-.codex-mark { border-radius: 50%; color: white; background: #18181b; font-size: 11px; }
-.claude-mark { color: #d97757; font-size: 20px; }
-.cursor-mark { font-size: 16px; }
-.opencode-mark { font-size: 18px; }
+.agent-client-mark { display: block; width: 20px; height: 20px; object-fit: contain; }
 .agent-setup-copy { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; padding: 20px; }
 .agent-setup-copy h3 { margin: 14px 0 7px; font-size: 14px; }
 .agent-setup-copy p { margin: 0 0 15px; color: var(--muted); font-size: 11px; line-height: 1.55; }

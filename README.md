@@ -104,6 +104,8 @@ Required configuration:
 
 Back up PostgreSQL, artifact data, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly. Configure the browser-reachable origin here—not an internal container hostname—because copied setup buttons deliberately ignore request `Host` and forwarding headers.
 
+Database migrations are append-only public deployment history. Never edit, rename, or delete an existing migration; add a new uniquely numbered migration for every schema change. Repository and runtime checksum validation enforce this policy.
+
 ### Breaking v3 upgrade
 
 Migration `0020_contract_v3.sql` deliberately removes the legacy package and open-ended hook contracts. Back up the database and encryption key before deploying it.

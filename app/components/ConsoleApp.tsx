@@ -217,13 +217,31 @@ function escapeEmbedHTML(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }
 
+const agentClients = [
+  { id: "codex", name: "Codex", file: "codex.svg" },
+  { id: "claude-code", name: "Claude Code", file: "claude-code.svg" },
+  { id: "cursor", name: "Cursor", file: "cursor.svg" },
+  { id: "opencode", name: "OpenCode", file: "opencode.svg" },
+] as const;
+
+function agentClientAssetURL(setupURL: string, filename: string) {
+  let origin = "";
+  try {
+    origin = new URL(setupURL).origin;
+  } catch {
+    if (typeof window !== "undefined") origin = window.location.origin;
+  }
+  return `${origin}/agent-client-icons/${filename}`;
+}
+
 function buildAgentSetupEmbedHTML(tenantName: string, setupURL: string, kind: "public" | "private") {
   const name = escapeEmbedHTML(tenantName);
   const url = escapeEmbedHTML(setupURL);
   const label = kind === "public" ? "Public" : "Private";
   const chipColor = kind === "public" ? "#4338ca" : "#3f3f46";
   const chipBackground = kind === "public" ? "#eef2ff" : "#f4f4f5";
-  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" aria-label="Connect your agent to ${name} using ${kind} MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to ${name}</span><span style="padding:4px 8px;border-radius:999px;color:${chipColor};background:${chipBackground};font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">${label}</span><span role="img" aria-label="Codex" title="Codex" data-agent-client="codex" style="display:grid;place-items:center;width:25px;height:25px;border-radius:50%;color:#fff;background:#18181b;font-size:15px">◉</span><span role="img" aria-label="Claude Code" title="Claude Code" data-agent-client="claude-code" style="display:grid;place-items:center;width:25px;height:25px;color:#d97757;font-size:24px">✳</span><span role="img" aria-label="Cursor" title="Cursor" data-agent-client="cursor" style="display:grid;place-items:center;width:25px;height:25px;color:#18181b;font-size:21px">◆</span><span role="img" aria-label="OpenCode" title="OpenCode" data-agent-client="opencode" style="display:grid;place-items:center;width:25px;height:25px;color:#18181b;font-size:22px">▣</span></a>`;
+  const clients = agentClients.map((client) => `<img src="${escapeEmbedHTML(agentClientAssetURL(setupURL, client.file))}" alt="${client.name}" title="${client.name}" data-agent-client="${client.id}" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain">`).join("");
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" aria-label="Connect your agent to ${name} using ${kind} MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to ${name}</span><span style="padding:4px 8px;border-radius:999px;color:${chipColor};background:${chipBackground};font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">${label}</span>${clients}</a>`;
 }
 
 function deploymentAsLegacyProduct(value: APIDeployment): APIProduct {
@@ -1601,10 +1619,8 @@ function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity
       <a href={setup.available ? setup.url : undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!setup.available} aria-label={`Connect your agent to ${tenantName} using ${kind} MCP`} onClick={(event) => { if (!setup.available) event.preventDefault(); }}>
         <span className="agent-setup-label">Connect your agent to {tenantName}</span>
         <span className={`agent-access-chip ${kind}`}>{isPublic ? "Public" : "Private"}</span>
-        <span className="agent-client-mark codex-mark" role="img" aria-label="Codex" title="Codex">◉</span>
-        <span className="agent-client-mark claude-mark" role="img" aria-label="Claude Code" title="Claude Code">✳</span>
-        <span className="agent-client-mark cursor-mark" role="img" aria-label="Cursor" title="Cursor">◆</span>
-        <span className="agent-client-mark opencode-mark" role="img" aria-label="OpenCode" title="OpenCode">▣</span>
+        {/* eslint-disable-next-line @next/next/no-img-element -- These tiny vendor SVG marks are served unchanged from the public asset contract. */}
+        {agentClients.map((client) => <img key={client.id} className="agent-client-mark" src={`/agent-client-icons/${client.file}`} alt={client.name} title={client.name} data-agent-client={client.id} />)}
       </a>
     </div>
     <div className="agent-setup-copy">
