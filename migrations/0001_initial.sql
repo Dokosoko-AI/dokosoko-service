@@ -4,7 +4,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TYPE visibility AS ENUM ('private', 'public');
 CREATE TYPE lifecycle_state AS ENUM ('draft', 'validated', 'published', 'quarantined', 'retired');
-CREATE TYPE package_mode AS ENUM ('public', 'proxy', 'download');
+CREATE TYPE package_mode AS ENUM ('public', 'proxy', 'fetch');
 
 CREATE TABLE platform_config (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -193,26 +193,18 @@ CREATE TABLE packages (
     ecosystem text NOT NULL CHECK (ecosystem IN ('npm', 'go', 'git', 'maven', 'android', 'swift', 'nuget')),
     name text NOT NULL,
     version text NOT NULL,
-    external_package_id text,
     mode package_mode NOT NULL,
     visibility visibility NOT NULL DEFAULT 'private',
     state lifecycle_state NOT NULL DEFAULT 'draft',
     upstream_url text,
-    download_url text,
-    credential_secret_id uuid REFERENCES secrets(id) ON DELETE RESTRICT,
+    credential_secret_id uuid REFERENCES secrets(id) ON DELETE SET NULL,
+    fetch_hook_id uuid,
     checksum_sha256 bytea,
     expected_size bigint,
     anonymous_download_budget bigint,
     revision bigint NOT NULL DEFAULT 1,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT packages_delivery_configuration CHECK (
-        (mode = 'public' AND upstream_url IS NOT NULL AND download_url IS NULL AND credential_secret_id IS NULL AND external_package_id IS NULL) OR
-        (mode = 'proxy' AND upstream_url IS NOT NULL AND download_url IS NULL AND credential_secret_id IS NOT NULL AND external_package_id IS NULL) OR
-        (mode = 'download' AND upstream_url IS NULL AND download_url IS NOT NULL AND download_url ~ '^https://[^/?#:@]+(:443)?/v1/package/download$' AND credential_secret_id IS NOT NULL AND external_package_id IS NOT NULL AND char_length(btrim(external_package_id)) BETWEEN 1 AND 200)
-    ),
-    CONSTRAINT packages_checksum_sha256_length CHECK (checksum_sha256 IS NULL OR octet_length(checksum_sha256) = 32),
-    CONSTRAINT packages_expected_size_range CHECK (expected_size IS NULL OR expected_size BETWEEN 1 AND 1073741824),
     UNIQUE (product_id, environment_id, ecosystem, name, version)
 );
 CREATE INDEX packages_product_visibility_idx ON packages(product_id, visibility, state);
@@ -436,3 +428,8 @@ END;
 $$;
 CREATE TRIGGER analytics_events_no_update BEFORE UPDATE OR DELETE ON analytics_events
 FOR EACH ROW EXECUTE FUNCTION prevent_analytics_mutation();
+
+ALTER TABLE packages
+    ADD CONSTRAINT packages_fetch_hook_fk
+    FOREIGN KEY (fetch_hook_id) REFERENCES tool_definitions(id) ON DELETE SET NULL;
+
