@@ -1,0 +1,47 @@
+{
+  "submission_id": "submission_bug_example_0001",
+  "created_at": "2026-08-22T12:00:00Z",
+  "submission": {
+    "schema_version": "2026-08-20",
+    "kind": "bug",
+    "bug": {
+      "summary": "Payment request returns an unexpected response",
+      "description": "The confirmed request returned an error after the payment was authorized.",
+      "reproduction_steps": [
+        "Create a payment using the sandbox account",
+        "Confirm the payment"
+      ],
+      "expected_behavior": "The confirmed payment is returned.",
+      "actual_behavior": "The API returns payment_state_invalid.",
+      "error_code": "payment_state_invalid",
+      "severity": "medium"
+    },
+    "reporter": {
+      "principal": {
+        "issuer": "https://identity.vendor.example",
+        "subject": "user_123"
+      },
+      "external_customer_id": "customer_456",
+      "installation_id": "installation_789",
+      "allow_contact": false
+    },
+    "product": {
+      "product_id": "product_123",
+      "product_name": "Example Platform",
+      "product_version": "2026.8",
+      "catalog_revision": 42
+    },
+    "integration": {
+      "integration_id": "integration_123",
+      "family_key": "payments",
+      "version_key": "v1",
+      "display_name": "Payments API",
+      "lifecycle": "active",
+      "revision": 3,
+      "manifest_hash": "sha256:example"
+    },
+    "source": "private_mcp",
+    "confirmed_at": "2026-08-22T12:00:00Z",
+    "request_id": "req_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

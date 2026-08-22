@@ -11,6 +11,8 @@ The public contracts are deliberately small:
 
 Each integration contract is independently deployable and independently code-generatable. A vendor can generate a server stub for the contract it implements; DokoSoko does not require a package. There is no package registry abstraction and no per-operation hook configuration. If an integration is an HTTP API, expose it as an API or a tool. Client libraries are optional generated artifacts outside the runtime contract.
 
+Runnable reference implementations live under `examples/`. Start with the complete [Go backend integration](examples/go-backend-integration/README.md), which demonstrates authenticated, retry-safe support delivery without requiring an SDK.
+
 ## Customer identity integration (optional)
 
 Private customer access optionally configures one OIDC provider and one credential-free delegated API origin. This configuration never contains a service-to-service credential. DokoSoko owns the downstream OAuth server and tokens.

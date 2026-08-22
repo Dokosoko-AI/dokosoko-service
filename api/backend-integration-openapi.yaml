@@ -98,7 +98,7 @@ components:
         integration: { $ref: "#/components/schemas/IntegrationContext" }
         source: { const: private_mcp }
         confirmed_at: { type: string, format: date-time }
-        request_id: { type: string }
+        request_id: { type: string, minLength: 1 }
       required: [schema_version, kind, reporter, product, source, confirmed_at, request_id]
       oneOf:
         - properties: { kind: { const: bug }, feedback: false }
@@ -143,12 +143,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        integration_id: { type: string }
-        family_key: { type: string }
-        version_key: { type: string }
-        display_name: { type: string }
-        lifecycle: { type: string }
-        revision: { type: integer, format: int64 }
+        integration_id: { type: string, minLength: 1 }
+        family_key: { type: string, minLength: 1 }
+        version_key: { type: string, minLength: 1 }
+        display_name: { type: string, minLength: 1 }
+        lifecycle: { type: string, minLength: 1 }
+        revision: { type: integer, format: int64, minimum: 1 }
         manifest_hash: { type: string }
         snapshot:
           type: object
