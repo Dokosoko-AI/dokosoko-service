@@ -7,7 +7,7 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 export const metadata: Metadata = {
   title: "DokoSoko — Agent delivery control plane",
-  description: "Configure trusted product knowledge, packages, tools, and MCP access from one console.",
+  description: "Configure trusted API knowledge, tools, customer identity, and MCP access from one console.",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 

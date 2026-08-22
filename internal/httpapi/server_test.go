@@ -27,13 +27,6 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
-type usageReporterStub struct {
-	report    identity.UsageReport
-	err       error
-	principal identity.Principal
-	calls     int
-}
-
 type accessResolverStub struct{}
 
 func (accessResolverStub) LookupIP(context.Context, string, string) ([]net.IP, error) {
@@ -50,12 +43,6 @@ func (accessDoerStub) Do(request *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
 
-func (s *usageReporterStub) Report(_ context.Context, _ string, principal identity.Principal) (identity.UsageReport, error) {
-	s.calls++
-	s.principal = principal
-	return s.report, s.err
-}
-
 func newServer() http.Handler {
 	return httpapi.New(platform.New(store.NewMemory()), "https://dokosoko.example")
 }
@@ -65,6 +52,9 @@ func newCatalogServer(t *testing.T) http.Handler {
 	memory := store.NewMemory()
 	vault, err := secrets.New(bytes.Repeat([]byte{0x53}, 32))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.SaveIdentityProvider(context.Background(), identity.ProviderConfig{ID: "idp_catalog", OrganisationID: "org_acme", DeploymentID: "prod_acme", Issuer: "https://identity.vendor.example", ClientID: "vendor-client", DelegatedAPIOrigin: "https://api.vendor.example", State: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	service := platform.NewWithVault(memory, vault)
@@ -112,7 +102,7 @@ func request(t *testing.T, handler http.Handler, method, path, token, body strin
 	t.Helper()
 	mcpMethod := ""
 	mcpName := ""
-	if method == http.MethodPost && strings.HasPrefix(path, "/mcp/") && body != "" {
+	if method == http.MethodPost && (path == "/mcp" || path == "/mcp/public") && body != "" {
 		var envelope map[string]any
 		if err := json.Unmarshal([]byte(body), &envelope); err != nil {
 			t.Fatal(err)
@@ -158,13 +148,31 @@ func request(t *testing.T, handler http.Handler, method, path, token, body strin
 func TestMCPRejectsPreV2Requests(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
-	r := httptest.NewRequest(http.MethodPost, "/mcp/prod_acme", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	r := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
 	r.Header.Set("Authorization", "Bearer doko_private_demo")
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Stateless MCPv2 Only") {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMCPPublishesOneCanonicalOAuthResource(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+
+	metadata := request(t, handler, http.MethodGet, "/.well-known/oauth-protected-resource/mcp", "", "")
+	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"resource":"https://dokosoko.example/mcp"`) {
+		t.Fatalf("protected resource metadata status = %d, body = %s", metadata.Code, metadata.Body.String())
+	}
+	private := request(t, handler, http.MethodPost, "/mcp", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	if private.Code != http.StatusUnauthorized || private.Header().Get("WWW-Authenticate") != `Bearer resource_metadata="https://dokosoko.example/.well-known/oauth-protected-resource/mcp", scope="mcp:private"` {
+		t.Fatalf("private challenge status = %d, header = %q", private.Code, private.Header().Get("WWW-Authenticate"))
+	}
+	legacy := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	if legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy endpoint status = %d, body = %s", legacy.Code, legacy.Body.String())
 	}
 }
 
@@ -181,7 +189,7 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w = request(t, handler, http.MethodPost, "/api/v1/resource-sets", "doko_admin_demo", `{"kind":"hook","name":"Voice hooks","description":"Shared provider operations","manifest":[{"name":"calls.create","path":"/v2/calls"}]}`)
+	w = request(t, handler, http.MethodPost, "/api/v1/resource-sets", "doko_admin_demo", `{"kind":"api","name":"Voice API","description":"Shared provider operations","manifest":[{"name":"calls.create","path":"/v2/calls"}]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create resource set status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -224,11 +232,27 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 		t.Fatalf("assign Integration access status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Default support","is_default":true,"bug_reports_enabled":true,"feedback_enabled":true,"retention_days":30,"state":"active","integration_ids":[]}`)
+	w = request(t, handler, http.MethodPost, "/api/v1/backend-connections", "doko_admin_demo", `{"name":"Default support backend","base_url":"https://api.vendor.example","authentication_type":"bearer","credential":"default-secret","state":"active"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create default backend connection status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var defaultBackend model.BackendConnection
+	if err := json.Unmarshal(w.Body.Bytes(), &defaultBackend); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/backend-connections", "doko_admin_demo", `{"name":"Voice support backend","base_url":"https://api.vendor.example","authentication_type":"bearer","credential":"voice-secret","state":"active"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create voice backend connection status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var voiceBackend model.BackendConnection
+	if err := json.Unmarshal(w.Body.Bytes(), &voiceBackend); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Default support","is_default":true,"bug_reports_enabled":true,"feedback_enabled":true,"backend_connection_id":"`+defaultBackend.ID+`","retention_days":30,"state":"active","integration_ids":[]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create support route status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Voice support","is_default":false,"bug_reports_enabled":true,"feedback_enabled":true,"retention_days":30,"state":"active","integration_ids":["`+integration.ID+`"]}`)
+	w = request(t, handler, http.MethodPost, "/api/v1/support-routes", "doko_admin_demo", `{"name":"Voice support","is_default":false,"bug_reports_enabled":true,"feedback_enabled":true,"backend_connection_id":"`+voiceBackend.ID+`","retention_days":30,"state":"active","integration_ids":["`+integration.ID+`"]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create Integration support route status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -283,7 +307,7 @@ func TestPrivateMCPDiscoversAndExecutesProviderAccessWithoutLegacyProjects(t *te
 	}
 	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AccessRuntime: accessruntime.New(memory, vault, accessResolverStub{}, accessDoerStub{}), AllowDemoTokens: true})
 
-	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"access.instances.create"`) || !strings.Contains(w.Body.String(), `"instance_label":"workspace"`) {
 		t.Fatalf("access discovery status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -291,7 +315,7 @@ func TestPrivateMCPDiscoversAndExecutesProviderAccessWithoutLegacyProjects(t *te
 		t.Fatalf("legacy DokoSoko project tools must not be discoverable: %s", w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"access.instances.create","arguments":{"connection_id":"`+connection.ID+`","integration_id":"`+integration.ID+`","environment_id":"env_prod","display_name":"Voice sandbox","idempotency_key":"mcp-access-instance-0001"}}}`)
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"access.instances.create","arguments":{"connection_id":"`+connection.ID+`","integration_id":"`+integration.ID+`","environment_id":"env_prod","display_name":"Voice sandbox","idempotency_key":"mcp-access-instance-0001"}}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"external_id":"provider-instance-1"`) {
 		t.Fatalf("access instance call status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -300,7 +324,7 @@ func TestPrivateMCPDiscoversAndExecutesProviderAccessWithoutLegacyProjects(t *te
 func TestPublicMCPIsAnonymousButOffByDefault(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
-	w := request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	w := request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -312,7 +336,7 @@ func TestPublicMCPIsAnonymousButOffByDefault(t *testing.T) {
 func TestAIProductBuilderAPIProducesReviewAndPublishesDefinition(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
-	body := `{"inputs":[{"kind":"openapi","name":"Voice API","location":"https://api.example.com/voice/v3/openapi.yaml","version":"v3"},{"kind":"package","name":"@acme/voice-node","location":"npm:@acme/voice-node@7.2.1","version":"7.2.1","metadata":{"api_version":"v3"}}]}`
+	body := `{"inputs":[{"kind":"openapi","name":"Voice API","location":"https://api.example.com/voice/v3/openapi.yaml","version":"v3"},{"kind":"docs","name":"Voice documentation","location":"https://docs.example.com/voice/v3","version":"v3"}]}`
 	w := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/product-builds", "doko_admin_demo", body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("build status = %d, body = %s", w.Code, w.Body.String())
@@ -357,9 +381,7 @@ func TestMCPDiscoversTheEffectiveDokosokoProductVersion(t *testing.T) {
 	}
 	build, err := service.BuildProductDefinition(t.Context(), product.ID, []model.ProductBuildInput{
 		{Kind: "openapi", Name: "Voice API", Location: "https://api.example.com/voice/v3/openapi.yaml", Version: "v3"},
-		{Kind: "package", Name: "@acme/voice", Location: "npm:@acme/voice@7.2.1", Version: "7.2.1", Metadata: map[string]string{"api_version": "v3"}},
 		{Kind: "openapi", Name: "Messages API", Location: "https://api.example.com/messages/v2/openapi.yaml", Version: "v2"},
-		{Kind: "package", Name: "@acme/messages", Location: "npm:@acme/messages@5.1.3", Version: "5.1.3", Metadata: map[string]string{"api_version": "v2"}},
 	}, actor)
 	if err != nil {
 		t.Fatal(err)
@@ -373,11 +395,11 @@ func TestMCPDiscoversTheEffectiveDokosokoProductVersion(t *testing.T) {
 	}
 	handler := httpapi.New(service, "https://dokosoko.example")
 
-	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
+	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"product_name":"Acme Platform"`) || !strings.Contains(w.Body.String(), `"version":"2026.8"`) || !strings.Contains(w.Body.String(), `"release":"v3"`) || !strings.Contains(w.Body.String(), `"release":"v2"`) || !strings.Contains(w.Body.String(), `"catalogRevision":`) || !strings.Contains(w.Body.String(), `"manifestHash":"sha256:`) {
 		t.Fatalf("discover status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"deployment.get_manifest"`) || !strings.Contains(w.Body.String(), `"name":"deployment.releases.list"`) || !strings.Contains(w.Body.String(), `"com.dokosoko/deploymentRelease"`) || !strings.Contains(w.Body.String(), `"is_lts":true`) {
 		t.Fatalf("tools/list status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -388,8 +410,13 @@ func TestMCPDiscoversTheEffectiveDokosokoProductVersion(t *testing.T) {
 
 func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 	t.Parallel()
-	handler := newServer()
-	w := request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme", "doko_admin_demo", `{"description":"Build supported Acme API integrations with version-matched documentation, packages, and tools.","default_version_policy":"latest","revision":1}`)
+	memory := store.NewMemory()
+	account, err := memory.ResolveCustomerAccount(t.Context(), identity.CustomerAccount{ID: "account_contoso", OrganisationID: "org_acme", ProductID: "prod_acme", Issuer: "https://identity.vendor.example", ExternalID: "contoso", State: "active", LastAuthenticatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(platform.New(memory), "https://dokosoko.example")
+	w := request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme", "doko_admin_demo", `{"description":"Build supported Acme API integrations with version-matched documentation and tools.","default_version_policy":"latest","revision":1}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("settings status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -435,8 +462,8 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"summary":"Initial product release"`) {
 		t.Fatalf("diff status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", fmt.Sprintf(`{"customer_id":"contoso","product_version_id":%q,"reason":"Production stability"}`, version.ID))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_id":"contoso"`) || !strings.Contains(w.Body.String(), `"product_version":"2026.8"`) {
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", fmt.Sprintf(`{"customer_account_id":%q,"product_version_id":%q,"reason":"Production stability"}`, account.ID, version.ID))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_account_id":"`+account.ID+`"`) || !strings.Contains(w.Body.String(), `"product_version":"2026.8"`) {
 		t.Fatalf("pin status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/versions", "doko_admin_demo", "")
@@ -444,14 +471,14 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 		t.Fatalf("versions status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/version-pins", "doko_admin_demo", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_id":"contoso"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"customer_account_id":"`+account.ID+`"`) {
 		t.Fatalf("pins status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/version-pins/history", "doko_admin_demo", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"action":"created"`) || !strings.Contains(w.Body.String(), `"scope":"customer"`) {
 		t.Fatalf("pin history status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/installations", "doko_admin_demo", `{"customer_id":"contoso","environment_id":"env_prod","external_id":"contoso-prod","name":"Contoso production","state":"active","revision":0}`)
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/installations", "doko_admin_demo", fmt.Sprintf(`{"customer_account_id":%q,"environment_id":"env_prod","external_id":"contoso-prod","name":"Contoso production","state":"active","revision":0}`, account.ID))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"external_id":"contoso-prod"`) {
 		t.Fatalf("installation status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -462,37 +489,6 @@ func TestProductVersionAdminAPIManagesChannelsAndPins(t *testing.T) {
 	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/versions/"+version.ID+"/reconcile", "doko_admin_demo", fmt.Sprintf(`{"revision":%d}`, version.Revision))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"drift_status":"healthy"`) {
 		t.Fatalf("reconcile status = %d, body = %s", w.Code, w.Body.String())
-	}
-}
-
-func TestPackageControlAPIUsesDownloadContractVocabulary(t *testing.T) {
-	t.Parallel()
-	handler := newCatalogServer(t)
-	body := `{"organisation_id":"org_acme","name":"@acme/private","ecosystem":"npm","version":"1.0.0","external_package_id":"vendor-sdk-node-1.0.0","mode":"download","download_url":"https://packages.example.com/v1/package/download","credential":"download-service-token"}`
-	w := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", body)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), `"mode":"download"`) || !strings.Contains(w.Body.String(), `"external_package_id":"vendor-sdk-node-1.0.0"`) || strings.Contains(w.Body.String(), "download_url") || strings.Contains(w.Body.String(), "download-service-token") {
-		t.Fatalf("unsafe or inconsistent package response: %s", w.Body.String())
-	}
-
-	legacy := `{"organisation_id":"org_acme","name":"@acme/legacy","ecosystem":"npm","version":"1.0.0","mode":"fetch","fetch_hook_url":"https://packages.example.com/package-fetch","credential":"token","checksum_sha256":"","expected_size":0}`
-	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", legacy)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unknown field") {
-		t.Fatalf("legacy request status = %d, body = %s", w.Code, w.Body.String())
-	}
-
-	invalidShapes := []string{
-		`{"organisation_id":"org_acme","name":"public","ecosystem":"npm","version":"1.0.0","mode":"public","upstream_url":"https://packages.example.com/artifact","credential":""}`,
-		`{"organisation_id":"org_acme","name":"proxy","ecosystem":"npm","version":"1.0.0","mode":"proxy","upstream_url":"https://packages.example.com/artifact","download_url":""}`,
-		`{"organisation_id":"org_acme","name":"download","ecosystem":"npm","version":"1.0.0","external_package_id":"vendor-artifact","mode":"download","upstream_url":"","download_url":"https://packages.example.com/v1/package/download","credential":"token"}`,
-	}
-	for _, invalid := range invalidShapes {
-		w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/packages", "doko_admin_demo", invalid)
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "do not match") {
-			t.Fatalf("invalid shape status = %d, body = %s", w.Code, w.Body.String())
-		}
 	}
 }
 
@@ -512,13 +508,6 @@ func TestPublicTransitionWarningsAreEnforcedByAPI(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/packages/pkg_node/visibility", "doko_admin_demo", `{"visibility":"public","revision":1}`)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("package status = %d, body = %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "public_confirmation_required") || !strings.Contains(w.Body.String(), "without authentication") {
-		t.Fatalf("package body = %s", w.Body.String())
-	}
 }
 
 func TestPublicMCPOnlyReturnsExplicitlyPublicRecordsAndReadOnlyTools(t *testing.T) {
@@ -533,20 +522,20 @@ func TestPublicMCPOnlyReturnsExplicitlyPublicRecordsAndReadOnlyTools(t *testing.
 		t.Fatalf("distribution status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("tools/list status = %d, body = %s", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "provision_resource") {
 		t.Fatalf("privileged tool leaked: %s", w.Body.String())
 	}
-	for _, expected := range []string{"search_knowledge", "find_package", "get_package"} {
+	for _, expected := range []string{"search_knowledge"} {
 		if !strings.Contains(w.Body.String(), expected) {
 			t.Fatalf("missing tool %q: %s", expected, w.Body.String())
 		}
 	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"API key"}}}`)
+	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"API key"}}}`)
 	if !strings.Contains(w.Body.String(), "Create an API key") {
 		t.Fatalf("public record missing: %s", w.Body.String())
 	}
@@ -554,23 +543,11 @@ func TestPublicMCPOnlyReturnsExplicitlyPublicRecordsAndReadOnlyTools(t *testing.
 		t.Fatalf("private record leaked: %s", w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"provision_resource","arguments":{}}}`)
+	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"provision_resource","arguments":{}}}`)
 	if !strings.Contains(w.Body.String(), "not available on Public MCP") {
 		t.Fatalf("privileged tool was not rejected: %s", w.Body.String())
 	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"find_package","arguments":{}}}`)
-	if strings.Contains(w.Body.String(), "@acme/node") {
-		t.Fatalf("private package leaked: %s", w.Body.String())
-	}
-	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/packages/pkg_node/visibility", "doko_admin_demo", `{"visibility":"public","acknowledge_public":true,"revision":1}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("package publication status = %d, body = %s", w.Code, w.Body.String())
-	}
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"find_package","arguments":{}}}`)
-	if !strings.Contains(w.Body.String(), "@acme/node") {
-		t.Fatalf("public package missing: %s", w.Body.String())
-	}
 }
 
 func TestMakingSourcePrivateRemovesItImmediately(t *testing.T) {
@@ -583,7 +560,7 @@ func TestMakingSourcePrivateRemovesItImmediately(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("private transition status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"API key"}}}`)
+	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"API key"}}}`)
 	if strings.Contains(w.Body.String(), "Create an API key") {
 		t.Fatalf("newly private source still visible: %s", w.Body.String())
 	}
@@ -592,69 +569,71 @@ func TestMakingSourcePrivateRemovesItImmediately(t *testing.T) {
 func TestPrivateMCPRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
-	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	w := request(t, handler, http.MethodPost, "/mcp", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d", w.Code)
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "search_knowledge") {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 }
 
-func TestUsageToolIsPrivateConfiguredAndProxiesStructuredReport(t *testing.T) {
+func TestCustomerAccountsUseStableCursorPagination(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	memory := store.NewMemory()
-	_, err := memory.SaveVendorIdentity(ctx, identity.VendorConfig{ID: "idp-usage", OrganisationID: "org_acme", ProductID: "prod_acme", Issuer: "https://identity.vendor.example", ClientID: "vendor-client", Scopes: []string{"openid"}, AllowedRedirectURIs: []string{"https://client.example/callback"}, UsageHookURL: "https://hooks.vendor.example/usage"})
-	if err != nil {
+	base := time.Date(2026, time.August, 22, 0, 0, 0, 0, time.UTC)
+	for index, id := range []string{"account-a", "account-b", "account-c"} {
+		if _, err := memory.ResolveCustomerAccount(ctx, identity.CustomerAccount{
+			ID:                  id,
+			OrganisationID:      "org_acme",
+			ProductID:           "prod_acme",
+			Issuer:              "https://identity.vendor.example",
+			ExternalID:          fmt.Sprintf("customer-%d", index),
+			State:               "active",
+			LastAuthenticatedAt: base.Add(time.Duration(index) * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true})
+
+	type page struct {
+		Items   []identity.CustomerAccount `json:"items"`
+		HasMore bool                       `json:"has_more"`
+	}
+	first := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/customer-accounts?limit=2", "doko_admin_demo", "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, body = %s", first.Code, first.Body.String())
+	}
+	var firstPage page
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPage); err != nil {
 		t.Fatal(err)
 	}
-	reporter := &usageReporterStub{report: identity.UsageReport{AsOf: "2026-08-19T05:30:00Z", Items: []identity.UsageItem{{Key: "used", Label: "Used", Value: 720, Format: "number", Unit: "credits"}, {Key: "next_renewal", Label: "Next renewal", Value: "2026-09-01T00:00:00Z", Format: "datetime"}}}}
-	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, UsageReporter: reporter})
-
-	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"usage.get"`) || !strings.Contains(w.Body.String(), `"readOnlyHint":true`) || !strings.Contains(w.Body.String(), `"outputSchema"`) {
-		t.Fatalf("private usage tool definition missing: status=%d body=%s", w.Code, w.Body.String())
-	}
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"usage.get","arguments":{"subject":"other-user"}}}`)
-	if !strings.Contains(w.Body.String(), "Invalid params") || reporter.calls != 0 {
-		t.Fatalf("caller-controlled usage identity was accepted: calls=%d body=%s", reporter.calls, w.Body.String())
-	}
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"usage.get","arguments":{}}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"structuredContent":{"as_of":"2026-08-19T05:30:00Z"`) || !strings.Contains(w.Body.String(), `"key":"next_renewal"`) {
-		t.Fatalf("usage report was not proxied: status=%d body=%s", w.Code, w.Body.String())
-	}
-	if reporter.calls != 1 || reporter.principal.Subject != "private_mcp_demo" {
-		t.Fatalf("usage reporter calls=%d principal=%#v", reporter.calls, reporter.principal)
+	if !firstPage.HasMore || len(firstPage.Items) != 2 || firstPage.Items[0].ID != "account-c" || firstPage.Items[1].ID != "account-b" {
+		t.Fatalf("unexpected first page: %#v", firstPage)
 	}
 
-	product, _ := memory.Product(ctx, "prod_acme")
-	product.PublicMCPEnabled = true
-	if _, err := memory.UpdateProduct(ctx, product, product.Revision); err != nil {
+	second := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/customer-accounts?limit=2&starting_after=account-b", "doko_admin_demo", "")
+	var secondPage page
+	if second.Code != http.StatusOK {
+		t.Fatalf("second page status = %d, body = %s", second.Code, second.Body.String())
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
 		t.Fatal(err)
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
-	if strings.Contains(w.Body.String(), `"name":"usage.get"`) {
-		t.Fatalf("usage tool leaked to Public MCP: %s", w.Body.String())
+	if secondPage.HasMore || len(secondPage.Items) != 1 || secondPage.Items[0].ID != "account-a" {
+		t.Fatalf("unexpected second page: %#v", secondPage)
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"usage.get","arguments":{}}}`)
-	if !strings.Contains(w.Body.String(), "Tool is not available") || reporter.calls != 1 {
-		t.Fatalf("public usage call was not denied: calls=%d body=%s", reporter.calls, w.Body.String())
+
+	invalid := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/customer-accounts?starting_after=missing", "doko_admin_demo", "")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d, body = %s", invalid.Code, invalid.Body.String())
 	}
 }
 
-func TestUsageToolIsHiddenUntilHookIsConfigured(t *testing.T) {
-	t.Parallel()
-	reporter := &usageReporterStub{}
-	handler := httpapi.NewWithOptions(platform.New(store.NewMemory()), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, UsageReporter: reporter})
-	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	if strings.Contains(w.Body.String(), `"name":"usage.get"`) {
-		t.Fatalf("unconfigured usage tool was listed: %s", w.Body.String())
-	}
-}
-
-func TestSupportReportingToolsRequireConsentHoldEncryptedReportsAndStayPrivate(t *testing.T) {
+func TestSupportReportingToolsRequireConsentQueueEncryptedReportsAndStayPrivate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	memory := store.NewMemory()
@@ -663,50 +642,79 @@ func TestSupportReportingToolsRequireConsentHoldEncryptedReportsAndStayPrivate(t
 		t.Fatal(err)
 	}
 	reporter := reporting.New(memory, vault)
-	if _, err := reporter.Configure(ctx, "prod_acme", reporting.ConfigInput{BugReportsEnabled: true, FeedbackEnabled: true, RetentionDays: 30}, "root-test", "req-config"); err != nil {
+	backend, err := platform.NewWithVault(memory, vault).CreateBackendConnection(ctx, platform.BackendConnectionInput{Name: "Support backend", BaseURL: "https://api.vendor.example", AuthenticationType: "bearer", Credential: "support-delivery-secret", State: "active"}, platform.Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reporter.SaveRoute(ctx, "prod_acme", "", reporting.RouteInput{Name: "Default support", IsDefault: true, BugReportsEnabled: true, FeedbackEnabled: true, BackendConnectionID: backend.ID, RetentionDays: 30, State: "active"}, "root-test", "req-config"); err != nil {
 		t.Fatal(err)
 	}
 	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, Reporting: reporter})
 
-	w := request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
+	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "do not submit automatically") || !strings.Contains(w.Body.String(), "obtain explicit approval") {
 		t.Fatalf("reporting agent policy missing from discovery: status=%d body=%s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"support.report_bug"`) || !strings.Contains(w.Body.String(), `"name":"support.submit_feedback"`) || !strings.Contains(w.Body.String(), `"com.dokosoko/confirmationRequired":true`) || !strings.Contains(w.Body.String(), "never invent ratings") {
 		t.Fatalf("support reporting definitions missing: status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	bugArgs := `"summary":"Connector failure","description":"The connector returned an unexpected result.","related_tool":"access.credentials.create","idempotency_key":"bug-report-idempotency-http-1"`
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`}}}`)
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`}}}`)
 	if !strings.Contains(w.Body.String(), "Explicit user confirmation is required") {
 		t.Fatalf("unconfirmed report was not denied: %s", w.Body.String())
 	}
-	values, err := memory.ReportSubmissions(ctx, "prod_acme", 10)
+	values, _, err := memory.ReportSubmissions(ctx, "prod_acme", "", 10)
 	if err != nil || len(values) != 0 {
 		t.Fatalf("unconfirmed report was persisted: values=%#v err=%v", values, err)
 	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`},"_meta":{"confirmed":true}}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"held"`) || !strings.Contains(w.Body.String(), `"submission_id"`) || strings.Contains(w.Body.String(), "unexpected result") {
-		t.Fatalf("confirmed bug was not held safely: status=%d body=%s", w.Code, w.Body.String())
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"support.report_bug","arguments":{`+bugArgs+`},"_meta":{"confirmed":true}}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"pending"`) || !strings.Contains(w.Body.String(), `"submission_id"`) || strings.Contains(w.Body.String(), "unexpected result") {
+		t.Fatalf("confirmed bug was not queued safely: status=%d body=%s", w.Code, w.Body.String())
 	}
-	values, err = memory.ReportSubmissions(ctx, "prod_acme", 10)
-	if err != nil || len(values) != 1 || values[0].State != "held" || bytes.Contains(values[0].PayloadCiphertext, []byte("Connector failure")) {
-		t.Fatalf("encrypted held bug missing: values=%#v err=%v", values, err)
+	values, _, err = memory.ReportSubmissions(ctx, "prod_acme", "", 10)
+	if err != nil || len(values) != 1 || values[0].State != "pending" || bytes.Contains(values[0].PayloadCiphertext, []byte("Connector failure")) {
+		t.Fatalf("encrypted queued bug missing: values=%#v err=%v", values, err)
 	}
-	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/report-submissions", "doko_admin_demo", "")
+	w = request(t, handler, http.MethodGet, "/api/v1/support-submissions", "doko_admin_demo", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Connector failure") || strings.Contains(w.Body.String(), "unexpected result") || strings.Contains(w.Body.String(), `"content"`) {
 		t.Fatalf("inbox list did not limit decrypted content: status=%d body=%s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/report-submissions/"+values[0].ID, "doko_admin_demo", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "unexpected result") || !strings.Contains(w.Body.String(), `"content"`) {
+	w = request(t, handler, http.MethodGet, "/api/v1/support-submissions/"+values[0].ID, "doko_admin_demo", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "unexpected result") || !strings.Contains(w.Body.String(), `"content"`) || !strings.Contains(w.Body.String(), `"support_route_id"`) {
 		t.Fatalf("on-demand report detail missing: status=%d body=%s", w.Code, w.Body.String())
 	}
+	failed := values[0]
+	failed.State, failed.NextAttemptAt, failed.DeliveryStartedAt = "failed", nil, nil
+	if _, err := memory.UpdateReportSubmissionDelivery(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/support-submissions/"+values[0].ID+"/delivery-attempts", "doko_admin_demo", "")
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"state":"pending"`) {
+		t.Fatalf("delivery attempt was not accepted: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/support-submissions/"+values[0].ID+"/delivery-attempts", "doko_admin_demo", "")
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"state":"pending"`) {
+		t.Fatalf("delivery-attempt retry was not idempotent: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/report-submissions", "doko_admin_demo", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("legacy product-scoped support submissions must not remain addressable: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/reporting", "doko_admin_demo", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("legacy reporting configuration must not remain addressable: status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/report-submissions/"+values[0].ID+"/retry", "doko_admin_demo", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("legacy retry action must not remain addressable: status=%d body=%s", w.Code, w.Body.String())
+	}
 
-	w = request(t, handler, http.MethodPost, "/mcp/prod_acme", "doko_private_demo", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"support.submit_feedback","arguments":{"message":"The connector workflow was excellent.","category":"usability","idempotency_key":"feedback-idempotency-http-1"},"_meta":{"confirmed":true}}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"held"`) {
-		t.Fatalf("confirmed feedback was not held: status=%d body=%s", w.Code, w.Body.String())
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"support.submit_feedback","arguments":{"message":"The connector workflow was excellent.","category":"usability","idempotency_key":"feedback-idempotency-http-1"},"_meta":{"confirmed":true}}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"pending"`) {
+		t.Fatalf("confirmed feedback was not queued: status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	product, _ := memory.Product(ctx, "prod_acme")
@@ -714,7 +722,7 @@ func TestSupportReportingToolsRequireConsentHoldEncryptedReportsAndStayPrivate(t
 	if _, err := memory.UpdateProduct(ctx, product, product.Revision); err != nil {
 		t.Fatal(err)
 	}
-	w = request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}`)
+	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}`)
 	if strings.Contains(w.Body.String(), "support.report_bug") || strings.Contains(w.Body.String(), "support.submit_feedback") {
 		t.Fatalf("support reporting tools leaked to Public MCP: %s", w.Body.String())
 	}
@@ -819,12 +827,12 @@ func TestPublicMCPHasAnAnonymousRequestBudget(t *testing.T) {
 	request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/distribution", "doko_admin_demo", `{"public_mcp_enabled":true,"acknowledge_public":true,"revision":1}`)
 
 	for index := 0; index < 120; index++ {
-		w := request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+		w := request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 		if w.Code != http.StatusOK {
 			t.Fatalf("request %d status = %d, body = %s", index+1, w.Code, w.Body.String())
 		}
 	}
-	w := request(t, handler, http.MethodPost, "/mcp/public/prod_acme", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	w := request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "rate_limited") {
 		t.Fatalf("over-budget status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -993,5 +1001,48 @@ func TestIntegrationRunsFeedValidatedAnalyticsAndScopedAudit(t *testing.T) {
 	w = request(t, handler, http.MethodGet, "/api/v1/organisations/org_acme/audit", "doko_admin_demo", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "integration_run.started") || !strings.Contains(w.Body.String(), "integration_run.completed") {
 		t.Fatalf("audit status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestIdentityBackendAndVisibilityContractsAreIndependent(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+
+	identityResponse := request(t, handler, http.MethodGet, "/api/v1/identity-provider", "doko_admin_demo", "")
+	if identityResponse.Code != http.StatusOK || !strings.Contains(identityResponse.Body.String(), `"delegated_api_origin":"https://api.vendor.example"`) {
+		t.Fatalf("identity provider status=%d body=%s", identityResponse.Code, identityResponse.Body.String())
+	}
+	legacyIdentity := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/identity", "doko_admin_demo", "")
+	if legacyIdentity.Code != http.StatusNotFound {
+		t.Fatalf("legacy identity route status=%d body=%s", legacyIdentity.Code, legacyIdentity.Body.String())
+	}
+
+	createdBackend := request(t, handler, http.MethodPost, "/api/v1/backend-connections", "doko_admin_demo", `{"name":"Support backend","base_url":"https://backend.vendor.example","authentication_type":"bearer","credential":"first-secret","state":"active"}`)
+	if createdBackend.Code != http.StatusCreated {
+		t.Fatalf("backend create status=%d body=%s", createdBackend.Code, createdBackend.Body.String())
+	}
+	var backend model.BackendConnection
+	if err := json.Unmarshal(createdBackend.Body.Bytes(), &backend); err != nil {
+		t.Fatal(err)
+	}
+	if backend.CredentialFingerprint == "" || strings.Contains(createdBackend.Body.String(), "first-secret") {
+		t.Fatalf("backend credential was not safely redacted: %s", createdBackend.Body.String())
+	}
+	rotated := request(t, handler, http.MethodPost, "/api/v1/backend-connections/"+backend.ID+"/credentials", "doko_admin_demo", fmt.Sprintf(`{"credential":"second-secret","revision":%d}`, backend.Revision))
+	if rotated.Code != http.StatusCreated || strings.Contains(rotated.Body.String(), "second-secret") {
+		t.Fatalf("backend rotation status=%d body=%s", rotated.Code, rotated.Body.String())
+	}
+	stale := request(t, handler, http.MethodPost, "/api/v1/backend-connections/"+backend.ID+"/credentials", "doko_admin_demo", fmt.Sprintf(`{"credential":"stale-secret","revision":%d}`, backend.Revision))
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale backend rotation status=%d body=%s", stale.Code, stale.Body.String())
+	}
+
+	unconfirmed := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"public-api","version_key":"v1","display_name":"Public API","description":"Public API metadata.","visibility":"public","lifecycle":"active"}`)
+	if unconfirmed.Code != http.StatusConflict || !strings.Contains(unconfirmed.Body.String(), `"code":"public_confirmation_required"`) {
+		t.Fatalf("unconfirmed public Integration status=%d body=%s", unconfirmed.Code, unconfirmed.Body.String())
+	}
+	confirmed := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"public-api","version_key":"v1","display_name":"Public API","description":"Public API metadata.","visibility":"public","acknowledge_public":true,"lifecycle":"active"}`)
+	if confirmed.Code != http.StatusCreated || !strings.Contains(confirmed.Body.String(), `"visibility":"public"`) {
+		t.Fatalf("confirmed public Integration status=%d body=%s", confirmed.Code, confirmed.Body.String())
 	}
 }

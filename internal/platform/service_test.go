@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
@@ -79,144 +80,6 @@ func TestPrivateDefaultsAndGuardedPublication(t *testing.T) {
 	}
 }
 
-func TestPackageCredentialIsEncryptedAndExcludedFromAPIRepresentation(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	memory := store.NewMemory()
-	vault, err := secrets.New(bytes.Repeat([]byte{0x73}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := platform.NewWithVault(memory, vault)
-	pkg, err := service.CreatePackage(ctx, platform.PackageInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "@acme/private", Ecosystem: "npm", Version: "1.0.0", Mode: "proxy", UpstreamURL: "https://registry.example.com/acme.tgz", Credential: "upstream-secret-token"}, platform.Actor{ID: "root", RequestID: "req_package"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pkg.Visibility != model.VisibilityPrivate || pkg.Published {
-		t.Fatalf("unsafe defaults: %#v", pkg)
-	}
-	encoded, err := json.Marshal(pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(encoded, []byte("upstream-secret-token")) || bytes.Contains(encoded, []byte("registry.example.com")) || bytes.Contains(encoded, []byte(pkg.CredentialID)) {
-		t.Fatalf("internal delivery data leaked in JSON: %s", encoded)
-	}
-	stored, err := memory.Secret(ctx, "org_acme", pkg.CredentialID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(stored.Ciphertext, []byte("upstream-secret-token")) {
-		t.Fatal("credential was stored in plaintext")
-	}
-}
-
-func TestPackageDownloadRequiresTheVersionedContractEndpoint(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	memory := store.NewMemory()
-	vault, err := secrets.New(bytes.Repeat([]byte{0x74}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := platform.NewWithVault(memory, vault)
-	input := platform.PackageInput{
-		OrganisationID:    "org_acme",
-		ProductID:         "prod_acme",
-		Name:              "@acme/private",
-		Ecosystem:         "npm",
-		Version:           "1.0.0",
-		ExternalPackageID: "vendor-sdk-node-1.0.0",
-		Mode:              "download",
-		DownloadURL:       "https://packages.example.com/v1/package/download",
-		Credential:        "download-service-token",
-	}
-	pkg, err := service.CreatePackage(ctx, input, platform.Actor{ID: "root", RequestID: "req_package_download"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pkg.Mode != "download" || pkg.DownloadURL != input.DownloadURL || pkg.ExternalPackageID != input.ExternalPackageID {
-		t.Fatalf("package download configuration = %#v", pkg)
-	}
-	encoded, err := json.Marshal(pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(encoded, []byte("download-service-token")) || bytes.Contains(encoded, []byte(input.DownloadURL)) {
-		t.Fatalf("download configuration leaked in JSON: %s", encoded)
-	}
-
-	invalid := []struct {
-		name       string
-		mode       string
-		url        string
-		externalID string
-	}{
-		{name: "legacy mode", mode: "fetch", url: input.DownloadURL, externalID: input.ExternalPackageID},
-		{name: "legacy path", mode: "download", url: "https://packages.example.com/package-fetch", externalID: input.ExternalPackageID},
-		{name: "encoded path", mode: "download", url: "https://packages.example.com/v1/package/%64ownload", externalID: input.ExternalPackageID},
-		{name: "query string", mode: "download", url: input.DownloadURL + "?tenant=acme", externalID: input.ExternalPackageID},
-		{name: "nonstandard port", mode: "download", url: "https://packages.example.com:8443/v1/package/download", externalID: input.ExternalPackageID},
-		{name: "missing external package id", mode: "download", url: input.DownloadURL},
-		{name: "external package id on proxy", mode: "proxy", url: "https://packages.example.com/artifact", externalID: input.ExternalPackageID},
-	}
-	for _, test := range invalid {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := input
-			candidate.Mode = test.mode
-			candidate.DownloadURL = test.url
-			candidate.ExternalPackageID = test.externalID
-			if test.mode == "proxy" {
-				candidate.UpstreamURL = test.url
-			}
-			if _, err := service.CreatePackage(ctx, candidate, platform.Actor{ID: "root"}); err == nil {
-				t.Fatalf("CreatePackage accepted mode %q and URL %q", test.mode, test.url)
-			}
-		})
-	}
-}
-
-func TestUsageHookCredentialIsEncryptedAndExcludedFromIdentityAPI(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	memory := store.NewMemory()
-	vault, err := secrets.New(bytes.Repeat([]byte{0x55}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := platform.NewWithVault(memory, vault)
-	config, err := service.ConfigureIdentity(ctx, platform.IdentityInput{
-		OrganisationID:      "org_acme",
-		ProductID:           "prod_acme",
-		Issuer:              "https://identity.vendor.example",
-		ClientID:            "vendor-client",
-		ClientSecret:        "oidc-client-secret",
-		AllowedRedirectURIs: []string{"https://client.example/callback"},
-		UsageHookURL:        "https://hooks.vendor.example/usage",
-		UsageCredential:     "usage-service-secret",
-	}, platform.Actor{ID: "root", RequestID: "req_usage_config"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.UsageHookURL == "" || config.UsageCredentialID == "" {
-		t.Fatalf("usage configuration = %#v", config)
-	}
-	encoded, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(encoded, []byte("usage-service-secret")) || bytes.Contains(encoded, []byte(config.UsageCredentialID)) {
-		t.Fatalf("usage credential leaked in identity JSON: %s", encoded)
-	}
-	stored, err := memory.Secret(ctx, "org_acme", config.UsageCredentialID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Purpose != "vendor_usage" || bytes.Contains(stored.Ciphertext, []byte("usage-service-secret")) {
-		t.Fatalf("usage credential was not safely stored: %#v", stored)
-	}
-}
-
 func TestPublicMCPRequiresConfirmationAndPrivateTransitionDoesNot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -262,7 +125,7 @@ func TestIntegrationsCanShareAndThenIsolateResourceSets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shared, err := service.CreateResourceSet(ctx, platform.ResourceSetInput{Kind: "hook", Name: "Voice hooks", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v1/calls"}]`)}, actor)
+	shared, err := service.CreateResourceSet(ctx, platform.ResourceSetInput{Kind: "api", Name: "Voice API", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v1/calls"}]`)}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +135,7 @@ func TestIntegrationsCanShareAndThenIsolateResourceSets(t *testing.T) {
 		}
 	}
 
-	shared, err = service.UpdateResourceSet(ctx, shared.ID, platform.ResourceSetInput{Kind: "hook", Name: shared.Name, State: "active", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v2/calls"}]`), Revision: shared.Revision}, actor)
+	shared, err = service.UpdateResourceSet(ctx, shared.ID, platform.ResourceSetInput{Kind: "api", Name: shared.Name, State: "active", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v2/calls"}]`), Revision: shared.Revision}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +146,7 @@ func TestIntegrationsCanShareAndThenIsolateResourceSets(t *testing.T) {
 		}
 	}
 
-	isolated, err := service.DuplicateResourceSet(ctx, shared.ID, "Voice v1 frozen hooks", actor)
+	isolated, err := service.DuplicateResourceSet(ctx, shared.ID, "Voice v1 frozen API", actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,32 +156,12 @@ func TestIntegrationsCanShareAndThenIsolateResourceSets(t *testing.T) {
 	if _, err := service.AttachResourceSet(ctx, voiceV1.ID, isolated.ID, isolated.Latest.ID, actor); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.UpdateResourceSet(ctx, shared.ID, platform.ResourceSetInput{Kind: "hook", Name: shared.Name, State: "active", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v3/calls"}]`), Revision: shared.Revision}, actor); err != nil {
+	if _, err := service.UpdateResourceSet(ctx, shared.ID, platform.ResourceSetInput{Kind: "api", Name: shared.Name, State: "active", Manifest: json.RawMessage(`[{"name":"calls.create","path":"/v3/calls"}]`), Revision: shared.Revision}, actor); err != nil {
 		t.Fatal(err)
 	}
 	deprecated, err := memory.Integration(ctx, "prod_acme", voiceV1.ID)
 	if err != nil || len(deprecated.Resources) != 1 || deprecated.Resources[0].ResourceSetID != isolated.ID || deprecated.Resources[0].ResolvedRevision.ID != isolated.Latest.ID {
 		t.Fatalf("duplicated resource set did not isolate v1: integration=%#v err=%v", deprecated, err)
-	}
-}
-
-func TestCredentialBackedPackagePublicationIsStillGuarded(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	memory := store.NewMemory()
-	service := platform.New(memory)
-	pkg, _ := memory.Package(ctx, "prod_acme", "pkg_node")
-
-	_, err := service.SetPackageVisibility(ctx, pkg.ProductID, pkg.ID, model.VisibilityPublic, false, pkg.Revision, platform.Actor{ID: "root"})
-	if !errors.Is(err, platform.ErrConfirmationRequired) {
-		t.Fatalf("unconfirmed proxy package publication error = %v", err)
-	}
-	updated, err := service.SetPackageVisibility(ctx, pkg.ProductID, pkg.ID, model.VisibilityPublic, true, pkg.Revision, platform.Actor{ID: "root"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Visibility != model.VisibilityPublic {
-		t.Fatalf("visibility = %q", updated.Visibility)
 	}
 }
 
@@ -336,10 +179,8 @@ func TestAIProductBuilderJoinsIndependentAPIVersionsAndPublishes(t *testing.T) {
 	build, err := service.BuildProductDefinition(ctx, product.ID, []model.ProductBuildInput{
 		{Kind: "openapi", Name: "Voice API", Location: "https://api.example.com/voice/v3/openapi.yaml", Version: "v3"},
 		{Kind: "docs", Name: "Voice documentation", Location: "https://docs.example.com/voice/v3", Version: "v3"},
-		{Kind: "package", Name: "@acme/voice-node", Location: "npm:@acme/voice-node@7.2.1", Version: "7.2.1", Metadata: map[string]string{"api_version": "v3"}},
 		{Kind: "mcp", Name: "Voice tools", Location: "https://mcp.example.com/v2", Version: "2026-07-28"},
 		{Kind: "openapi", Name: "Messages API", Location: "https://api.example.com/messages/v2/openapi.yaml", Version: "v2"},
-		{Kind: "package", Name: "@acme/messages", Location: "npm:@acme/messages@5.1.3", Version: "5.1.3", Metadata: map[string]string{"api_version": "v2"}},
 	}, actor)
 	if err != nil {
 		t.Fatal(err)
@@ -357,10 +198,10 @@ func TestAIProductBuilderJoinsIndependentAPIVersionsAndPublishes(t *testing.T) {
 		if len(component.Releases) != 1 || component.Releases[0].Version == "unversioned" {
 			t.Fatalf("component release was not resolved: %#v", component)
 		}
-		if len(component.Releases[0].Bindings) < 2 {
+		if len(component.Releases[0].Bindings) < 1 {
 			t.Fatalf("release artifacts were not joined: %#v", component.Releases[0])
 		}
-		if component.Slug == "voice" && len(component.Releases[0].Bindings) != 4 {
+		if component.Slug == "voice" && len(component.Releases[0].Bindings) != 3 {
 			t.Fatalf("MCP protocol /v2 was not joined to Voice API v3: %#v", component.Releases[0])
 		}
 	}
@@ -476,10 +317,8 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	}
 	build, err := service.BuildProductDefinition(ctx, product.ID, []model.ProductBuildInput{
 		{Kind: "openapi", Name: "Voice API", Location: "https://api.example.com/voice/v3/openapi.yaml", Version: "v3"},
-		{Kind: "package", Name: "@acme/voice", Location: "npm:@acme/voice@7.2.1", Version: "7.2.1", Metadata: map[string]string{"api_version": "v3"}},
 		{Kind: "tool", Name: "voice.calls_create", Location: "tool:voice.calls_create", Version: "v3", Metadata: map[string]string{"api_version": "v3", "capability_slug": "voice", "capability_name": "Voice API"}},
 		{Kind: "openapi", Name: "Messages API", Location: "https://api.example.com/messages/v2/openapi.yaml", Version: "v2"},
-		{Kind: "package", Name: "@acme/messages", Location: "npm:@acme/messages@5.1.3", Version: "5.1.3", Metadata: map[string]string{"api_version": "v2"}},
 		{Kind: "docs", Name: "Platform changelog", Location: "https://docs.example.com/changelog/2026.8", Version: "2026.8"},
 	}, actor)
 	if err != nil {
@@ -523,10 +362,14 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	if err != nil || !managed || allowed {
 		t.Fatalf("tool outside snapshot managed=%v allowed=%v err=%v", managed, allowed, err)
 	}
-	if _, err := service.SaveProductVersionPin(ctx, product.ID, "contoso", ltsVersion.ID, "Production stability window", actor); err != nil {
+	customer, err := memory.ResolveCustomerAccount(ctx, identity.CustomerAccount{ID: "account_contoso", OrganisationID: product.OrganisationID, ProductID: product.ID, Issuer: "https://identity.vendor.example", ExternalID: "contoso", State: "active", LastAuthenticatedAt: time.Now().UTC()})
+	if err != nil {
 		t.Fatal(err)
 	}
-	pinned, err := service.ProductManifest(ctx, product.ID, "contoso")
+	if _, err := service.SaveProductVersionPin(ctx, product.ID, customer.ID, ltsVersion.ID, "Production stability window", actor); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := service.ProductManifest(ctx, product.ID, customer.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +380,7 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installation, err := service.SaveProductInstallation(ctx, product.ID, platform.ProductInstallationInput{CustomerID: "contoso", EnvironmentID: environment.ID, ExternalID: "contoso-voice-prod", Name: "Contoso voice production", State: "active"}, actor)
+	installation, err := service.SaveProductInstallation(ctx, product.ID, platform.ProductInstallationInput{CustomerAccountID: customer.ID, EnvironmentID: environment.ID, ExternalID: "contoso-voice-prod", Name: "Contoso voice production", State: "active"}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,15 +390,15 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	if _, err := service.SaveScopedProductVersionPin(ctx, product.ID, platform.ProductVersionPinInput{Scope: "installation", ScopeID: installation.ID, ProductVersionID: ltsVersion.ID, Reason: "Voice certification"}, actor); err != nil {
 		t.Fatal(err)
 	}
-	installationManifest, err := service.ProductManifestFor(ctx, product.ID, model.ProductSelectionContext{CustomerID: "contoso", InstallationID: "contoso-voice-prod"})
+	installationManifest, err := service.ProductManifestFor(ctx, product.ID, model.ProductSelectionContext{CustomerAccountID: customer.ID, InstallationID: "contoso-voice-prod"})
 	if err != nil || installationManifest.EffectiveVersion == nil || installationManifest.EffectiveVersion.ID != ltsVersion.ID || installationManifest.SelectionSource != "installation_pin" || installationManifest.EnvironmentID != environment.ID {
 		t.Fatalf("installation-scoped manifest = %#v err=%v", installationManifest, err)
 	}
-	secondInstallation, err := service.SaveProductInstallation(ctx, product.ID, platform.ProductInstallationInput{CustomerID: "contoso", EnvironmentID: environment.ID, ExternalID: "contoso-messages-prod", Name: "Contoso messages production", State: "active"}, actor)
+	secondInstallation, err := service.SaveProductInstallation(ctx, product.ID, platform.ProductInstallationInput{CustomerAccountID: customer.ID, EnvironmentID: environment.ID, ExternalID: "contoso-messages-prod", Name: "Contoso messages production", State: "active"}, actor)
 	if err != nil || secondInstallation.ID == "" {
 		t.Fatal(err)
 	}
-	environmentManifest, err := service.ProductManifestFor(ctx, product.ID, model.ProductSelectionContext{CustomerID: "contoso", InstallationID: "contoso-messages-prod"})
+	environmentManifest, err := service.ProductManifestFor(ctx, product.ID, model.ProductSelectionContext{CustomerAccountID: customer.ID, InstallationID: "contoso-messages-prod"})
 	if err != nil || environmentManifest.EffectiveVersion == nil || environmentManifest.EffectiveVersion.ID != latestVersion.ID || environmentManifest.SelectionSource != "environment_pin" {
 		t.Fatalf("environment-scoped manifest = %#v err=%v", environmentManifest, err)
 	}
@@ -576,7 +419,7 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pinned, err = service.ProductManifest(ctx, product.ID, "contoso")
+	pinned, err = service.ProductManifest(ctx, product.ID, customer.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,10 +463,14 @@ func TestProductVersionDiscoveryPinsAndLifecycle(t *testing.T) {
 			t.Fatalf("pending preview leaked into ordinary discovery: %#v", unpinnedPreviewManifest.AvailableVersions)
 		}
 	}
-	if _, err := service.SaveScopedProductVersionPin(ctx, product.ID, platform.ProductVersionPinInput{Scope: "customer", ScopeID: "preview-customer", ProductVersionID: preview.ID, Reason: "Pre-production acceptance", Revision: 0}, actor); err != nil {
+	previewCustomer, err := memory.ResolveCustomerAccount(ctx, identity.CustomerAccount{ID: "account_preview", OrganisationID: product.OrganisationID, ProductID: product.ID, Issuer: "https://identity.vendor.example", ExternalID: "preview-customer", State: "active", LastAuthenticatedAt: time.Now().UTC()})
+	if err != nil {
 		t.Fatal(err)
 	}
-	pinnedPreviewManifest, err := service.ProductManifest(ctx, product.ID, "preview-customer")
+	if _, err := service.SaveScopedProductVersionPin(ctx, product.ID, platform.ProductVersionPinInput{Scope: "customer", ScopeID: previewCustomer.ID, ProductVersionID: preview.ID, Reason: "Pre-production acceptance", Revision: 0}, actor); err != nil {
+		t.Fatal(err)
+	}
+	pinnedPreviewManifest, err := service.ProductManifest(ctx, product.ID, previewCustomer.ID)
 	if err != nil || pinnedPreviewManifest.EffectiveVersion == nil || pinnedPreviewManifest.EffectiveVersion.ID != preview.ID || len(pinnedPreviewManifest.OperationalWarnings) == 0 {
 		t.Fatalf("explicit preview pin = %#v err=%v", pinnedPreviewManifest, err)
 	}
@@ -699,5 +546,84 @@ func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
 	}
 	if _, err := service.RewriteProductDescription(ctx, product.ID, "A second bounded draft.", actor); err == nil || !strings.Contains(err.Error(), "daily token budget") {
 		t.Fatalf("daily rewrite budget error = %v", err)
+	}
+}
+
+func TestPublicManifestContainsOnlyAcknowledgedPublicIntegrations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "root", RequestID: "visibility-test"}
+
+	privateIntegration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "private-api", VersionKey: "v1", DisplayName: "Private API", Description: "Private customer API.", Lifecycle: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PublishIntegration(ctx, privateIntegration.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "public-api", VersionKey: "v1", DisplayName: "Public API", Description: "Public API.", Visibility: model.VisibilityPublic, Lifecycle: "active"}, actor); !errors.Is(err, platform.ErrConfirmationRequired) {
+		t.Fatalf("public integration created without confirmation: %v", err)
+	}
+	publicIntegration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "public-api", VersionKey: "v1", DisplayName: "Public API", Description: "Public API.", Visibility: model.VisibilityPublic, AcknowledgePublic: true, Lifecycle: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PublishIntegration(ctx, publicIntegration.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	privateIntegration, err = service.UpdateIntegration(ctx, privateIntegration.ID, platform.IntegrationInput{FamilyKey: privateIntegration.FamilyKey, VersionKey: privateIntegration.VersionKey, DisplayName: privateIntegration.DisplayName, Description: privateIntegration.Description, Visibility: model.VisibilityPublic, AcknowledgePublic: true, Lifecycle: privateIntegration.Lifecycle, Revision: privateIntegration.Revision}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicIntegration, err = service.UpdateIntegration(ctx, publicIntegration.ID, platform.IntegrationInput{FamilyKey: publicIntegration.FamilyKey, VersionKey: publicIntegration.VersionKey, DisplayName: "Unpublished public name", Description: publicIntegration.Description, Visibility: publicIntegration.Visibility, Lifecycle: publicIntegration.Lifecycle, Revision: publicIntegration.Revision}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicManifest, err := service.ProductManifestFor(ctx, "prod_acme", model.ProductSelectionContext{Public: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(publicManifest.Integrations) != 1 || publicManifest.Integrations[0].ID != publicIntegration.ID || publicManifest.Integrations[0].DisplayName != "Public API" || publicManifest.EffectiveVersion != nil || len(publicManifest.Artifacts) != 0 || len(publicManifest.AvailableVersions) != 0 {
+		t.Fatalf("public manifest leaked private or versioned state: %#v", publicManifest)
+	}
+	privateManifest, err := service.ProductManifestFor(ctx, "prod_acme", model.ProductSelectionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(privateManifest.Integrations) != 2 {
+		t.Fatalf("private manifest omitted integrations: %#v", privateManifest.Integrations)
+	}
+}
+
+func TestBackendConnectionCredentialRotationIsRevisionGuarded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x35}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVault(memory, vault)
+	connection, err := service.CreateBackendConnection(ctx, platform.BackendConnectionInput{Name: "Support delivery", BaseURL: "https://backend.vendor.example", AuthenticationType: "bearer", Credential: "first-secret", State: "active"}, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstFingerprint := connection.CredentialFingerprint
+	credential, err := service.RotateBackendConnectionCredential(ctx, connection.ID, "second-secret", connection.Revision, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.Fingerprint == "" || credential.Fingerprint == firstFingerprint || credential.ConnectionRevision != connection.Revision+1 {
+		t.Fatalf("unexpected credential version: %#v", credential)
+	}
+	replayed, err := service.RotateBackendConnectionCredential(ctx, connection.ID, "second-secret", connection.Revision, platform.Actor{ID: "root"})
+	if err != nil || replayed.ID != credential.ID || replayed.CreatedAt != credential.CreatedAt || replayed.ConnectionRevision != credential.ConnectionRevision {
+		t.Fatalf("credential retry created a second version: replay=%#v err=%v", replayed, err)
+	}
+	if _, err := service.RotateBackendConnectionCredential(ctx, connection.ID, "stale-secret", connection.Revision, platform.Actor{ID: "root"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale rotation did not conflict: %v", err)
 	}
 }

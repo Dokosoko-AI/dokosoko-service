@@ -1,334 +1,147 @@
-# DokoSoko — Final Plan
+# DokoSoko integration contract
 
-## Product model
+This document records the intended long-lived contract. It is normative design guidance; the OpenAPI documents are the machine-readable source of truth.
 
-DokoSoko is a vendor-operated delivery control plane for coding agents. A DokoSoko installation is the vendor deployment: it owns environments, policy, distribution, identity, and the API catalog. Inside it, an **API** is one API family plus one API version, such as Voice API v2 or Face API v3. `Integration` remains an internal compatibility name in APIs and persisted records.
-
-The authoritative hierarchy is:
-
-```text
-DokoSoko installation / Deployment
-├── Environments
-├── APIs (API family + API version)
-│   ├── attached documentation/package/tool-backend resource sets
-│   ├── attached service connections
-│   └── optional API-specific reporting policy
-├── Reusable resource-set directory
-├── Shared service connections
-└── Agent access, identity, customer data, activity, audit, and default reporting policy
-```
+## 1. Resource model
 
-“Product” remains only in compatibility APIs and persisted legacy records while clients migrate. It is not a second user-facing container under the DokoSoko installation.
+One DokoSoko installation is one vendor deployment. Its integration surface consists of:
 
-The v2 product is UI-first: every routine configuration task is available in the web console, while an API and declarative configuration format remain available for automation. The UI is a statically built Next.js application based on Catalyst UI patterns and is served or reverse-proxied by the Go control plane.
+- `integration` — one API family and version exposed by the deployment;
+- `resource_set` — independently revisioned documentation or API content shared by integrations;
+- optional singleton `identity_provider` — delegated customer OIDC and API configuration for private access;
+- `backend_connection` — service-to-service origin, authentication state, and active credential version;
+- `customer_account` — DokoSoko's durable account resource resolved from a trusted external identity;
+- `installation` — a registered customer/environment integration instance;
+- `tool` — a published operation with fixed destination, schemas, and authorization policy;
+- `support_submission` — one consented, encrypted bug report or feedback item;
+- `support_route` — reporting policy that references, but never owns, a backend connection;
+- optional `access_definition`, `access_connection`, `access_instance`, and `access_credential` resources for provider-owned lifecycle management.
 
-## Product principles
+Package ecosystems are not a DokoSoko resource. An HTTP capability belongs in an API or tool contract. Generated SDKs may be published separately, but they are not needed to expose an endpoint and do not shape runtime authorization.
 
-1. Private by default. New sources, packages, tools, connectors, and credentials are never public implicitly.
-2. Explicit publication. Public access is a reviewed state transition with a warning, confirmation, actor, timestamp, and audit record.
-3. Separate identity, entitlement, consent, and policy. A successful login is not sufficient authority for an operation.
-4. Server-side secrets. Browser and MCP clients never receive persistent vendor credentials.
-5. Versioned, reversible configuration. Draft, validate, publish, and roll back are first-class operations.
-6. Untrusted knowledge. Crawled or uploaded content can inform an answer but cannot authorize actions, expose secrets, or redefine tools.
-7. Measured outcomes. Success means a validated developer outcome, not merely a tool call or generated answer.
+## 2. Optional identity and customer accounts
 
-## Implemented v2 baseline
+Private customer access optionally configures:
 
-This repository now contains an executable v2 baseline, not only a design document. The following proposed changes are implemented end to end:
+- an exact HTTPS OIDC issuer;
+- a client ID and encrypted client secret;
+- OIDC scopes and audience;
+- an optional OAuth resource indicator independent of the API origin;
+- the claim containing the vendor's external customer ID;
+- an optional installation claim;
+- one credential-free delegated API origin;
+- an explicit active or disabled state.
 
-- UI-first static Next.js/Catalyst console served by the Go control plane;
-- first-run deployment, database migrations, encrypted secrets, root creation, MFA, recovery, secure sessions, CSRF, additional-root lifecycle, readiness, and System Doctor;
-- a singleton Deployment, environments, first-class versioned APIs, reusable resource sets, sources, crawl queues/state polling, review/publication controls, packages, tools, identity, access connections, provider-owned instances, credential records, API runs, analytics, audit, and LLM profiles in the web UI/API;
-- sitemap-first Crawlee/Playwright worker with incremental metadata, immutable snapshots, scope/budget limits, DNS/IP defenses, hidden/encoded instruction detection, quarantine, and atomic source state changes;
-- private-first, separately published packages for npm, Go, Git, Maven/Java, Android, Swift, and NuGet/C#, with generic public-link, authenticated proxy, and versioned download-service artifact delivery;
-- no-code custom tool definitions with JSON Schemas, fixed HTTPS tool backend, encrypted credential, entitlement/confirmation policy, safe runtime validation, versioned publication, and audit;
-- managed third-party MCP imports using the [Stateless MCPv2 Only](https://blog.modelcontextprotocol.io/posts/2026-07-28/) `2026-07-28` contract, complete catalog review, explicit namespaced selection, local schema pins, drift shutdown, post-authz execution, and separate service or subject-bound delegated upstream credentials;
-- OAuth authorization-code + PKCE brokerage through the vendor OIDC provider, exact redirect allowlists, nonce/ID-token validation, login-time entitlement resolution, opaque product-bound DokoSoko tokens, and separate per-operation authorization;
-- generalized provider access operations for authorization, optional instance creation, credential issue, and revoke, with provider-defined single/multi cardinality, connection/instance scope, ownership, idempotency, and one-time credential delivery;
-- Private MCP, default-off/read-only Public MCP, secret-free widget loaders, package delivery, owner-scoped API runs, deterministic success analytics, and append-only audit;
-- consent-gated bug-report and feedback tools on Private MCP, with fixed safe-use instructions, explicit runtime confirmation, immutable API context, API-specific or default reporting policies, encrypted durable holding, bounded retention, separate idempotent delivery endpoints, and an administrative inbox;
-- mandatory LLM/knowledge hardening: content has no authority, model tool calls and authorization are disabled, retrieval is scoped before ranking, citations are required, low confidence returns no answer, and suspicious sources are quarantined.
+The pair `(issuer, external_customer_id)` resolves to one durable `customer_account` within a deployment. This resolution is just-in-time after a verified ID token. Administrative APIs may list, suspend, and reactivate accounts but cannot manufacture identity-backed accounts.
 
-The executable API contract is [`api/openapi.yaml`](../api/openapi.yaml); deployment and vendor integration instructions are in [`README.md`](../README.md).
+Internal `customer_account.id` values are used for DokoSoko relationships. External IDs are preserved for vendor context and never accepted as internal foreign keys. Installations must belong to the resolved customer account. An unknown or mismatched authenticated installation fails closed.
 
-### Production follow-ups
+Suspension is checked whenever a DokoSoko access token is authenticated. It therefore affects already-issued tokens without waiting for expiry.
 
-The baseline deliberately leaves these scale or ecosystem-specialized items as follow-up releases rather than pretending a generic implementation is sufficient:
+Identity is not required for public discovery or backend delivery. Disabling the provider immediately fails private authorization without disabling those independent surfaces.
 
-1. Native registry-protocol adapters and install-command UX for each package ecosystem. The current gateway provides secure artifact records and streaming for every named ecosystem, but it is not yet a drop-in npm, Maven, NuGet, Go module, or Swift registry.
-2. Git clone and uploaded-file ingestion adapters. Website/OpenAPI URL crawling is operational; Git/upload source records require their dedicated workers.
-3. A complete embeddable chat SDK. The current public/private scripts are secret-free launchers that hand off through `dokosoko:open`; origin/theme/locale configuration and the hosted chat surface remain to be built.
-4. Advanced organisation membership/groups, compatibility-snapshot diff/rollback UI, support elevation, and multi-step tool mappings.
-5. S3/KMS adapters, distributed job control/dead letters, OpenTelemetry, scheduled rollups, automated backup/restore drills, support bundles, upgrades, and disaster-recovery automation.
-6. A production adversarial evaluation corpus and external penetration review. Runtime guardrails and unit/integration security tests are present, but these release gates require deployment-specific evidence.
+## 3. OAuth contract
 
-These follow-ups do not weaken the current private/public, identity, authorization, secret, or tenant boundaries. They are required before describing the baseline as a horizontally scaled general-availability service.
+DokoSoko is the authorization server for MCP clients and federates authentication to vendor OIDC.
 
-## Runtime architecture
+Required properties:
 
-```text
-Browser console ─────── REST/JSON ───────────────┐
-Private MCP client ─── Doko OAuth token ─────────┤
-Public MCP client ──── no authentication ────────┤
-Public/private widget ─ scoped session ──────────┤
-                                                 ▼
-                                      Go control plane
-                    ┌────────────────────┼─────────────────────┐
-                    ▼                    ▼                     ▼
-              PostgreSQL          object storage       provider runtime
-                    ▲                    ▲                     │
-                    │                    │                     ▼
-             crawler jobs ◄──── Crawlee/Playwright      vendor APIs/IdP
-```
+1. RFC 8414 authorization-server metadata at `/.well-known/oauth-authorization-server`.
+2. RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource/mcp`.
+3. One canonical resource: the exact `/mcp` URL.
+4. Authorization code flow with PKCE S256 only.
+5. Mandatory RFC 8707 `resource` on authorization and token requests.
+6. HTTPS client metadata documents as client IDs; redirect URIs must match exactly.
+7. One-time, short-lived authorization state and code records stored by digest.
+8. DokoSoko access tokens bound to client, resource, deployment, subject, customer account, scopes, and grant evaluation.
+9. The DokoSoko token is never forwarded to a vendor or upstream MCP server.
 
-The control plane owns authorization, publication, agent connection state, audits, analytics events, package streaming, and MCP protocol handling. A dedicated TypeScript worker owns crawling and browser rendering. PostgreSQL is the source of truth. Object storage contains immutable source snapshots and large package/cache artifacts.
+The upstream vendor access token is stored encrypted and expires no later than the earliest upstream token or access-evaluation boundary.
 
-## Default deployment
+## 4. Vendor-owned operations
 
-The supported self-hosted deployment is Docker Compose with:
+The vendor may configure two independent HTTPS origins: the delegated API origin under the identity provider and a service origin on each backend connection. Neither is a collection of hook URLs. DokoSoko owns the paths and request schemas.
 
-- `dokosoko`: Go control plane and static console;
-- `crawler`: TypeScript Crawlee worker with HTTP and Playwright paths;
-- `postgres`: PostgreSQL with pgvector;
-- a persistent data volume, with S3-compatible object storage and KMS optional.
+Identity and backend delivery have separate OpenAPI documents. Either may generate an independent server stub without creating a shared base URL, credential, deployment, or lifecycle.
 
-The minimum bootstrap configuration is the database URL, master encryption key or KMS reference, one-time setup token, public base URL, and storage path. There is no default administrator password.
+### Access evaluation
 
-## Console information architecture
+`POST /v1/access/evaluations` is called once during authorization with the live delegated vendor access token. Its body is an empty object. The vendor derives the client, authenticated subject, and external customer from the token; DokoSoko does not send a second ambiguous integration identifier.
 
-Every routine console view has a canonical URL. Navigation uses ordinary anchors enhanced with client-side history, so deep links, refresh, open-in-new-tab, and browser back/forward all work.
+The response contains:
 
-- APIs — `/integrations`
-  - Selected API overview — `/integration/:uid`
-  - Resources — `/integration/:uid/resources`
-  - Access — `/integration/:uid/access`
-  - Published history — `/integration/:uid/history`
-- Agent access — `/agent-access`
-- Activity — `/activity`
-- Settings — `/settings`
-  - Service connections — `/access`
-  - Bug reports and feedback policies — `/operations/reporting`
+- a stable evaluation ID;
+- a bounded, unique list of `grants`;
+- an absolute expiry;
+- an optional policy version.
 
-The API directory is the home page; `/` and the retired `/overview` route canonicalize to `/integrations`. Selecting an API opens a contextual workspace with four tabs. Resources includes documentation, packages, agent tools, and tool backends. Access assigns shared service connections. Overview shows one compact state, unresolved setup actions only, bug-report and feedback configuration, and a link to the deployment-wide customer usage endpoint. History exposes immutable published snapshots. Technical identifiers, hashes, and release machinery stay behind Advanced details or Advanced publishing.
+DokoSoko defines tools and `required_grants`. Access evaluation narrows access; it does not remotely define DokoSoko resources. Network errors, non-success HTTP statuses, malformed data, missing identity, expired evaluations, and unavailable dependencies deny authorization.
 
-The API switcher is hidden when only one API exists. The directory keeps one search field and groups versions by API family; redundant family, lifecycle, and setup filters are intentionally absent. Usage is configured once under Settings → Identity & customer account data. Report submissions, API runs, analytics context, and audit events share Activity. The legacy tools, libraries, reporting, and snapshot URLs remain compatibility routes but are not primary navigation.
+The `Idempotency-Key` is stable for retries of one evaluation and unique for a later evaluation. Each transport attempt has a new `X-DokoSoko-Request-ID`.
 
-Other records retain singular, UID-addressed technical URLs: `/resource-set/:uid`, `/source/:uid`, `/package/:uid`, `/tool/:uid`, `/connection/:uid`, `/access-definition/:uid`, `/access-connection/:uid`, `/installation/:uid`, `/release/:uid`, `/run/:uid`, `/support-route/:uid`, `/report/:uid`, `/audit-event/:uid`, and `/root-user/:uid`. Unrecognised console paths render a console-level not-found view without shadowing `/api`, `/mcp`, widget, health, OAuth, or artifact endpoints.
+### Support submission
 
-## Functional scope
+`POST /v1/support-submissions` receives both bug reports and feedback through a referenced backend connection. Backend credentials rotate independently of support routes and are never reused for delegated customer operations.
 
-### 1. Bootstrap and root administration
+DokoSoko accepts a report only after explicit user confirmation, schema and size validation, and secret screening. It stores the payload encrypted and returns a local receipt before vendor delivery. A durable worker provides at-least-once delivery.
 
-The first-run setup flow validates the database, applies migrations, configures encryption, creates the first root administrator, requires MFA enrollment, sets the public URL and storage, and optionally configures email and LLM profiles. Platform root and organisation owner are separate roles. Access to tenant content by platform support requires explicit, time-limited, audited elevation.
+Retries preserve `Idempotency-Key` and change `X-DokoSoko-Request-ID`. Network failures, 408, 429, and 5xx are retryable. Other 4xx statuses are permanent. A vendor returns `409` if a key is reused with a different payload and retains the original result for at least 24 hours.
 
-The System Console covers database, storage, AI, identity, email, crawling, package gateway, security, observability, backups, updates, organisations, root users, and audit. System Doctor performs non-destructive connectivity and configuration checks and can generate a redacted support bundle.
+Usage is an ordinary API operation or tool if required. It has no separate integration mechanism.
 
-### 2. Deployment, APIs, and environments
+## 5. Tools and delegated execution
 
-An organisation owns the singleton Deployment represented by the DokoSoko installation. The Deployment owns one or more environments and all delivery policy. An API is uniquely identified by `(family_key, version_key)` and carries `draft`, `active`, `deprecated`, or `retired` lifecycle plus optional replacement and sunset metadata. Publishing creates an immutable hashed API revision that pins the exact resource revisions, service connections, and reporting policy in force.
+A tool has:
 
-Documentation, package, and tool-backend resources live in reusable typed sets. Two APIs share content only when both explicitly attach the same set. A link may follow latest or pin a particular immutable resource-set revision. “Duplicate” creates an independent copy before a version-specific change, preventing accidental mutation of a shared catalog. Environment overrides cannot silently broaden published permissions.
+- a stable namespace and name;
+- bounded JSON input and output schemas;
+- one fixed HTTPS destination;
+- an HTTP method or managed MCP operation;
+- `required_grants`;
+- an explicit confirmation policy;
+- a timeout and immutable published revision.
 
-### 3. Sources and crawling
+For vendor HTTP tools, the destination must share the delegated API origin and execution uses the authenticated user's delegated vendor token. For managed MCP tools, DokoSoko uses either a separately encrypted service credential or a delegated upstream OAuth grant bound to the DokoSoko subject.
 
-Sources include websites, OpenAPI documents, Git repositories, uploaded files, SDK references, and package metadata. The Sources tab exposes configuration, credentials, latest crawl, discovered pages, fetch/render method, errors, diffs, quarantine state, and publication state.
+Before execution DokoSoko checks publication state, schema, confirmation, grants, customer and installation state, destination policy, and upstream schema drift. Any ambiguity fails closed. Request-time destination overrides are forbidden.
 
-The crawler uses sitemap-first discovery, an HTTP fast path, Playwright fallback, ETag and Last-Modified incremental requests, canonical URL normalization, scope rules, request budgets, and immutable raw/rendered snapshots. It extracts meaningful content, computes changes, scans for prompt injection and hidden text, and publishes atomically after validation or review.
+## 6. Access Provider API
 
-All outbound fetches enforce DNS and IP validation, redirect revalidation, protocol allowlists, tenant request budgets, response size limits, and isolated browser contexts. Private source credentials are encrypted and never enter the knowledge index.
+The optional Access Provider API is reserved for a genuine provider-owned resource lifecycle:
 
-### 4. Knowledge publication and retrieval
+- authorize one mutation;
+- create an instance when cardinality is `many`;
+- issue a connection- or instance-scoped credential;
+- revoke a credential idempotently.
 
-Content moves through `draft → validated → published`, with `quarantined` and `retired` side states. Published snapshots are immutable and rollbacks are atomic. Retrieval filters organisation, product, environment, version, visibility, and publication state before lexical, vector, or reranking work.
+It must not become a generic action bag. Operations that do not fit this lifecycle are ordinary tools.
 
-Knowledge answers carry citations and provenance. Low-confidence retrieval can return no answer. Private and public indexes may share storage, but public queries must have an independent visibility filter in the authoritative query path.
+Every mutation is authorized independently. Create and issue operations require idempotency keys. One-time credentials are returned once; replay returns metadata, never plaintext. DokoSoko persists only encrypted material or fingerprints according to the declared storage mode.
 
-### 5. Packages
+## 7. HTTP and evolution rules
 
-Packages support npm, Go, Git, Java/Maven, Android/AAR, Swift, and C#/NuGet. A package is public or private, defaults to private, and supports:
+- Resource creation uses `POST` and returns `201`; accepted asynchronous work returns `202`.
+- Retrieval uses `GET`; partial state change uses `PATCH`; replacement configuration uses `PUT`; deletion uses `DELETE` and returns `204` when no representation is needed.
+- Mutable administrative resources use revisions for optimistic concurrency and return `409` on stale writes.
+- Errors use one structured envelope with stable machine codes, safe messages, and request IDs.
+- List responses use `{ "items": [...] }`; cursor pagination must be added before an unbounded collection can grow materially.
+- Servers ignore unknown additive response fields from vendor APIs. Vendors must tolerate additive request headers but may reject unknown body fields according to the published schema.
+- Breaking changes require a new versioned path or explicit API version. Implementation details and database identifiers are not promoted into the public contract accidentally.
 
-- public metadata/link mode;
-- proxy mode, where DokoSoko stores the upstream credential and streams the package;
-- download mode, where DokoSoko sends a vendor-owned opaque artifact identifier to `POST /v1/package/download` and receives an idempotent short-lived URL, exact checksum, and exact size without exposing DokoSoko resource IDs.
+## 8. Acceptance invariants
 
-Any mode may be marked public after the guarded warning and confirmation. For proxy and download modes this explicitly authorizes anonymous access through DokoSoko; public rate limits, download budgets, checksum enforcement, and rapid disable controls are mandatory.
+The integration is acceptable only while all of these remain true:
 
-Initial scope is read/install only. Package credentials are short-lived, product/environment scoped, revocable, rate-limited, and audited. Streams enforce content length and checksum when available. Persistent upstream credentials are never returned to clients.
-
-### 6. Provider-owned access and credential issuance
-
-The administrator connects a vendor service. An advanced Service Type—not the DokoSoko user—declares whether the service has one fixed instance or supports many provider-owned resources. It also supplies vendor labels such as Project, Tenant, Workspace, or Account, the credential scope, management authentication mode, required entitlements, TTL limit, storage mode, and fixed operation paths.
-
-For `instance_cardinality=one`, DokoSoko suppresses instance creation and issues connection-scoped credentials. For `instance_cardinality=many`, authenticated users can create/list owned provider resources and issue instance-scoped credentials. Every connection is explicitly attached to the APIs allowed to use it. Operations are owner filtered, idempotent, environment scoped, audited, DNS/IP validated, HTTPS-only, and fail closed through the provider authorization operation.
-
-One-time credentials are returned once and only their fingerprint and lifecycle metadata are listable. Managed encrypted and provider-reference storage modes must be explicitly selected by the provider definition. Revocation is explicit and audited.
-
-### 7. Vendor identity and entitlements
-
-The default authentication flow is:
-
-```text
-MCP or widget → DokoSoko OAuth → vendor IdP → DokoSoko audience token
-```
-
-At runtime DokoSoko exchanges or acquires a separate vendor-audience token. It never passes the inbound DokoSoko token to a vendor API. Identities are keyed by OIDC `(issuer, subject)`, not email.
-
-DokoSoko defines and publishes product capabilities. The vendor is authoritative for commercial and account entitlements. Effective authorization is:
-
-```text
-published capability
-∩ vendor entitlement
-∩ vendor user role
-∩ connector consent
-∩ DokoSoko policy
-∩ environment
-∩ approval state
-```
-
-The standard vendor contract provides batch entitlement resolution for discovery, per-operation authorization checks, credential issuance, and revocation. Mutating, private, or credential operations fail closed when the entitlement service is unavailable.
-
-### 8. Custom API tools
-
-The no-code tool builder configures:
-
-- tool name, description, and namespace;
-- JSON input schema;
-- reusable API connection and credential;
-- URL, method, headers, and safe request mapping;
-- output schema and response mapping;
-- required entitlement, scopes, confirmation, timeout, and rate limit;
-- tests and a versioned publication step.
-
-The initial builder allows one HTTP call per tool and safe expressions such as CEL. It does not allow arbitrary JavaScript, agent-controlled hosts, or agent-controlled authorization headers. Existing MCP servers are imported only through the managed Stateless MCPv2 bridge after tools are explicitly selected, pinned, namespaced, reviewed, and policy wrapped. The bridge retains no logical live session and never forwards an inbound DokoSoko token.
-
-### 9. Private MCP
-
-Private MCP is the default agent interface. The canonical endpoint is `/mcp`; the legacy ID-bearing route remains an alias. It requires a DokoSoko-audience access token, resolves the user and organisation, evaluates connector consent and vendor entitlements, and exposes only the applicable APIs, knowledge, packages, tools, access instances, and credential actions. Token passthrough is forbidden.
-
-### 10. Public MCP
-
-Public MCP is a Deployment-level, authentication-free endpoint at `/mcp/public` and is **off by default**. The legacy ID-bearing route remains an alias. Enabling it requires an explicit warning and confirmation and creates an audit event. Disabling it takes effect immediately.
-
-Public MCP exposes read-only discovery and retrieval tools only. Its authoritative query path includes only:
-
-- published source records marked `public`;
-- published package records marked `public`.
-
-Custom API tools, provider-resource provisioning, private package modes, identity data, entitlement data, credentials, and API-run details are never exposed through Public MCP in the initial release. Public responses are rate-limited, abuse monitored, citation-bearing, and cacheable only where tenant isolation is preserved.
-
-### 11. Visibility safety
-
-Every source and package is `private` by default. A change from private to public is a guarded publication operation, not a casual switch:
-
-1. show which Deployment, environment, record, and currently published content will become anonymous;
-2. explain that public MCP and the public widget may expose it without login;
-3. require a positive confirmation value in both UI and API;
-4. validate that the record contains no configured credentials or quarantined content;
-5. write the actor, prior state, new state, revision, and timestamp to audit;
-6. invalidate public retrieval caches after commit.
-
-Changing public to private requires no warning and takes effect immediately. The API rejects a public transition without the explicit acknowledgement, even if a client bypasses the UI.
-
-### 12. Widgets
-
-The MCP & widgets console has a dedicated Copy widget section with two independently copyable snippets:
-
-- **Public widget:** no sign-in, uses only Public MCP and public published sources/packages, and is unavailable while Public MCP is disabled.
-- **Private widget:** starts an authenticated DokoSoko session and can use private knowledge and authorized actions according to the same policy as Private MCP.
-
-Widget configuration includes allowed origins, product/environment, theme, launcher text, locale, privacy notice, rate limit, and Content Security Policy guidance. Embed snippets contain public identifiers only; secrets are never embedded.
-
-The console obtains endpoint and loader URLs from DokoSoko's distribution API rather than embedding a deployment hostname, so copied snippets always target the active service origin.
-
-### 13. LLM profiles and hardening
-
-LLMs are optional and configured by profile: embedding, extraction, reranking, evaluation, and optional UI assistant. Providers may be hosted, OpenAI-compatible, or local. Configuration includes encrypted credentials, budgets, model tests, embedding dimension validation, and controlled re-embedding.
-
-Crawled and uploaded content is always untrusted. It cannot grant authority, reveal secrets, choose network destinations, add tools, or modify system policy. Models have no direct database, network, or secret-store access. All tool calls are schema validated and allowlisted. Injection indicators, hidden-text checks, provenance, trust levels, quarantine, no-answer behavior, and adversarial evaluation gates are part of publication.
-
-The evaluation corpus covers prompt injection, cross-tenant leakage, package substitution, hidden tools, internal URL access, encoded/obfuscated instructions, unsafe citations, and data exfiltration attempts.
-
-### 14. Connector runs
-
-A connector run records connector authorization, requested outcome, capability discovery, package access, access-instance/credential operations, validation, reported result, timing, and failure reason. Sensitive tool inputs and outputs are redacted or excluded by policy. The persisted legacy `IntegrationRun` name remains during migration so it cannot be confused with a first-class API Integration in new APIs or UI.
-
-### 15. Bug reports, feedback, and support routes
-
-Private MCP may expose `support.report_bug` and `support.submit_feedback` only where the selected API’s reporting policy enables that capability. An API-specific policy wins over the deployment default. No support tool is ever exposed by Public MCP.
-
-The fixed MCP server instruction and each tool description tell the agent to offer reporting when appropriate, preview the exact sanitized content, disclose the trusted context DokoSoko will add, and obtain explicit approval. The server independently requires `_meta.confirmed=true`, validates strict schemas and size limits, rejects likely secrets, and includes contact details only when `allow_contact` was explicitly approved. A prompt is guidance, not the security boundary.
-
-Every accepted submission encrypts the user content and trusted context into a durable outbox. The plaintext record contains only routing, fingerprint, expiry, retry, and sanitized ticket metadata. It pins the internal API record ID, API family/version, immutable published revision and manifest hash, reporting policy, authenticated pseudonym, deployment release context, environment, installation, and request ID. With no delivery endpoint it remains held for administrators; with a fixed HTTPS endpoint and independent encrypted service credential it is delivered idempotently with bounded retries. Bug and feedback destinations are separate.
-
-### 16. Analytics
-
-Activity brings API runs, reporting, operational analytics, and audit into one place. Root administrators see aggregated platform health; organisation users see their scoped data. User counts distinguish console users, authorized developers, and agent connectors.
-
-Metrics include DAU/WAU/MAU, API runs, reported versus validated success, first-pass success, time-to-success, human intervention, MCP/tool volume and latency, zero-result rate, source freshness, package downloads and verification, credential issuance/revocation, LLM tokens/cost, and public-versus-private usage.
-
-The primary funnel is:
-
-```text
-connector authorized → run started → capability resolved → package acquired
-→ credentials issued → implementation validated → success reported
-```
-
-Events are append-only in partitioned PostgreSQL tables with scheduled rollups/materialized views. Raw query text, secrets, private content, and sensitive tool arguments/results are not analytics dimensions by default.
-
-### 17. Audit and operations
-
-Audit is append-only, tenant scoped, exportable, and records actor, action, target, policy decision, revision, request ID, timestamp, and outcome without secret values. Operations include health/readiness endpoints, queue visibility, retry/dead-letter controls, backups/restore verification, version/update status, OpenTelemetry export, and redacted support bundles.
-
-## Core entities
-
-`PlatformConfig`, `RootUser`, `Organisation`, `Membership`, `Deployment`, `Environment`, `Integration`, `IntegrationRevision`, `ResourceSet`, `ResourceSetRevision`, `IntegrationResourceLink`, `ConnectorRelease`, `VendorIdentityProvider`, `VendorGrant`, `EntitlementSnapshot`, `Policy`, `Source`, `CrawlJob`, `SourceSnapshot`, `KnowledgeDocument`, `Package`, `PackageAccessLease`, `AccessDefinition`, `AccessDefinitionRevision`, `AccessConnection`, `AccessInstance`, `AccessCredential`, `SupportRoute`, `ReportSubmission`, `APIConnection`, `ToolDefinition`, `ToolRelease`, `MCPConfiguration`, `WidgetConfiguration`, `ConnectorRun`, `AnalyticsEvent`, and `AuditEvent`.
-
-All tenant resources include an organisation ID, immutable ID, revision, creation/update timestamps, and lifecycle state. Visibility-bearing resources default to `private` at both application and database layers.
-
-## Delivery phases
-
-1. Contract: entities, API conventions, threat model, audit/analytics event catalog, and this plan.
-2. Deployment and bootstrap: Compose, database migrations, static console serving, setup/root flow, System Doctor.
-3. Deployment and API control plane: tenancy, environments, API family/version lifecycle, reusable resource sets, and immutable revisions.
-4. Sources and knowledge: crawler worker, snapshots, diff/review, publication, retrieval, citations, visibility.
-5. Identity and MCP: OAuth/IdP brokerage, connector grants, private MCP, public MCP, widgets.
-6. Packages: ecosystem adapters, proxy/download modes, checksums, leases, cache policy.
-7. Access and credentials: provider-owned single/multi-instance definitions, connections, authorization endpoints, ownership, idempotency, cleanup, and revocation.
-8. Custom tools: builder, schemas/mappings, authz, test/publish, runtime proxy.
-9. Analytics and evaluation: event pipeline, dashboards, success funnel, adversarial LLM suite.
-10. Production hardening: scale, rate limits, backups, disaster recovery, penetration review, upgrade path.
-
-## MVP acceptance criteria
-
-The first production candidate is complete only when all of the following are demonstrated end to end:
-
-1. A fresh deployment completes setup without a default password and creates an MFA-protected root user.
-2. The organisation, singleton Deployment, environment, and vendor IdP can be configured entirely in the console.
-3. A source can be crawled, diffed, quarantined/reviewed, and atomically published with citations.
-4. New sources and packages are private at both API and database layers.
-5. A public visibility transition is rejected without acknowledgement and audited when confirmed.
-6. Public MCP is off on a new Deployment and is unavailable anonymously until explicitly enabled.
-7. Public MCP returns only public, published sources and packages and has no privileged tools.
-8. Disabling Public MCP or making a record private removes anonymous access immediately.
-9. The public widget follows the same public-only policy and the private widget follows authenticated MCP policy.
-10. Public and private embed snippets can be copied and contain no secrets.
-11. A private package can be installed through proxy and download modes with short-lived access and checksum verification.
-12. A single-instance service suppresses instance creation; a multi-instance service can create an owned provider resource, and both can issue, use, revoke, and audit a scoped temporary credential.
-13. A custom API tool can be defined, tested, published, authorized, executed, and audited without arbitrary code.
-14. Vendor identity and entitlements narrow effective access; outages fail closed for private or mutating operations.
-15. An adversarial source cannot cause secret access, unauthorized tool calls, cross-tenant retrieval, or arbitrary network access.
-16. An API run reaches a deterministic validation result and feeds the analytics success funnel.
-17. Analytics and audit provide distinct, scoped views with no stored secrets or private query text by default.
-18. Backup/restore, upgrade, health, and System Doctor paths are documented and verified.
-19. A third-party MCPv2 catalog can be inspected, explicitly imported as schema-pinned drafts, published behind DokoSoko authorization, executed with a separate upstream identity, and shut down automatically on schema drift.
-20. Two APIs can deliberately share documentation, package, or tool-backend sets; duplication isolates later edits; every published API version pins the resolved resource revisions.
-21. Bug reports and feedback are API-routed, consent-gated, secret-scanned, encrypted at rest, held without a delivery endpoint, delivered idempotently when configured, and retain immutable trusted API context.
-
-## Initial non-goals
-
-- package publishing;
-- arbitrary workflow scripting in the tool builder;
-- blindly proxying every tool from an upstream MCP server;
-- using model output as an authorization decision;
-- storing persistent vendor credentials in clients;
-- public project, credential, entitlement, or custom-tool operations.
+1. The OpenAPI and implemented paths agree exactly.
+2. There is one canonical Private MCP resource and no legacy ID-bearing alias.
+3. A trusted external customer resolves to a durable internal account.
+4. Suspended or mismatched accounts and installations fail closed.
+5. Access evaluation is resource-bound, short-lived, idempotent, and fail-closed.
+6. `grants` is the only authorization vocabulary across identity, tools, provider access, storage, and APIs.
+7. DokoSoko tokens are never forwarded.
+8. Vendor calls use fixed origins and fixed versioned paths.
+9. Support delivery is consented, encrypted, durable, idempotent, and retry-safe.
+10. No package gateway, package resource, entitlement hook, usage hook, or arbitrary hook URL remains in the product contract.
+11. Identity, backend connectivity, and public visibility are independent axes.
+12. Integrations default private; public transition requires acknowledgement and the global Public MCP switch remains a master kill switch.
+13. Support routes contain backend-connection references, never plaintext credentials or copied secret identifiers.

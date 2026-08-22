@@ -65,14 +65,14 @@ var capabilityKeywords = []struct {
 func normalizeBuildInput(input model.ProductBuildInput) (model.ProductBuildInput, error) {
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
 	input.Name, input.Location = strings.TrimSpace(input.Name), strings.TrimSpace(input.Location)
-	input.Version, input.Ecosystem = strings.TrimSpace(input.Version), strings.ToLower(strings.TrimSpace(input.Ecosystem))
+	input.Version = strings.TrimSpace(input.Version)
 	if input.Kind == "" {
 		input.Kind = "auto"
 	}
 	if input.Location == "" || len(input.Location) > 2048 || len(input.Name) > 160 || len(input.Version) > 80 {
 		return model.ProductBuildInput{}, errors.New("each product builder input requires a location and must fit the documented length limits")
 	}
-	for _, value := range []string{input.Name, input.Location, input.Version, input.Ecosystem} {
+	for _, value := range []string{input.Name, input.Location, input.Version} {
 		if strings.IndexFunc(value, unicode.IsControl) >= 0 {
 			return model.ProductBuildInput{}, errors.New("product builder inputs cannot contain control characters")
 		}
@@ -84,7 +84,7 @@ func normalizeBuildInput(input model.ProductBuildInput) (model.ProductBuildInput
 		parsed.RawQuery, parsed.Fragment = "", ""
 		input.Location = parsed.String()
 	}
-	allowed := map[string]bool{"auto": true, "openapi": true, "docs": true, "git": true, "package": true, "mcp": true, "tool": true}
+	allowed := map[string]bool{"auto": true, "openapi": true, "docs": true, "git": true, "mcp": true, "tool": true}
 	if !allowed[input.Kind] {
 		return model.ProductBuildInput{}, fmt.Errorf("unsupported product builder input kind %q", input.Kind)
 	}
@@ -113,8 +113,6 @@ func normalizeBuildInput(input model.ProductBuildInput) (model.ProductBuildInput
 func inferInputKind(input model.ProductBuildInput) string {
 	value := strings.ToLower(input.Name + " " + input.Location)
 	switch {
-	case strings.HasPrefix(value, "npm:"), strings.HasPrefix(value, "go:"), strings.HasPrefix(value, "maven:"), strings.Contains(value, "package.json"), strings.Contains(value, "@npm"):
-		return "package"
 	case strings.Contains(value, "openapi"), strings.Contains(value, "swagger"), strings.HasSuffix(value, ".yaml"), strings.HasSuffix(value, ".yml"):
 		return "openapi"
 	case strings.Contains(value, "mcp"):
@@ -340,16 +338,15 @@ func (s *Service) maybeEnhanceProductInputs(ctx context.Context, product model.P
 	}()
 
 	type promptInput struct {
-		Index     int    `json:"index"`
-		Kind      string `json:"kind"`
-		Name      string `json:"name"`
-		Location  string `json:"location"`
-		Version   string `json:"version,omitempty"`
-		Ecosystem string `json:"ecosystem,omitempty"`
+		Index    int    `json:"index"`
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+		Location string `json:"location"`
+		Version  string `json:"version,omitempty"`
 	}
 	promptInputs := make([]promptInput, 0, len(inputs))
 	for index, input := range inputs {
-		promptInputs = append(promptInputs, promptInput{Index: index, Kind: input.Kind, Name: input.Name, Location: input.Location, Version: input.Version, Ecosystem: input.Ecosystem})
+		promptInputs = append(promptInputs, promptInput{Index: index, Kind: input.Kind, Name: input.Name, Location: input.Location, Version: input.Version})
 	}
 	prompt, _ := json.Marshal(map[string]any{"product": map[string]string{"name": product.Name, "slug": product.Slug}, "inputs": promptInputs})
 	maxOutputTokens := profile.MaxOutputTokens
@@ -492,8 +489,6 @@ func (s *Service) productBuildInputs(ctx context.Context, productID string, supp
 		switch source.Kind {
 		case "website":
 			kind = "docs"
-		case "sdk", "package_metadata":
-			kind = "package"
 		case "upload":
 			kind = "auto"
 		}
@@ -503,19 +498,6 @@ func (s *Service) productBuildInputs(ctx context.Context, productID string, supp
 		}
 		inputs = append(inputs, input)
 		references[input.Kind+"\x00"+input.Name+"\x00"+input.Location] = source.ID
-	}
-	packages, err := s.store.Packages(ctx, productID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return nil, nil, err
-	}
-	for _, pkg := range packages {
-		location := pkg.Ecosystem + ":" + pkg.Name + "@" + pkg.Version
-		input, err := normalizeBuildInput(model.ProductBuildInput{Kind: "package", Name: pkg.Name, Location: location, Version: pkg.Version, Ecosystem: pkg.Ecosystem})
-		if err != nil {
-			return nil, nil, err
-		}
-		inputs = append(inputs, input)
-		references[input.Kind+"\x00"+input.Name+"\x00"+input.Location] = pkg.ID
 	}
 	connections, err := s.store.MCPConnections(ctx, productID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -575,10 +557,8 @@ func (s *Service) inferProductDefinition(product model.Product, buildID, definit
 			switch kind {
 			case "openapi":
 				return 0
-			case "package":
-				return 1
 			case "docs", "git":
-				return 2
+				return 1
 			default:
 				return 3
 			}
@@ -622,7 +602,7 @@ func (s *Service) inferProductDefinition(product model.Product, buildID, definit
 		if index < 0 && len(definition.Components) == 1 {
 			index = 0
 		}
-		if index < 0 && (input.Kind == "package" || input.Kind == "mcp" || input.Kind == "tool") {
+		if index < 0 && (input.Kind == "mcp" || input.Kind == "tool") {
 			definition.Components = append(definition.Components, model.ProductComponent{ID: "component_" + slug, Kind: "api", Name: name, Slug: slug, VersionStrategy: "independent", Releases: []model.ProductRelease{{ID: releaseID(slug, "unversioned"), Version: "unversioned", State: "draft", Bindings: []model.ProductBinding{}}}})
 			index = len(definition.Components) - 1
 		}
@@ -658,7 +638,7 @@ func (s *Service) inferProductDefinition(product model.Product, buildID, definit
 	}
 
 	if len(definition.Components) == 0 {
-		definition.Validation = append(definition.Validation, model.ProductValidationFinding{Level: "error", Code: "no_api_capabilities", Message: "No API capability could be inferred. Add an API specification, package, or MCP source."})
+		definition.Validation = append(definition.Validation, model.ProductValidationFinding{Level: "error", Code: "no_api_capabilities", Message: "No API capability could be inferred. Add an OpenAPI specification or MCP source."})
 	}
 	for componentIndex := range definition.Components {
 		component := &definition.Components[componentIndex]
@@ -773,12 +753,10 @@ func (s *Service) PublishProductDefinition(ctx context.Context, productID, build
 
 func integrationResourceKind(bindingKind string) string {
 	switch bindingKind {
-	case "openapi", "docs", "git":
+	case "docs", "git":
 		return "documentation"
-	case "package":
-		return "package"
-	case "mcp", "tool":
-		return "hook"
+	case "openapi", "mcp", "tool":
+		return "api"
 	default:
 		return ""
 	}
@@ -836,7 +814,7 @@ func (s *Service) reconcileIntegrationsFromDefinition(ctx context.Context, defin
 					groups[kind] = append(groups[kind], binding)
 				}
 			}
-			for _, kind := range []string{"documentation", "package", "hook"} {
+			for _, kind := range []string{"documentation", "api"} {
 				bindings := groups[kind]
 				if len(bindings) == 0 {
 					continue

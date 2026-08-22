@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,15 +27,15 @@ const (
 	KindBug             = "bug"
 	KindFeedback        = "feedback"
 	maxDeliveryAttempts = 8
-	maxHookResponse     = 1 << 20
+	maxDeliveryResponse = 1 << 20
 )
 
 var (
-	ErrNotConfigured    = errors.New("reporting is not configured")
-	ErrDisabled         = errors.New("this report type is disabled")
-	ErrInvalidReport    = errors.New("report is invalid")
-	ErrSensitiveContent = errors.New("report may contain a credential or secret")
-	ErrHookUnavailable  = errors.New("report delivery hook is unavailable")
+	ErrNotConfigured       = errors.New("reporting is not configured")
+	ErrDisabled            = errors.New("this report type is disabled")
+	ErrInvalidReport       = errors.New("report is invalid")
+	ErrSensitiveContent    = errors.New("report may contain a credential or secret")
+	ErrDeliveryUnavailable = errors.New("support delivery is unavailable")
 
 	toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,160}$`)
 	secretPatterns  = []*regexp.Regexp{
@@ -46,30 +47,16 @@ var (
 	}
 )
 
-type ConfigInput struct {
-	BugReportsEnabled      bool
-	FeedbackEnabled        bool
-	BugHookURL             string
-	BugHookCredential      string
-	FeedbackHookURL        string
-	FeedbackHookCredential string
-	RetentionDays          int
-	Revision               int64
-}
-
 type RouteInput struct {
-	Name                   string
-	IsDefault              bool
-	BugReportsEnabled      bool
-	FeedbackEnabled        bool
-	BugHookURL             string
-	BugHookCredential      string
-	FeedbackHookURL        string
-	FeedbackHookCredential string
-	RetentionDays          int
-	State                  string
-	IntegrationIDs         []string
-	Revision               int64
+	Name                string
+	IsDefault           bool
+	BugReportsEnabled   bool
+	FeedbackEnabled     bool
+	BackendConnectionID string
+	RetentionDays       int
+	State               string
+	IntegrationIDs      []string
+	Revision            int64
 }
 
 type BugInput struct {
@@ -101,13 +88,18 @@ type FeedbackInput struct {
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 }
 
+type ReporterPrincipal struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
+}
+
 type ReporterContext struct {
-	Subject              string `json:"subject"`
-	DisplayName          string `json:"display_name,omitempty"`
-	Email                string `json:"email,omitempty"`
-	VendorOrganisationID string `json:"vendor_organisation_id,omitempty"`
-	InstallationID       string `json:"installation_id,omitempty"`
-	AllowContact         bool   `json:"allow_contact"`
+	Principal          ReporterPrincipal `json:"principal"`
+	DisplayName        string            `json:"display_name,omitempty"`
+	Email              string            `json:"email,omitempty"`
+	ExternalCustomerID string            `json:"external_customer_id,omitempty"`
+	InstallationID     string            `json:"installation_id,omitempty"`
+	AllowContact       bool              `json:"allow_contact"`
 }
 
 type ProductContext struct {
@@ -151,6 +143,7 @@ type Envelope struct {
 
 type SubmissionView struct {
 	ID                 string              `json:"id"`
+	SupportRouteID     string              `json:"support_route_id"`
 	Kind               string              `json:"kind"`
 	State              string              `json:"state"`
 	Summary            string              `json:"summary"`
@@ -178,19 +171,27 @@ type SubmitContext struct {
 }
 
 type SupportCapability struct {
-	IntegrationID     string `json:"integration_id"`
-	FamilyKey         string `json:"family_key"`
-	VersionKey        string `json:"version_key"`
+	Scope             string `json:"scope"`
+	SupportRouteID    string `json:"support_route_id"`
+	IntegrationID     string `json:"integration_id,omitempty"`
+	FamilyKey         string `json:"family_key,omitempty"`
+	VersionKey        string `json:"version_key,omitempty"`
 	BugReportsEnabled bool   `json:"bug_reports_enabled"`
 	FeedbackEnabled   bool   `json:"feedback_enabled"`
 }
 
 func (s *Service) Capabilities(ctx context.Context, deploymentID string) ([]SupportCapability, error) {
+	result := make([]SupportCapability, 0)
+	defaultRoute, defaultErr := s.store.SupportRouteForIntegration(ctx, deploymentID, "")
+	if defaultErr == nil && (defaultRoute.BugReportsEnabled || defaultRoute.FeedbackEnabled) {
+		result = append(result, SupportCapability{Scope: "default", SupportRouteID: defaultRoute.ID, BugReportsEnabled: defaultRoute.BugReportsEnabled, FeedbackEnabled: defaultRoute.FeedbackEnabled})
+	} else if defaultErr != nil && !errors.Is(defaultErr, store.ErrNotFound) {
+		return nil, defaultErr
+	}
 	integrations, err := s.store.Integrations(ctx, deploymentID)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]SupportCapability, 0, len(integrations))
 	for _, integration := range integrations {
 		if integration.Lifecycle == "retired" {
 			continue
@@ -203,7 +204,7 @@ func (s *Service) Capabilities(ctx context.Context, deploymentID string) ([]Supp
 			return nil, routeErr
 		}
 		if route.BugReportsEnabled || route.FeedbackEnabled {
-			result = append(result, SupportCapability{IntegrationID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, BugReportsEnabled: route.BugReportsEnabled, FeedbackEnabled: route.FeedbackEnabled})
+			result = append(result, SupportCapability{Scope: "integration", SupportRouteID: route.ID, IntegrationID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, BugReportsEnabled: route.BugReportsEnabled, FeedbackEnabled: route.FeedbackEnabled})
 		}
 	}
 	return result, nil
@@ -237,7 +238,13 @@ func auditID() string {
 	return "audit_" + hex.EncodeToString(buffer)
 }
 
-func validHookURL(raw string) bool {
+func requestID() string {
+	buffer := make([]byte, 16)
+	_, _ = rand.Read(buffer)
+	return "req_" + hex.EncodeToString(buffer)
+}
+
+func validDeliveryURL(raw string) bool {
 	if raw == "" {
 		return true
 	}
@@ -245,116 +252,14 @@ func validHookURL(raw string) bool {
 	return err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && (parsed.Port() == "" || parsed.Port() == "443")
 }
 
-func (s *Service) Config(ctx context.Context, productID string) (model.ReportingConfig, error) {
-	value, err := s.store.ReportingConfig(ctx, productID)
-	if errors.Is(err, store.ErrNotFound) {
-		return model.ReportingConfig{}, ErrNotConfigured
-	}
-	return value, err
-}
-
-func (s *Service) Configure(ctx context.Context, productID string, input ConfigInput, actorID, requestID string) (model.ReportingConfig, error) {
-	product, err := s.store.Product(ctx, productID)
-	if err != nil {
-		return model.ReportingConfig{}, err
-	}
-	input.BugHookURL = strings.TrimSpace(input.BugHookURL)
-	input.FeedbackHookURL = strings.TrimSpace(input.FeedbackHookURL)
-	input.BugHookCredential = strings.TrimSpace(input.BugHookCredential)
-	input.FeedbackHookCredential = strings.TrimSpace(input.FeedbackHookCredential)
-	if !validHookURL(input.BugHookURL) || !validHookURL(input.FeedbackHookURL) {
-		return model.ReportingConfig{}, fmt.Errorf("%w: hook URLs must be fixed HTTPS URLs without credentials, query strings, fragments, or non-standard ports", ErrInvalidReport)
-	}
-	if input.RetentionDays == 0 {
-		input.RetentionDays = 30
-	}
-	if input.RetentionDays < 1 || input.RetentionDays > 365 {
-		return model.ReportingConfig{}, fmt.Errorf("%w: retention_days must be between 1 and 365", ErrInvalidReport)
-	}
-	current, currentErr := s.store.ReportingConfig(ctx, productID)
-	if currentErr != nil && !errors.Is(currentErr, store.ErrNotFound) {
-		return model.ReportingConfig{}, currentErr
-	}
-	if errors.Is(currentErr, store.ErrNotFound) && input.Revision != 0 {
-		return model.ReportingConfig{}, store.ErrConflict
-	}
-	if currentErr == nil && current.Revision != input.Revision {
-		return model.ReportingConfig{}, store.ErrConflict
-	}
-	config := model.ReportingConfig{OrganisationID: product.OrganisationID, ProductID: productID, BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BugHookURL: input.BugHookURL, FeedbackHookURL: input.FeedbackHookURL, RetentionDays: input.RetentionDays}
-	if currentErr == nil {
-		config.ID = current.ID
-		config.BugHookCredentialID = current.BugHookCredentialID
-		config.FeedbackHookCredentialID = current.FeedbackHookCredentialID
-	} else {
-		config.ID, err = randomUUID()
-		if err != nil {
-			return model.ReportingConfig{}, err
-		}
-	}
-	if input.BugHookURL != "" && input.BugHookCredential == "" && (currentErr != nil || current.BugHookURL != input.BugHookURL || current.BugHookCredentialID == "") {
-		return model.ReportingConfig{}, fmt.Errorf("%w: a new bug hook destination requires a new credential", ErrInvalidReport)
-	}
-	if input.FeedbackHookURL != "" && input.FeedbackHookCredential == "" && (currentErr != nil || current.FeedbackHookURL != input.FeedbackHookURL || current.FeedbackHookCredentialID == "") {
-		return model.ReportingConfig{}, fmt.Errorf("%w: a new feedback hook destination requires a new credential", ErrInvalidReport)
-	}
-	if input.BugHookURL == "" {
-		config.BugHookCredentialID = ""
-	} else if input.BugHookCredential != "" {
-		config.BugHookCredentialID, err = s.storeHookCredential(ctx, product.OrganisationID, KindBug, input.BugHookCredential)
-		if err != nil {
-			return model.ReportingConfig{}, err
-		}
-	}
-	if input.FeedbackHookURL == "" {
-		config.FeedbackHookCredentialID = ""
-	} else if input.FeedbackHookCredential != "" {
-		config.FeedbackHookCredentialID, err = s.storeHookCredential(ctx, product.OrganisationID, KindFeedback, input.FeedbackHookCredential)
-		if err != nil {
-			return model.ReportingConfig{}, err
-		}
-	}
-	if input.BugHookURL != "" && config.BugHookCredentialID == "" {
-		return model.ReportingConfig{}, fmt.Errorf("%w: bug hook credential is required", ErrInvalidReport)
-	}
-	if input.FeedbackHookURL != "" && config.FeedbackHookCredentialID == "" {
-		return model.ReportingConfig{}, fmt.Errorf("%w: feedback hook credential is required", ErrInvalidReport)
-	}
-	updated, err := s.store.SaveReportingConfig(ctx, config, input.Revision)
-	if err != nil {
-		return model.ReportingConfig{}, err
-	}
-	// Keep the legacy configuration endpoint as a default Integration route
-	// during the console transition. Dedicated support-route APIs can then add
-	// Integration-specific overrides without changing this default.
-	routeExpected := int64(0)
-	if currentRoute, routeErr := s.store.SupportRoute(ctx, productID, updated.ID); routeErr == nil {
-		routeExpected = currentRoute.Revision
-	} else if !errors.Is(routeErr, store.ErrNotFound) {
-		return model.ReportingConfig{}, routeErr
-	}
-	if _, routeErr := s.store.SaveSupportRoute(ctx, model.SupportRoute{ID: updated.ID, DeploymentID: productID, OrganisationID: updated.OrganisationID, Name: "Default support route", IsDefault: true, BugReportsEnabled: updated.BugReportsEnabled, FeedbackEnabled: updated.FeedbackEnabled, BugHookURL: updated.BugHookURL, BugHookCredentialID: updated.BugHookCredentialID, FeedbackHookURL: updated.FeedbackHookURL, FeedbackHookCredentialID: updated.FeedbackHookCredentialID, RetentionDays: updated.RetentionDays, State: "active"}, routeExpected); routeErr != nil {
-		return model.ReportingConfig{}, routeErr
-	}
-	if updated.BugReportsEnabled && updated.BugHookURL != "" {
-		_ = s.store.ActivateHeldReportSubmissions(ctx, productID, KindBug, s.now())
-	}
-	if updated.FeedbackEnabled && updated.FeedbackHookURL != "" {
-		_ = s.store.ActivateHeldReportSubmissions(ctx, productID, KindFeedback, s.now())
-	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: product.OrganisationID, ProductID: productID, ActorID: actorID, Action: "reporting.configured", TargetType: "reporting_config", TargetID: updated.ID, Current: map[string]any{"bug_reports_enabled": updated.BugReportsEnabled, "feedback_enabled": updated.FeedbackEnabled, "bug_hook": updated.BugHookURL != "", "feedback_hook": updated.FeedbackHookURL != "", "bug_credential_rotated": input.BugHookCredential != "", "feedback_credential_rotated": input.FeedbackHookCredential != "", "retention_days": updated.RetentionDays}, RequestID: requestID, CreatedAt: s.now()})
-	return updated, nil
-}
-
 func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, input RouteInput, actorID, requestID string) (model.SupportRoute, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil || deployment.ID != deploymentID {
 		return model.SupportRoute{}, store.ErrNotFound
 	}
-	input.Name, input.BugHookURL, input.FeedbackHookURL = strings.TrimSpace(input.Name), strings.TrimSpace(input.BugHookURL), strings.TrimSpace(input.FeedbackHookURL)
-	input.BugHookCredential, input.FeedbackHookCredential = strings.TrimSpace(input.BugHookCredential), strings.TrimSpace(input.FeedbackHookCredential)
-	if input.Name == "" || len(input.Name) > 120 || !validHookURL(input.BugHookURL) || !validHookURL(input.FeedbackHookURL) {
-		return model.SupportRoute{}, fmt.Errorf("%w: route name or hook destination is invalid", ErrInvalidReport)
+	input.Name, input.BackendConnectionID = strings.TrimSpace(input.Name), strings.TrimSpace(input.BackendConnectionID)
+	if input.Name == "" || len(input.Name) > 120 {
+		return model.SupportRoute{}, fmt.Errorf("%w: route name is invalid", ErrInvalidReport)
 	}
 	if input.RetentionDays == 0 {
 		input.RetentionDays = 30
@@ -367,6 +272,12 @@ func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, i
 	}
 	if input.State != "active" && input.State != "archived" {
 		return model.SupportRoute{}, fmt.Errorf("%w: support route state is invalid", ErrInvalidReport)
+	}
+	if input.BugReportsEnabled || input.FeedbackEnabled {
+		connection, connectionErr := s.store.BackendConnection(ctx, deploymentID, input.BackendConnectionID)
+		if connectionErr != nil || connection.State != "active" || connection.AuthenticationType != "bearer" || connection.CredentialSecretID == "" {
+			return model.SupportRoute{}, fmt.Errorf("%w: an active authenticated backend connection is required when support submission is enabled", ErrInvalidReport)
+		}
 	}
 	if !input.IsDefault && len(input.IntegrationIDs) == 0 {
 		return model.SupportRoute{}, fmt.Errorf("%w: a non-default route must be attached to at least one Integration", ErrInvalidReport)
@@ -384,7 +295,7 @@ func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, i
 		seen[integrationID] = true
 		integrationIDs = append(integrationIDs, integrationID)
 	}
-	value := model.SupportRoute{ID: routeID, DeploymentID: deploymentID, OrganisationID: deployment.OrganisationID, Name: input.Name, IsDefault: input.IsDefault, BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BugHookURL: input.BugHookURL, FeedbackHookURL: input.FeedbackHookURL, RetentionDays: input.RetentionDays, State: input.State, IntegrationIDs: integrationIDs}
+	value := model.SupportRoute{ID: routeID, DeploymentID: deploymentID, OrganisationID: deployment.OrganisationID, Name: input.Name, IsDefault: input.IsDefault, BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BackendConnectionID: input.BackendConnectionID, RetentionDays: input.RetentionDays, State: input.State, IntegrationIDs: integrationIDs}
 	if routeID == "" {
 		if input.Revision != 0 {
 			return model.SupportRoute{}, store.ErrConflict
@@ -398,58 +309,24 @@ func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, i
 		if currentErr != nil {
 			return model.SupportRoute{}, currentErr
 		}
-		value.BugHookCredentialID, value.FeedbackHookCredentialID = current.BugHookCredentialID, current.FeedbackHookCredentialID
 		if current.Revision != input.Revision {
 			return model.SupportRoute{}, store.ErrConflict
 		}
-		if input.BugHookURL != "" && input.BugHookCredential == "" && (current.BugHookURL != input.BugHookURL || current.BugHookCredentialID == "") {
-			return model.SupportRoute{}, fmt.Errorf("%w: a changed bug hook requires a new credential", ErrInvalidReport)
-		}
-		if input.FeedbackHookURL != "" && input.FeedbackHookCredential == "" && (current.FeedbackHookURL != input.FeedbackHookURL || current.FeedbackHookCredentialID == "") {
-			return model.SupportRoute{}, fmt.Errorf("%w: a changed feedback hook requires a new credential", ErrInvalidReport)
-		}
-	}
-	if input.BugHookURL == "" {
-		value.BugHookCredentialID = ""
-	} else if input.BugHookCredential != "" {
-		value.BugHookCredentialID, err = s.storeHookCredential(ctx, deployment.OrganisationID, KindBug, input.BugHookCredential)
-		if err != nil {
-			return model.SupportRoute{}, err
-		}
-	}
-	if input.FeedbackHookURL == "" {
-		value.FeedbackHookCredentialID = ""
-	} else if input.FeedbackHookCredential != "" {
-		value.FeedbackHookCredentialID, err = s.storeHookCredential(ctx, deployment.OrganisationID, KindFeedback, input.FeedbackHookCredential)
-		if err != nil {
-			return model.SupportRoute{}, err
-		}
-	}
-	if (value.BugHookURL != "" && value.BugHookCredentialID == "") || (value.FeedbackHookURL != "" && value.FeedbackHookCredentialID == "") {
-		return model.SupportRoute{}, fmt.Errorf("%w: every configured hook requires a credential", ErrInvalidReport)
 	}
 	saved, err := s.store.SaveSupportRoute(ctx, value, input.Revision)
 	if err != nil {
 		return model.SupportRoute{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: deployment.OrganisationID, ProductID: deploymentID, ActorID: actorID, Action: "support_route.saved", TargetType: "support_route", TargetID: saved.ID, Current: map[string]any{"name": saved.Name, "is_default": saved.IsDefault, "integration_ids": saved.IntegrationIDs, "bug_reports_enabled": saved.BugReportsEnabled, "feedback_enabled": saved.FeedbackEnabled}, RequestID: requestID, CreatedAt: s.now()})
+	if saved.State == "active" && saved.BackendConnectionID != "" {
+		if saved.BugReportsEnabled {
+			_ = s.store.ActivateHeldReportSubmissions(ctx, deploymentID, saved.ID, KindBug, s.now())
+		}
+		if saved.FeedbackEnabled {
+			_ = s.store.ActivateHeldReportSubmissions(ctx, deploymentID, saved.ID, KindFeedback, s.now())
+		}
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: deployment.OrganisationID, ProductID: deploymentID, ActorID: actorID, Action: "support_route.saved", TargetType: "support_route", TargetID: saved.ID, Current: map[string]any{"name": saved.Name, "is_default": saved.IsDefault, "integration_ids": saved.IntegrationIDs, "backend_connection_id": saved.BackendConnectionID, "bug_reports_enabled": saved.BugReportsEnabled, "feedback_enabled": saved.FeedbackEnabled}, RequestID: requestID, CreatedAt: s.now()})
 	return saved, nil
-}
-
-func (s *Service) storeHookCredential(ctx context.Context, organisationID, kind, plaintext string) (string, error) {
-	if s.vault == nil {
-		return "", errors.New("reporting credential vault is unavailable")
-	}
-	id, err := randomUUID()
-	if err != nil {
-		return "", err
-	}
-	encrypted, err := s.vault.Encrypt([]byte(plaintext), organisationID+":reporting:"+kind+":"+id)
-	if err != nil {
-		return "", err
-	}
-	_, err = s.store.CreateSecret(ctx, model.Secret{ID: id, OrganisationID: organisationID, Name: "reporting-" + kind + "-" + id, Purpose: "reporting_" + kind, Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
-	return id, err
 }
 
 func validateCommon(idempotencyKey, relatedTool, integrationRunID string) error {
@@ -542,12 +419,13 @@ func (s *Service) SubmitBug(ctx context.Context, input BugInput, submit SubmitCo
 		return SubmissionView{}, fmt.Errorf("%w: integration_id does not belong to the trusted connector context", ErrInvalidReport)
 	}
 	if input.IntegrationRunID != "" {
-		if _, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID); err != nil {
-			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to this product", ErrInvalidReport)
+		run, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID)
+		if err != nil || run.ActorPseudonym != submit.ActorPseudonym {
+			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to the authenticated reporter", ErrInvalidReport)
 		}
 	}
 	idempotencyKey := input.IdempotencyKey
-	input.IdempotencyKey = ""
+	input.IdempotencyKey, input.IntegrationID = "", ""
 	envelope := s.envelope(KindBug, submit, input.AllowContact)
 	envelope.Bug = &input
 	return s.submit(ctx, idempotencyKey, envelope, submit.ActorPseudonym)
@@ -564,23 +442,20 @@ func (s *Service) SubmitFeedback(ctx context.Context, input FeedbackInput, submi
 		return SubmissionView{}, fmt.Errorf("%w: integration_id does not belong to the trusted connector context", ErrInvalidReport)
 	}
 	if input.IntegrationRunID != "" {
-		if _, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID); err != nil {
-			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to this product", ErrInvalidReport)
+		run, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID)
+		if err != nil || run.ActorPseudonym != submit.ActorPseudonym {
+			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to the authenticated reporter", ErrInvalidReport)
 		}
 	}
 	idempotencyKey := input.IdempotencyKey
-	input.IdempotencyKey = ""
+	input.IdempotencyKey, input.IntegrationID = "", ""
 	envelope := s.envelope(KindFeedback, submit, input.AllowContact)
 	envelope.Feedback = &input
 	return s.submit(ctx, idempotencyKey, envelope, submit.ActorPseudonym)
 }
 
 func (s *Service) envelope(kind string, submit SubmitContext, allowContact bool) Envelope {
-	subject := submit.Principal.Subject
-	if submit.Principal.Issuer != "" {
-		subject = submit.Principal.Issuer + "|" + subject
-	}
-	reporter := ReporterContext{Subject: subject, VendorOrganisationID: submit.Principal.VendorOrganisation, InstallationID: submit.Principal.InstallationID, AllowContact: allowContact}
+	reporter := ReporterContext{Principal: ReporterPrincipal{Issuer: submit.Principal.Issuer, Subject: submit.Principal.Subject}, ExternalCustomerID: submit.Principal.ExternalCustomerID, InstallationID: submit.Principal.InstallationID, AllowContact: allowContact}
 	if allowContact {
 		reporter.DisplayName, reporter.Email = submit.Principal.DisplayName, submit.Principal.Email
 	}
@@ -588,7 +463,7 @@ func (s *Service) envelope(kind string, submit SubmitContext, allowContact bool)
 }
 
 func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope Envelope, actorPseudonym string) (SubmissionView, error) {
-	organisationID, supportRouteID, retentionDays, enabled, hookURL, err := s.submissionRoute(ctx, envelope)
+	organisationID, supportRouteID, retentionDays, enabled, deliveryCredentialID, err := s.submissionRoute(ctx, envelope)
 	if err != nil {
 		return SubmissionView{}, err
 	}
@@ -620,7 +495,7 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	now := s.now()
 	state := "held"
 	var next *time.Time
-	if hookURL != "" {
+	if deliveryCredentialID != "" {
 		state, next = "pending", &now
 	}
 	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: organisationID, ProductID: envelope.Product.ProductID, IntegrationID: integrationID, IntegrationSnapshot: integrationSnapshot, SupportRouteID: supportRouteID, Kind: envelope.Kind, State: state, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], PayloadCiphertext: encrypted.Ciphertext, PayloadNonce: encrypted.Nonce, PayloadKeyVersion: encrypted.KeyVersion, PayloadFingerprint: encrypted.Fingerprint, NextAttemptAt: next, ExpiresAt: now.AddDate(0, 0, retentionDays)})
@@ -630,33 +505,30 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	return s.view(value)
 }
 
-func (s *Service) submissionRoute(ctx context.Context, envelope Envelope) (organisationID, routeID string, retentionDays int, enabled bool, hookURL string, err error) {
-	if envelope.Integration != nil && envelope.Integration.IntegrationID != "" {
-		route, routeErr := s.store.SupportRouteForIntegration(ctx, envelope.Product.ProductID, envelope.Integration.IntegrationID)
-		if routeErr != nil {
-			if errors.Is(routeErr, store.ErrNotFound) {
-				err = ErrNotConfigured
-			} else {
-				err = routeErr
-			}
-			return
-		}
-		organisationID, routeID, retentionDays = route.OrganisationID, route.ID, route.RetentionDays
-		enabled, hookURL = route.BugReportsEnabled, route.BugHookURL
-		if envelope.Kind == KindFeedback {
-			enabled, hookURL = route.FeedbackEnabled, route.FeedbackHookURL
+func (s *Service) submissionRoute(ctx context.Context, envelope Envelope) (organisationID, routeID string, retentionDays int, enabled bool, deliveryCredentialID string, err error) {
+	integrationID := ""
+	if envelope.Integration != nil {
+		integrationID = envelope.Integration.IntegrationID
+	}
+	route, routeErr := s.store.SupportRouteForIntegration(ctx, envelope.Product.ProductID, integrationID)
+	if routeErr != nil {
+		if errors.Is(routeErr, store.ErrNotFound) {
+			err = ErrNotConfigured
+		} else {
+			err = routeErr
 		}
 		return
 	}
-	config, configErr := s.Config(ctx, envelope.Product.ProductID)
-	if configErr != nil {
-		err = configErr
-		return
-	}
-	organisationID, retentionDays = config.OrganisationID, config.RetentionDays
-	enabled, hookURL = config.BugReportsEnabled, config.BugHookURL
+	organisationID, routeID, retentionDays = route.OrganisationID, route.ID, route.RetentionDays
+	enabled = route.BugReportsEnabled
 	if envelope.Kind == KindFeedback {
-		enabled, hookURL = config.FeedbackEnabled, config.FeedbackHookURL
+		enabled = route.FeedbackEnabled
+	}
+	if enabled && route.State == "active" && route.BackendConnectionID != "" {
+		connection, connectionErr := s.store.BackendConnection(ctx, envelope.Product.ProductID, route.BackendConnectionID)
+		if connectionErr == nil && connection.State == "active" {
+			deliveryCredentialID = connection.CredentialSecretID
+		}
 	}
 	return
 }
@@ -675,6 +547,9 @@ func (s *Service) decrypt(value model.ReportSubmission) (Envelope, error) {
 	if err := decoder.Decode(&envelope); err != nil {
 		return Envelope{}, err
 	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return Envelope{}, errors.New("report payload contains multiple JSON values")
+	}
 	return envelope, nil
 }
 
@@ -683,7 +558,7 @@ func (s *Service) view(value model.ReportSubmission) (SubmissionView, error) {
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	view := SubmissionView{ID: value.ID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
+	view := SubmissionView{ID: value.ID, SupportRouteID: value.SupportRouteID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
 	if envelope.Bug != nil {
 		view.Summary, view.RelatedTool = envelope.Bug.Summary, envelope.Bug.RelatedTool
 		encoded, _ := json.Marshal(envelope.Bug)
@@ -697,21 +572,24 @@ func (s *Service) view(value model.ReportSubmission) (SubmissionView, error) {
 	return view, nil
 }
 
-func (s *Service) Submissions(ctx context.Context, productID string, limit int) ([]SubmissionView, error) {
-	values, err := s.store.ReportSubmissions(ctx, productID, limit)
+func (s *Service) Submissions(ctx context.Context, productID, startingAfter string, limit int) ([]SubmissionView, bool, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	values, hasMore, err := s.store.ReportSubmissions(ctx, productID, startingAfter, limit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	result := make([]SubmissionView, 0, len(values))
 	for _, value := range values {
 		view, viewErr := s.view(value)
 		if viewErr != nil {
-			return nil, viewErr
+			return nil, false, viewErr
 		}
 		view.Content = nil
 		result = append(result, view)
 	}
-	return result, nil
+	return result, hasMore, nil
 }
 
 func (s *Service) Submission(ctx context.Context, productID, id string) (SubmissionView, error) {
@@ -727,15 +605,27 @@ func (s *Service) Retry(ctx context.Context, productID, id string) (SubmissionVi
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	hookURL, _, err := s.deliveryRoute(ctx, value)
+	if value.State == "pending" || value.State == "delivering" {
+		return s.view(value)
+	}
+	endpoint, credentialID, err := s.deliveryRoute(ctx, value)
 	if err != nil {
+		if errors.Is(err, ErrNotConfigured) || errors.Is(err, store.ErrNotFound) {
+			return SubmissionView{}, ErrDeliveryUnavailable
+		}
 		return SubmissionView{}, err
 	}
-	if hookURL == "" {
-		return SubmissionView{}, ErrHookUnavailable
+	if endpoint == "" || credentialID == "" {
+		return SubmissionView{}, ErrDeliveryUnavailable
 	}
 	value, err = s.store.RetryReportSubmission(ctx, productID, id, s.now())
 	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			current, lookupErr := s.store.ReportSubmission(ctx, productID, id)
+			if lookupErr == nil && (current.State == "pending" || current.State == "delivering") {
+				return s.view(current)
+			}
+		}
 		return SubmissionView{}, err
 	}
 	return s.view(value)
@@ -753,12 +643,17 @@ func (s *Service) ProcessPending(ctx context.Context, limit int) (int, error) {
 }
 
 func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
-	hookURL, credentialID, err := s.deliveryRoute(ctx, value)
+	endpoint, credentialID, err := s.deliveryRoute(ctx, value)
 	if err != nil {
+		if errors.Is(err, ErrDeliveryUnavailable) || errors.Is(err, ErrNotConfigured) || errors.Is(err, store.ErrNotFound) {
+			value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "held", nil, nil, ""
+			_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
+			return
+		}
 		s.deliveryFailed(ctx, value, err)
 		return
 	}
-	if hookURL == "" || credentialID == "" {
+	if endpoint == "" || credentialID == "" {
 		value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "held", nil, nil, ""
 		_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
 		return
@@ -768,17 +663,17 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 		s.deliveryFailed(ctx, value, errors.New("encrypted report payload could not be opened"))
 		return
 	}
-	credential, err := s.hookCredential(ctx, value.OrganisationID, value.Kind, credentialID)
+	credential, err := s.deliveryCredential(ctx, value.OrganisationID, credentialID)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("reporting hook credential is unavailable"))
+		s.deliveryFailed(ctx, value, errors.New("support delivery credential is unavailable"))
 		return
 	}
-	parsed, err := url.Parse(hookURL)
-	if err != nil || !validHookURL(hookURL) {
-		s.deliveryFailed(ctx, value, errors.New("reporting hook destination is unsafe"))
+	parsed, err := url.Parse(endpoint)
+	if err != nil || !validDeliveryURL(endpoint) {
+		s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))
 		return
 	}
-	body, _ := json.Marshal(map[string]any{"submission_id": value.ID, "created_at": value.CreatedAt, "report": envelope})
+	body, _ := json.Marshal(map[string]any{"submission_id": value.ID, "created_at": value.CreatedAt, "submission": envelope})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(body))
 	if err != nil {
 		s.deliveryFailed(ctx, value, err)
@@ -788,41 +683,52 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Idempotency-Key", value.ID)
-	request.Header.Set("X-DokoSoko-Submission-ID", value.ID)
-	client, err := identity.SafeHookClient(ctx, parsed, s.Client, s.Resolver)
+	request.Header.Set("X-DokoSoko-Request-ID", requestID())
+	client, err := identity.SafeOutboundClient(ctx, parsed, s.Client, s.Resolver)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("reporting hook destination is unsafe"))
+		s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))
 		return
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("reporting hook request failed"))
+		s.deliveryFailed(ctx, value, errors.New("support API request failed"))
 		return
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		s.deliveryFailed(ctx, value, fmt.Errorf("reporting hook returned status %d", response.StatusCode))
+	if response.StatusCode != http.StatusAccepted {
+		failure := fmt.Errorf("support API returned status %d", response.StatusCode)
+		if response.StatusCode != http.StatusRequestTimeout && response.StatusCode != http.StatusTooManyRequests && response.StatusCode < 500 {
+			s.deliveryFailedPermanently(ctx, value, failure)
+		} else {
+			s.deliveryFailedAfter(ctx, value, failure, retryAfter(response.Header.Get("Retry-After"), s.now()))
+		}
 		return
 	}
 	result := struct {
+		ID          string `json:"id"`
+		Status      string `json:"status"`
 		ExternalID  string `json:"external_id"`
 		ExternalURL string `json:"external_url"`
 	}{}
-	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxHookResponse+1))
-	if readErr != nil || len(raw) > maxHookResponse {
-		s.deliveryFailed(ctx, value, errors.New("reporting hook response is too large"))
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxDeliveryResponse+1))
+	if readErr != nil || len(raw) > maxDeliveryResponse {
+		s.deliveryFailed(ctx, value, errors.New("support API response is too large"))
 		return
 	}
 	if len(bytes.TrimSpace(raw)) > 0 {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&result); err != nil {
-			s.deliveryFailed(ctx, value, errors.New("reporting hook returned invalid JSON"))
+			s.deliveryFailed(ctx, value, errors.New("support API returned invalid JSON"))
+			return
+		}
+		var trailing any
+		if decoder.Decode(&trailing) != io.EOF {
+			s.deliveryFailed(ctx, value, errors.New("support API returned multiple JSON values"))
 			return
 		}
 	}
-	if len(result.ExternalID) > 200 || len(result.ExternalURL) > 2000 || (result.ExternalURL != "" && !validExternalURL(result.ExternalURL)) {
-		s.deliveryFailed(ctx, value, errors.New("reporting hook returned invalid ticket metadata"))
+	if result.ID == "" || len(result.ID) > 200 || result.Status != "accepted" || len(result.ExternalID) > 200 || len(result.ExternalURL) > 2000 || (result.ExternalURL != "" && !validExternalURL(result.ExternalURL)) {
+		s.deliveryFailed(ctx, value, errors.New("support API returned invalid receipt"))
 		return
 	}
 	now := s.now()
@@ -831,27 +737,26 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 	_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
 }
 
-func (s *Service) deliveryRoute(ctx context.Context, value model.ReportSubmission) (hookURL, credentialID string, err error) {
-	if value.SupportRouteID != "" {
-		route, routeErr := s.store.SupportRoute(ctx, value.ProductID, value.SupportRouteID)
-		if routeErr != nil {
-			return "", "", routeErr
-		}
-		hookURL, credentialID = route.BugHookURL, route.BugHookCredentialID
-		if value.Kind == KindFeedback {
-			hookURL, credentialID = route.FeedbackHookURL, route.FeedbackHookCredentialID
-		}
-		return hookURL, credentialID, nil
+func (s *Service) deliveryRoute(ctx context.Context, value model.ReportSubmission) (endpoint, credentialID string, err error) {
+	if value.SupportRouteID == "" {
+		return "", "", ErrNotConfigured
 	}
-	config, configErr := s.Config(ctx, value.ProductID)
-	if configErr != nil {
-		return "", "", configErr
+	route, routeErr := s.store.SupportRoute(ctx, value.ProductID, value.SupportRouteID)
+	if routeErr != nil {
+		return "", "", routeErr
 	}
-	hookURL, credentialID = config.BugHookURL, config.BugHookCredentialID
+	enabled := route.BugReportsEnabled
 	if value.Kind == KindFeedback {
-		hookURL, credentialID = config.FeedbackHookURL, config.FeedbackHookCredentialID
+		enabled = route.FeedbackEnabled
 	}
-	return hookURL, credentialID, nil
+	if route.State != "active" || !enabled || route.BackendConnectionID == "" {
+		return "", "", ErrDeliveryUnavailable
+	}
+	connection, connectionErr := s.store.BackendConnection(ctx, value.ProductID, route.BackendConnectionID)
+	if connectionErr != nil || connection.State != "active" || connection.AuthenticationType != "bearer" || connection.CredentialSecretID == "" {
+		return "", "", ErrDeliveryUnavailable
+	}
+	return connection.BaseURL + "/v1/support-submissions", connection.CredentialSecretID, nil
 }
 
 func validExternalURL(raw string) bool {
@@ -859,7 +764,7 @@ func validExternalURL(raw string) bool {
 	return err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" && parsed.User == nil
 }
 
-func (s *Service) hookCredential(ctx context.Context, organisationID, kind, id string) (string, error) {
+func (s *Service) deliveryCredential(ctx context.Context, organisationID, id string) (string, error) {
 	if s.vault == nil {
 		return "", errors.New("credential vault is unavailable")
 	}
@@ -867,11 +772,30 @@ func (s *Service) hookCredential(ctx context.Context, organisationID, kind, id s
 	if err != nil {
 		return "", err
 	}
-	plain, err := s.vault.Decrypt(secrets.Encrypted{Ciphertext: stored.Ciphertext, Nonce: stored.Nonce, KeyVersion: stored.KeyVersion, Fingerprint: stored.Fingerprint}, organisationID+":reporting:"+kind+":"+id)
+	plain, err := s.vault.Decrypt(secrets.Encrypted{Ciphertext: stored.Ciphertext, Nonce: stored.Nonce, KeyVersion: stored.KeyVersion, Fingerprint: stored.Fingerprint}, organisationID+":backend_connection:"+id)
 	return string(plain), err
 }
 
 func (s *Service) deliveryFailed(ctx context.Context, value model.ReportSubmission, failure error) {
+	s.deliveryFailedAfter(ctx, value, failure, time.Time{})
+}
+
+func (s *Service) deliveryFailedPermanently(ctx context.Context, value model.ReportSubmission, failure error) {
+	value.Attempts = max(value.Attempts, maxDeliveryAttempts)
+	s.deliveryFailedAfter(ctx, value, failure, time.Time{})
+}
+
+func retryAfter(raw string, now time.Time) time.Time {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && seconds >= 0 {
+		return now.Add(time.Duration(seconds) * time.Second)
+	}
+	if parsed, err := http.ParseTime(raw); err == nil && parsed.After(now) {
+		return parsed
+	}
+	return time.Time{}
+}
+
+func (s *Service) deliveryFailedAfter(ctx context.Context, value model.ReportSubmission, failure error, retryAt time.Time) {
 	value.DeliveryStartedAt = nil
 	message := failure.Error()
 	if len(message) > 500 {
@@ -881,11 +805,14 @@ func (s *Service) deliveryFailed(ctx context.Context, value model.ReportSubmissi
 	if value.Attempts >= maxDeliveryAttempts {
 		value.State, value.NextAttemptAt = "failed", nil
 	} else {
-		delay := time.Minute * time.Duration(1<<min(value.Attempts-1, 8))
-		if delay > 6*time.Hour {
-			delay = 6 * time.Hour
+		next := retryAt
+		if next.IsZero() {
+			delay := time.Minute * time.Duration(1<<min(value.Attempts-1, 8))
+			if delay > 6*time.Hour {
+				delay = 6 * time.Hour
+			}
+			next = s.now().Add(delay)
 		}
-		next := s.now().Add(delay)
 		value.State, value.NextAttemptAt = "pending", &next
 	}
 	_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)

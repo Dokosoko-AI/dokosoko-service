@@ -4,7 +4,6 @@ import {
   Activity,
   AlertCircle,
   ArrowLeft,
-  BarChart3,
   BookOpen,
   Bot,
   Bug,
@@ -24,11 +23,11 @@ import {
   LogOut,
   MoreHorizontal,
   MessageSquareText,
-  Package as PackageIcon,
   Plus,
   Radio,
   RefreshCw,
   Search,
+  Server,
   Settings,
   Share2,
   ShieldCheck,
@@ -40,7 +39,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIReportingConfig, APIReportSubmission, APIResourceSet, APISupportRoute, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAnalytics, APIAuditEvent, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APILLMProfile, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, APIWidgetSnippets, Distribution, SetupEnrollment, api } from "../lib/api";
 import { ConsoleRoute, EntityKind, INTEGRATION_TABS, IntegrationTab, Section, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath } from "../lib/console-routes";
 import { Badge, Button, Dialog, Switch } from "./catalyst";
 
@@ -61,21 +60,8 @@ type Source = {
   revision: number;
 };
 
-type ProductPackage = {
-  id: string;
-  name: string;
-  ecosystem: string;
-  version: string;
-  externalPackageID?: string;
-  mode: "public" | "proxy" | "download";
-  visibility: Visibility;
-  published: boolean;
-  status: "ready" | "checking";
-  revision: number;
-};
-
 type PendingPublication = {
-  kind: "source" | "package";
+  kind: "source";
   id: string;
   name: string;
   detail: string;
@@ -99,16 +85,10 @@ const initialSources: Source[] = [
   { id: "src_examples", name: "SDK examples", kind: "Git repository", location: "acme/sdk-examples", visibility: "private", published: false, quarantined: false, crawlState: "failed", pages: 0, lastCrawl: "1 day ago", revision: 1 },
 ];
 
-const initialPackages: ProductPackage[] = [
-  { id: "pkg_node", name: "@acme/node", ecosystem: "npm", version: "2.4.1", mode: "proxy", visibility: "private", published: true, status: "ready", revision: 1 },
-  { id: "pkg_go", name: "go.acme.dev/sdk", ecosystem: "Go", version: "1.8.0", externalPackageID: "vendor-sdk-go-1.8.0", mode: "download", visibility: "private", published: true, status: "ready", revision: 1 },
-  { id: "pkg_swift", name: "AcmeKit", ecosystem: "Swift", version: "3.1.0", mode: "public", visibility: "private", published: false, status: "checking", revision: 1 },
-];
-
 const initialTools: APITool[] = [
   { id: "tool_sandbox", organisation_id: "org_acme", product_id: "prod_acme", namespace: "access", name: "create_sandbox", description: "Create a sandbox", input_schema: {}, output_schema: {}, state: "published", revision: 2, http_method: "POST", authorization_policy: {}, timeout_ms: 10000 },
   { id: "tool_credentials", organisation_id: "org_acme", product_id: "prod_acme", namespace: "credentials", name: "issue", description: "Issue credentials", input_schema: {}, output_schema: {}, state: "draft", revision: 1, http_method: "POST", authorization_policy: {}, timeout_ms: 10000 },
-  { id: "tool_incidents", organisation_id: "org_acme", product_id: "prod_acme", namespace: "support", name: "create_incident", description: "Create a support incident", input_schema: {}, output_schema: {}, state: "published", revision: 2, http_method: "MCP", authorization_policy: { required_entitlements: ["support.write"] }, timeout_ms: 10000, backend_kind: "mcp", mcp_connection_id: "mcp_support", upstream_tool_name: "incidents.create", upstream_schema_hash: "sha256:8f44e6" },
+  { id: "tool_incidents", organisation_id: "org_acme", product_id: "prod_acme", namespace: "support", name: "create_incident", description: "Create a support incident", input_schema: {}, output_schema: {}, state: "published", revision: 2, http_method: "MCP", authorization_policy: { required_grants: ["support.write"] }, timeout_ms: 10000, backend_kind: "mcp", mcp_connection_id: "mcp_support", upstream_tool_name: "incidents.create", upstream_schema_hash: "sha256:8f44e6" },
 ];
 
 const fixtureProduct: APIProduct = { id: "prod_acme", organisation_id: "org_acme", name: "Acme Platform", slug: "acme", description: "Build reliable voice and messaging experiences with versioned APIs, SDKs, documentation, and managed tools.", default_version_policy: "latest", catalog_revision: 12, require_promotion_approval: true, public_mcp_enabled: false, revision: 1 };
@@ -142,7 +122,6 @@ const fixtureDefinition: APIProductDefinition = {
       releases: [{ id: "release_voice-v3", version: "v3", state: "draft", bindings: [
         { id: "binding_voice_spec", kind: "openapi", name: "Voice OpenAPI", location: "api.acme.dev/voice/v3/openapi.yaml", version: "v3", scope: "api_release", confidence: 0.99, evidence: ["OpenAPI title matches Voice API", "Explicit /v3 path"], verified: true },
         { id: "binding_voice_docs", kind: "docs", name: "Voice documentation", location: "docs.acme.dev/voice/v3", version: "v3", scope: "api_release", confidence: 0.97, evidence: ["Versioned documentation path"], verified: true },
-        { id: "binding_voice_package", kind: "package", name: "@acme/voice-node", location: "npm:@acme/voice-node@7.2.1", version: "7.2.1", scope: "api_release", confidence: 0.96, evidence: ["Package metadata declares Voice API v3"], verified: true },
         { id: "binding_voice_tools", kind: "mcp", name: "voice.calls.*", location: "mcp.acme.dev/v2", version: "2026-07-28", scope: "api_release", confidence: 0.94, evidence: ["Tool namespace matches Voice API"], verified: true },
       ] }],
     },
@@ -155,7 +134,6 @@ const fixtureDefinition: APIProductDefinition = {
       releases: [{ id: "release_messages-v2", version: "v2", state: "draft", bindings: [
         { id: "binding_messages_spec", kind: "openapi", name: "Messages OpenAPI", location: "api.acme.dev/messages/v2/openapi.yaml", version: "v2", scope: "api_release", confidence: 0.99, evidence: ["OpenAPI title matches Messages API", "Explicit /v2 path"], verified: true },
         { id: "binding_messages_docs", kind: "docs", name: "Messages documentation", location: "docs.acme.dev/messages/v2", version: "v2", scope: "api_release", confidence: 0.97, evidence: ["Versioned documentation path"], verified: true },
-        { id: "binding_messages_package", kind: "package", name: "@acme/messages", location: "npm:@acme/messages@5.1.3", version: "5.1.3", scope: "api_release", confidence: 0.96, evidence: ["Package metadata declares Messages API v2"], verified: true },
       ] }],
     },
   ],
@@ -171,10 +149,8 @@ const fixtureProductBuild: APIProductBuild = {
   inputs: [
     { kind: "openapi", name: "Voice OpenAPI", location: "https://api.acme.dev/voice/v3/openapi.yaml", version: "v3" },
     { kind: "docs", name: "Voice documentation", location: "https://docs.acme.dev/voice/v3", version: "v3" },
-    { kind: "package", name: "@acme/voice-node", location: "npm:@acme/voice-node@7.2.1", version: "7.2.1" },
     { kind: "openapi", name: "Messages OpenAPI", location: "https://api.acme.dev/messages/v2/openapi.yaml", version: "v2" },
     { kind: "docs", name: "Messages documentation", location: "https://docs.acme.dev/messages/v2", version: "v2" },
-    { kind: "package", name: "@acme/messages", location: "npm:@acme/messages@5.1.3", version: "5.1.3" },
     { kind: "mcp", name: "Acme tools", location: "https://mcp.acme.dev/v2", version: "2026-07-28" },
   ],
   proposal: fixtureDefinition,
@@ -183,7 +159,7 @@ const fixtureProductBuild: APIProductBuild = {
   completed_at: "2026-08-19T12:00:08Z",
 };
 
-const fixtureDiff: APIProductVersionDiff = { from_version_id: "version_2026_05", from_version: "2026.5", generated_at: "2026-08-19T12:20:00Z", summary: "1 added, 0 removed, 2 changed", added: [{ kind: "artifact", path: "capability/voice/artifact/tool/voice.calls.transfer", after: "v3" }], removed: [], changed: [{ kind: "artifact", path: "capability/voice/artifact/package/@acme/voice-node", before: "7.1.0", after: "7.2.1" }, { kind: "artifact", path: "capability/messages/artifact/package/@acme/messages", before: "5.0.8", after: "5.1.3" }] };
+const fixtureDiff: APIProductVersionDiff = { from_version_id: "version_2026_05", from_version: "2026.5", generated_at: "2026-08-19T12:20:00Z", summary: "1 added, 0 removed, 2 changed", added: [{ kind: "artifact", path: "capability/voice/artifact/tool/voice.calls.transfer", after: "v3" }], removed: [], changed: [{ kind: "artifact", path: "capability/voice/artifact/openapi", before: "v2", after: "v3" }, { kind: "artifact", path: "capability/messages/artifact/docs", before: "v1", after: "v2" }] };
 const fixtureProductVersions: APIProductVersion[] = [
   { id: "version_2026_08", organisation_id: "org_acme", product_id: "prod_acme", version: "2026.8", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, manifest_hash: "sha256:81f4…b9c2", diff: fixtureDiff, release_stage: "active", rollout_percentage: 25, promotion_state: "approved", requested_latest: true, requested_lts: false, approved_by: "root_approver", approved_at: "2026-08-19T12:19:00Z", drift_status: "healthy", drift_details: [], drift_checked_at: "2026-08-19T12:19:30Z", is_latest: true, is_lts: false, revision: 2, published_at: "2026-08-19T12:20:00Z" },
   { id: "version_2026_05", organisation_id: "org_acme", product_id: "prod_acme", version: "2026.5", profile_id: "profile_communications_202608", profile_name: "Voice v3 + Messages v2", definition_revision: 1, manifest_hash: "sha256:17bd…81a0", diff: { ...fixtureDiff, from_version_id: undefined, from_version: undefined, summary: "Initial product release", added: [], changed: [] }, release_stage: "active", rollout_percentage: 100, promotion_state: "approved", requested_latest: false, requested_lts: true, drift_status: "healthy", drift_details: [], is_latest: false, is_lts: true, revision: 3, published_at: "2026-05-10T09:00:00Z" },
@@ -191,10 +167,11 @@ const fixtureProductVersions: APIProductVersion[] = [
 ];
 
 const fixtureProductPins: APIProductVersionPin[] = [
-  { id: "pin_contoso", organisation_id: "org_acme", product_id: "prod_acme", scope: "customer", scope_id: "contoso", customer_id: "contoso", product_version_id: "version_2026_05", product_version: "2026.5", reason: "Production stability window", revision: 1, created_at: "2026-08-19T12:30:00Z", updated_at: "2026-08-19T12:30:00Z" },
+  { id: "pin_contoso", organisation_id: "org_acme", product_id: "prod_acme", scope: "customer", scope_id: "account_contoso", customer_account_id: "account_contoso", product_version_id: "version_2026_05", product_version: "2026.5", reason: "Production stability window", revision: 1, created_at: "2026-08-19T12:30:00Z", updated_at: "2026-08-19T12:30:00Z" },
 ];
 
-const fixtureInstallations: APIProductInstallation[] = [{ id: "installation_contoso_voice", organisation_id: "org_acme", product_id: "prod_acme", customer_id: "contoso", environment_id: "env_prod", external_id: "contoso-voice-prod", name: "Contoso voice production", state: "active", revision: 1, created_at: "2026-08-19T12:24:00Z", updated_at: "2026-08-19T12:24:00Z" }];
+const fixtureCustomerAccounts: APICustomerAccount[] = [{ id: "account_contoso", organisation_id: "org_acme", product_id: "prod_acme", issuer: "https://identity.acme.example", external_id: "contoso", state: "active", revision: 1, created_at: "2026-08-19T12:24:00Z", updated_at: "2026-08-19T12:24:00Z", last_authenticated_at: "2026-08-19T12:24:00Z" }];
+const fixtureInstallations: APIProductInstallation[] = [{ id: "installation_contoso_voice", organisation_id: "org_acme", product_id: "prod_acme", customer_account_id: "account_contoso", environment_id: "env_prod", external_id: "contoso-voice-prod", name: "Contoso voice production", state: "active", revision: 1, created_at: "2026-08-19T12:24:00Z", updated_at: "2026-08-19T12:24:00Z" }];
 
 function ConsoleLink({ path, onNavigate, className, children, ariaCurrent }: { path: string; onNavigate: (path: string) => void; className?: string; children: React.ReactNode; ariaCurrent?: "page" }) {
   return <a href={path} className={className} aria-current={ariaCurrent} onClick={(event) => {
@@ -246,6 +223,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	const [resourceSets, setResourceSets] = useState<APIResourceSet[]>([]);
 	const [accessDefinitions, setAccessDefinitions] = useState<APIAccessDefinition[]>([]);
 	const [accessConnections, setAccessConnections] = useState<APIAccessConnection[]>([]);
+	const [backendConnections, setBackendConnections] = useState<APIBackendConnection[]>([]);
 	const [accessInstances, setAccessInstances] = useState<APIAccessInstance[]>([]);
 	const [accessCredentials, setAccessCredentials] = useState<APIAccessCredential[]>([]);
 	const [supportRoutes, setSupportRoutes] = useState<APISupportRoute[]>([]);
@@ -257,7 +235,6 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [productBuilderBusy, setProductBuilderBusy] = useState(false);
   const [productBuilderInputs, setProductBuilderInputs] = useState("");
   const [sources, setSources] = useState(initialSources);
-  const [packages, setPackages] = useState(initialPackages);
   const [tools, setTools] = useState(initialTools);
   const [mcpConnections, setMCPConnections] = useState<APIMCPConnection[]>(fixtureMCPConnections);
   const [mcpConnectionOpen, setMCPConnectionOpen] = useState(false);
@@ -276,7 +253,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [mcpAuthorizationURL, setMCPAuthorizationURL] = useState("");
   const [mcpTokenURL, setMCPTokenURL] = useState("");
   const [mcpScopes, setMCPScopes] = useState("");
-  const [mcpEntitlements, setMCPEntitlements] = useState("");
+  const [mcpGrants, setMCPGrants] = useState("");
   const [mcpConfirmationRequired, setMCPConfirmationRequired] = useState(true);
   const [publicMCPEnabled, setPublicMCPEnabled] = useState(false);
   const [distribution, setDistribution] = useState<Distribution | null>(null);
@@ -293,32 +270,20 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [sourceKind, setSourceKind] = useState("website");
   const [sourceLocation, setSourceLocation] = useState("");
   const [sourceBusy, setSourceBusy] = useState(false);
-  const [addPackageOpen, setAddPackageOpen] = useState(false);
-  const [packageName, setPackageName] = useState("");
-  const [packageVersion, setPackageVersion] = useState("");
-  const [packageExternalID, setPackageExternalID] = useState("");
-  const [packageEcosystem, setPackageEcosystem] = useState("npm");
-  const [packageMode, setPackageMode] = useState<"public" | "proxy" | "download">("proxy");
-  const [packageEndpoint, setPackageEndpoint] = useState("");
-  const [packageCredential, setPackageCredential] = useState("");
-  const [packageChecksum, setPackageChecksum] = useState("");
-  const [packageBusy, setPackageBusy] = useState(false);
   const [addToolOpen, setAddToolOpen] = useState(false);
   const [toolNamespace, setToolNamespace] = useState("access");
   const [toolName, setToolName] = useState("");
   const [toolDescription, setToolDescription] = useState("");
   const [toolMethod, setToolMethod] = useState("POST");
-  const [toolHook, setToolHook] = useState("");
-  const [toolCredential, setToolCredential] = useState("");
-  const [toolEntitlements, setToolEntitlements] = useState("");
+  const [toolEndpoint, setToolEndpoint] = useState("");
+  const [toolGrants, setToolGrants] = useState("");
   const [toolInputSchema, setToolInputSchema] = useState(`{"type":"object","additionalProperties":false,"properties":{},"required":[]}`);
   const [toolOutputSchema, setToolOutputSchema] = useState(`{"type":"object","additionalProperties":false,"properties":{}}`);
 	  const [toolBusy, setToolBusy] = useState(false);
 	  const [analytics, setAnalytics] = useState<APIAnalytics | null>(null);
 	  const [identityConfig, setIdentityConfig] = useState<APIIdentity | null>(null);
-	  const [reportingConfig, setReportingConfig] = useState<APIReportingConfig | null>(null);
-	  const [reportSubmissions, setReportSubmissions] = useState<APIReportSubmission[]>([]);
-	  const [reportDetail, setReportDetail] = useState<APIReportSubmission | null>(null);
+	  const [reportSubmissions, setReportSubmissions] = useState<APISupportSubmission[]>([]);
+	  const [reportDetail, setReportDetail] = useState<APISupportSubmission | null>(null);
 	  const [reportDetailBusy, setReportDetailBusy] = useState(false);
 	  const [rootUsers, setRootUsers] = useState<APIUser[]>(currentUser ? [currentUser] : []);
 	  const [identityOpen, setIdentityOpen] = useState(false);
@@ -328,14 +293,11 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const [idpClientSecret, setIDPClientSecret] = useState("");
 	  const [idpScopes, setIDPScopes] = useState("openid, profile, email");
 	  const [idpAudience, setIDPAudience] = useState("");
+	  const [idpOAuthResource, setIDPOAuthResource] = useState("");
 	  const [idpOrganisationClaim, setIDPOrganisationClaim] = useState("org_id");
 	  const [idpInstallationClaim, setIDPInstallationClaim] = useState("installation_id");
-	  const [idpEntitlementHook, setIDPEntitlementHook] = useState("");
-	  const [idpAuthorizationHook, setIDPAuthorizationHook] = useState("");
-	  const [idpAuthorizationCredential, setIDPAuthorizationCredential] = useState("");
-	  const [idpUsageHook, setIDPUsageHook] = useState("");
-	  const [idpUsageCredential, setIDPUsageCredential] = useState("");
-	  const [idpRedirects, setIDPRedirects] = useState("");
+	  const [delegatedAPIOrigin, setDelegatedAPIOrigin] = useState("");
+	  const [identityState, setIdentityState] = useState<APIIdentity["state"]>("active");
 	  const [rootOpen, setRootOpen] = useState(false);
 	  const [rootBusy, setRootBusy] = useState(false);
 	  const [rootEmail, setRootEmail] = useState("");
@@ -371,6 +333,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const [requirePromotionApproval, setRequirePromotionApproval] = useState(product.require_promotion_approval);
 	  const [productVersions, setProductVersions] = useState<APIProductVersion[]>(fixtureProductVersions);
 	  const [productVersionPins, setProductVersionPins] = useState<APIProductVersionPin[]>(fixtureProductPins);
+	  const [customerAccounts, setCustomerAccounts] = useState<APICustomerAccount[]>(fixtureCustomerAccounts);
 	  const [productInstallations, setProductInstallations] = useState<APIProductInstallation[]>(fixtureInstallations);
 	  const [pinHistory, setPinHistory] = useState<APIProductVersionPinHistory[]>([]);
 	  const [newProductVersion, setNewProductVersion] = useState("");
@@ -427,7 +390,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     }
 
     let cancelled = false;
-	    Promise.all([api.distribution(product.id), api.widgets(product.id), api.sources(product.id), api.packages(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(([distributionValue, widgetValues, remoteSources, remotePackages, remoteTools, remoteMCPConnections]) => {
+	    Promise.all([api.distribution(product.id), api.widgets(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(([distributionValue, widgetValues, remoteSources, remoteTools, remoteMCPConnections]) => {
       if (cancelled) return;
       setDistribution(distributionValue);
       setProduct(distributionValue.product);
@@ -450,10 +413,6 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           revision: source.revision,
         };
       }));
-      setPackages((current) => remotePackages.map((pkg) => {
-        const local = current.find((item) => item.id === pkg.id);
-        return { id: pkg.id, name: pkg.name, ecosystem: pkg.ecosystem, version: pkg.version, externalPackageID: pkg.external_package_id, mode: pkg.mode, visibility: pkg.visibility, published: pkg.published, status: local?.status ?? "ready", revision: pkg.revision };
-      }));
       setTools(remoteTools);
       setMCPConnections(remoteMCPConnections);
       setAPIConnected(true);
@@ -462,20 +421,18 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       // service deployment, same-origin session authentication hydrates live state.
 	    });
 	    api.analytics(product.id).then((value) => { if (!cancelled) setAnalytics(value); }).catch(() => {});
-	    api.identity(product.id).then((value) => {
+	    api.identity().then((value) => {
 	      if (cancelled) return;
 	      setIdentityConfig(value);
-	      setIDPIssuer(value.issuer); setIDPClientID(value.client_id); setIDPScopes(value.scopes.join(", ")); setIDPAudience(value.audience); setIDPOrganisationClaim(value.organisation_claim); setIDPInstallationClaim(value.installation_claim); setIDPEntitlementHook(value.entitlement_hook_url); setIDPAuthorizationHook(value.authorization_hook_url); setIDPUsageHook(value.usage_hook_url); setIDPRedirects(value.allowed_redirect_uris.join("\n"));
+	      setIDPIssuer(value.issuer); setIDPClientID(value.client_id); setIDPScopes(value.scopes.join(", ")); setIDPAudience(value.audience ?? ""); setIDPOAuthResource(value.oauth_resource ?? ""); setIDPOrganisationClaim(value.organisation_claim); setIDPInstallationClaim(value.installation_claim); setDelegatedAPIOrigin(value.delegated_api_origin); setIdentityState(value.state);
 	    }).catch(() => {});
-	    Promise.all([api.reporting(product.id), api.reportSubmissions(product.id)]).then(([config, submissions]) => {
-	      if (cancelled) return;
-	      setReportingConfig(config);
-	      setReportSubmissions(submissions);
+	    api.supportSubmissions().then((submissions) => {
+	      if (!cancelled) setReportSubmissions(submissions);
 	    }).catch(() => {});
 	    api.rootUsers().then((value) => { if (!cancelled) setRootUsers(value); }).catch(() => {});
-	    Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.supportRoutes()]).then(async ([integrationValues, setValues, definitionValues, connectionValues, routeValues]) => {
+	    Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]).then(async ([integrationValues, setValues, definitionValues, connectionValues, backendValues, routeValues]) => {
 	      if (cancelled) return;
-	      setIntegrations(integrationValues); setResourceSets(setValues); setAccessDefinitions(definitionValues); setAccessConnections(connectionValues); setSupportRoutes(routeValues);
+	      setIntegrations(integrationValues); setResourceSets(setValues); setAccessDefinitions(definitionValues); setAccessConnections(connectionValues); setBackendConnections(backendValues); setSupportRoutes(routeValues);
 	      const instanceGroups = await Promise.all(connectionValues.map((connection) => api.accessInstances(connection.id).catch(() => [])));
 	      const credentialGroups = await Promise.all(connectionValues.map((connection) => api.accessCredentials(connection.id).catch(() => [])));
 	      if (!cancelled) { setAccessInstances(instanceGroups.flat()); setAccessCredentials(credentialGroups.flat()); }
@@ -485,7 +442,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	    api.productBuilds(product.id).then((values) => { if (!cancelled) setLatestProductBuild(values[0] ?? null); }).catch(() => {});
 	    api.productVersions(product.id).then((values) => { if (!cancelled) { setProductVersions(values); setPinVersionID(values.find((value) => value.is_latest)?.id ?? values[0]?.id ?? ""); } }).catch(() => {});
 	    api.productVersionPins(product.id).then((values) => { if (!cancelled) setProductVersionPins(values); }).catch(() => {});
-	    Promise.all([api.productInstallations(product.id), api.productVersionPinHistory(product.id)]).then(([installationValues, historyValues]) => { if (!cancelled) { setProductInstallations(installationValues); setPinHistory(historyValues); } }).catch(() => {});
+	    Promise.all([api.productInstallations(product.id), api.productVersionPinHistory(product.id), api.customerAccounts(product.id)]).then(([installationValues, historyValues, accountValues]) => { if (!cancelled) { setProductInstallations(installationValues); setPinHistory(historyValues); setCustomerAccounts(accountValues); } }).catch(() => {});
 	    Promise.all([api.environments(product.id), api.integrationRuns(product.id), api.auditEvents(product.organisation_id)]).then(([environmentValues, runValues, eventValues]) => {
 	      if (cancelled) return;
 	      setEnvironments(environmentValues);
@@ -497,12 +454,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   }, [product.id, product.organisation_id]);
 
   const publicSources = sources.filter((item) => item.visibility === "public");
-  const publicPackages = packages.filter((item) => item.visibility === "public");
-  const publicResourceCount = publicSources.length + publicPackages.length;
+  const publicResourceCount = publicSources.length;
   const allResources = useMemo(() => [
     ...sources.map((item) => ({ ...item, resourceType: "source" as const, type: item.kind, detail: item.location })),
-    ...packages.map((item) => ({ ...item, resourceType: "package" as const, type: `${item.ecosystem} package`, detail: `${item.mode[0].toUpperCase()}${item.mode.slice(1)} mode` })),
-  ], [sources, packages]);
+  ], [sources]);
   const visibleResources = resourceFilter === "all" ? allResources : allResources.filter((item) => item.visibility === resourceFilter);
 
   function showToast(message: string) {
@@ -511,11 +466,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   }
 
 	async function refreshCatalog() {
-		const [integrationValues, setValues, definitionValues, connectionValues, routeValues] = await Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.supportRoutes()]);
+		const [integrationValues, setValues, definitionValues, connectionValues, backendValues, routeValues] = await Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]);
 		setIntegrations(integrationValues);
 		setResourceSets(setValues);
 		setAccessDefinitions(definitionValues);
 		setAccessConnections(connectionValues);
+		setBackendConnections(backendValues);
 		setSupportRoutes(routeValues);
 		const instanceGroups = await Promise.all(connectionValues.map((connection) => api.accessInstances(connection.id).catch(() => [])));
 		const credentialGroups = await Promise.all(connectionValues.map((connection) => api.accessCredentials(connection.id).catch(() => [])));
@@ -632,8 +588,8 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const existing = productVersionPins.find((pin) => pin.scope === pinScope && pin.scope_id === pinCustomerID.trim());
 	  const installation = pinScope === "installation" ? productInstallations.find((item) => item.id === pinCustomerID) : undefined;
 	  const value = apiConnected
-		? await api.saveProductVersionPin(product.id, { scope: pinScope, scope_id: pinCustomerID.trim(), customer_id: installation?.customer_id, product_version_id: pinVersionID, reason: pinReason.trim(), revision: existing?.revision ?? 0 })
-		: { id: existing?.id ?? `pin_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, scope: pinScope, scope_id: pinCustomerID.trim(), customer_id: pinScope === "customer" ? pinCustomerID.trim() : installation?.customer_id ?? "", environment_id: pinScope === "environment" ? pinCustomerID.trim() : installation?.environment_id, installation_id: installation?.id, product_version_id: pinVersionID, product_version: selected?.version ?? "", reason: pinReason.trim(), revision: (existing?.revision ?? 0) + 1, created_at: existing?.created_at ?? now, updated_at: now };
+		? await api.saveProductVersionPin(product.id, { scope: pinScope, scope_id: pinCustomerID.trim(), customer_account_id: pinScope === "customer" ? pinCustomerID.trim() : installation?.customer_account_id, product_version_id: pinVersionID, reason: pinReason.trim(), revision: existing?.revision ?? 0 })
+		: { id: existing?.id ?? `pin_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, scope: pinScope, scope_id: pinCustomerID.trim(), customer_account_id: pinScope === "customer" ? pinCustomerID.trim() : installation?.customer_account_id ?? "", environment_id: pinScope === "environment" ? pinCustomerID.trim() : installation?.environment_id, installation_id: installation?.id, product_version_id: pinVersionID, product_version: selected?.version ?? "", reason: pinReason.trim(), revision: (existing?.revision ?? 0) + 1, created_at: existing?.created_at ?? now, updated_at: now };
 	  setProductVersionPins((current) => [value, ...current.filter((pin) => !(pin.scope === value.scope && pin.scope_id === value.scope_id))]);
       setPinCustomerID("");
       setPinReason("");
@@ -650,7 +606,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	setProductCatalogBusy(true);
 	try {
 	  const now = new Date().toISOString();
-	  const value = apiConnected ? await api.saveProductInstallation(product.id, { customer_id: installationCustomerID.trim(), environment_id: installationEnvironmentID, external_id: installationExternalID.trim(), name: installationName.trim(), state: "active", revision: 0 }) : { id: `installation_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, customer_id: installationCustomerID.trim(), environment_id: installationEnvironmentID, external_id: installationExternalID.trim(), name: installationName.trim(), state: "active" as const, revision: 1, created_at: now, updated_at: now };
+	  const value = apiConnected ? await api.saveProductInstallation(product.id, { customer_account_id: installationCustomerID.trim(), environment_id: installationEnvironmentID, external_id: installationExternalID.trim(), name: installationName.trim(), state: "active", revision: 0 }) : { id: `installation_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, customer_account_id: installationCustomerID.trim(), environment_id: installationEnvironmentID, external_id: installationExternalID.trim(), name: installationName.trim(), state: "active" as const, revision: 1, created_at: now, updated_at: now };
 	  setProductInstallations((current) => [value, ...current]);
 	  setInstallationName(""); setInstallationExternalID(""); setInstallationCustomerID("");
 	  showToast(`${value.name} is now available for installation-scoped version resolution.`);
@@ -718,20 +674,15 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     }
   }
 
-  async function requestVisibility(kind: "source" | "package", id: string) {
-    const list = kind === "source" ? sources : packages;
-    const item = list.find((candidate) => candidate.id === id);
+  async function requestVisibility(kind: "source", id: string) {
+    const item = sources.find((candidate) => candidate.id === id);
     if (!item) return;
     if (item.visibility === "public") {
       try {
-        if (apiConnected && kind === "source") {
+        if (apiConnected) {
           const updated = await api.setSourceVisibility(product.id, id, "private", item.revision, false);
           setSources((items) => items.map((candidate) => candidate.id === id ? { ...candidate, visibility: updated.visibility, revision: updated.revision } : candidate));
-        } else if (apiConnected && kind === "package") {
-          const updated = await api.setPackageVisibility(product.id, id, "private", item.revision, false);
-          setPackages((items) => items.map((candidate) => candidate.id === id ? { ...candidate, visibility: updated.visibility, revision: updated.revision } : candidate));
-        } else if (kind === "source") setSources((items) => items.map((candidate) => candidate.id === id ? { ...candidate, visibility: "private" } : candidate));
-        else setPackages((items) => items.map((candidate) => candidate.id === id ? { ...candidate, visibility: "private" } : candidate));
+        } else setSources((items) => items.map((candidate) => candidate.id === id ? { ...candidate, visibility: "private" } : candidate));
       } catch (error) {
         showToast(error instanceof APIError ? error.message : "Could not update visibility.");
         return;
@@ -744,24 +695,20 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       kind,
       id,
       name: item.name,
-      detail: kind === "source" ? "Its currently published knowledge will become anonymously searchable." : "Its metadata and downloads may be accessed anonymously.",
+      detail: "Its currently published knowledge will become anonymously searchable.",
     });
   }
 
   async function confirmPublication() {
     if (!pendingPublication || !acknowledged) return;
-    const { kind, id, name } = pendingPublication;
-    const current = kind === "source" ? sources.find((item) => item.id === id) : packages.find((item) => item.id === id);
+    const { id, name } = pendingPublication;
+    const current = sources.find((item) => item.id === id);
     if (!current) return;
     try {
-      if (apiConnected && kind === "source") {
+      if (apiConnected) {
         const updated = await api.setSourceVisibility(product.id, id, "public", current.revision, true);
         setSources((items) => items.map((item) => item.id === id ? { ...item, visibility: updated.visibility, revision: updated.revision } : item));
-      } else if (apiConnected && kind === "package") {
-        const updated = await api.setPackageVisibility(product.id, id, "public", current.revision, true);
-        setPackages((items) => items.map((item) => item.id === id ? { ...item, visibility: updated.visibility, revision: updated.revision } : item));
-      } else if (kind === "source") setSources((items) => items.map((item) => item.id === id ? { ...item, visibility: "public" } : item));
-      else setPackages((items) => items.map((item) => item.id === id ? { ...item, visibility: "public" } : item));
+      } else setSources((items) => items.map((item) => item.id === id ? { ...item, visibility: "public" } : item));
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not publish this resource.");
       return;
@@ -870,49 +817,16 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	}
   }
 
-  async function publishPackage(pkg: ProductPackage) {
-	try {
-	  const value = apiConnected ? await api.publishPackage(product.id, pkg.id, pkg.revision) : { ...pkg, published: true, revision: pkg.revision + 1 };
-	  setPackages((items) => items.map((item) => item.id === pkg.id ? { ...item, published: value.published, revision: value.revision, status: "ready" } : item));
-	  showToast(`${pkg.name} was published.`);
-	} catch (error) {
-	  showToast(error instanceof APIError ? error.message : "Could not publish package.");
-	}
-  }
-
-  async function createPackage() {
-    setPackageBusy(true);
-    try {
-      const base = { organisation_id: product.organisation_id, name: packageName, ecosystem: packageEcosystem, version: packageVersion, ...(packageChecksum.trim() ? { checksum_sha256: packageChecksum.trim() } : {}) };
-      const input = packageMode === "public"
-        ? { ...base, mode: "public" as const, upstream_url: packageEndpoint }
-        : packageMode === "proxy"
-          ? { ...base, mode: "proxy" as const, upstream_url: packageEndpoint, credential: packageCredential }
-          : { ...base, mode: "download" as const, download_url: packageEndpoint, external_package_id: packageExternalID, credential: packageCredential };
-      const created = apiConnected
-        ? await api.createPackage(product.id, input)
-        : { id: `pkg_${Date.now()}`, name: packageName, ecosystem: packageEcosystem, version: packageVersion, external_package_id: packageMode === "download" ? packageExternalID : undefined, mode: packageMode, visibility: "private" as const, published: false, revision: 1 };
-      setPackages((items) => [...items, { id: created.id, name: created.name, ecosystem: created.ecosystem, version: created.version, externalPackageID: created.external_package_id, mode: created.mode, visibility: created.visibility, published: created.published, status: "checking", revision: created.revision }]);
-      setAddPackageOpen(false);
-      setPackageName(""); setPackageVersion(""); setPackageExternalID(""); setPackageEndpoint(""); setPackageCredential(""); setPackageChecksum("");
-      showToast(`${created.name} was added privately; credentials remain server-side.`);
-    } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not add package.");
-    } finally {
-      setPackageBusy(false);
-    }
-  }
-
   async function createTool() {
     setToolBusy(true);
     try {
       const inputSchema = JSON.parse(toolInputSchema) as Record<string, unknown>;
       const outputSchema = JSON.parse(toolOutputSchema) as Record<string, unknown>;
-      const authorizationPolicy = { required_entitlements: toolEntitlements.split(",").map((value) => value.trim()).filter(Boolean), confirmation_required: false };
-      const created = apiConnected ? await api.createTool(product.id, { organisation_id: product.organisation_id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, api_hook_url: toolHook, http_method: toolMethod, credential: toolCredential, authorization_policy: authorizationPolicy, timeout_ms: 10000 }) : { id: `tool_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, state: "draft" as const, revision: 1, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 };
+      const authorizationPolicy = { required_grants: toolGrants.split(",").map((value) => value.trim()).filter(Boolean), confirmation_required: false };
+      const created = apiConnected ? await api.createTool(product.id, { organisation_id: product.organisation_id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, endpoint: toolEndpoint, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 }) : { id: `tool_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, state: "draft" as const, revision: 1, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 };
       setTools((items) => [...items, created as APITool]);
       setAddToolOpen(false);
-      setToolName(""); setToolDescription(""); setToolHook(""); setToolCredential(""); setToolEntitlements("");
+      setToolName(""); setToolDescription(""); setToolEndpoint(""); setToolGrants("");
       showToast(`${created.namespace}.${created.name} was saved as a draft.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Schema or tool configuration is invalid.");
@@ -990,18 +904,18 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     if (!mcpCatalog || mcpSelectedTools.length === 0) return;
     setMCPBusy(true);
     try {
-      const entitlements = mcpEntitlements.split(",").map((value) => value.trim()).filter(Boolean);
+      const grants = mcpGrants.split(",").map((value) => value.trim()).filter(Boolean);
       if (apiConnected) {
-        const result = await api.importMCPTools(product.id, mcpCatalog.connection.id, { tool_names: mcpSelectedTools, required_entitlements: entitlements, confirmation_required: mcpConfirmationRequired, timeout_ms: 10000 });
+        const result = await api.importMCPTools(product.id, mcpCatalog.connection.id, { tool_names: mcpSelectedTools, required_grants: grants, confirmation_required: mcpConfirmationRequired, timeout_ms: 10000 });
         const changed = [...result.created, ...result.updated, ...result.unchanged, ...result.drifted];
         setTools((items) => [...items.filter((item) => !changed.some((candidate) => candidate.id === item.id)), ...changed]);
         setMCPConnections((items) => items.map((item) => item.id === result.connection.id ? result.connection : item));
       } else {
-        const imported = mcpCatalog.tools.filter((item) => mcpSelectedTools.includes(item.name)).map((item, index): APITool => ({ id: `tool_mcp_${index}`, organisation_id: product.organisation_id, product_id: product.id, namespace: mcpCatalog.connection.namespace, name: item.name.replace(/[^A-Za-z0-9_]/g, "_"), description: item.description ?? item.title ?? item.name, input_schema: item.input_schema, output_schema: item.output_schema ?? {}, state: "draft", revision: 1, http_method: "MCP", authorization_policy: { required_entitlements: entitlements, confirmation_required: mcpConfirmationRequired }, timeout_ms: 10000, backend_kind: "mcp", mcp_connection_id: mcpCatalog.connection.id, upstream_tool_name: item.name, upstream_schema_hash: item.schema_hash }));
+        const imported = mcpCatalog.tools.filter((item) => mcpSelectedTools.includes(item.name)).map((item, index): APITool => ({ id: `tool_mcp_${index}`, organisation_id: product.organisation_id, product_id: product.id, namespace: mcpCatalog.connection.namespace, name: item.name.replace(/[^A-Za-z0-9_]/g, "_"), description: item.description ?? item.title ?? item.name, input_schema: item.input_schema, output_schema: item.output_schema ?? {}, state: "draft", revision: 1, http_method: "MCP", authorization_policy: { required_grants: grants, confirmation_required: mcpConfirmationRequired }, timeout_ms: 10000, backend_kind: "mcp", mcp_connection_id: mcpCatalog.connection.id, upstream_tool_name: item.name, upstream_schema_hash: item.schema_hash }));
         setTools((items) => [...items, ...imported]);
       }
       setMCPImportOpen(false);
-      setMCPEntitlements("");
+      setMCPGrants("");
       showToast(`${mcpSelectedTools.length} upstream tool${mcpSelectedTools.length === 1 ? "" : "s"} imported as reviewed drafts.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not import the selected MCP tools.");
@@ -1014,28 +928,23 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     setIdentityBusy(true);
     try {
       const input = {
-        organisation_id: product.organisation_id,
         issuer: idpIssuer,
         client_id: idpClientID,
         client_secret: idpClientSecret,
         scopes: idpScopes.split(",").map((value) => value.trim()).filter(Boolean),
         audience: idpAudience,
+		oauth_resource: idpOAuthResource,
 		organisation_claim: idpOrganisationClaim,
 		installation_claim: idpInstallationClaim,
-        entitlement_hook_url: idpEntitlementHook,
-		authorization_hook_url: idpAuthorizationHook,
-		authorization_credential: idpAuthorizationCredential,
-		usage_hook_url: idpUsageHook,
-		usage_credential: idpUsageCredential,
-        allowed_redirect_uris: idpRedirects.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+		delegated_api_origin: delegatedAPIOrigin,
+		state: identityState,
+        revision: identityConfig?.revision ?? 0,
       };
-      const value = apiConnected ? await api.configureIdentity(product.id, input) : { id: "idp_preview", product_id: product.id, revision: 1, ...input } as APIIdentity;
+      const value = apiConnected ? await api.configureIdentity(input) : { id: "idp_preview", organisation_id: product.organisation_id, deployment_id: product.id, ...input } as APIIdentity;
       setIdentityConfig(value);
       setIDPClientSecret("");
-	  setIDPAuthorizationCredential("");
-	  setIDPUsageCredential("");
       setIdentityOpen(false);
-      showToast("Vendor identity and entitlement resolution are configured.");
+      showToast("Customer identity integration is configured.");
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not configure vendor identity.");
     } finally {
@@ -1043,9 +952,9 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     }
   }
 
-  async function retryReportSubmission(submission: APIReportSubmission) {
+  async function createSupportDeliveryAttempt(submission: APISupportSubmission) {
 	try {
-	  const value = apiConnected ? await api.retryReportSubmission(product.id, submission.id) : { ...submission, state: "pending" as const, last_error: undefined };
+	  const value = apiConnected ? await api.createSupportDeliveryAttempt(submission.id) : { ...submission, state: "pending" as const, last_error: undefined };
 	  setReportSubmissions((items) => items.map((item) => item.id === value.id ? value : item));
 	  showToast("Submission queued for another delivery attempt.");
 	} catch (error) {
@@ -1053,12 +962,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	}
   }
 
-  async function openReportSubmission(submission: APIReportSubmission) {
+  async function openSupportSubmission(submission: APISupportSubmission) {
 	setReportDetail(submission);
 	if (!apiConnected) return;
 	setReportDetailBusy(true);
 	try {
-	  setReportDetail(await api.reportSubmission(product.id, submission.id));
+	  setReportDetail(await api.supportSubmission(submission.id));
 	} catch (error) {
 	  showToast(error instanceof APIError ? error.message : "Could not decrypt this submission.");
 	  setReportDetail(null);
@@ -1181,15 +1090,11 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       }
       case "resource-set": {
         const value = resourceSets.find((item) => item.id === consoleRoute.uid);
-        return value ? { eyebrow: "Reusable resource set", title: value.name, description: value.description || "Reusable API resource configuration.", fields: fields([["UID", value.id], ["Kind", value.kind === "hook" ? "tool backend" : value.kind], ["State", value.state], ["Revision", value.latest_revision?.revision ?? value.revision], ["APIs", value.integration_ids?.length ?? 0]]) } : null;
+        return value ? { eyebrow: "Reusable resource set", title: value.name, description: value.description || "Reusable API resource configuration.", fields: fields([["UID", value.id], ["Kind", value.kind], ["State", value.state], ["Revision", value.latest_revision?.revision ?? value.revision], ["APIs", value.integration_ids?.length ?? 0]]) } : null;
       }
       case "source": {
         const value = sources.find((item) => item.id === consoleRoute.uid);
         return value ? { eyebrow: "Documentation source", title: value.name, description: value.location, fields: fields([["UID", value.id], ["Kind", value.kind], ["Visibility", value.visibility], ["Crawl state", value.crawlState], ["Pages", value.pages], ["Revision", value.revision]]) } : null;
-      }
-      case "package": {
-        const value = packages.find((item) => item.id === consoleRoute.uid);
-        return value ? { eyebrow: "Package", title: value.name, description: `${value.ecosystem} package delivery`, fields: fields([["UID", value.id], ["Version", value.version], ["Mode", value.mode], ["Visibility", value.visibility], ["State", value.status], ["Revision", value.revision]]) } : null;
       }
       case "tool": {
         const value = tools.find((item) => item.id === consoleRoute.uid);
@@ -1209,7 +1114,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       }
       case "installation": {
         const value = productInstallations.find((item) => item.id === consoleRoute.uid);
-        return value ? { eyebrow: "Installation", title: value.name, description: value.external_id, fields: fields([["UID", value.id], ["Customer", value.customer_id], ["Environment", value.environment_id], ["State", value.state], ["Revision", value.revision], ["Updated", date(value.updated_at)]]) } : null;
+        return value ? { eyebrow: "Installation", title: value.name, description: value.external_id, fields: fields([["UID", value.id], ["Customer account", value.customer_account_id], ["Environment", value.environment_id], ["State", value.state], ["Revision", value.revision], ["Updated", date(value.updated_at)]]) } : null;
       }
       case "release": {
         const value = productVersions.find((item) => item.id === consoleRoute.uid);
@@ -1236,7 +1141,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         return value ? { eyebrow: "Root administrator", title: value.display_name, description: value.email, fields: fields([["UID", value.id], ["Role", value.role], ["Status", value.revoked_at ? "Revoked" : "MFA active"], ["Revoked", date(value.revoked_at)]]) } : null;
       }
     }
-  }, [consoleRoute, integrations, resourceSets, sources, packages, tools, mcpConnections, accessDefinitions, accessConnections, productInstallations, productVersions, integrationRuns, supportRoutes, reportSubmissions, auditEvents, rootUsers]);
+  }, [consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, accessDefinitions, accessConnections, productInstallations, productVersions, integrationRuns, supportRoutes, reportSubmissions, auditEvents, rootUsers]);
 
   function routeURL(path: string) {
     const preview = process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("preview") === "fixtures" ? window.location.search : "";
@@ -1312,14 +1217,13 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           )}
           {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
-          {section === "packages" && <PackagesView packages={packages} onAdd={() => setAddPackageOpen(true)} onPublish={publishPackage} onVisibilityChange={(id) => requestVisibility("package", id)} onNavigate={navigateToPath} />}
-          {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} hookSets={resourceSets.filter((set) => set.kind === "hook")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+          {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
           {section === "tools" && <ToolsView tools={tools} onAdd={() => setAddToolOpen(true)} onPublish={publishTool} onNavigate={navigateToPath} />}
           {section === "releases" && <ConnectorReleasesView versions={productVersions} integrations={integrations} onConfigure={openProductCatalog} onNavigate={navigateToPath} />}
-          {section === "runs" && <ActivityHubView runs={integrationRuns} environments={environments} submissions={reportSubmissions} events={auditEvents} analytics={analytics} reportingConfig={reportingConfig} supportRoutes={supportRoutes} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} onView={openReportSubmission} onRetry={retryReportSubmission} onNavigate={navigateToPath} />}
-          {section === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
-          {section === "settings" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} identity={identityConfig} llmProfiles={llmProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onConfigureIdentity={() => setIdentityOpen(true)} onConfigureLLM={() => setLLMOpen(true)} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
+          {section === "runs" && <ActivityHubView runs={integrationRuns} environments={environments} submissions={reportSubmissions} events={auditEvents} analytics={analytics} supportRoutes={supportRoutes} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} onView={openSupportSubmission} onRetry={createSupportDeliveryAttempt} onNavigate={navigateToPath} />}
+          {section === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} backendConnections={backendConnections} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+          {section === "settings" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} customerAccounts={customerAccounts} identity={identityConfig} llmProfiles={llmProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onConfigureIdentity={() => setIdentityOpen(true)} onConfigureLLM={() => setLLMOpen(true)} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
           </>}
         </div>
       </main>
@@ -1328,7 +1232,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         open={Boolean(pendingPublication)}
         onClose={(open) => { if (!open) setPendingPublication(null); }}
         title={`Make ${pendingPublication?.name ?? "resource"} public?`}
-        description="This is a security-sensitive publication change. Private is the default for every new source and package."
+        description="This is a security-sensitive publication change. Private is the default for every new source."
         actions={<><Button outline onClick={() => setPendingPublication(null)}>Keep private</Button><Button color="red" disabled={!acknowledged} onClick={confirmPublication}>Make public</Button></>}
       >
         <WarningContent>
@@ -1342,17 +1246,16 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         open={productBuilderOpen}
         onClose={setProductBuilderOpen}
         title="Import APIs"
-		description="Add specs, documentation, packages, repositories, or MCP endpoints. DokoSoko will group them into reviewable APIs."
+		description="Add specs, documentation, repositories, or MCP endpoints. DokoSoko will group them into reviewable APIs."
         actions={<><Button outline onClick={() => setProductBuilderOpen(false)}>Cancel</Button><Button color="indigo" disabled={productBuilderBusy} onClick={buildProductAutomatically}>{productBuilderBusy ? "Scanning…" : "Import APIs"}</Button></>}
       >
         <div className="product-builder-form">
           <div className="builder-source-summary">
             <span><BookOpen /><strong>{sources.length}</strong><small>docs & specs</small></span>
-            <span><PackageIcon /><strong>{packages.length}</strong><small>packages</small></span>
             <span><Share2 /><strong>{mcpConnections.length}</strong><small>MCP upstreams</small></span>
             <span><Wrench /><strong>{tools.length}</strong><small>tools</small></span>
           </div>
-          <label className="auth-field"><span>Anything else?</span><textarea value={productBuilderInputs} onChange={(event) => setProductBuilderInputs(event.target.value)} placeholder={"Paste URLs, package coordinates, repositories, or MCP endpoints—one per line.\nhttps://api.example.com/voice/v3/openapi.yaml\nnpm:@acme/voice-node@7.2.1"} /><small>Optional. DokoSoko automatically classifies each input and never retrieves credentials embedded in a URL.</small></label>
+          <label className="auth-field"><span>Anything else?</span><textarea value={productBuilderInputs} onChange={(event) => setProductBuilderInputs(event.target.value)} placeholder={"Paste specs, documentation, repositories, or MCP endpoints—one per line.\nhttps://api.example.com/voice/v3/openapi.yaml\nhttps://github.com/acme/voice-examples"} /><small>Optional. DokoSoko automatically classifies each input and never retrieves credentials embedded in a URL.</small></label>
           <div className="builder-magic-note"><Sparkles /><span><strong>Review exceptions, not configuration.</strong> Exact matches are joined automatically. Ambiguous version relationships stay unresolved and cannot silently fall back.</span></div>
         </div>
       </Dialog>
@@ -1393,7 +1296,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 			<div className="catalog-settings-heading"><span><strong>Scoped version pins</strong><small>Use the narrowest scope. Authenticated installation identity wins over environment and customer assignments.</small></span></div>
 			<div className="product-pin-create">
 			  <label className="auth-field"><span>Scope</span><select value={pinScope} onChange={(event) => { setPinScope(event.target.value as typeof pinScope); setPinCustomerID(""); }}><option value="customer">Customer</option><option value="environment">Environment</option><option value="installation">Installation</option></select></label>
-			  {pinScope === "customer" ? <label className="auth-field"><span>Vendor organisation ID</span><input value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)} placeholder="contoso" /></label> : <label className="auth-field"><span>{pinScope === "environment" ? "Environment" : "Installation"}</span><select value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)}><option value="">Select {pinScope}</option>{pinScope === "environment" ? environments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : productInstallations.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.customer_id}</option>)}</select></label>}
+			  {pinScope === "customer" ? <label className="auth-field"><span>Customer account</span><select value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)}><option value="">Select customer account</option>{customerAccounts.map((item) => <option key={item.id} value={item.id}>{item.external_id} · {item.state}</option>)}</select></label> : <label className="auth-field"><span>{pinScope === "environment" ? "Environment" : "Installation"}</span><select value={pinCustomerID} onChange={(event) => setPinCustomerID(event.target.value)}><option value="">Select {pinScope}</option>{pinScope === "environment" ? environments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : productInstallations.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.customer_account_id}</option>)}</select></label>}
               <label className="auth-field"><span>Compatibility snapshot</span><select value={pinVersionID} onChange={(event) => setPinVersionID(event.target.value)}><option value="">Select snapshot</option>{productVersions.filter((version) => !version.deprecated_at).map((version) => <option key={version.id} value={version.id}>{version.version}{version.is_lts ? " · LTS" : version.is_latest ? " · Latest" : ""}</option>)}</select></label>
               <label className="auth-field"><span>Reason</span><input value={pinReason} onChange={(event) => setPinReason(event.target.value)} placeholder="Production stability window" /></label>
               <Button color="indigo" disabled={productCatalogBusy || !pinCustomerID.trim() || !pinVersionID} onClick={pinCustomerVersion}>Save pin</Button>
@@ -1404,8 +1307,8 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 
 		  <section className="catalog-settings-section">
 			<div className="catalog-settings-heading"><span><strong>Customer installations</strong><small>Register the authenticated installation claim and bind it to one customer and environment.</small></span></div>
-			<div className="product-pin-create"><label className="auth-field"><span>Name</span><input value={installationName} onChange={(event) => setInstallationName(event.target.value)} placeholder="Contoso voice production" /></label><label className="auth-field"><span>Authenticated external ID</span><input value={installationExternalID} onChange={(event) => setInstallationExternalID(event.target.value)} placeholder="contoso-voice-prod" /></label><label className="auth-field"><span>Customer ID</span><input value={installationCustomerID} onChange={(event) => setInstallationCustomerID(event.target.value)} placeholder="contoso" /></label><label className="auth-field"><span>Environment</span><select value={installationEnvironmentID} onChange={(event) => setInstallationEnvironmentID(event.target.value)}>{environments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Button color="indigo" disabled={productCatalogBusy || !installationName.trim() || !installationExternalID.trim() || !installationCustomerID.trim()} onClick={saveInstallation}>Add installation</Button></div>
-			<div className="product-pin-list">{productInstallations.map((item) => <article key={item.id}><span><EntityLink entity="installation" uid={item.id} onNavigate={navigateToPath} className="entity-link"><strong>{item.name}</strong></EntityLink><small>{item.external_id} · {item.customer_id} · {environments.find((environment) => environment.id === item.environment_id)?.name ?? item.environment_id}</small></span><Badge color={item.state === "active" ? "green" : "zinc"}>{item.state}</Badge></article>)}</div>
+			<div className="product-pin-create"><label className="auth-field"><span>Name</span><input value={installationName} onChange={(event) => setInstallationName(event.target.value)} placeholder="Contoso voice production" /></label><label className="auth-field"><span>Authenticated external ID</span><input value={installationExternalID} onChange={(event) => setInstallationExternalID(event.target.value)} placeholder="contoso-voice-prod" /></label><label className="auth-field"><span>Customer account</span><select value={installationCustomerID} onChange={(event) => setInstallationCustomerID(event.target.value)}><option value="">Select customer account</option>{customerAccounts.filter((item) => item.state === "active").map((item) => <option key={item.id} value={item.id}>{item.external_id}</option>)}</select></label><label className="auth-field"><span>Environment</span><select value={installationEnvironmentID} onChange={(event) => setInstallationEnvironmentID(event.target.value)}>{environments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Button color="indigo" disabled={productCatalogBusy || !installationName.trim() || !installationExternalID.trim() || !installationCustomerID.trim()} onClick={saveInstallation}>Add installation</Button></div>
+			<div className="product-pin-list">{productInstallations.map((item) => <article key={item.id}><span><EntityLink entity="installation" uid={item.id} onNavigate={navigateToPath} className="entity-link"><strong>{item.name}</strong></EntityLink><small>{item.external_id} · {customerAccounts.find((account) => account.id === item.customer_account_id)?.external_id ?? item.customer_account_id} · {environments.find((environment) => environment.id === item.environment_id)?.name ?? item.environment_id}</small></span><Badge color={item.state === "active" ? "green" : "zinc"}>{item.state}</Badge></article>)}</div>
 		  </section>
         </div>
       </Dialog>
@@ -1436,7 +1339,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         description="The source starts private and draft. A crawl produces immutable snapshots for review before publication."
         actions={<><Button outline onClick={() => setAddSourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={sourceBusy || !sourceName.trim() || !sourceLocation.trim()} onClick={createSource}>{sourceBusy ? "Adding…" : "Add source"}</Button></>}
       >
-        <div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="Developer documentation" /></label><label className="auth-field"><span>Type</span><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="website">Website</option><option value="openapi">OpenAPI</option><option value="git">Git repository</option><option value="sdk">SDK reference</option></select></label><label className="auth-field"><span>Location</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder="https://docs.example.com" /></label><div className="private-default-note"><LockKeyhole />Private by default. Making it public is a separate guarded action.</div></div>
+        <div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="Developer documentation" /></label><label className="auth-field"><span>Type</span><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="website">Website</option><option value="openapi">OpenAPI</option><option value="git">Git repository</option></select></label><label className="auth-field"><span>Location</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder="https://docs.example.com" /></label><div className="private-default-note"><LockKeyhole />Private by default. Making it public is a separate guarded action.</div></div>
       </Dialog>
 
       <Dialog
@@ -1467,7 +1370,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         <div className="mcp-import-review">
           <div className="import-summary"><Badge color="violet">Stateless MCPv2 Only</Badge><code>{mcpCatalog?.connection.namespace}.*</code><span>{mcpCatalog?.tools.length ?? 0} catalog tools</span></div>
           <div className="catalog-list">{mcpCatalog?.tools.map((tool) => <label className="catalog-tool" key={tool.name}><input type="checkbox" checked={mcpSelectedTools.includes(tool.name)} onChange={(event) => setMCPSelectedTools((items) => event.target.checked ? [...items, tool.name] : items.filter((name) => name !== tool.name))} /><span className="check-box">{mcpSelectedTools.includes(tool.name) && <Check />}</span><span><strong>{tool.title || tool.name}</strong><code>{tool.name}</code><small>{tool.description || "No upstream description"}</small></span><Badge color="zinc">{tool.schema_hash.slice(0, 12)}</Badge></label>)}</div>
-          <label className="auth-field"><span>Required DokoSoko entitlements</span><input value={mcpEntitlements} onChange={(event) => setMCPEntitlements(event.target.value)} placeholder="support.write, developer.pro" /><small>Evaluated before every upstream call. Authorization endpoint failures deny execution.</small></label>
+          <label className="auth-field"><span>Required grants</span><input value={mcpGrants} onChange={(event) => setMCPGrants(event.target.value)} placeholder="support.write, developer.pro" /><small>Evaluated before every upstream call. Access-evaluation failures deny execution.</small></label>
           <Switch checked={mcpConfirmationRequired} onChange={setMCPConfirmationRequired} label="Require user confirmation before execution" />
           <div className="private-default-note"><LockKeyhole />Import pins each schema hash. Published tools fail closed if a later catalog inspection detects drift.</div>
         </div>
@@ -1491,20 +1394,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         actions={<><Button outline onClick={() => setPendingMCPEnable(false)}>Cancel</Button><Button color="red" disabled={!acknowledged} onClick={confirmMCPEnable}>Enable Public MCP</Button></>}
       >
         <WarningContent>
-          <p><strong>{publicResourceCount} published {publicResourceCount === 1 ? "resource is" : "resources are"} currently marked public.</strong> Private sources, private packages, API tools, provider resources, credentials, identities, and entitlement data remain excluded.</p>
+          <p><strong>{publicResourceCount} published {publicResourceCount === 1 ? "resource is" : "resources are"} currently marked public.</strong> Private sources, API tools, provider resources, credentials, identities, and customer access data remain excluded.</p>
           <p>Anonymous requests are rate-limited and logged as aggregate security events. You can turn this endpoint off immediately.</p>
           <Confirmation checked={acknowledged} onChange={setAcknowledged}>I understand Public MCP is authentication-less and exposes public resources anonymously.</Confirmation>
         </WarningContent>
-      </Dialog>
-
-      <Dialog
-        open={addPackageOpen}
-        onClose={setAddPackageOpen}
-        title="Add package"
-        description="Configure public metadata, a credential-backed proxy, or the versioned package download API. Every package starts private."
-        actions={<><Button outline onClick={() => setAddPackageOpen(false)}>Cancel</Button><Button color="indigo" disabled={packageBusy || !packageName.trim() || !packageVersion.trim() || !packageEndpoint.trim() || (packageMode !== "public" && !packageCredential.trim()) || (packageMode === "download" && !packageExternalID.trim())} onClick={createPackage}>{packageBusy ? "Encrypting…" : "Add package"}</Button></>}
-      >
-        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Name</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="@acme/sdk" /></label><label className="auth-field"><span>Version</span><input value={packageVersion} onChange={(event) => setPackageVersion(event.target.value)} placeholder="1.0.0" /></label></div><div className="two-fields"><label className="auth-field"><span>Ecosystem</span><select value={packageEcosystem} onChange={(event) => setPackageEcosystem(event.target.value)}>{["npm", "go", "git", "maven", "android", "swift", "nuget"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="auth-field"><span>Delivery mode</span><select value={packageMode} onChange={(event) => setPackageMode(event.target.value as "public" | "proxy" | "download")}><option value="public">Public link</option><option value="proxy">Proxy</option><option value="download">Download service</option></select></label></div>{packageMode === "download" && <label className="auth-field"><span>Vendor package ID</span><input value={packageExternalID} onChange={(event) => setPackageExternalID(event.target.value)} maxLength={200} placeholder="vendor-sdk-node-1.0.0" /><small>Opaque vendor-owned identifier for this exact artifact. DokoSoko IDs are never sent to the download API.</small></label>}<label className="auth-field"><span>{packageMode === "download" ? "Package download endpoint" : "Upstream artifact URL"}</span><input type="url" value={packageEndpoint} onChange={(event) => setPackageEndpoint(event.target.value)} placeholder={packageMode === "download" ? "https://packages.example.com/v1/package/download" : "https://packages.example.com/artifact"} /></label>{packageMode !== "public" && <label className="auth-field"><span>Upstream credential</span><input type="password" autoComplete="off" value={packageCredential} onChange={(event) => setPackageCredential(event.target.value)} /><small>Encrypted before storage and never returned to the browser or agent.</small></label>}<label className="auth-field"><span>Expected SHA-256 (optional)</span><input value={packageChecksum} onChange={(event) => setPackageChecksum(event.target.value)} placeholder="64 hexadecimal characters" /></label><div className="private-default-note"><LockKeyhole />Proxy and download packages can only become anonymous through a separate confirmed publication.</div></div>
       </Dialog>
 
       <Dialog
@@ -1512,29 +1405,27 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         onClose={setAddToolOpen}
         title="Create API tool"
         description="Define the MCP contract and one fixed API action. Agents cannot alter the host or authorization header."
-        actions={<><Button outline onClick={() => setAddToolOpen(false)}>Cancel</Button><Button color="indigo" disabled={toolBusy || !toolName.trim() || !toolDescription.trim() || !toolHook.trim()} onClick={createTool}>{toolBusy ? "Validating…" : "Save draft"}</Button></>}
+        actions={<><Button outline onClick={() => setAddToolOpen(false)}>Cancel</Button><Button color="indigo" disabled={toolBusy || !toolName.trim() || !toolDescription.trim() || !toolEndpoint.trim()} onClick={createTool}>{toolBusy ? "Validating…" : "Save draft"}</Button></>}
       >
-        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input value={toolNamespace} onChange={(event) => setToolNamespace(event.target.value)} /></label><label className="auth-field"><span>Tool name</span><input value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="create_sandbox" /></label></div><label className="auth-field"><span>Description</span><input value={toolDescription} onChange={(event) => setToolDescription(event.target.value)} /></label><label className="auth-field"><span>Input JSON Schema</span><textarea value={toolInputSchema} onChange={(event) => setToolInputSchema(event.target.value)} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea value={toolOutputSchema} onChange={(event) => setToolOutputSchema(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Method</span><select value={toolMethod} onChange={(event) => setToolMethod(event.target.value)}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="auth-field"><span>Tool backend</span><input type="url" value={toolHook} onChange={(event) => setToolHook(event.target.value)} placeholder="https://api.vendor.com/v1/action" /></label></div><label className="auth-field"><span>API credential (optional)</span><input type="password" autoComplete="off" value={toolCredential} onChange={(event) => setToolCredential(event.target.value)} /></label><label className="auth-field"><span>Required entitlements</span><input value={toolEntitlements} onChange={(event) => setToolEntitlements(event.target.value)} placeholder="sandboxes.create, developer.pro" /><small>Comma-separated vendor entitlement keys. Missing or unavailable entitlements fail closed.</small></label></div>
+        <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input value={toolNamespace} onChange={(event) => setToolNamespace(event.target.value)} /></label><label className="auth-field"><span>Tool name</span><input value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="create_sandbox" /></label></div><label className="auth-field"><span>Description</span><input value={toolDescription} onChange={(event) => setToolDescription(event.target.value)} /></label><label className="auth-field"><span>Input JSON Schema</span><textarea value={toolInputSchema} onChange={(event) => setToolInputSchema(event.target.value)} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea value={toolOutputSchema} onChange={(event) => setToolOutputSchema(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Method</span><select value={toolMethod} onChange={(event) => setToolMethod(event.target.value)}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="auth-field"><span>Vendor API endpoint</span><input type="url" value={toolEndpoint} onChange={(event) => setToolEndpoint(event.target.value)} placeholder="https://api.vendor.com/v1/action" /><small>Must use the configured vendor API origin. The developer&apos;s delegated bearer token is forwarded.</small></label></div><label className="auth-field"><span>Required grants</span><input value={toolGrants} onChange={(event) => setToolGrants(event.target.value)} placeholder="sandboxes.create, developer.pro" /><small>Comma-separated grant keys. Access-evaluation failures deny execution.</small></label></div>
       </Dialog>
 
       <Dialog
         open={identityOpen}
         onClose={setIdentityOpen}
-        title="Vendor identity & entitlements"
-        description={`DokoSoko brokers OAuth for this deployment. The downstream OAuth client_id is the deployment ID: ${product.id}`}
-        actions={<><Button outline onClick={() => setIdentityOpen(false)}>Cancel</Button><Button color="indigo" disabled={identityBusy || !idpIssuer.trim() || !idpClientID.trim() || (!identityConfig && !idpClientSecret.trim()) || !idpRedirects.trim() || (Boolean(idpUsageHook.trim()) && !identityConfig?.usage_hook_url && !idpUsageCredential.trim())} onClick={saveIdentity}>{identityBusy ? "Verifying…" : "Save identity"}</Button></>}
+        title="Customer identity integration"
+        description="Optional OIDC and delegated-user API configuration. Backend delivery credentials are managed separately."
+        actions={<><Button outline onClick={() => setIdentityOpen(false)}>Cancel</Button><Button color="indigo" disabled={identityBusy || !idpIssuer.trim() || !idpClientID.trim() || (!identityConfig && !idpClientSecret.trim()) || !delegatedAPIOrigin.trim()} onClick={saveIdentity}>{identityBusy ? "Verifying…" : "Save identity"}</Button></>}
       >
         <div className="auth-form compact-form">
           <label className="auth-field"><span>OIDC issuer</span><input type="url" value={idpIssuer} onChange={(event) => setIDPIssuer(event.target.value)} placeholder="https://identity.vendor.com" /></label>
           <div className="two-fields"><label className="auth-field"><span>OIDC client ID</span><input value={idpClientID} onChange={(event) => setIDPClientID(event.target.value)} /></label><label className="auth-field"><span>{identityConfig ? "Rotate client secret (optional)" : "OIDC client secret"}</span><input type="password" autoComplete="off" value={idpClientSecret} onChange={(event) => setIDPClientSecret(event.target.value)} /></label></div>
           <label className="auth-field"><span>Scopes</span><input value={idpScopes} onChange={(event) => setIDPScopes(event.target.value)} /></label>
-		  <div className="two-fields"><label className="auth-field"><span>Audience (optional)</span><input value={idpAudience} onChange={(event) => setIDPAudience(event.target.value)} /></label><label className="auth-field"><span>Organisation claim</span><input value={idpOrganisationClaim} onChange={(event) => setIDPOrganisationClaim(event.target.value)} /></label></div>
-		  <label className="auth-field"><span>Installation claim (optional)</span><input value={idpInstallationClaim} onChange={(event) => setIDPInstallationClaim(event.target.value)} placeholder="installation_id" /><small>When present, this authenticated claim selects a registered installation. DokoSoko never trusts an MCP tool argument for installation identity.</small></label>
-          <label className="auth-field"><span>Entitlements endpoint</span><input type="url" value={idpEntitlementHook} onChange={(event) => setIDPEntitlementHook(event.target.value)} placeholder="https://api.vendor.com/dokosoko/entitlements" /><small>The vendor returns enabled and disabled feature keys during login. Endpoint failures deny private access.</small></label>
-          <div className="two-fields"><label className="auth-field"><span>Per-operation authorization endpoint</span><input type="url" value={idpAuthorizationHook} onChange={(event) => setIDPAuthorizationHook(event.target.value)} placeholder="https://api.vendor.com/dokosoko/authorize" /></label><label className="auth-field"><span>{identityConfig?.authorization_hook_url ? "Rotate authorization credential" : "Authorization credential"}</span><input type="password" autoComplete="off" value={idpAuthorizationCredential} onChange={(event) => setIDPAuthorizationCredential(event.target.value)} /></label></div>
-          <div className="two-fields"><label className="auth-field"><span>Customer usage endpoint</span><input type="url" value={idpUsageHook} onChange={(event) => setIDPUsageHook(event.target.value)} placeholder="https://api.vendor.com/dokosoko/usage" /><small>Enables the read-only usage.get tool on Private MCP. Customer-defined values are proxied without storage.</small></label><label className="auth-field"><span>{identityConfig?.usage_hook_url ? "Rotate usage credential" : "Usage credential"}</span><input type="password" autoComplete="off" value={idpUsageCredential} onChange={(event) => setIDPUsageCredential(event.target.value)} /></label></div>
-          <label className="auth-field"><span>Allowed downstream redirect URIs</span><textarea value={idpRedirects} onChange={(event) => setIDPRedirects(event.target.value)} placeholder={"https://developer.vendor.com/dokosoko/callback\nhttp://localhost:3000/oauth/callback"} /><small>One exact URI per line. Wildcards are not accepted.</small></label>
-          <div className="private-default-note"><ShieldCheck />Login-time entitlements control discovery, operation endpoints reauthorize execution, and usage values remain an ephemeral vendor proxy. Credentials stay server-side.</div>
+		  <div className="two-fields"><label className="auth-field"><span>Audience (optional)</span><input value={idpAudience} onChange={(event) => setIDPAudience(event.target.value)} /></label><label className="auth-field"><span>OAuth resource (optional)</span><input type="url" value={idpOAuthResource} onChange={(event) => setIDPOAuthResource(event.target.value)} /></label></div>
+		  <label className="auth-field"><span>Organisation claim</span><input value={idpOrganisationClaim} onChange={(event) => setIDPOrganisationClaim(event.target.value)} /></label>
+		  <label className="auth-field"><span>Installation claim (optional)</span><input value={idpInstallationClaim} onChange={(event) => setIDPInstallationClaim(event.target.value)} placeholder="installation_id" /><small>When present, this authenticated claim must select a registered installation for the resolved customer account.</small></label>
+          <div className="two-fields"><label className="auth-field"><span>Delegated API origin</span><input type="url" value={delegatedAPIOrigin} onChange={(event) => setDelegatedAPIOrigin(event.target.value)} placeholder="https://customer-api.vendor.com" /><small>Used only with the customer&apos;s delegated token for access evaluation and tools.</small></label><label className="auth-field"><span>State</span><select value={identityState} onChange={(event) => setIdentityState(event.target.value as APIIdentity["state"])}><option value="active">Active</option><option value="disabled">Disabled</option></select></label></div>
+          <div className="private-default-note"><ShieldCheck />OIDC creates durable customer accounts from the configured organisation claim. Access is evaluated through the fixed vendor API contract, and tool calls use the developer&apos;s delegated token.</div>
         </div>
       </Dialog>
 
@@ -1614,11 +1505,11 @@ function DistributionView({
 }: {
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
-  resources: Array<{ id: string; name: string; resourceType: "source" | "package"; type: string; detail: string; visibility: Visibility }>;
+  resources: Array<{ id: string; name: string; resourceType: "source"; type: string; detail: string; visibility: Visibility }>;
   resourceFilter: "all" | "public" | "private";
   setResourceFilter: (filter: "all" | "public" | "private") => void;
   publicResourceCount: number;
-  onVisibilityChange: (kind: "source" | "package", id: string) => void;
+  onVisibilityChange: (kind: "source", id: string) => void;
   onCopied: (label: string) => void;
   publicSnippet: string;
   privateSnippet: string;
@@ -1628,7 +1519,7 @@ function DistributionView({
   return <>
     <PageHeading eyebrow="Delivery" title="Agent access" description="Control how authenticated and public agents reach your APIs and knowledge." action={<Button outline><ExternalLink data-slot="icon" />Private MCP setup</Button>} />
     <section className={`public-mcp-card ${enabled ? "enabled" : ""}`}>
-      <div className="public-mcp-copy"><div className="icon-tile"><Globe2 /></div><div><div className="title-row"><h2>Public MCP</h2><Badge color={enabled ? "green" : "zinc"}>{enabled ? "Live" : "Off"}</Badge></div><p>Offer an authentication-free, read-only MCP endpoint. Its server-side policy can retrieve only published sources and packages that you explicitly mark public.</p><div className="endpoint"><code>{publicEndpoint}</code><button type="button" aria-label="Copy public MCP endpoint" onClick={() => { navigator.clipboard.writeText(publicEndpoint); onCopied("Public MCP endpoint copied."); }}><Copy />Copy</button></div></div></div>
+      <div className="public-mcp-copy"><div className="icon-tile"><Globe2 /></div><div><div className="title-row"><h2>Public MCP</h2><Badge color={enabled ? "green" : "zinc"}>{enabled ? "Live" : "Off"}</Badge></div><p>Offer an authentication-free, read-only MCP endpoint. Its server-side policy can retrieve only published sources that you explicitly mark public.</p><div className="endpoint"><code>{publicEndpoint}</code><button type="button" aria-label="Copy public MCP endpoint" onClick={() => { navigator.clipboard.writeText(publicEndpoint); onCopied("Public MCP endpoint copied."); }}><Copy />Copy</button></div></div></div>
       <div className="switch-stack"><Switch checked={enabled} onChange={onEnabledChange} label="Enable Public MCP" /><small>{enabled ? "Accepting anonymous requests" : "Disabled by default"}</small></div>
     </section>
 
@@ -1640,7 +1531,7 @@ function DistributionView({
       <div className="resource-table">
         <div className="table-head resource-columns"><span>Resource</span><span>Type</span><span>Visibility</span><span /></div>
         {resources.map((resource) => <div className="table-row resource-columns" key={`${resource.resourceType}-${resource.id}`}>
-          <span className="resource-name"><span className="resource-icon">{resource.resourceType === "source" ? <BookOpen /> : <PackageIcon />}</span><span><strong>{resource.name}</strong><small>{resource.detail}</small></span></span>
+          <span className="resource-name"><span className="resource-icon"><BookOpen /></span><span><strong>{resource.name}</strong><small>{resource.detail}</small></span></span>
           <span>{resource.type}</span>
           <span className="visibility-control"><Badge color={resource.visibility === "public" ? "green" : "zinc"}>{resource.visibility === "public" ? <Globe2 /> : <LockKeyhole />}{resource.visibility[0].toUpperCase() + resource.visibility.slice(1)}</Badge><Switch checked={resource.visibility === "public"} onChange={() => onVisibilityChange(resource.resourceType, resource.id)} label={`Make ${resource.name} ${resource.visibility === "public" ? "private" : "public"}`} /></span>
           <button type="button" className="more" aria-label={`Actions for ${resource.name}`}><MoreHorizontal /></button>
@@ -1654,11 +1545,11 @@ function DistributionView({
       <div className="widget-grid">
         <article className={`widget-card ${!enabled ? "widget-disabled" : ""}`}>
           <WidgetPreview kind="public" />
-          <div className="widget-copy"><Badge color="blue"><Globe2 />Public</Badge><h3>Public widget</h3><p>No sign-in. Answers only from public, published sources and packages.</p>{!enabled && <div className="inline-warning"><TriangleAlert />Enable Public MCP before embedding.</div>}<CopyButton text={publicSnippet} label="Copy public widget" disabled={!enabled} onCopied={onCopied} /></div>
+          <div className="widget-copy"><Badge color="blue"><Globe2 />Public</Badge><h3>Public widget</h3><p>No sign-in. Answers only from public, published sources.</p>{!enabled && <div className="inline-warning"><TriangleAlert />Enable Public MCP before embedding.</div>}<CopyButton text={publicSnippet} label="Copy public widget" disabled={!enabled} onCopied={onCopied} /></div>
         </article>
         <article className="widget-card">
           <WidgetPreview kind="private" />
-          <div className="widget-copy"><Badge color="violet"><LockKeyhole />Private</Badge><h3>Private widget</h3><p>Uses your identity flow for private knowledge, tools, packages, provider resources, and credentials.</p><CopyButton text={privateSnippet} label="Copy private widget" onCopied={onCopied} /></div>
+          <div className="widget-copy"><Badge color="violet"><LockKeyhole />Private</Badge><h3>Private widget</h3><p>Uses your identity flow for private knowledge, tools, provider resources, and credentials.</p><CopyButton text={privateSnippet} label="Copy private widget" onCopied={onCopied} /></div>
         </article>
       </div>
     </section>
@@ -1667,7 +1558,7 @@ function DistributionView({
 
 function WidgetPreview({ kind }: { kind: "public" | "private" }) {
   const privateWidget = kind === "private";
-  return <div className={`widget-preview ${privateWidget ? "dark-preview" : ""}`}><div className="mini-chat"><span className={`mini-brand ${privateWidget ? "light" : ""}`}>D</span><span><strong>{privateWidget ? "Acme developer assistant" : "Ask Acme"}</strong><small>{privateWidget ? "Signed in as Alex" : "Powered by DokoSoko"}</small></span><button type="button" aria-label="Close widget preview">×</button></div><div className={`mini-message ${privateWidget ? "dark-message" : ""}`}>{privateWidget ? "Show my sandbox credentials" : "How do I create an API key?"}</div><div className={`mini-answer ${privateWidget ? "dark-answer" : ""}`}>{privateWidget ? "I can provision credentials after checking your access." : "I can help with Acme's public documentation and packages."}</div><div className={`mini-input ${privateWidget ? "dark-input" : ""}`}>Ask a question… <span>↑</span></div></div>;
+  return <div className={`widget-preview ${privateWidget ? "dark-preview" : ""}`}><div className="mini-chat"><span className={`mini-brand ${privateWidget ? "light" : ""}`}>D</span><span><strong>{privateWidget ? "Acme developer assistant" : "Ask Acme"}</strong><small>{privateWidget ? "Signed in as Alex" : "Powered by DokoSoko"}</small></span><button type="button" aria-label="Close widget preview">×</button></div><div className={`mini-message ${privateWidget ? "dark-message" : ""}`}>{privateWidget ? "Show my sandbox credentials" : "How do I create an API key?"}</div><div className={`mini-answer ${privateWidget ? "dark-answer" : ""}`}>{privateWidget ? "I can provision credentials after checking your access." : "I can help with Acme&apos;s public documentation."}</div><div className={`mini-input ${privateWidget ? "dark-input" : ""}`}>Ask a question… <span>↑</span></div></div>;
 }
 
 function SourcesView({ sources, onAdd, onCrawl, onPublish, onVisibilityChange, onNavigate }: { sources: Source[]; onAdd: () => void; onCrawl: (id: string) => void; onPublish: (source: Source) => void; onVisibilityChange: (id: string) => void; onNavigate: (path: string) => void }) {
@@ -1695,23 +1586,6 @@ function CrawlBadge({ state }: { state: Source["crawlState"] }) {
   return <Badge color="red"><XCircle />Failed</Badge>;
 }
 
-function PackagesView({ packages, onAdd, onPublish, onVisibilityChange, onNavigate }: { packages: ProductPackage[]; onAdd: () => void; onPublish: (pkg: ProductPackage) => void; onVisibilityChange: (id: string) => void; onNavigate: (path: string) => void }) {
-  return <>
-    <PageHeading eyebrow="Distribution" title="Packages" description="Manage public packages and credential-backed proxy or download-service delivery." action={<Button onClick={onAdd}><Plus data-slot="icon" />Add package</Button>} />
-    <div className="notice"><ShieldCheck /><span><strong>Credentials stay server-side.</strong> Proxy and download modes stream artifacts without exposing persistent upstream tokens.</span></div>
-    <div className="resource-table">
-      <div className="table-head package-columns"><span>Package</span><span>Ecosystem</span><span>Delivery</span><span>Visibility</span><span /></div>
-      {packages.map((pkg) => <div className="table-row package-columns" key={pkg.id}>
-        <span className="resource-name"><span className="resource-icon"><PackageIcon /></span><span><EntityLink entity="package" uid={pkg.id} onNavigate={onNavigate} className="entity-link"><strong>{pkg.name}</strong></EntityLink><small>v{pkg.version}</small></span></span>
-        <span>{pkg.ecosystem}</span>
-        <span><Badge color={pkg.mode === "public" ? "blue" : pkg.mode === "proxy" ? "violet" : "amber"}>{pkg.mode === "proxy" ? <Radio /> : pkg.mode === "download" ? <ExternalLink /> : <Globe2 />}{pkg.mode}</Badge></span>
-        <span className="visibility-control"><Badge color={pkg.visibility === "public" ? "green" : "zinc"}>{pkg.visibility === "public" ? <Globe2 /> : <LockKeyhole />}{pkg.visibility}</Badge><Switch checked={pkg.visibility === "public"} onChange={() => onVisibilityChange(pkg.id)} label={`Make ${pkg.name} ${pkg.visibility === "public" ? "private" : "public"}`} /></span>
-        <span className="table-actions">{!pkg.published && <Button outline onClick={() => onPublish(pkg)}>Publish</Button>}<button type="button" className="more" aria-label={`Actions for ${pkg.name}`}><MoreHorizontal /></button></span>
-      </div>)}
-    </div>
-  </>;
-}
-
 function IntegrationDirectoryView({ integrations, connections, supportRoutes, query, onQueryChange, onCreate, onBuild, onNavigate }: { integrations: APIIntegration[]; connections: APIAccessConnection[]; supportRoutes: APISupportRoute[]; query: string; onQueryChange: (query: string) => void; onCreate: () => void; onBuild: () => void; onNavigate: (path: string) => void }) {
   const normalizedQuery = query.trim().toLowerCase();
   const connectionCount = (integration: APIIntegration) => connections.filter((connection) => connection.integration_ids?.includes(integration.id) || integration.access_connection_ids?.includes(connection.id)).length;
@@ -1735,7 +1609,7 @@ function IntegrationDirectoryView({ integrations, connections, supportRoutes, qu
         <div className="table-head integration-directory-columns"><span>API</span><span>Lifecycle</span><span>Setup</span><span>Resources</span><span /></div>
         {group.integrations.map((integration) => { const issues = setupIssueCount(integration); return <ConsoleLink key={integration.id} path={integrationPath(integration.id)} onNavigate={onNavigate} className="table-row integration-directory-columns integration-directory-row">
           <span className="resource-name"><span className="resource-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.version_key}</small></span></span>
-          <Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge>
+          <span><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge> <Badge color={integration.visibility === "public" ? "blue" : "zinc"}>{integration.visibility}</Badge></span>
           <Badge color={issues === 0 ? "green" : "amber"}>{issues === 0 ? "Ready" : `${issues} step${issues === 1 ? "" : "s"} left`}</Badge>
           <span><strong className="cell-value">{integration.resources?.length ?? 0}</strong><small className="cell-note">attached sets</small></span>
           <ChevronRight />
@@ -1769,14 +1643,14 @@ function IntegrationWorkspaceView({ integration, integrations, activeTab, loadin
   const attachedResources = integration.resources ?? [];
   const sortedRevisions = [...revisions].sort((left, right) => right.revision - left.revision);
   const setupSteps = [
-    { label: "Add resources", detail: "Attach documentation, packages, or a tool backend.", ready: attachedResources.length > 0, tab: "resources" as IntegrationTab },
+    { label: "Add resources", detail: "Attach documentation or an API contract.", ready: attachedResources.length > 0, tab: "resources" as IntegrationTab },
     { label: "Connect access", detail: "Choose which service connections this API may use.", ready: integrationConnections.length > 0, tab: "access" as IntegrationTab },
   ].filter((step) => !step.ready);
   const setupValidationCodes = new Set(["resources_missing", "access_missing", "support_inherited"]);
   const actionableValidations = publishStatus?.validations.filter((validation) => !setupValidationCodes.has(validation.code)) ?? [];
   const hasChanges = Boolean(publishStatus?.has_changes);
   const canPublish = Boolean(publishStatus?.ready && hasChanges);
-  const resourceLabel = (kind: APIResourceSet["kind"]) => kind === "hook" ? "tool backend" : kind;
+  const resourceLabel = (kind: APIResourceSet["kind"]) => kind === "api" ? "API contract" : "documentation";
 
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All APIs</ConsoleLink></div>
@@ -1788,13 +1662,13 @@ function IntegrationWorkspaceView({ integration, integrations, activeTab, loadin
       <div className="api-status-bar"><span><span className={`status-dot${publishStatus ? "" : " checking"}`} /><strong>{!publishStatus ? "Checking status" : publishStatus.ready ? hasChanges ? "Ready to publish" : "Published" : "Needs setup"}</strong><small>{!publishStatus ? "Loading the latest publication state…" : hasChanges ? `${publishStatus.changes.length} unpublished change${publishStatus.changes.length === 1 ? "" : "s"}` : `${attachedResources.length} resource set${attachedResources.length === 1 ? "" : "s"} attached`}</small></span><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge></div>
       {(setupSteps.length > 0 || !supportRoute || actionableValidations.length > 0) && <section className="panel compact-setup-panel"><div className="panel-heading"><div><h2>Finish setup</h2><p>Only unresolved actions appear here.</p></div></div>{setupSteps.map((step) => <ConsoleLink key={step.label} path={integrationPath(integration.id, step.tab)} onNavigate={onNavigate} className="integration-health-check"><span className="health-icon"><AlertCircle /></span><span><strong>{step.label}</strong><small>{step.detail}</small></span><ChevronRight /></ConsoleLink>)}{!supportRoute && <button type="button" className="integration-health-check" onClick={() => onManageSupport(integration)}><span className="health-icon"><AlertCircle /></span><span><strong>Configure bug reports and feedback</strong><small>Choose secure delivery or encrypted local holding.</small></span><ChevronRight /></button>}{actionableValidations.map((validation) => <ConsoleLink key={validation.code} path={integrationPath(integration.id, validation.tab === "resources" || validation.tab === "access" ? validation.tab : "overview")} onNavigate={onNavigate} className={`publish-validation ${validation.level}`}><span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{validation.level === "error" ? "Resolve before publishing" : "Review before publishing"}</strong><small>{validation.message}</small></span><ChevronRight /></ConsoleLink>)}</section>}
       <section className="panel"><div className="panel-heading"><div><h2>Bug reports & feedback</h2><p>Consent-gated agent reports use this API’s delivery policy.</p></div><Button outline onClick={() => onManageSupport(integration)}>{supportRoute ? "Change" : "Configure"}</Button></div>{supportRoute ? <div className="support-route-summary"><span className="settings-icon"><Bug /></span><span><strong>{supportRoute.name}</strong><small>{supportRoute.is_default ? "Uses the deployment default" : "Configured for this API"} · {supportRoute.retention_days}-day encrypted retention</small></span><Badge color={supportRoute.state === "active" ? "green" : "zinc"}>{supportRoute.bug_reports_enabled || supportRoute.feedback_enabled ? "Available" : "Off"}</Badge></div> : <div className="empty-row">Not configured. Reports remain unavailable until you choose a policy.</div>}</section>
-      <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "resources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Documentation, packages, tools, and tool backends.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("settings")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BarChart3 /></span><span><strong>Customer usage</strong><small>{identity?.usage_hook_url ? "Shared endpoint configured" : "Optional deployment-wide endpoint"}</small></span><ChevronRight /></ConsoleLink></div>
+      <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "resources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Documentation, API contracts, and tools.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("settings")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Customer access</strong><small>{identity?.state === "active" ? "Delegated identity active" : identity ? "Identity disabled" : "Identity setup optional"}</small></span><ChevronRight /></ConsoleLink></div>
       <details className="panel advanced-details"><summary>Advanced details</summary><dl className="entity-detail-grid"><div><dt>API ID</dt><dd>{integration.id}</dd></div><div><dt>Family</dt><dd>{integration.family_key}</dd></div><div><dt>Version</dt><dd>{integration.version_key}</dd></div><div><dt>Draft revision</dt><dd>{integration.revision}</dd></div><div><dt>Replacement</dt><dd>{integration.replacement_integration_id ?? "—"}</dd></div><div><dt>Sunset</dt><dd>{integration.sunset_at ? new Date(integration.sunset_at).toLocaleDateString() : "—"}</dd></div></dl></details>
     </div>}
 
     {activeTab === "resources" && <div className="integration-tab-content">
       <section className="panel"><div className="panel-heading"><div><h2>Resources</h2><p>Everything agents need to understand or act on this API.</p></div><span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create resource set</Button><Button disabled={resourceSets.every((set) => attachedResources.some((resource) => resource.resource_set_id === set.id))} onClick={() => onAttach(integration)}>Attach existing</Button></span></div>
-        {attachedResources.map((resource) => { const source = resourceSets.find((set) => set.id === resource.resource_set_id); return <div className="integration-resource-row" key={resource.resource_set_id}><span className="settings-icon">{resource.kind === "documentation" ? <BookOpen /> : resource.kind === "package" ? <PackageIcon /> : <Wrench />}</span><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>{resourceLabel(resource.kind)} · {resource.follow_latest ? "follows latest" : "pinned"}</small></span><Badge color={resource.kind === "documentation" ? "blue" : resource.kind === "package" ? "green" : "violet"}>{resourceLabel(resource.kind)}</Badge><span className="table-actions">{source && <Button outline onClick={() => onEditResource(source)}>New revision</Button>}{source && <Button outline onClick={() => onDuplicateResource(source)}>Duplicate</Button>}<button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => onDetachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span></div>; })}
+        {attachedResources.map((resource) => { const source = resourceSets.find((set) => set.id === resource.resource_set_id); return <div className="integration-resource-row" key={resource.resource_set_id}><span className="settings-icon">{resource.kind === "documentation" ? <BookOpen /> : <TerminalSquare />}</span><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>{resourceLabel(resource.kind)} · {resource.follow_latest ? "follows latest" : "pinned"}</small></span><Badge color={resource.kind === "documentation" ? "blue" : "violet"}>{resourceLabel(resource.kind)}</Badge><span className="table-actions">{source && <Button outline onClick={() => onEditResource(source)}>New revision</Button>}{source && <Button outline onClick={() => onDuplicateResource(source)}>Duplicate</Button>}<button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => onDetachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span></div>; })}
         {attachedResources.length === 0 && <div className="empty-row">No resources are attached yet.</div>}
       </section>
       <section className="panel"><div className="panel-heading"><div><h2>Agent tools</h2><p>Published actions and their fixed, policy-checked backends.</p></div><Button outline onClick={onAddTool}><Plus data-slot="icon" />Add tool</Button></div>{tools.map((tool) => <div className="provider-row" key={tool.id}><span className="settings-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.backend_kind === "mcp" ? "MCP tool backend" : "HTTPS tool backend"}</small></span><Badge color={tool.state === "published" ? "green" : "amber"}>{tool.state}</Badge></div>)}{tools.length === 0 && <div className="empty-row">No tools are available.</div>}</section>
@@ -1819,6 +1693,8 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
   const [versionKey, setVersionKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [integrationVisibility, setIntegrationVisibility] = useState<APIIntegration["visibility"]>("private");
+  const [integrationPublicAcknowledged, setIntegrationPublicAcknowledged] = useState(false);
   const [lifecycle, setLifecycle] = useState<APIIntegration["lifecycle"]>("draft");
   const [replacementID, setReplacementID] = useState("");
   const [sunsetAt, setSunsetAt] = useState("");
@@ -1879,14 +1755,14 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
 
   function openIntegration(value?: APIIntegration) {
     setEditingIntegration(value ?? null);
-    setFamilyKey(value?.family_key ?? ""); setVersionKey(value?.version_key ?? ""); setDisplayName(value?.display_name ?? ""); setDescription(value?.description ?? ""); setLifecycle(value?.lifecycle ?? "draft"); setReplacementID(value?.replacement_integration_id ?? ""); setSunsetAt(value?.sunset_at?.slice(0, 10) ?? "");
+    setFamilyKey(value?.family_key ?? ""); setVersionKey(value?.version_key ?? ""); setDisplayName(value?.display_name ?? ""); setDescription(value?.description ?? ""); setIntegrationVisibility(value?.visibility ?? "private"); setIntegrationPublicAcknowledged(false); setLifecycle(value?.lifecycle ?? "draft"); setReplacementID(value?.replacement_integration_id ?? ""); setSunsetAt(value?.sunset_at?.slice(0, 10) ?? "");
     setIntegrationOpen(true);
   }
 
   async function saveIntegration() {
     setBusy(true);
     try {
-      const base = { family_key: familyKey, version_key: versionKey, display_name: displayName, description, lifecycle };
+      const base = { family_key: familyKey, version_key: versionKey, display_name: displayName, description, visibility: integrationVisibility, acknowledge_public: integrationPublicAcknowledged, lifecycle };
       const saved = editingIntegration
         ? await api.updateIntegration(editingIntegration.id, { ...base, replacement_integration_id: replacementID || undefined, sunset_at: sunsetAt ? new Date(`${sunsetAt}T00:00:00Z`).toISOString() : undefined, revision: editingIntegration.revision })
         : await api.createIntegration(base);
@@ -1986,10 +1862,10 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
   return <>
     {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} activeTab={activeTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} connections={connections} supportRoutes={supportRoutes} tools={tools} mcpConnections={mcpConnections} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddTool={onAddTool} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
 
-    <Dialog open={integrationOpen} onClose={setIntegrationOpen} title={editingIntegration ? "Edit API" : "Add API"} description="Each API record represents one family and one version." actions={<><Button outline onClick={() => setIntegrationOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !familyKey.trim() || !versionKey.trim() || !displayName.trim()} onClick={saveIntegration}>{busy ? "Saving…" : "Save API"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>API family key</span><input value={familyKey} onChange={(event) => setFamilyKey(event.target.value)} placeholder="voice-api" /></label><label className="auth-field"><span>API version</span><input value={versionKey} onChange={(event) => setVersionKey(event.target.value)} placeholder="v2" /></label></div><label className="auth-field"><span>Display name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Voice API v2" /></label><label className="auth-field"><span>Description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Lifecycle</span><select value={lifecycle} onChange={(event) => setLifecycle(event.target.value as APIIntegration["lifecycle"])}><option value="draft">Draft</option><option value="active">Active</option><option value="deprecated">Deprecated</option><option value="retired">Retired</option></select></label><label className="auth-field"><span>Replacement</span><select disabled={lifecycle !== "deprecated" && lifecycle !== "retired"} value={replacementID} onChange={(event) => setReplacementID(event.target.value)}><option value="">None</option>{integrations.filter((value) => value.id !== editingIntegration?.id).map((value) => <option key={value.id} value={value.id}>{value.display_name} {value.version_key}</option>)}</select></label></div>{(lifecycle === "deprecated" || lifecycle === "retired") && <label className="auth-field"><span>Sunset date</span><input type="date" value={sunsetAt} onChange={(event) => setSunsetAt(event.target.value)} /></label>}</div></Dialog>
-    <Dialog open={resourceOpen} onClose={setResourceOpen} title={editingSet ? `Create revision for ${editingSet.name}` : "Create reusable resource set"} description="Sets are reusable by explicit attachment. Each save creates immutable content." actions={<><Button outline onClick={() => setResourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !setName.trim()} onClick={saveResourceSet}>{busy ? "Saving…" : editingSet ? "Create revision" : "Create set"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Kind</span><select disabled={Boolean(editingSet)} value={setKind} onChange={(event) => setSetKind(event.target.value as APIResourceSet["kind"])}><option value="documentation">Documentation</option><option value="package">Package</option><option value="hook">Tool backend</option></select></label><label className="auth-field"><span>Name</span><input value={setName} onChange={(event) => setSetName(event.target.value)} /></label></div><label className="auth-field"><span>Description</span><textarea value={resourceDescription} onChange={(event) => setResourceDescription(event.target.value)} /></label><label className="auth-field"><span>Manifest (JSON array)</span><textarea className="code-input" value={setManifest} onChange={(event) => setSetManifest(event.target.value)} spellCheck={false} /></label></div></Dialog>
+    <Dialog open={integrationOpen} onClose={setIntegrationOpen} title={editingIntegration ? "Edit API" : "Add API"} description="Each API record represents one family and one version. Private is the default." actions={<><Button outline onClick={() => setIntegrationOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !familyKey.trim() || !versionKey.trim() || !displayName.trim() || (integrationVisibility === "public" && editingIntegration?.visibility !== "public" && !integrationPublicAcknowledged)} onClick={saveIntegration}>{busy ? "Saving…" : "Save API"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>API family key</span><input value={familyKey} onChange={(event) => setFamilyKey(event.target.value)} placeholder="voice-api" /></label><label className="auth-field"><span>API version</span><input value={versionKey} onChange={(event) => setVersionKey(event.target.value)} placeholder="v2" /></label></div><label className="auth-field"><span>Display name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Voice API v2" /></label><label className="auth-field"><span>Description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Visibility</span><select value={integrationVisibility} onChange={(event) => { setIntegrationVisibility(event.target.value as APIIntegration["visibility"]); setIntegrationPublicAcknowledged(false); }}><option value="private">Private</option><option value="public">Public</option></select><small>Public exposes only the published read-only Integration manifest.</small></label><label className="auth-field"><span>Lifecycle</span><select value={lifecycle} onChange={(event) => setLifecycle(event.target.value as APIIntegration["lifecycle"])}><option value="draft">Draft</option><option value="active">Active</option><option value="deprecated">Deprecated</option><option value="retired">Retired</option></select></label></div>{integrationVisibility === "public" && editingIntegration?.visibility !== "public" && <label className="compact-check"><input type="checkbox" checked={integrationPublicAcknowledged} onChange={(event) => setIntegrationPublicAcknowledged(event.target.checked)} /><span>I understand this published API metadata will be anonymously discoverable while Public MCP is enabled.</span></label>}<label className="auth-field"><span>Replacement</span><select disabled={lifecycle !== "deprecated" && lifecycle !== "retired"} value={replacementID} onChange={(event) => setReplacementID(event.target.value)}><option value="">None</option>{integrations.filter((value) => value.id !== editingIntegration?.id).map((value) => <option key={value.id} value={value.id}>{value.display_name} {value.version_key}</option>)}</select></label>{(lifecycle === "deprecated" || lifecycle === "retired") && <label className="auth-field"><span>Sunset date</span><input type="date" value={sunsetAt} onChange={(event) => setSunsetAt(event.target.value)} /></label>}</div></Dialog>
+    <Dialog open={resourceOpen} onClose={setResourceOpen} title={editingSet ? `Create revision for ${editingSet.name}` : "Create reusable resource set"} description="Sets are reusable by explicit attachment. Each save creates immutable content." actions={<><Button outline onClick={() => setResourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !setName.trim()} onClick={saveResourceSet}>{busy ? "Saving…" : editingSet ? "Create revision" : "Create set"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Kind</span><select disabled={Boolean(editingSet)} value={setKind} onChange={(event) => setSetKind(event.target.value as APIResourceSet["kind"])}><option value="documentation">Documentation</option><option value="api">API contract</option></select></label><label className="auth-field"><span>Name</span><input value={setName} onChange={(event) => setSetName(event.target.value)} /></label></div><label className="auth-field"><span>Description</span><textarea value={resourceDescription} onChange={(event) => setResourceDescription(event.target.value)} /></label><label className="auth-field"><span>Manifest (JSON array)</span><textarea className="code-input" value={setManifest} onChange={(event) => setSetManifest(event.target.value)} spellCheck={false} /></label></div></Dialog>
     <Dialog open={Boolean(duplicateSet)} onClose={(open) => { if (!open) setDuplicateSet(null); }} title="Duplicate resource set" description="Creates an independent copy so later edits do not affect APIs using the original." actions={<><Button outline onClick={() => setDuplicateSet(null)}>Cancel</Button><Button color="indigo" disabled={busy || !duplicateName.trim()} onClick={duplicateResource}>Duplicate</Button></>}><label className="auth-field"><span>New set name</span><input value={duplicateName} onChange={(event) => setDuplicateName(event.target.value)} /></label></Dialog>
-    <Dialog open={Boolean(attachIntegration)} onClose={(open) => { if (!open) setAttachIntegration(null); }} title={`Attach resources to ${attachIntegration?.display_name ?? "API"}`} description="Follow latest for deliberate sharing, or pin the current immutable revision." actions={<><Button outline onClick={() => setAttachIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy || !attachSetID} onClick={attachResource}>Attach</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Resource set</span><select value={attachSetID} onChange={(event) => setAttachSetID(event.target.value)}><option value="">Select a set</option>{resourceSets.filter((set) => (!attachKind || set.kind === attachKind) && !(attachIntegration?.resources ?? []).some((link) => link.resource_set_id === set.id)).map((set) => <option key={set.id} value={set.id}>{set.kind === "hook" ? "tool backend" : set.kind} · {set.name}</option>)}</select></label><label className="compact-check"><input type="checkbox" checked={pinAttachedSet} onChange={(event) => setPinAttachedSet(event.target.checked)} /><span>Pin the current revision instead of following latest</span></label></div></Dialog>
+    <Dialog open={Boolean(attachIntegration)} onClose={(open) => { if (!open) setAttachIntegration(null); }} title={`Attach resources to ${attachIntegration?.display_name ?? "API"}`} description="Follow latest for deliberate sharing, or pin the current immutable revision." actions={<><Button outline onClick={() => setAttachIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy || !attachSetID} onClick={attachResource}>Attach</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Resource set</span><select value={attachSetID} onChange={(event) => setAttachSetID(event.target.value)}><option value="">Select a set</option>{resourceSets.filter((set) => (!attachKind || set.kind === attachKind) && !(attachIntegration?.resources ?? []).some((link) => link.resource_set_id === set.id)).map((set) => <option key={set.id} value={set.id}>{set.kind === "api" ? "API contract" : "documentation"} · {set.name}</option>)}</select></label><label className="compact-check"><input type="checkbox" checked={pinAttachedSet} onChange={(event) => setPinAttachedSet(event.target.checked)} /><span>Pin the current revision instead of following latest</span></label></div></Dialog>
     <Dialog open={Boolean(accessIntegration)} onClose={(open) => { if (!open) setAccessIntegration(null); }} title={`Access for ${accessIntegration?.display_name ?? "API"}`} description="Choose the service connections this API may use. Credentials remain encrypted and are never copied into the API." actions={<><Button outline onClick={() => setAccessIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy} onClick={saveAccessConnections}>{busy ? "Saving…" : "Save connections"}</Button></>}><div className="auth-form compact-form"><fieldset className="catalog-settings-section"><legend>Allowed connections</legend>{connections.map((connection) => <label className="compact-check" key={connection.id}><input type="checkbox" aria-label={`Allow ${connection.name}`} checked={accessSelection.includes(connection.id)} onChange={() => setAccessSelection((values) => values.includes(connection.id) ? values.filter((id) => id !== connection.id) : [...values, connection.id])} /><span><strong>{connection.name}</strong><small>{connection.definition?.name ?? "Service connection"} · {connection.state}</small></span></label>)}{connections.length === 0 && <p className="dialog-empty-copy">No service connections exist yet. Create one in Settings, then return here.</p>}</fieldset></div></Dialog>
     <Dialog open={Boolean(supportIntegration)} onClose={(open) => { if (!open) setSupportIntegration(null); }} title={`Bug reports & feedback for ${supportIntegration?.display_name ?? "API"}`} description="Choose an API-specific policy, or inherit the deployment default." actions={<><Button outline onClick={() => setSupportIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy} onClick={saveSupportRoute}>{busy ? "Saving…" : "Save policy"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Reporting policy</span><select value={supportSelection} onChange={(event) => setSupportSelection(event.target.value)}><option value="">Inherit deployment default</option>{supportRoutes.filter((route) => !route.is_default && route.state === "active").map((route) => <option key={route.id} value={route.id}>{route.name} · {route.retention_days} days</option>)}</select><small>{supportRoutes.find((route) => route.is_default) ? `Current default: ${supportRoutes.find((route) => route.is_default)?.name}` : "No default policy exists. Configure one in Settings."}</small></label></div></Dialog>
     <Dialog open={Boolean(publishCandidate)} onClose={(open) => { if (!open) setPublishCandidate(null); }} title={`Publish ${publishCandidate?.display_name ?? "API"}`} description="Review what changed before creating a new immutable version." actions={<><Button outline onClick={() => setPublishCandidate(null)}>Cancel</Button><Button color="indigo" disabled={busy || !selectedPublishStatus?.ready || !selectedPublishStatus.has_changes} onClick={publishIntegration}>{busy ? "Publishing…" : "Publish"}</Button></>}><div className="publish-review">{selectedPublishStatus?.validations.map((validation) => <div key={validation.code} className={`publish-validation ${validation.level}`}><span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{validation.level}</strong><small>{validation.message}</small></span></div>)}<div className="publish-diff-list">{selectedPublishStatus?.changes.map((change) => <div className="publish-diff" key={change.field}><strong>{change.field}</strong><span><small>Published</small><code>{change.before === undefined ? "—" : JSON.stringify(change.before)}</code></span><ChevronRight /><span><small>Draft</small><code>{change.after === undefined ? "—" : JSON.stringify(change.after)}</code></span></div>)}</div><details className="advanced-details"><summary>Technical details</summary><code>{selectedPublishStatus?.current_manifest_hash ?? "—"}</code></details></div></Dialog>
@@ -2001,7 +1877,7 @@ function ConnectorReleasesView({ versions, integrations, onConfigure, onNavigate
   return <><PageHeading eyebrow="Advanced publishing" title="Compatibility snapshots" description="Publish immutable compatibility snapshots that select a tested combination of API versions. This is a deployment release, not an API version." action={<Button onClick={onConfigure}><Settings data-slot="icon" />Release policy</Button>} /><div className="notice"><GitBranch /><span><strong>API versions stay independent.</strong> A compatibility snapshot can combine Voice API v2 with Face API v3 without changing either API identity.</span></div><div className="metrics-grid"><Metric label="Compatibility snapshots" value={String(versions.length)} detail={`${versions.filter((version) => version.release_stage === "active").length} active`} /><Metric label="APIs" value={String(integrations.length)} detail="Selected by immutable revision" /><Metric label="Latest" value={versions.find((version) => version.is_latest)?.version ?? "—"} detail="Default latest channel" /><Metric label="LTS" value={versions.find((version) => version.is_lts)?.version ?? "—"} detail="Stable channel" /></div><section className="panel"><div className="panel-heading"><div><h2>Published snapshots</h2><p>Customer, environment, and installation pins continue to override the default channel.</p></div></div>{versions.map((version) => <div className="provider-row" key={version.id}><span className="settings-icon"><GitBranch /></span><span><EntityLink entity="release" uid={version.id} onNavigate={onNavigate} className="entity-link"><strong>{version.version}</strong></EntityLink><small>{version.profile_name} · {version.manifest_hash}</small></span><span>{version.is_latest && <Badge color="blue">Latest</Badge>} {version.is_lts && <Badge color="violet">LTS</Badge>}</span><Badge color={version.deprecated_at ? "amber" : version.drift_status === "drifted" ? "red" : "green"}>{version.deprecated_at ? "Deprecated" : version.drift_status}</Badge></div>)}{versions.length === 0 && <div className="empty-row">No compatibility snapshots have been published.</div>}</section></>;
 }
 
-function AccessView({ definitions, connections, instances, credentials, integrations, environments, hookSets, onChanged, onMessage, onNavigate }: { definitions: APIAccessDefinition[]; connections: APIAccessConnection[]; instances: APIAccessInstance[]; credentials: APIAccessCredential[]; integrations: APIIntegration[]; environments: APIEnvironment[]; hookSets: APIResourceSet[]; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function AccessView({ definitions, connections, instances, credentials, integrations, environments, apiResourceSets, onChanged, onMessage, onNavigate }: { definitions: APIAccessDefinition[]; connections: APIAccessConnection[]; instances: APIAccessInstance[]; credentials: APIAccessCredential[]; integrations: APIIntegration[]; environments: APIEnvironment[]; apiResourceSets: APIResourceSet[]; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const activeCredentials = credentials.filter((credential) => credential.state === "active" && (!credential.expires_at || new Date(credential.expires_at) > new Date())).length;
   const [definitionOpen, setDefinitionOpen] = useState(false);
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -2011,13 +1887,13 @@ function AccessView({ definitions, connections, instances, credentials, integrat
   const [singular, setSingular] = useState("account"); const [plural, setPlural] = useState("accounts");
   const [credentialScope, setCredentialScope] = useState<APIAccessDefinition["credential_scope"]>("connection");
   const [managementAuth, setManagementAuth] = useState<APIAccessDefinition["management_auth_type"]>("bearer");
-  const [hookSetID, setHookSetID] = useState("");
-  const [operations, setOperations] = useState('{\n  "required_entitlements": [],\n  "max_ttl_seconds": 3600,\n  "credential_storage_mode": "one_time",\n  "authorize": {"method": "POST", "path": "/v1/authorize"},\n  "credentials.create": {"method": "POST", "path": "/v1/credentials"},\n  "credentials.revoke": {"method": "POST", "path": "/v1/credentials/{credential_id}/revoke"}\n}');
+  const [apiResourceSetID, setAPIResourceSetID] = useState("");
+  const [operations, setOperations] = useState('{\n  "required_grants": [],\n  "max_ttl_seconds": 3600,\n  "credential_storage_mode": "one_time",\n  "authorize": {"method": "POST", "path": "/v1/authorize"},\n  "credentials.create": {"method": "POST", "path": "/v1/credentials"},\n  "credentials.revoke": {"method": "POST", "path": "/v1/credentials/{credential_id}/revoke"}\n}');
   const [definitionID, setDefinitionID] = useState(""); const [connectionName, setConnectionName] = useState(""); const [environmentID, setEnvironmentID] = useState(""); const [region, setRegion] = useState(""); const [baseURL, setBaseURL] = useState(""); const [managementSecret, setManagementSecret] = useState(""); const [connectionConfig, setConnectionConfig] = useState("{}"); const [selectedIntegrations, setSelectedIntegrations] = useState<string[]>([]);
 
   async function saveDefinition() {
     setBusy(true);
-    try { const parsed = JSON.parse(operations) as Record<string, unknown>; await api.createAccessDefinition({ service_key: serviceKey, name: serviceName, instance_cardinality: cardinality, instance_label_singular: singular, instance_label_plural: plural, credential_scope: cardinality === "one" ? "connection" : credentialScope, management_auth_type: managementAuth, hook_set_id: hookSetID || undefined, operations: parsed }); await onChanged(); setDefinitionOpen(false); onMessage("Provider access definition created."); } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "Access definition could not be created."); } finally { setBusy(false); }
+    try { const parsed = JSON.parse(operations) as Record<string, unknown>; await api.createAccessDefinition({ service_key: serviceKey, name: serviceName, instance_cardinality: cardinality, instance_label_singular: singular, instance_label_plural: plural, credential_scope: cardinality === "one" ? "connection" : credentialScope, management_auth_type: managementAuth, api_resource_set_id: apiResourceSetID || undefined, operations: parsed }); await onChanged(); setDefinitionOpen(false); onMessage("Provider access definition created."); } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "Access definition could not be created."); } finally { setBusy(false); }
   }
 
   async function saveConnection() {
@@ -2031,18 +1907,17 @@ function AccessView({ definitions, connections, instances, credentials, integrat
     <PageHeading eyebrow="Shared configuration" title="Service connections" description="Connect vendor services once, then allow each API to use only the connections it needs." action={<Button onClick={() => { setDefinitionID(definitions[0]?.id ?? ""); setEnvironmentID(environments[0]?.id ?? ""); setConnectionOpen(true); }}><KeyRound data-slot="icon" />Connect service</Button>} />
     <section className="panel"><div className="panel-heading"><div><h2>Connections</h2><p>Credentials stay encrypted and every API assignment is explicit.</p></div></div>{connections.map((connection) => { const definition = connection.definition ?? definitions.find((item) => item.id === connection.access_definition_id); const connectionInstances = instances.filter((item) => item.access_connection_id === connection.id); const connectionCredentials = credentials.filter((item) => item.access_connection_id === connection.id); const labels = (connection.integration_ids ?? []).map((id) => integrations.find((item) => item.id === id)).filter(Boolean).map((item) => `${item!.display_name} ${item!.version_key}`).join(", "); return <div className="provider-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{definition?.name ?? "Service"} · {labels || "No API attached"}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge><span><strong>{definition?.instance_cardinality === "many" ? connectionInstances.length : "1"} {definition?.instance_cardinality === "many" ? definition.instance_label_plural : definition?.instance_label_singular ?? "instance"}</strong><small>{connectionCredentials.length} credential record{connectionCredentials.length === 1 ? "" : "s"}</small></span></div>; })}{connections.length === 0 && <div className="empty-row">No service connections yet. Connect a vendor service to make it available to APIs.</div>}</section>
     <details className="panel advanced-details"><summary>Advanced service setup</summary><div className="advanced-details-body"><div className="panel-heading"><div><h2>Service types</h2><p>Reusable operation contracts for unusual provider models.</p></div><Button outline onClick={() => setDefinitionOpen(true)}><Plus data-slot="icon" />New service type</Button></div>{definitions.map((definition) => <div className="lease-row" key={definition.id}><span><EntityLink entity="access-definition" uid={definition.id} onNavigate={onNavigate} className="entity-link"><strong>{definition.name}</strong></EntityLink><small>{definition.instance_cardinality === "many" ? `Multiple ${definition.instance_label_plural}` : `Single ${definition.instance_label_singular}`}</small></span><Badge color={definition.state === "active" ? "green" : "zinc"}>{definition.state}</Badge></div>)}{definitions.length === 0 && <div className="empty-row">No service types are configured.</div>}<div className="panel-heading advanced-subheading"><div><h2>Credential records</h2><p>Fingerprints and lifecycle only. Plaintext credentials are never listed.</p></div><Badge color="violet">{activeCredentials} active</Badge></div>{credentials.slice(0, 12).map((credential) => <div className="lease-row" key={credential.id}><span><strong>{credential.scopes.join(", ") || "Default scope"}</strong><small>{credential.secret_fingerprint.slice(0, 18)}… · {credential.storage_mode}</small></span><Badge color={credential.state === "active" ? "green" : "zinc"}>{credential.state}</Badge></div>)}{credentials.length === 0 && <div className="empty-row">No credential records yet.</div>}</div></details>
-  <Dialog open={definitionOpen} onClose={setDefinitionOpen} title="Create service type" description="The provider contract declares cardinality and credential scope; end users do not choose mono versus multi." actions={<><Button outline onClick={() => setDefinitionOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !serviceKey.trim() || !serviceName.trim() || !singular.trim() || !plural.trim()} onClick={saveDefinition}>{busy ? "Saving…" : "Create service type"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Service key</span><input value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="auth0" /></label><label className="auth-field"><span>Name</span><input value={serviceName} onChange={(event) => setServiceName(event.target.value)} placeholder="Auth0 Management API" /></label></div><div className="two-fields"><label className="auth-field"><span>Provider instances</span><select value={cardinality} onChange={(event) => { const value = event.target.value as typeof cardinality; setCardinality(value); if (value === "one") setCredentialScope("connection"); }}><option value="one">One fixed instance</option><option value="many">Multiple provider resources</option></select></label><label className="auth-field"><span>Credential scope</span><select disabled={cardinality === "one"} value={credentialScope} onChange={(event) => setCredentialScope(event.target.value as typeof credentialScope)}><option value="connection">Connection</option><option value="instance">Provider resource</option></select></label></div><div className="two-fields"><label className="auth-field"><span>Singular label</span><input value={singular} onChange={(event) => setSingular(event.target.value)} placeholder="tenant" /></label><label className="auth-field"><span>Plural label</span><input value={plural} onChange={(event) => setPlural(event.target.value)} placeholder="tenants" /></label></div><div className="two-fields"><label className="auth-field"><span>Management authentication</span><select value={managementAuth} onChange={(event) => setManagementAuth(event.target.value as typeof managementAuth)}><option value="bearer">Bearer token</option><option value="api_key">API key</option><option value="oauth2_client_credentials">OAuth2 client credentials</option><option value="none">None</option></select></label><label className="auth-field"><span>Tool backend set</span><select value={hookSetID} onChange={(event) => setHookSetID(event.target.value)}><option value="">None</option>{hookSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select></label></div><label className="auth-field"><span>Operations (JSON)</span><textarea className="code-input" value={operations} onChange={(event) => setOperations(event.target.value)} spellCheck={false} /></label></div></Dialog>
+  <Dialog open={definitionOpen} onClose={setDefinitionOpen} title="Create service type" description="The provider contract declares cardinality and credential scope; end users do not choose mono versus multi." actions={<><Button outline onClick={() => setDefinitionOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !serviceKey.trim() || !serviceName.trim() || !singular.trim() || !plural.trim()} onClick={saveDefinition}>{busy ? "Saving…" : "Create service type"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Service key</span><input value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="auth0" /></label><label className="auth-field"><span>Name</span><input value={serviceName} onChange={(event) => setServiceName(event.target.value)} placeholder="Auth0 Management API" /></label></div><div className="two-fields"><label className="auth-field"><span>Provider instances</span><select value={cardinality} onChange={(event) => { const value = event.target.value as typeof cardinality; setCardinality(value); if (value === "one") setCredentialScope("connection"); }}><option value="one">One fixed instance</option><option value="many">Multiple provider resources</option></select></label><label className="auth-field"><span>Credential scope</span><select disabled={cardinality === "one"} value={credentialScope} onChange={(event) => setCredentialScope(event.target.value as typeof credentialScope)}><option value="connection">Connection</option><option value="instance">Provider resource</option></select></label></div><div className="two-fields"><label className="auth-field"><span>Singular label</span><input value={singular} onChange={(event) => setSingular(event.target.value)} placeholder="tenant" /></label><label className="auth-field"><span>Plural label</span><input value={plural} onChange={(event) => setPlural(event.target.value)} placeholder="tenants" /></label></div><div className="two-fields"><label className="auth-field"><span>Management authentication</span><select value={managementAuth} onChange={(event) => setManagementAuth(event.target.value as typeof managementAuth)}><option value="bearer">Bearer token</option><option value="api_key">API key</option><option value="oauth2_client_credentials">OAuth2 client credentials</option><option value="none">None</option></select></label><label className="auth-field"><span>API contract set</span><select value={apiResourceSetID} onChange={(event) => setAPIResourceSetID(event.target.value)}><option value="">None</option>{apiResourceSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select></label></div><label className="auth-field"><span>Operations (JSON)</span><textarea className="code-input" value={operations} onChange={(event) => setOperations(event.target.value)} spellCheck={false} /></label></div></Dialog>
   <Dialog open={connectionOpen} onClose={setConnectionOpen} title="Connect vendor service" description="Credentials are encrypted server-side. The fixed HTTPS destination is validated again for every operation." actions={<><Button outline onClick={() => setConnectionOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !definitionID || !connectionName.trim() || !baseURL.trim() || selectedIntegrations.length === 0} onClick={saveConnection}>{busy ? "Connecting…" : "Connect service"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Service type</span><select value={definitionID} onChange={(event) => setDefinitionID(event.target.value)}><option value="">Select definition</option>{definitions.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}</option>)}</select></label><label className="auth-field"><span>Connection name</span><input value={connectionName} onChange={(event) => setConnectionName(event.target.value)} /></label></div><div className="two-fields"><label className="auth-field"><span>Environment</span><select value={environmentID} onChange={(event) => setEnvironmentID(event.target.value)}><option value="">All environments</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select></label><label className="auth-field"><span>Region</span><input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east-1" /></label></div><label className="auth-field"><span>Fixed HTTPS base URL</span><input type="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="https://management.example.com" /></label><label className="auth-field"><span>Management credential</span><input type="password" autoComplete="off" value={managementSecret} onChange={(event) => setManagementSecret(event.target.value)} /></label><fieldset className="catalog-settings-section"><legend>Allowed APIs</legend>{integrations.map((integration) => <label className="compact-check" key={integration.id}><input type="checkbox" checked={selectedIntegrations.includes(integration.id)} onChange={() => toggleIntegration(integration.id)} /><span>{integration.display_name} {integration.version_key}</span></label>)}</fieldset><label className="auth-field"><span>Connection configuration (JSON)</span><textarea className="code-input" value={connectionConfig} onChange={(event) => setConnectionConfig(event.target.value)} spellCheck={false} /></label></div></Dialog>
   </>;
 }
 
 
-function ActivityHubView({ runs, environments, submissions, events, analytics, reportingConfig, supportRoutes, onStart, onComplete, onView, onRetry, onNavigate }: { runs: APIIntegrationRun[]; environments: APIEnvironment[]; submissions: APIReportSubmission[]; events: APIAuditEvent[]; analytics: APIAnalytics | null; reportingConfig: APIReportingConfig | null; supportRoutes: APISupportRoute[]; onStart: () => void; onComplete: (run: APIIntegrationRun, succeeded: boolean) => void; onView: (submission: APIReportSubmission) => void; onRetry: (submission: APIReportSubmission) => void; onNavigate: (path: string) => void }) {
+function ActivityHubView({ runs, environments, submissions, events, analytics, supportRoutes, onStart, onComplete, onView, onRetry, onNavigate }: { runs: APIIntegrationRun[]; environments: APIEnvironment[]; submissions: APISupportSubmission[]; events: APIAuditEvent[]; analytics: APIAnalytics | null; supportRoutes: APISupportRoute[]; onStart: () => void; onComplete: (run: APIIntegrationRun, succeeded: boolean) => void; onView: (submission: APISupportSubmission) => void; onRetry: (submission: APISupportSubmission) => void; onNavigate: (path: string) => void }) {
   const [filter, setFilter] = useState<"all" | "runs" | "reports" | "audit">("all");
   const environmentName = (id: string) => environments.find((environment) => environment.id === id)?.name ?? id;
-  const statusColor = (state: APIReportSubmission["state"]): "zinc" | "blue" | "green" | "red" | "amber" => state === "delivered" ? "green" : state === "failed" ? "red" : state === "held" ? "amber" : "blue";
-  const defaultRoute = supportRoutes.find((route) => route.is_default);
-  const canRetry = (submission: APIReportSubmission) => submission.kind === "bug" ? Boolean(defaultRoute?.bug_hook_url || reportingConfig?.bug_hook_url) : Boolean(defaultRoute?.feedback_hook_url || reportingConfig?.feedback_hook_url);
+  const statusColor = (state: APISupportSubmission["state"]): "zinc" | "blue" | "green" | "red" | "amber" => state === "delivered" ? "green" : state === "failed" ? "red" : state === "held" ? "amber" : "blue";
+  const canRetry = (submission: APISupportSubmission) => supportRoutes.some((route) => route.id === submission.support_route_id && route.state === "active" && (submission.kind === "bug" ? route.bug_reports_enabled : route.feedback_enabled));
   const show = (kind: typeof filter) => filter === "all" || filter === kind;
 
   return <>
@@ -2058,13 +1933,14 @@ function ActivityHubView({ runs, environments, submissions, events, analytics, r
   </>;
 }
 
-function ReportingView({ routes, integrations, onChanged, onMessage, onNavigate }: { routes: APISupportRoute[]; integrations: APIIntegration[]; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function ReportingView({ routes, integrations, backendConnections, onChanged, onMessage, onNavigate }: { routes: APISupportRoute[]; integrations: APIIntegration[]; backendConnections: APIBackendConnection[]; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const [routeOpen, setRouteOpen] = useState(false);
   const [editingRoute, setEditingRoute] = useState<APISupportRoute | null>(null);
-  const [routeName, setRouteName] = useState(""); const [routeDefault, setRouteDefault] = useState(false); const [routeBugEnabled, setRouteBugEnabled] = useState(true); const [routeFeedbackEnabled, setRouteFeedbackEnabled] = useState(true); const [routeBugURL, setRouteBugURL] = useState(""); const [routeBugCredential, setRouteBugCredential] = useState(""); const [routeFeedbackURL, setRouteFeedbackURL] = useState(""); const [routeFeedbackCredential, setRouteFeedbackCredential] = useState(""); const [routeRetention, setRouteRetention] = useState("30"); const [routeIntegrations, setRouteIntegrations] = useState<string[]>([]); const [busy, setBusy] = useState(false);
+  const [routeName, setRouteName] = useState(""); const [routeDefault, setRouteDefault] = useState(false); const [routeBugEnabled, setRouteBugEnabled] = useState(true); const [routeFeedbackEnabled, setRouteFeedbackEnabled] = useState(true); const [routeBackendID, setRouteBackendID] = useState(""); const [routeRetention, setRouteRetention] = useState("30"); const [routeIntegrations, setRouteIntegrations] = useState<string[]>([]); const [busy, setBusy] = useState(false);
+  const [backendOpen, setBackendOpen] = useState(false); const [editingBackend, setEditingBackend] = useState<APIBackendConnection | null>(null); const [backendName, setBackendName] = useState(""); const [backendBaseURL, setBackendBaseURL] = useState(""); const [backendState, setBackendState] = useState<APIBackendConnection["state"]>("disabled"); const [backendCredential, setBackendCredential] = useState("");
 
   function openRoute(value?: APISupportRoute) {
-    setEditingRoute(value ?? null); setRouteName(value?.name ?? ""); setRouteDefault(value?.is_default ?? routes.length === 0); setRouteBugEnabled(value?.bug_reports_enabled ?? true); setRouteFeedbackEnabled(value?.feedback_enabled ?? true); setRouteBugURL(value?.bug_hook_url ?? ""); setRouteBugCredential(""); setRouteFeedbackURL(value?.feedback_hook_url ?? ""); setRouteFeedbackCredential(""); setRouteRetention(String(value?.retention_days ?? 30)); setRouteIntegrations(value?.integration_ids ?? []); setRouteOpen(true);
+    setEditingRoute(value ?? null); setRouteName(value?.name ?? ""); setRouteDefault(value?.is_default ?? routes.length === 0); setRouteBugEnabled(value?.bug_reports_enabled ?? true); setRouteFeedbackEnabled(value?.feedback_enabled ?? true); setRouteBackendID(value?.backend_connection_id ?? backendConnections.find((connection) => connection.state === "active")?.id ?? ""); setRouteRetention(String(value?.retention_days ?? 30)); setRouteIntegrations(value?.integration_ids ?? []); setRouteOpen(true);
   }
 
   function toggleRouteIntegration(id: string) { setRouteIntegrations((values) => values.includes(id) ? values.filter((value) => value !== id) : [...values, id]); }
@@ -2072,18 +1948,44 @@ function ReportingView({ routes, integrations, onChanged, onMessage, onNavigate 
   async function saveRoute() {
     setBusy(true);
     try {
-      const input = { name: routeName, is_default: routeDefault, bug_reports_enabled: routeBugEnabled, feedback_enabled: routeFeedbackEnabled, bug_hook_url: routeBugURL, bug_hook_credential: routeBugCredential || undefined, feedback_hook_url: routeFeedbackURL, feedback_hook_credential: routeFeedbackCredential || undefined, retention_days: Number(routeRetention), state: "active" as const, integration_ids: routeDefault ? [] : routeIntegrations };
-      if (editingRoute) await api.updateSupportRoute(editingRoute.id, { ...input, revision: editingRoute.revision }); else await api.createSupportRoute(input);
+      const input = { name: routeName, is_default: routeDefault, bug_reports_enabled: routeBugEnabled, feedback_enabled: routeFeedbackEnabled, backend_connection_id: routeBackendID || undefined, retention_days: Number(routeRetention), state: "active" as const, integration_ids: routeDefault ? [] : routeIntegrations };
+      if (editingRoute) await api.replaceSupportRoute(editingRoute.id, { ...input, revision: editingRoute.revision }); else await api.createSupportRoute(input);
       await onChanged(); setRouteOpen(false); onMessage(editingRoute ? "Reporting policy updated." : "Reporting policy created.");
     } catch (error) { onMessage(error instanceof APIError ? error.message : "Reporting policy could not be saved."); } finally { setBusy(false); }
+  }
+
+  function openBackend(value?: APIBackendConnection) {
+    setEditingBackend(value ?? null); setBackendName(value?.name ?? ""); setBackendBaseURL(value?.base_url ?? ""); setBackendState(value?.state ?? "disabled"); setBackendCredential(""); setBackendOpen(true);
+  }
+
+  async function saveBackend() {
+    setBusy(true);
+    try {
+      if (editingBackend) {
+		let revision = editingBackend.revision;
+		let rotatedBeforeActivation = false;
+		if (backendState === "active" && !editingBackend.credential_fingerprint && backendCredential.trim()) {
+			const credential = await api.createBackendConnectionCredential(editingBackend.id, backendCredential, revision);
+			revision = credential.connection_revision;
+			rotatedBeforeActivation = true;
+		}
+		const updated = await api.replaceBackendConnection(editingBackend.id, { name: backendName, base_url: backendBaseURL, authentication_type: "bearer", state: backendState, revision });
+		if (backendCredential.trim() && !rotatedBeforeActivation) await api.createBackendConnectionCredential(updated.id, backendCredential, updated.revision);
+      } else {
+        await api.createBackendConnection({ name: backendName, base_url: backendBaseURL, authentication_type: "bearer", credential: backendCredential || undefined, state: backendState });
+      }
+      await onChanged(); setBackendOpen(false); onMessage(editingBackend ? "Backend connection updated." : "Backend connection created.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Backend connection could not be saved."); } finally { setBusy(false); }
   }
 
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("settings")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Settings</ConsoleLink></div>
     <PageHeading eyebrow="Settings" title="Bug reports & feedback" description="Configure consent-gated reporting and secure delivery. View submissions in Activity." action={<Button onClick={() => openRoute()}><Plus data-slot="icon" />New policy</Button>} />
     <div className="notice"><ShieldCheck /><span><strong>Consent is enforced.</strong> Agents preview the sanitized report and obtain explicit approval. Secret detection, encryption, and Private MCP isolation are enforced independently.</span></div>
-    <section className="panel"><div className="panel-heading"><div><h2>Delivery policies</h2><p>Use one default policy and add API-specific exceptions only when necessary.</p></div><Badge color="violet">{routes.length} polic{routes.length === 1 ? "y" : "ies"}</Badge></div>{routes.map((route) => <div className="provider-row" key={route.id}><span className="settings-icon"><MessageSquareText /></span><span><EntityLink entity="support-route" uid={route.id} onNavigate={onNavigate} className="entity-link"><strong>{route.name}</strong></EntityLink><small>{route.is_default ? "Default for all APIs" : (route.integration_ids ?? []).map((id) => integrations.find((item) => item.id === id)?.display_name ?? id).join(", ")}</small></span><span>{route.bug_reports_enabled && <Badge color="blue">Bugs</Badge>} {route.feedback_enabled && <Badge color="violet">Feedback</Badge>}</span><span className="table-actions"><small>{route.bug_hook_url || route.feedback_hook_url ? "Support webhook configured" : "Encrypted local holding"} · {route.retention_days} days</small><Button outline onClick={() => openRoute(route)}>Edit</Button></span></div>)}{routes.length === 0 && <div className="empty-row">Create a default policy to enable bug reports and feedback.</div>}</section>
-    <Dialog open={routeOpen} onClose={setRouteOpen} title={editingRoute ? "Edit reporting policy" : "Create reporting policy"} description="Reports are held locally when a support webhook is empty." actions={<><Button outline onClick={() => setRouteOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !routeName.trim() || (!routeDefault && routeIntegrations.length === 0)} onClick={saveRoute}>{busy ? "Saving…" : "Save policy"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Policy name</span><input value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="Default reporting" /></label><label className="compact-check"><input type="checkbox" checked={routeDefault} onChange={(event) => setRouteDefault(event.target.checked)} /><span>Use as the default for all APIs</span></label>{!routeDefault && <fieldset className="catalog-settings-section"><legend>Assigned APIs</legend>{integrations.map((integration) => <label className="compact-check" key={integration.id}><input type="checkbox" checked={routeIntegrations.includes(integration.id)} onChange={() => toggleRouteIntegration(integration.id)} /><span>{integration.display_name} {integration.version_key}</span></label>)}</fieldset>}<div className="two-fields"><label className="compact-check"><input type="checkbox" checked={routeBugEnabled} onChange={(event) => setRouteBugEnabled(event.target.checked)} /><span>Enable bug reports</span></label><label className="compact-check"><input type="checkbox" checked={routeFeedbackEnabled} onChange={(event) => setRouteFeedbackEnabled(event.target.checked)} /><span>Enable feedback</span></label></div><label className="auth-field"><span>Bug report webhook (optional HTTPS)</span><input type="url" value={routeBugURL} onChange={(event) => setRouteBugURL(event.target.value)} placeholder="Leave empty to hold locally" /></label>{routeBugURL && <label className="auth-field"><span>Webhook credential</span><input type="password" autoComplete="off" value={routeBugCredential} onChange={(event) => setRouteBugCredential(event.target.value)} /><small>Required for a new or changed destination; leave blank to retain the existing credential.</small></label>}<label className="auth-field"><span>Feedback webhook (optional HTTPS)</span><input type="url" value={routeFeedbackURL} onChange={(event) => setRouteFeedbackURL(event.target.value)} placeholder="Leave empty to hold locally" /></label>{routeFeedbackURL && <label className="auth-field"><span>Webhook credential</span><input type="password" autoComplete="off" value={routeFeedbackCredential} onChange={(event) => setRouteFeedbackCredential(event.target.value)} /><small>Required for a new or changed destination; leave blank to retain the existing credential.</small></label>}<label className="auth-field"><span>Encrypted retention (days)</span><input type="number" min={1} max={365} value={routeRetention} onChange={(event) => setRouteRetention(event.target.value)} /></label></div></Dialog>
+    <section className="panel"><div className="panel-heading"><div><h2>Backend connections</h2><p>Service-to-service origins and bearer credentials are independent of customer identity.</p></div><Button outline onClick={() => openBackend()}><Plus data-slot="icon" />New connection</Button></div>{backendConnections.map((connection) => <div className="provider-row" key={connection.id}><span className="settings-icon"><Server /></span><span><strong>{connection.name}</strong><small>{connection.base_url} · bearer · {connection.credential_fingerprint ? `credential ${connection.credential_fingerprint}` : "no credential"}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><Button outline onClick={() => openBackend(connection)}>Edit</Button></div>)}{backendConnections.length === 0 && <div className="empty-row">Create a backend connection before enabling support delivery.</div>}</section>
+    <section className="panel"><div className="panel-heading"><div><h2>Delivery policies</h2><p>Use one default policy and add API-specific exceptions only when necessary.</p></div><Badge color="violet">{routes.length} polic{routes.length === 1 ? "y" : "ies"}</Badge></div>{routes.map((route) => <div className="provider-row" key={route.id}><span className="settings-icon"><MessageSquareText /></span><span><EntityLink entity="support-route" uid={route.id} onNavigate={onNavigate} className="entity-link"><strong>{route.name}</strong></EntityLink><small>{route.is_default ? "Default for all APIs" : (route.integration_ids ?? []).map((id) => integrations.find((item) => item.id === id)?.display_name ?? id).join(", ")}</small></span><span>{route.bug_reports_enabled && <Badge color="blue">Bugs</Badge>} {route.feedback_enabled && <Badge color="violet">Feedback</Badge>}</span><span className="table-actions"><small>{route.bug_reports_enabled || route.feedback_enabled ? backendConnections.find((connection) => connection.id === route.backend_connection_id)?.name ?? "Backend unavailable" : "Delivery disabled"} · {route.retention_days} days</small><Button outline onClick={() => openRoute(route)}>Edit</Button></span></div>)}{routes.length === 0 && <div className="empty-row">Create a default policy to enable bug reports and feedback.</div>}</section>
+    <Dialog open={routeOpen} onClose={setRouteOpen} title={editingRoute ? "Edit reporting policy" : "Create reporting policy"} description="Approved submissions are delivered to /v1/support-submissions through a separately authenticated backend connection." actions={<><Button outline onClick={() => setRouteOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !routeName.trim() || (!routeDefault && routeIntegrations.length === 0) || ((routeBugEnabled || routeFeedbackEnabled) && !backendConnections.some((connection) => connection.id === routeBackendID && connection.state === "active"))} onClick={saveRoute}>{busy ? "Saving…" : "Save policy"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Policy name</span><input value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="Default reporting" /></label><label className="compact-check"><input type="checkbox" checked={routeDefault} onChange={(event) => setRouteDefault(event.target.checked)} /><span>Use as the default for all APIs</span></label>{!routeDefault && <fieldset className="catalog-settings-section"><legend>Assigned APIs</legend>{integrations.map((integration) => <label className="compact-check" key={integration.id}><input type="checkbox" checked={routeIntegrations.includes(integration.id)} onChange={() => toggleRouteIntegration(integration.id)} /><span>{integration.display_name} {integration.version_key}</span></label>)}</fieldset>}<div className="two-fields"><label className="compact-check"><input type="checkbox" checked={routeBugEnabled} onChange={(event) => setRouteBugEnabled(event.target.checked)} /><span>Enable bug reports</span></label><label className="compact-check"><input type="checkbox" checked={routeFeedbackEnabled} onChange={(event) => setRouteFeedbackEnabled(event.target.checked)} /><span>Enable feedback</span></label></div><label className="auth-field"><span>Backend connection</span><select value={routeBackendID} onChange={(event) => setRouteBackendID(event.target.value)}><option value="">No delivery connection</option>{backendConnections.map((connection) => <option key={connection.id} value={connection.id} disabled={connection.state !== "active"}>{connection.name} · {connection.state}</option>)}</select><small>The route stores only this reference; credentials rotate on the connection.</small></label><label className="auth-field"><span>Encrypted retention (days)</span><input type="number" min={1} max={365} value={routeRetention} onChange={(event) => setRouteRetention(event.target.value)} /></label></div></Dialog>
+		<Dialog open={backendOpen} onClose={setBackendOpen} title={editingBackend ? "Edit backend connection" : "Create backend connection"} description="This credential is used only for service-to-service delivery, never for customer access or tool calls." actions={<><Button outline onClick={() => setBackendOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !backendName.trim() || !backendBaseURL.trim() || (backendState === "active" && !backendCredential.trim() && !editingBackend?.credential_fingerprint)} onClick={saveBackend}>{busy ? "Saving…" : "Save connection"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={backendName} onChange={(event) => setBackendName(event.target.value)} placeholder="Support delivery" /></label><label className="auth-field"><span>HTTPS origin</span><input type="url" value={backendBaseURL} onChange={(event) => setBackendBaseURL(event.target.value)} placeholder="https://backend.vendor.com" /><small>DokoSoko appends only /v1/support-submissions.</small></label><div className="two-fields"><label className="auth-field"><span>Authentication</span><input value="Bearer" disabled /></label><label className="auth-field"><span>State</span><select value={backendState} onChange={(event) => setBackendState(event.target.value as APIBackendConnection["state"])}><option value="disabled">Disabled</option><option value="active">Active</option></select></label></div><label className="auth-field"><span>{editingBackend ? "Rotate bearer credential (optional)" : "Bearer credential"}</span><input type="password" autoComplete="off" value={backendCredential} onChange={(event) => setBackendCredential(event.target.value)} /><small>Submitted once, encrypted immediately, and never returned.</small></label></div></Dialog>
   </>;
 }
 
@@ -2104,29 +2006,28 @@ function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect, onNavi
       })}
       {connections.length === 0 && <div className="empty-row">No upstream MCP is connected. Add one to inspect and review its catalog.</div>}
     </section>
-    <div className="identity-flow"><span><LockKeyhole /><strong>1 · DokoSoko identity</strong><small>Authenticate the user and resolve vendor entitlements.</small></span><span><ShieldCheck /><strong>2 · Post-authz policy</strong><small>Validate schema, confirmation, entitlement, and the authorization endpoint.</small></span><span><Users /><strong>3 · Upstream identity</strong><small>Use a separate user grant or encrypted service credential—never the inbound token.</small></span></div>
+    <div className="identity-flow"><span><LockKeyhole /><strong>1 · DokoSoko identity</strong><small>Authenticate the user and resolve a durable customer account.</small></span><span><ShieldCheck /><strong>2 · Access policy</strong><small>Validate schema, confirmation, grants, and the vendor access evaluation.</small></span><span><Users /><strong>3 · Upstream identity</strong><small>Use a separate user grant or encrypted service credential—never the inbound token.</small></span></div>
   </>;
 }
 
 function ToolsView({ tools, onAdd, onPublish, onNavigate }: { tools: APITool[]; onAdd: () => void; onPublish: (tool: APITool) => void; onNavigate: (path: string) => void }) {
-  return <><PageHeading eyebrow="Actions" title="Tools" description="Publish reviewed HTTP actions and imported Stateless MCPv2 tools behind one authorization boundary." action={<Button onClick={onAdd}><Plus data-slot="icon" />Create API tool</Button>} /><div className="notice"><ShieldCheck /><span><strong>Policy-wrapped execution.</strong> Every call is schema validated, entitlement-scoped, reauthorized, rate-limited, and audited before a fixed backend is reached.</span></div><div className="tool-grid">{tools.map((tool) => <article className={`panel tool-card ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><span className="tool-icon">{tool.backend_kind === "mcp" ? <Share2 /> : tool.namespace === "credentials" ? <KeyRound /> : <TerminalSquare />}</span><div><span className="tool-badges"><Badge color={tool.state === "published" ? "green" : "amber"}>{tool.state}</Badge><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP"}</Badge>{tool.upstream_drifted && <Badge color="red">Schema drift</Badge>}</span><h3><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link">{tool.namespace}.{tool.name}</EntityLink></h3><code>{tool.backend_kind === "mcp" ? `upstream · ${tool.upstream_tool_name}` : `${tool.http_method} · tool backend`}</code>{tool.state === "draft" && !tool.upstream_drifted && <Button outline className="publish-tool" onClick={() => onPublish(tool)}>Publish</Button>}{tool.upstream_drifted && <small className="drift-warning">Re-inspect and review before republishing.</small>}</div><button className="more" type="button" aria-label={`Actions for ${tool.name}`}><MoreHorizontal /></button></article>)}<button type="button" className="new-tool-card" onClick={onAdd}><Plus /><strong>Add API tool</strong><span>Definition → schema → API action → authz → test → publish</span></button></div></>;
+  return <><PageHeading eyebrow="Actions" title="Tools" description="Publish reviewed HTTP actions and imported Stateless MCPv2 tools behind one authorization boundary." action={<Button onClick={onAdd}><Plus data-slot="icon" />Create API tool</Button>} /><div className="notice"><ShieldCheck /><span><strong>Policy-wrapped execution.</strong> Every call is schema validated, grant-scoped, reauthorized, rate-limited, and audited before a fixed backend is reached.</span></div><div className="tool-grid">{tools.map((tool) => <article className={`panel tool-card ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><span className="tool-icon">{tool.backend_kind === "mcp" ? <Share2 /> : tool.namespace === "credentials" ? <KeyRound /> : <TerminalSquare />}</span><div><span className="tool-badges"><Badge color={tool.state === "published" ? "green" : "amber"}>{tool.state}</Badge><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP"}</Badge>{tool.upstream_drifted && <Badge color="red">Schema drift</Badge>}</span><h3><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link">{tool.namespace}.{tool.name}</EntityLink></h3><code>{tool.backend_kind === "mcp" ? `upstream · ${tool.upstream_tool_name}` : `${tool.http_method} · tool backend`}</code>{tool.state === "draft" && !tool.upstream_drifted && <Button outline className="publish-tool" onClick={() => onPublish(tool)}>Publish</Button>}{tool.upstream_drifted && <small className="drift-warning">Re-inspect and review before republishing.</small>}</div><button className="more" type="button" aria-label={`Actions for ${tool.name}`}><MoreHorizontal /></button></article>)}<button type="button" className="new-tool-card" onClick={onAdd}><Plus /><strong>Add API tool</strong><span>Definition → schema → API action → authz → test → publish</span></button></div></>;
 }
 
 
-function SettingsView({ product, versions, pins, identity, llmProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onConfigureIdentity, onConfigureLLM, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; identity: APIIdentity | null; llmProfiles: APILLMProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onConfigureIdentity: () => void; onConfigureLLM: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
+function SettingsView({ product, versions, pins, customerAccounts, identity, llmProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onConfigureIdentity, onConfigureLLM, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; customerAccounts: APICustomerAccount[]; identity: APIIdentity | null; llmProfiles: APILLMProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onConfigureIdentity: () => void; onConfigureLLM: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
   const activeRoots = rootUsers.filter((user) => !user.revoked_at);
-  const usageConfigured = Boolean(identity?.usage_hook_url);
   return <>
     <PageHeading eyebrow="Administration" title="Settings" description="Shared configuration for identity, customer data, service connections, and security." action={<Button outline onClick={onDoctor}><Activity data-slot="icon" />Run System Doctor</Button>} />
     <div className="settings-grid">
-      <button type="button" className="settings-button" onClick={onConfigureIdentity}><SettingsCard icon={<Users />} title="Identity & customer account data" detail={identity ? `OIDC configured · customer usage ${usageConfigured ? "configured" : "optional"}` : "Configure OIDC, authorization, and the optional usage endpoint"} status={identity ? "Configured" : "Required"} /></button>
+      <button type="button" className="settings-button" onClick={onConfigureIdentity}><SettingsCard icon={<Users />} title="Customer identity (optional)" detail={identity ? `OIDC ${identity.state} · ${customerAccounts.length} account${customerAccounts.length === 1 ? "" : "s"}` : "Configure delegated customer identity only when private access is needed"} status={identity ? identity.state : "Optional"} /></button>
       <button type="button" className="settings-button" onClick={() => onNavigate(sectionPath("projects"))}><SettingsCard icon={<KeyRound />} title="Service connections" detail="Encrypted vendor credentials shared explicitly with APIs" status="Manage" /></button>
       <button type="button" className="settings-button" onClick={() => onNavigate(sectionPath("reporting"))}><SettingsCard icon={<MessageSquareText />} title="Bug reports & feedback" detail="Consent-gated reporting policies and secure delivery endpoints" status="Manage" /></button>
       <SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted local object storage" status="Healthy" />
       <button type="button" className="settings-button" onClick={onConfigureLLM}><SettingsCard icon={<Bot />} title="LLM profiles & hardening" detail={`${llmProfiles.length} optional profile${llmProfiles.length === 1 ? "" : "s"} · model authority disabled`} status="Enforced" /></button>
       <SettingsCard icon={<ShieldCheck />} title="Root access" detail={`${activeRoots.length} MFA-protected administrator${activeRoots.length === 1 ? "" : "s"} · append-only audit`} status="Secure" />
     </div>
-    <section className="panel identity-contract"><div className="panel-heading"><div><h2>Customer account data</h2><p>Usage is fetched from the vendor only when an authenticated agent asks for it. Values are validated and proxied without storage.</p></div><Button onClick={onConfigureIdentity}>{identity ? "Configure" : "Get started"}</Button></div><div className="contract-grid"><span><small>Customer usage</small><strong>{usageConfigured ? "Available to Private MCP" : "Not configured"}</strong></span><span><small>Response</small><strong>Up to 50 customer-defined values</strong></span><span><small>Examples</small><strong>Used · Available · Renewal · Trial</strong></span><span><small>Storage</small><strong>Never stored</strong></span></div><details className="advanced-details inline-advanced"><summary>Identity and endpoint details</summary><div className="contract-grid"><span><small>Vendor issuer</small><code>{identity?.issuer ?? "Not configured"}</code></span><span><small>Installation claim</small><code>{identity?.installation_claim || "Not configured"}</code></span><span><small>Authorization endpoint</small><code>{identity?.authorization_hook_url || identity?.entitlement_hook_url || "Not configured"}</code></span><span><small>Usage endpoint</small><code>{identity?.usage_hook_url || "Not configured"}</code></span></div></details></section>
+    <section className="panel identity-contract"><div className="panel-heading"><div><h2>Customer identity contract</h2><p>The optional OIDC organisation claim resolves to a durable internal account. Suspended accounts and a disabled identity provider fail closed immediately.</p></div><Button onClick={onConfigureIdentity}>{identity ? "Configure" : "Get started"}</Button></div><div className="contract-grid"><span><small>Customer accounts</small><strong>{customerAccounts.length}</strong></span><span><small>Active</small><strong>{customerAccounts.filter((account) => account.state === "active").length}</strong></span><span><small>Access evaluation</small><strong>POST /v1/access/evaluations</strong></span><span><small>Tool identity</small><strong>Delegated user token</strong></span></div><details className="advanced-details inline-advanced"><summary>Identity and API details</summary><div className="contract-grid"><span><small>OIDC issuer</small><code>{identity?.issuer ?? "Not configured"}</code></span><span><small>Organisation claim</small><code>{identity?.organisation_claim || "Not configured"}</code></span><span><small>Installation claim</small><code>{identity?.installation_claim || "Not configured"}</code></span><span><small>Delegated API origin</small><code>{identity?.delegated_api_origin || "Not configured"}</code></span></div></details></section>
     <details className="panel advanced-details"><summary>Advanced publishing</summary><div className="advanced-details-body"><div className="panel-heading"><div><h2>Publishing snapshots</h2><p>Immutable compatibility snapshots and scoped pins are retained for deterministic delivery. Most teams do not need to manage these directly.</p></div><Button outline onClick={onConfigureProduct}>Open advanced publishing</Button></div><div className="activity-summary"><span>{versions.length} published snapshot{versions.length === 1 ? "" : "s"}</span><span>{pins.length} scoped pin{pins.length === 1 ? "" : "s"}</span><span>Default {product.default_version_policy.toUpperCase()}</span></div></div></details>
     <section className="panel root-management"><div className="panel-heading"><div><h2>Root administrators</h2><p>Root access is independent from vendor identities and always requires MFA.</p></div><Button onClick={onAddRoot}><Plus data-slot="icon" />Add root</Button></div>{rootUsers.map((user) => <div className="root-row" key={user.id}><span className="avatar">{user.display_name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><span><EntityLink entity="root-user" uid={user.id} onNavigate={onNavigate} className="entity-link"><strong>{user.display_name}</strong></EntityLink><small>{user.email}</small></span><Badge color={user.revoked_at ? "zinc" : "green"}>{user.revoked_at ? "Revoked" : "MFA active"}</Badge>{!user.revoked_at && user.id !== currentUser?.id ? <Button outline onClick={() => onRevokeRoot(user)}>Revoke</Button> : <span />}</div>)}</section>
   </>;

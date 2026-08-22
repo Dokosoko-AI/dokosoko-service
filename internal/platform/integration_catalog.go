@@ -83,6 +83,8 @@ type IntegrationInput struct {
 	VersionKey               string
 	DisplayName              string
 	Description              string
+	Visibility               model.Visibility
+	AcknowledgePublic        bool
 	Lifecycle                string
 	ReplacementIntegrationID string
 	SunsetAt                 *time.Time
@@ -101,6 +103,12 @@ func normalizeIntegrationInput(input IntegrationInput) (IntegrationInput, error)
 	}
 	if input.DisplayName == "" || len(input.DisplayName) > 120 || len(input.Description) > 2000 {
 		return input, errors.New("integration display name or description is invalid")
+	}
+	if input.Visibility == "" {
+		input.Visibility = model.VisibilityPrivate
+	}
+	if !input.Visibility.Valid() {
+		return input, ErrInvalidVisibility
 	}
 	if input.Lifecycle == "" {
 		input.Lifecycle = "draft"
@@ -130,15 +138,18 @@ func (s *Service) CreateIntegration(ctx context.Context, input IntegrationInput,
 			return model.Integration{}, errors.New("replacement integration does not exist in this deployment")
 		}
 	}
+	if input.Visibility == model.VisibilityPublic && !input.AcknowledgePublic {
+		return model.Integration{}, ErrConfirmationRequired
+	}
 	id, err := randomUUID()
 	if err != nil {
 		return model.Integration{}, err
 	}
-	value, err := s.store.CreateIntegration(ctx, model.Integration{ID: id, DeploymentID: deployment.ID, OrganisationID: deployment.OrganisationID, FamilyKey: input.FamilyKey, VersionKey: input.VersionKey, DisplayName: input.DisplayName, Description: input.Description, Lifecycle: input.Lifecycle, ReplacementIntegrationID: input.ReplacementIntegrationID, SunsetAt: input.SunsetAt})
+	value, err := s.store.CreateIntegration(ctx, model.Integration{ID: id, DeploymentID: deployment.ID, OrganisationID: deployment.OrganisationID, FamilyKey: input.FamilyKey, VersionKey: input.VersionKey, DisplayName: input.DisplayName, Description: input.Description, Visibility: input.Visibility, Lifecycle: input.Lifecycle, ReplacementIntegrationID: input.ReplacementIntegrationID, SunsetAt: input.SunsetAt})
 	if err != nil {
 		return model.Integration{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.created", TargetType: "integration", TargetID: value.ID, Current: map[string]any{"family_key": value.FamilyKey, "version_key": value.VersionKey, "lifecycle": value.Lifecycle}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.created", TargetType: "integration", TargetID: value.ID, Current: map[string]any{"family_key": value.FamilyKey, "version_key": value.VersionKey, "visibility": value.Visibility, "lifecycle": value.Lifecycle}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, nil
 }
 
@@ -151,6 +162,9 @@ func (s *Service) UpdateIntegration(ctx context.Context, integrationID string, i
 	if err != nil {
 		return model.Integration{}, err
 	}
+	if input.Visibility == "" {
+		input.Visibility = current.Visibility
+	}
 	input, err = normalizeIntegrationInput(input)
 	if err != nil {
 		return model.Integration{}, err
@@ -158,18 +172,21 @@ func (s *Service) UpdateIntegration(ctx context.Context, integrationID string, i
 	if input.ReplacementIntegrationID == integrationID {
 		return model.Integration{}, errors.New("an integration cannot replace itself")
 	}
+	if current.Visibility != model.VisibilityPublic && input.Visibility == model.VisibilityPublic && !input.AcknowledgePublic {
+		return model.Integration{}, ErrConfirmationRequired
+	}
 	if input.ReplacementIntegrationID != "" {
 		if _, err := s.store.Integration(ctx, deployment.ID, input.ReplacementIntegrationID); err != nil {
 			return model.Integration{}, errors.New("replacement integration does not exist in this deployment")
 		}
 	}
 	current.FamilyKey, current.VersionKey, current.DisplayName, current.Description = input.FamilyKey, input.VersionKey, input.DisplayName, input.Description
-	current.Lifecycle, current.ReplacementIntegrationID, current.SunsetAt = input.Lifecycle, input.ReplacementIntegrationID, input.SunsetAt
+	current.Visibility, current.Lifecycle, current.ReplacementIntegrationID, current.SunsetAt = input.Visibility, input.Lifecycle, input.ReplacementIntegrationID, input.SunsetAt
 	updated, err := s.store.UpdateIntegration(ctx, current, input.Revision)
 	if err != nil {
 		return model.Integration{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.updated", TargetType: "integration", TargetID: updated.ID, Current: map[string]any{"family_key": updated.FamilyKey, "version_key": updated.VersionKey, "lifecycle": updated.Lifecycle, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.updated", TargetType: "integration", TargetID: updated.ID, Current: map[string]any{"family_key": updated.FamilyKey, "version_key": updated.VersionKey, "visibility": updated.Visibility, "lifecycle": updated.Lifecycle, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return updated, nil
 }
 
@@ -270,8 +287,8 @@ func normalizeResourceSetInput(input ResourceSetInput) (ResourceSetInput, error)
 	if input.Name == "" || len(input.Name) > 120 || len(input.Description) > 2000 {
 		return input, errors.New("resource set name or description is invalid")
 	}
-	if input.Kind != "documentation" && input.Kind != "package" && input.Kind != "hook" {
-		return input, errors.New("resource set kind must be documentation, package, or hook")
+	if input.Kind != "documentation" && input.Kind != "api" {
+		return input, errors.New("resource set kind must be documentation or api")
 	}
 	if input.State == "" {
 		input.State = "active"
@@ -420,6 +437,7 @@ type IntegrationPublishStatus struct {
 type integrationResourceSnapshot struct {
 	SetID       string `json:"set_id"`
 	Kind        string `json:"kind"`
+	Name        string `json:"name"`
 	RevisionID  string `json:"revision_id"`
 	Revision    int64  `json:"revision"`
 	ContentHash string `json:"content_hash"`
@@ -430,6 +448,7 @@ type integrationSnapshot struct {
 	VersionKey               string                        `json:"version_key"`
 	DisplayName              string                        `json:"display_name"`
 	Description              string                        `json:"description"`
+	Visibility               model.Visibility              `json:"visibility"`
 	Lifecycle                string                        `json:"lifecycle"`
 	ReplacementIntegrationID string                        `json:"replacement_integration_id,omitempty"`
 	SunsetAt                 *time.Time                    `json:"sunset_at,omitempty"`
@@ -446,7 +465,7 @@ func buildIntegrationSnapshot(integration model.Integration) (json.RawMessage, [
 			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "resource_revision_unresolved", Message: fmt.Sprintf("%s has no resolvable revision", link.Name), Tab: "resources"})
 			continue
 		}
-		resources = append(resources, integrationResourceSnapshot{SetID: link.ResourceSetID, Kind: link.Kind, RevisionID: link.ResolvedRevision.ID, Revision: link.ResolvedRevision.Revision, ContentHash: link.ResolvedRevision.ContentHash})
+		resources = append(resources, integrationResourceSnapshot{SetID: link.ResourceSetID, Kind: link.Kind, Name: link.Name, RevisionID: link.ResolvedRevision.ID, Revision: link.ResolvedRevision.Revision, ContentHash: link.ResolvedRevision.ContentHash})
 	}
 	sort.Slice(resources, func(i, j int) bool {
 		if resources[i].Kind == resources[j].Kind {
@@ -455,7 +474,7 @@ func buildIntegrationSnapshot(integration model.Integration) (json.RawMessage, [
 		return resources[i].Kind < resources[j].Kind
 	})
 	if len(integration.Resources) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation, package, or tool-backend set is attached.", Tab: "resources"})
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation or API set is attached.", Tab: "resources"})
 	}
 	if len(integration.AccessConnections) == 0 {
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No service connection is attached.", Tab: "access"})
@@ -463,7 +482,7 @@ func buildIntegrationSnapshot(integration model.Integration) (json.RawMessage, [
 	if integration.SupportRouteID == "" {
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "support_inherited", Message: "Bug reports and feedback use the deployment default, if one is configured.", Tab: "overview"})
 	}
-	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
+	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
 	return snapshot, validations, err
 }
 
@@ -471,7 +490,7 @@ func publishChanges(previous, current json.RawMessage) []IntegrationPublishChang
 	var before, after map[string]any
 	_ = json.Unmarshal(previous, &before)
 	_ = json.Unmarshal(current, &after)
-	fields := []string{"family_key", "version_key", "display_name", "description", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "access_connection_ids", "support_route_id"}
+	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "access_connection_ids", "support_route_id"}
 	changes := make([]IntegrationPublishChange, 0)
 	for _, field := range fields {
 		beforeJSON, _ := json.Marshal(before[field])

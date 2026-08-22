@@ -275,9 +275,6 @@ h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: -.035em; }
 .filter-tabs button.active { color: #27272a; background: white; box-shadow: 0 1px 2px rgba(0,0,0,.09); }
 .resource-columns { grid-template-columns: minmax(260px, 1.5fr) minmax(130px, .8fr) minmax(210px, .85fr) 30px; }
 .source-columns { grid-template-columns: minmax(250px, 1.4fr) minmax(140px, .8fr) minmax(90px, .5fr) minmax(190px, .8fr) minmax(30px, auto); }
-.package-columns { grid-template-columns: minmax(220px, 1.3fr) minmax(96px, .55fr) minmax(105px, .65fr) minmax(180px, .8fr) 104px; }
-.package-columns > * { min-width: 0; }
-.package-columns .table-actions { width: 104px; }
 .table-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .table-actions .button { min-height: 28px; padding-inline: 9px; font-size: 9px; }
 .empty-row { display: grid; place-items: center; min-height: 110px; color: #a1a1aa; font-size: 13px; }
@@ -740,8 +737,6 @@ h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: -.035em; }
   .metrics-grid { grid-template-columns: repeat(2, 1fr); }
   .source-columns { grid-template-columns: minmax(230px, 1.3fr) minmax(130px, .8fr) minmax(180px, .9fr) 30px; }
   .source-columns > span:nth-child(3) { display: none; }
-  .package-columns { grid-template-columns: minmax(210px, 1.3fr) minmax(105px, .7fr) minmax(170px, .9fr) 104px; }
-  .package-columns > span:nth-child(2) { display: none; }
   .mcp-connection-row { grid-template-columns: 42px minmax(220px, 1fr) auto; }
   .mcp-connection-row .connection-stat { display: none; }
   .definition-columns { grid-template-columns: 1fr; }
@@ -796,8 +791,8 @@ h1 { margin: 0; font-size: 30px; line-height: 1.2; letter-spacing: -.035em; }
 	.contract-grid > span { border-right: 0; border-bottom: 1px solid #eeeeef; }
   .summary-item { border-right: 0; border-bottom: 1px solid var(--line); }
   .summary-item:last-child { border-bottom: 0; }
-  .resource-columns, .source-columns, .package-columns { grid-template-columns: 1fr auto; }
-  .source-columns > span:nth-child(2), .package-columns > span:nth-child(3) { display: none; }
+  .resource-columns, .source-columns { grid-template-columns: 1fr auto; }
+  .source-columns > span:nth-child(2) { display: none; }
   .visibility-control { grid-column: 2; grid-row: 1; }
   .visibility-control .catalyst-badge { display: none; }
   .switch-stack small { display: none; }

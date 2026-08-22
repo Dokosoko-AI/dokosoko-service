@@ -17,7 +17,6 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
-	packagegateway "github.com/dokosoko/dokosoko-service/internal/packages"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
@@ -85,19 +84,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure secret vault: %w", err)
 	}
-	packageGateway := packagegateway.New(persistence, vault, packagegateway.Config{DataDirectory: env("DOKOSOKO_DATA_DIR", "./data")})
-	toolProxy := toolruntime.NewRuntime(persistence, vault, nil, nil)
+	toolProxy := toolruntime.NewRuntime(persistence, nil, nil)
 	mcpBridge := mcpbridge.New(persistence, vault, baseURL, nil, nil)
-	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil)
-	usageReporter := identity.NewHookUsage(persistence, vault)
+	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil, nil)
 	reportingService := reporting.New(persistence, vault)
-	toolProxy.SetAuthorizer(identity.NewHookAuthorization(persistence, vault))
 	toolProxy.SetMCPExecutor(mcpBridge)
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
 	accessProxy := accessruntime.New(persistence, vault, nil, nil)
 	handler := httpapi.NewWithOptions(platform.NewWithVault(persistence, vault), httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), PackageGateway: packageGateway, ToolRuntime: toolProxy, IdentityBroker: identityBroker, UsageReporter: usageReporter, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
+		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
 	})
 	workerCtx, stopReporting := context.WithCancel(context.Background())
 	defer stopReporting()

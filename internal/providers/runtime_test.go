@@ -34,7 +34,7 @@ func TestProviderContractCreatesProjectIssuesOnceAndRevokes(t *testing.T) {
 	memory := store.NewMemory()
 	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
 	service := platform.NewWithVault(memory, vault)
-	provider, err := service.CreateProvider(ctx, platform.ProviderInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Acme provider", BaseURL: "https://provider.example", Credential: "service-secret", RequiredEntitlements: []string{"developer.pro"}, MaxTTLSeconds: 3600}, platform.Actor{ID: "root"})
+	provider, err := service.CreateProvider(ctx, platform.ProviderInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Acme provider", BaseURL: "https://provider.example", Credential: "service-secret", RequiredGrants: []string{"developer.pro"}, MaxTTLSeconds: 3600}, platform.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestProviderContractCreatesProjectIssuesOnceAndRevokes(t *testing.T) {
 	runtime := providers.New(memory, vault, resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("8.8.8.8")}, nil
 	}), doer)
-	principal := providers.Principal{Subject: "issuer|subject", VendorOrganisation: "vendor-org", Entitlements: map[string]bool{"developer.pro": true}, RequestID: "request-1"}
+	principal := providers.Principal{Subject: "issuer|subject", ExternalCustomerID: "vendor-org", Grants: map[string]bool{"developer.pro": true}, RequestID: "request-1"}
 	project, err := runtime.CreateProject(ctx, "prod_acme", provider.ID, providers.ProjectRequest{EnvironmentID: "env_prod", Name: "SDK test", IdempotencyKey: "project-idempotency-0001", TTLSeconds: 1800}, principal)
 	if err != nil || project.ExternalID != "vendor-project-7" {
 		t.Fatalf("project = %#v, err = %v", project, err)
@@ -83,11 +83,11 @@ func TestProviderContractCreatesProjectIssuesOnceAndRevokes(t *testing.T) {
 	}
 }
 
-func TestProviderOperationsFailClosedOnEntitlementAndPrivateResolution(t *testing.T) {
+func TestProviderOperationsFailClosedOnGrantAndPrivateResolution(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()
 	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
-	provider, err := platform.NewWithVault(memory, vault).CreateProvider(ctx, platform.ProviderInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Provider", BaseURL: "https://provider.example", Credential: "service-secret", RequiredEntitlements: []string{"developer.pro"}}, platform.Actor{ID: "root"})
+	provider, err := platform.NewWithVault(memory, vault).CreateProvider(ctx, platform.ProviderInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Provider", BaseURL: "https://provider.example", Credential: "service-secret", RequiredGrants: []string{"developer.pro"}}, platform.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +95,10 @@ func TestProviderOperationsFailClosedOnEntitlementAndPrivateResolution(t *testin
 		return []net.IP{net.ParseIP("127.0.0.1")}, nil
 	}), doerFunc(func(*http.Request) (*http.Response, error) { t.Fatal("unsafe request executed"); return nil, nil }))
 	request := providers.ProjectRequest{EnvironmentID: "env_prod", Name: "test", IdempotencyKey: "project-idempotency-0002", TTLSeconds: 1800}
-	if _, err := runtime.CreateProject(ctx, "prod_acme", provider.ID, request, providers.Principal{Subject: "user", Entitlements: map[string]bool{}}); err == nil {
-		t.Fatal("missing entitlement was accepted")
+	if _, err := runtime.CreateProject(ctx, "prod_acme", provider.ID, request, providers.Principal{Subject: "user", Grants: map[string]bool{}}); err == nil {
+		t.Fatal("missing grant was accepted")
 	}
-	if _, err := runtime.CreateProject(ctx, "prod_acme", provider.ID, request, providers.Principal{Subject: "user", Entitlements: map[string]bool{"developer.pro": true}}); err == nil {
+	if _, err := runtime.CreateProject(ctx, "prod_acme", provider.ID, request, providers.Principal{Subject: "user", Grants: map[string]bool{"developer.pro": true}}); err == nil {
 		t.Fatal("private provider resolution was accepted")
 	}
 }

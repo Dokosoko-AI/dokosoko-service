@@ -72,9 +72,9 @@ type Runtime struct {
 
 type Principal struct {
 	Subject            string
-	VendorOrganisation string
+	ExternalCustomerID string
 	InstallationID     string
-	Entitlements       map[string]bool
+	Grants             map[string]bool
 	RequestID          string
 }
 
@@ -121,7 +121,7 @@ type operation struct {
 
 type definitionConfig struct {
 	Operations            map[string]operation
-	RequiredEntitlements  []string
+	RequiredGrants        []string
 	MaxTTLSeconds         int
 	CredentialStorageMode string
 }
@@ -156,8 +156,8 @@ func parseDefinition(value model.AccessDefinition) (definitionConfig, error) {
 	result := definitionConfig{Operations: make(map[string]operation), MaxTTLSeconds: 86400, CredentialStorageMode: "one_time"}
 	for key, encoded := range raw {
 		switch key {
-		case "required_entitlements":
-			_ = json.Unmarshal(encoded, &result.RequiredEntitlements)
+		case "required_grants":
+			_ = json.Unmarshal(encoded, &result.RequiredGrants)
 		case "max_ttl_seconds":
 			_ = json.Unmarshal(encoded, &result.MaxTTLSeconds)
 		case "credential_storage_mode":
@@ -186,8 +186,8 @@ func allowed(cfg definitionConfig, principal Principal) bool {
 	if principal.Subject == "" {
 		return false
 	}
-	for _, entitlement := range cfg.RequiredEntitlements {
-		if !principal.Entitlements[entitlement] {
+	for _, grant := range cfg.RequiredGrants {
+		if !principal.Grants[grant] {
 			return false
 		}
 	}
@@ -203,7 +203,7 @@ func contains(values []string, wanted string) bool {
 	return false
 }
 
-func (r *Runtime) Capabilities(ctx context.Context, deploymentID string, entitlements map[string]bool) []Capability {
+func (r *Runtime) Capabilities(ctx context.Context, deploymentID string, grants map[string]bool) []Capability {
 	connections, err := r.store.AccessConnections(ctx, deploymentID)
 	if err != nil {
 		return nil
@@ -214,7 +214,7 @@ func (r *Runtime) Capabilities(ctx context.Context, deploymentID string, entitle
 			continue
 		}
 		cfg, err := parseDefinition(*connection.Definition)
-		if err != nil || !allowed(cfg, Principal{Subject: "discovery", Entitlements: entitlements}) {
+		if err != nil || !allowed(cfg, Principal{Subject: "discovery", Grants: grants}) {
 			continue
 		}
 		_, createInstance := cfg.Operations["instances.create"]
@@ -462,7 +462,7 @@ func (r *Runtime) authorize(ctx context.Context, connection model.AccessConnecti
 	var response struct {
 		Allowed bool `json:"allowed"`
 	}
-	err := r.call(ctx, connection, definition, authorize, map[string]any{"operation": operationName, "subject": principal.Subject, "vendor_organisation_id": principal.VendorOrganisation, "installation_id": principal.InstallationID, "deployment_id": connection.DeploymentID, "details": details}, &response)
+	err := r.call(ctx, connection, definition, authorize, map[string]any{"operation": operationName, "subject": principal.Subject, "external_customer_id": principal.ExternalCustomerID, "installation_id": principal.InstallationID, "deployment_id": connection.DeploymentID, "details": details}, &response)
 	if errors.Is(err, ErrUnsafeDestination) {
 		return err
 	}
@@ -565,7 +565,7 @@ func ownsInstance(value model.AccessInstance, principal Principal) bool {
 	case "installation":
 		return value.OwnerID != "" && value.OwnerID == principal.InstallationID
 	case "organisation":
-		return value.OwnerID != "" && value.OwnerID == principal.VendorOrganisation
+		return value.OwnerID != "" && value.OwnerID == principal.ExternalCustomerID
 	default:
 		return false
 	}

@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
@@ -59,26 +58,33 @@ func NewWithVaultAndProductBuilderDoer(storage store.Store, vault *secretvault.V
 func (s *Service) Store() store.Store { return s.store }
 
 type IdentityInput struct {
-	OrganisationID          string
-	ProductID               string
-	Issuer                  string
-	ClientID                string
-	ClientSecret            string
-	Scopes                  []string
-	Audience                string
-	OrganisationClaim       string
-	InstallationClaim       string
-	EntitlementHookURL      string
-	AllowedRedirectURIs     []string
-	AuthorizationHookURL    string
-	AuthorizationCredential string
-	UsageHookURL            string
-	UsageCredential         string
+	DeploymentID       string
+	Issuer             string
+	ClientID           string
+	ClientSecret       string
+	Scopes             []string
+	Audience           string
+	OAuthResource      string
+	OrganisationClaim  string
+	InstallationClaim  string
+	DelegatedAPIOrigin string
+	State              string
+	Revision           int64
 }
 
 func validHTTPSOrigin(raw string) bool {
 	parsed, err := url.Parse(raw)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == "" && parsed.Port() == ""
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == "" && parsed.RawQuery == "" && parsed.Port() == ""
+}
+
+func validHTTPSBaseOrigin(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Port() == ""
+}
+
+func validHTTPSURI(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
 }
 
 func validOAuthRedirect(raw string) bool {
@@ -89,23 +95,28 @@ func validOAuthRedirect(raw string) bool {
 	return parsed.Scheme == "https" || (parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"))
 }
 
-func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, actor Actor) (identity.VendorConfig, error) {
-	input.OrganisationID, input.ProductID = strings.TrimSpace(input.OrganisationID), strings.TrimSpace(input.ProductID)
+func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, actor Actor) (identity.ProviderConfig, error) {
+	input.DeploymentID = strings.TrimSpace(input.DeploymentID)
 	input.Issuer, input.ClientID, input.ClientSecret = strings.TrimRight(strings.TrimSpace(input.Issuer), "/"), strings.TrimSpace(input.ClientID), strings.TrimSpace(input.ClientSecret)
-	input.Audience, input.OrganisationClaim, input.InstallationClaim, input.EntitlementHookURL = strings.TrimSpace(input.Audience), strings.TrimSpace(input.OrganisationClaim), strings.TrimSpace(input.InstallationClaim), strings.TrimSpace(input.EntitlementHookURL)
-	input.AuthorizationHookURL, input.AuthorizationCredential = strings.TrimSpace(input.AuthorizationHookURL), strings.TrimSpace(input.AuthorizationCredential)
-	input.UsageHookURL, input.UsageCredential = strings.TrimSpace(input.UsageHookURL), strings.TrimSpace(input.UsageCredential)
-	if input.OrganisationID == "" || input.ProductID == "" || input.ClientID == "" || !validHTTPSOrigin(input.Issuer) {
-		return identity.VendorConfig{}, errors.New("organisation, product, HTTPS OIDC issuer, and client ID are required")
+	input.Audience, input.OAuthResource = strings.TrimSpace(input.Audience), strings.TrimSpace(input.OAuthResource)
+	input.OrganisationClaim, input.InstallationClaim = strings.TrimSpace(input.OrganisationClaim), strings.TrimSpace(input.InstallationClaim)
+	input.DelegatedAPIOrigin = strings.TrimRight(strings.TrimSpace(input.DelegatedAPIOrigin), "/")
+	input.State = strings.ToLower(strings.TrimSpace(input.State))
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return identity.ProviderConfig{}, err
 	}
-	if input.EntitlementHookURL != "" && !validHTTPSOrigin(input.EntitlementHookURL) {
-		return identity.VendorConfig{}, errors.New("entitlement hook must be a fixed HTTPS URL on the default port")
+	if input.DeploymentID != deployment.ID || input.ClientID == "" || !validHTTPSOrigin(input.Issuer) {
+		return identity.ProviderConfig{}, errors.New("deployment, HTTPS OIDC issuer, and client ID are required")
 	}
-	if input.AuthorizationHookURL != "" && !validHTTPSOrigin(input.AuthorizationHookURL) {
-		return identity.VendorConfig{}, errors.New("authorization hook must be a fixed HTTPS URL on the default port")
+	if !validHTTPSBaseOrigin(input.DelegatedAPIOrigin) || (input.OAuthResource != "" && !validHTTPSURI(input.OAuthResource)) {
+		return identity.ProviderConfig{}, errors.New("delegated API origin and OAuth resource must be credential-free HTTPS URLs")
 	}
-	if input.UsageHookURL != "" && !validHTTPSOrigin(input.UsageHookURL) {
-		return identity.VendorConfig{}, errors.New("usage hook must be a fixed HTTPS URL on the default port")
+	if input.State == "" {
+		input.State = "active"
+	}
+	if input.State != "active" && input.State != "disabled" {
+		return identity.ProviderConfig{}, errors.New("identity provider state must be active or disabled")
 	}
 	if input.OrganisationClaim == "" {
 		input.OrganisationClaim = "org_id"
@@ -125,101 +136,78 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 	if !seenScopes["openid"] {
 		scopes = append([]string{"openid"}, scopes...)
 	}
-	if len(input.AllowedRedirectURIs) == 0 || len(input.AllowedRedirectURIs) > 20 {
-		return identity.VendorConfig{}, errors.New("at least one and no more than 20 OAuth redirect URIs are required")
+	current, currentErr := s.store.IdentityProvider(ctx, input.DeploymentID)
+	if currentErr != nil && !errors.Is(currentErr, store.ErrNotFound) {
+		return identity.ProviderConfig{}, currentErr
 	}
-	redirects := make([]string, 0, len(input.AllowedRedirectURIs))
-	seenRedirects := map[string]bool{}
-	for _, redirect := range input.AllowedRedirectURIs {
-		redirect = strings.TrimSpace(redirect)
-		if !validOAuthRedirect(redirect) {
-			return identity.VendorConfig{}, errors.New("redirect URIs must use HTTPS, except exact localhost development callbacks")
-		}
-		if !seenRedirects[redirect] {
-			seenRedirects[redirect] = true
-			redirects = append(redirects, redirect)
-		}
-	}
-	current, currentErr := s.store.VendorIdentity(ctx, input.ProductID)
-	config := identity.VendorConfig{OrganisationID: input.OrganisationID, ProductID: input.ProductID, Issuer: input.Issuer, ClientID: input.ClientID, Scopes: scopes, Audience: input.Audience, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, EntitlementHookURL: input.EntitlementHookURL, AllowedRedirectURIs: redirects, AuthorizationHookURL: input.AuthorizationHookURL, UsageHookURL: input.UsageHookURL}
+	config := identity.ProviderConfig{OrganisationID: deployment.OrganisationID, DeploymentID: input.DeploymentID, Issuer: input.Issuer, ClientID: input.ClientID, Scopes: scopes, Audience: input.Audience, OAuthResource: input.OAuthResource, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, DelegatedAPIOrigin: input.DelegatedAPIOrigin, State: input.State, Revision: input.Revision}
 	if currentErr == nil {
-		config.ID, config.ClientSecretID, config.AuthorizationCredentialID, config.UsageCredentialID = current.ID, current.ClientSecretID, current.AuthorizationCredentialID, current.UsageCredentialID
+		if input.Revision != current.Revision {
+			return identity.ProviderConfig{}, store.ErrConflict
+		}
+		config.ID, config.ClientSecretID = current.ID, current.ClientSecretID
+		if (current.Issuer != config.Issuer || current.ClientID != config.ClientID) && input.ClientSecret == "" {
+			return identity.ProviderConfig{}, errors.New("changing the OIDC issuer or client ID requires a new client secret")
+		}
 	} else {
-		var err error
+		if input.Revision != 0 {
+			return identity.ProviderConfig{}, store.ErrConflict
+		}
 		config.ID, err = randomUUID()
 		if err != nil {
-			return identity.VendorConfig{}, err
+			return identity.ProviderConfig{}, err
 		}
 	}
 	if input.ClientSecret != "" {
 		if s.vault == nil {
-			return identity.VendorConfig{}, errors.New("identity credential encryption is not configured")
+			return identity.ProviderConfig{}, errors.New("identity credential encryption is not configured")
 		}
 		secretID, err := randomUUID()
 		if err != nil {
-			return identity.VendorConfig{}, err
+			return identity.ProviderConfig{}, err
 		}
-		encrypted, err := s.vault.Encrypt([]byte(input.ClientSecret), input.OrganisationID+":idp:"+secretID)
+		encrypted, err := s.vault.Encrypt([]byte(input.ClientSecret), deployment.OrganisationID+":idp:"+secretID)
 		if err != nil {
-			return identity.VendorConfig{}, err
+			return identity.ProviderConfig{}, err
 		}
-		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: secretID, OrganisationID: input.OrganisationID, Name: "vendor-oidc-" + input.ProductID, Purpose: "vendor_oidc_client", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
-			return identity.VendorConfig{}, err
+		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: secretID, OrganisationID: deployment.OrganisationID, Name: "identity-provider-oidc-" + input.DeploymentID, Purpose: "identity_provider_oidc_client", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
+			return identity.ProviderConfig{}, err
 		}
 		config.ClientSecretID = secretID
 	}
 	if config.ClientSecretID == "" {
-		return identity.VendorConfig{}, errors.New("OIDC client secret is required for initial configuration")
+		return identity.ProviderConfig{}, errors.New("OIDC client secret is required for initial configuration")
 	}
-	if input.AuthorizationHookURL == "" {
-		config.AuthorizationCredentialID = ""
-	} else if input.AuthorizationCredential != "" {
-		if s.vault == nil {
-			return identity.VendorConfig{}, errors.New("authorization credential encryption is not configured")
-		}
-		authorizationSecretID, err := randomUUID()
-		if err != nil {
-			return identity.VendorConfig{}, err
-		}
-		encrypted, err := s.vault.Encrypt([]byte(input.AuthorizationCredential), input.OrganisationID+":authorization:"+authorizationSecretID)
-		if err != nil {
-			return identity.VendorConfig{}, err
-		}
-		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: authorizationSecretID, OrganisationID: input.OrganisationID, Name: "vendor-authorization-" + authorizationSecretID, Purpose: "vendor_authorization", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
-			return identity.VendorConfig{}, err
-		}
-		config.AuthorizationCredentialID = authorizationSecretID
-	}
-	if input.AuthorizationHookURL != "" && config.AuthorizationCredentialID == "" {
-		return identity.VendorConfig{}, errors.New("authorization hook credential is required")
-	}
-	if input.UsageHookURL == "" {
-		config.UsageCredentialID = ""
-	} else if input.UsageCredential != "" {
-		if s.vault == nil {
-			return identity.VendorConfig{}, errors.New("usage credential encryption is not configured")
-		}
-		usageSecretID, err := randomUUID()
-		if err != nil {
-			return identity.VendorConfig{}, err
-		}
-		encrypted, err := s.vault.Encrypt([]byte(input.UsageCredential), input.OrganisationID+":usage:"+usageSecretID)
-		if err != nil {
-			return identity.VendorConfig{}, err
-		}
-		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: usageSecretID, OrganisationID: input.OrganisationID, Name: "vendor-usage-" + usageSecretID, Purpose: "vendor_usage", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
-			return identity.VendorConfig{}, err
-		}
-		config.UsageCredentialID = usageSecretID
-	}
-	if input.UsageHookURL != "" && config.UsageCredentialID == "" {
-		return identity.VendorConfig{}, errors.New("usage hook credential is required")
-	}
-	updated, err := s.store.SaveVendorIdentity(ctx, config)
+	updated, err := s.store.SaveIdentityProvider(ctx, config)
 	if err != nil {
-		return identity.VendorConfig{}, err
+		return identity.ProviderConfig{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "identity.vendor.configured", TargetType: "vendor_identity_provider", TargetID: updated.ID, Current: map[string]any{"issuer": updated.Issuer, "scopes": updated.Scopes, "organisation_claim": updated.OrganisationClaim, "installation_claim": updated.InstallationClaim, "redirect_count": len(updated.AllowedRedirectURIs), "entitlement_hook": updated.EntitlementHookURL != "", "authorization_hook": updated.AuthorizationHookURL != "", "usage_hook": updated.UsageHookURL != "", "credential_rotated": input.ClientSecret != "", "authorization_credential_rotated": input.AuthorizationCredential != "", "usage_credential_rotated": input.UsageCredential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "identity_provider.configured", TargetType: "identity_provider", TargetID: updated.ID, Current: map[string]any{"issuer": updated.Issuer, "scopes": updated.Scopes, "oauth_resource": updated.OAuthResource, "delegated_api_origin": updated.DelegatedAPIOrigin, "state": updated.State, "credential_rotated": input.ClientSecret != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return updated, nil
+}
+
+func (s *Service) UpdateCustomerAccountState(ctx context.Context, productID, accountID, state string, revision int64, actor Actor) (identity.CustomerAccount, error) {
+	state = strings.ToLower(strings.TrimSpace(state))
+	if state != "active" && state != "suspended" {
+		return identity.CustomerAccount{}, errors.New("customer account state must be active or suspended")
+	}
+	current, err := s.store.CustomerAccount(ctx, productID, accountID)
+	if err != nil {
+		return identity.CustomerAccount{}, err
+	}
+	if current.State == state {
+		if current.Revision != revision {
+			return identity.CustomerAccount{}, store.ErrConflict
+		}
+		return current, nil
+	}
+	prior := current.State
+	current.State = state
+	updated, err := s.store.UpdateCustomerAccount(ctx, current, revision)
+	if err != nil {
+		return identity.CustomerAccount{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "customer_account.state.changed", TargetType: "customer_account", TargetID: updated.ID, Prior: map[string]any{"state": prior}, Current: map[string]any{"state": state}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return updated, nil
 }
 
@@ -307,7 +295,7 @@ func (s *Service) CreateSource(ctx context.Context, organisationID, productID, n
 	if name == "" || len(name) > 120 || location == "" || len(location) > 2048 {
 		return model.Source{}, errors.New("source name and location are required")
 	}
-	allowedKinds := map[string]bool{"website": true, "openapi": true, "git": true, "upload": true, "sdk": true, "package_metadata": true}
+	allowedKinds := map[string]bool{"website": true, "openapi": true, "git": true, "upload": true}
 	if !allowedKinds[kind] {
 		return model.Source{}, errors.New("unsupported source kind")
 	}
@@ -346,107 +334,6 @@ func (s *Service) QueueCrawl(ctx context.Context, productID, sourceID string, ac
 	return job, err
 }
 
-type PackageInput struct {
-	OrganisationID    string
-	ProductID         string
-	Name              string
-	Ecosystem         string
-	Version           string
-	ExternalPackageID string
-	Mode              string
-	UpstreamURL       string
-	DownloadURL       string
-	Credential        string
-	ChecksumSHA256    string
-	ExpectedSize      int64
-}
-
-func (s *Service) CreatePackage(ctx context.Context, input PackageInput, actor Actor) (model.Package, error) {
-	input.Name, input.Version, input.ExternalPackageID = strings.TrimSpace(input.Name), strings.TrimSpace(input.Version), strings.TrimSpace(input.ExternalPackageID)
-	input.Ecosystem, input.Mode = strings.ToLower(strings.TrimSpace(input.Ecosystem)), strings.ToLower(strings.TrimSpace(input.Mode))
-	if input.Name == "" || input.Version == "" || len(input.Name) > 240 || len(input.Version) > 120 {
-		return model.Package{}, errors.New("package name and version are required")
-	}
-	ecosystems := map[string]bool{"npm": true, "go": true, "git": true, "maven": true, "android": true, "swift": true, "nuget": true}
-	if !ecosystems[input.Ecosystem] || (input.Mode != "public" && input.Mode != "proxy" && input.Mode != "download") {
-		return model.Package{}, errors.New("unsupported package ecosystem or delivery mode")
-	}
-	upstreamURL, downloadURL := strings.TrimSpace(input.UpstreamURL), strings.TrimSpace(input.DownloadURL)
-	switch input.Mode {
-	case "public":
-		if downloadURL != "" || input.ExternalPackageID != "" || strings.TrimSpace(input.Credential) != "" {
-			return model.Package{}, errors.New("public packages accept only upstream_url delivery configuration")
-		}
-	case "proxy":
-		if downloadURL != "" || input.ExternalPackageID != "" {
-			return model.Package{}, errors.New("proxy packages accept only upstream_url and credential delivery configuration")
-		}
-	case "download":
-		if upstreamURL != "" {
-			return model.Package{}, errors.New("download packages accept only download_url, external_package_id, and credential delivery configuration")
-		}
-		if input.ExternalPackageID == "" || utf8.RuneCountInString(input.ExternalPackageID) > 200 {
-			return model.Package{}, errors.New("external_package_id is required for download packages and cannot exceed 200 characters")
-		}
-	}
-	endpoint := upstreamURL
-	if input.Mode == "download" {
-		endpoint = downloadURL
-	}
-	parsed, parseErr := url.Parse(endpoint)
-	if parseErr != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.RawPath != "" || (parsed.Port() != "" && parsed.Port() != "443") {
-		return model.Package{}, errors.New("package delivery endpoints must use credential-free HTTPS URLs")
-	}
-	if input.Mode == "download" && parsed.Path != "/v1/package/download" {
-		return model.Package{}, errors.New("download_url must use the fixed /v1/package/download path")
-	}
-	if input.ExpectedSize < 0 || input.ExpectedSize > 1<<30 {
-		return model.Package{}, errors.New("expected package size must be between 0 and 1 GiB")
-	}
-	if input.Mode != "public" {
-		if parseErr != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-			return model.Package{}, errors.New("proxy and download endpoints must use credential-free HTTPS URLs")
-		}
-		if strings.TrimSpace(input.Credential) == "" || s.vault == nil {
-			return model.Package{}, errors.New("credential encryption is required for proxy and download packages")
-		}
-	}
-	var checksum []byte
-	if value := strings.TrimSpace(input.ChecksumSHA256); value != "" {
-		decoded, err := hex.DecodeString(value)
-		if err != nil || len(decoded) != sha256.Size {
-			return model.Package{}, errors.New("checksum_sha256 must be a 64-character hexadecimal SHA-256 digest")
-		}
-		checksum = decoded
-	}
-	packageID, err := randomUUID()
-	if err != nil {
-		return model.Package{}, err
-	}
-	credentialID := ""
-	if input.Mode != "public" {
-		credentialID, err = randomUUID()
-		if err != nil {
-			return model.Package{}, err
-		}
-		associatedData := input.OrganisationID + ":package:" + credentialID
-		encrypted, err := s.vault.Encrypt([]byte(input.Credential), associatedData)
-		if err != nil {
-			return model.Package{}, err
-		}
-		_, err = s.store.CreateSecret(ctx, model.Secret{ID: credentialID, OrganisationID: input.OrganisationID, Name: "package-" + packageID, Purpose: "package_upstream", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
-		if err != nil {
-			return model.Package{}, err
-		}
-	}
-	value, err := s.store.CreatePackage(ctx, model.Package{ID: packageID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, ExternalPackageID: input.ExternalPackageID, Mode: input.Mode, Location: upstreamURL, DownloadURL: downloadURL, CredentialID: credentialID, ChecksumSHA256: checksum, ExpectedSize: input.ExpectedSize, Visibility: model.VisibilityPrivate})
-	if err != nil {
-		return model.Package{}, err
-	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "package.created", TargetType: "package", TargetID: value.ID, Current: map[string]any{"name": value.Name, "ecosystem": value.Ecosystem, "mode": value.Mode, "external_package_id": value.ExternalPackageID, "visibility": model.VisibilityPrivate, "credential_stored": credentialID != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
-	return value, err
-}
-
 type ToolInput struct {
 	OrganisationID      string
 	ProductID           string
@@ -455,21 +342,20 @@ type ToolInput struct {
 	Description         string
 	InputSchema         json.RawMessage
 	OutputSchema        json.RawMessage
-	APIHookURL          string
+	Endpoint            string
 	HTTPMethod          string
-	Credential          string
 	AuthorizationPolicy json.RawMessage
 	TimeoutMS           int
 }
 
 type ProviderInput struct {
-	OrganisationID       string
-	ProductID            string
-	Name                 string
-	BaseURL              string
-	Credential           string
-	RequiredEntitlements []string
-	MaxTTLSeconds        int
+	OrganisationID string
+	ProductID      string
+	Name           string
+	BaseURL        string
+	Credential     string
+	RequiredGrants []string
+	MaxTTLSeconds  int
 }
 
 func (s *Service) CreateProvider(ctx context.Context, input ProviderInput, actor Actor) (model.Provider, error) {
@@ -498,16 +384,16 @@ func (s *Service) CreateProvider(ctx context.Context, input ProviderInput, actor
 	if _, err := s.store.CreateSecret(ctx, model.Secret{ID: secretID, OrganisationID: input.OrganisationID, Name: "provider-" + providerID, Purpose: "provider_api", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
 		return model.Provider{}, err
 	}
-	entitlements := make([]string, 0, len(input.RequiredEntitlements))
+	grants := make([]string, 0, len(input.RequiredGrants))
 	seen := map[string]bool{}
-	for _, entitlement := range input.RequiredEntitlements {
-		entitlement = strings.TrimSpace(entitlement)
-		if entitlement != "" && !seen[entitlement] {
-			seen[entitlement] = true
-			entitlements = append(entitlements, entitlement)
+	for _, grant := range input.RequiredGrants {
+		grant = strings.TrimSpace(grant)
+		if grant != "" && !seen[grant] {
+			seen[grant] = true
+			grants = append(grants, grant)
 		}
 	}
-	config, _ := json.Marshal(map[string]any{"contract_version": "2026-08-01", "authorize_path": "/v1/authorize", "project_path": "/v1/projects", "credential_path": "/v1/credentials", "revoke_path": "/v1/credentials/{credential_id}/revoke", "required_entitlements": entitlements, "max_ttl_seconds": input.MaxTTLSeconds})
+	config, _ := json.Marshal(map[string]any{"contract_version": "2026-08-01", "authorize_path": "/v1/authorize", "project_path": "/v1/projects", "credential_path": "/v1/credentials", "revoke_path": "/v1/credentials/{credential_id}/revoke", "required_grants": grants, "max_ttl_seconds": input.MaxTTLSeconds})
 	value, err := s.store.CreateProvider(ctx, model.Provider{ID: providerID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Kind: "remote", BaseURL: input.BaseURL, CredentialID: secretID, Config: config})
 	if err != nil {
 		return model.Provider{}, err
@@ -593,7 +479,7 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 
 func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) (model.Tool, error) {
 	input.Namespace, input.Name = strings.ToLower(strings.TrimSpace(input.Namespace)), strings.ToLower(strings.TrimSpace(input.Name))
-	input.Description, input.HTTPMethod, input.APIHookURL = strings.TrimSpace(input.Description), strings.ToUpper(strings.TrimSpace(input.HTTPMethod)), strings.TrimSpace(input.APIHookURL)
+	input.Description, input.HTTPMethod, input.Endpoint = strings.TrimSpace(input.Description), strings.ToUpper(strings.TrimSpace(input.HTTPMethod)), strings.TrimSpace(input.Endpoint)
 	if !toolNamePattern.MatchString(input.Namespace) || !toolNamePattern.MatchString(input.Name) || input.Description == "" || len(input.Description) > 500 {
 		return model.Tool{}, errors.New("tool namespace, name, and description are invalid")
 	}
@@ -607,9 +493,17 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 		return model.Tool{}, fmt.Errorf("output schema: %w", err)
 	}
 	methods := map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
-	parsed, err := url.Parse(input.APIHookURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || !methods[input.HTTPMethod] {
-		return model.Tool{}, errors.New("tool API hook must be a fixed credential-free HTTPS URL and allowed HTTP method")
+	parsed, err := url.Parse(input.Endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.Port() != "" || !methods[input.HTTPMethod] {
+		return model.Tool{}, errors.New("tool endpoint must be a fixed credential-free HTTPS URL on the default port and use an allowed HTTP method")
+	}
+	provider, err := s.store.IdentityProvider(ctx, input.ProductID)
+	if err != nil || provider.State != "active" || provider.DelegatedAPIOrigin == "" {
+		return model.Tool{}, errors.New("configure an active identity provider delegated API origin before creating an HTTP tool")
+	}
+	vendorOrigin, err := url.Parse(provider.DelegatedAPIOrigin)
+	if err != nil || !strings.EqualFold(parsed.Scheme, vendorOrigin.Scheme) || !strings.EqualFold(parsed.Host, vendorOrigin.Host) {
+		return model.Tool{}, errors.New("tool endpoint must use the configured vendor API origin")
 	}
 	if input.TimeoutMS == 0 {
 		input.TimeoutMS = 10_000
@@ -621,7 +515,7 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 		input.AuthorizationPolicy = json.RawMessage(`{}`)
 	}
 	var policy struct {
-		RequiredEntitlements []string `json:"required_entitlements"`
+		RequiredGrants       []string `json:"required_grants"`
 		ConfirmationRequired bool     `json:"confirmation_required"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(input.AuthorizationPolicy))
@@ -637,28 +531,11 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 	if err != nil {
 		return model.Tool{}, err
 	}
-	credentialID := ""
-	if strings.TrimSpace(input.Credential) != "" {
-		if s.vault == nil {
-			return model.Tool{}, errors.New("credential encryption is not configured")
-		}
-		credentialID, err = randomUUID()
-		if err != nil {
-			return model.Tool{}, err
-		}
-		encrypted, err := s.vault.Encrypt([]byte(input.Credential), input.OrganisationID+":tool:"+credentialID)
-		if err != nil {
-			return model.Tool{}, err
-		}
-		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: credentialID, OrganisationID: input.OrganisationID, Name: "tool-" + toolID, Purpose: "tool_api", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
-			return model.Tool{}, err
-		}
-	}
-	value, err := s.store.CreateTool(ctx, model.Tool{ID: toolID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIConnectionID: connectionID, BaseURL: input.APIHookURL, HTTPMethod: input.HTTPMethod, CredentialID: credentialID, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS, BackendKind: "http"})
+	value, err := s.store.CreateTool(ctx, model.Tool{ID: toolID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIConnectionID: connectionID, BaseURL: input.Endpoint, HTTPMethod: input.HTTPMethod, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS, BackendKind: "http"})
 	if err != nil {
 		return model.Tool{}, err
 	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "tool.created", TargetType: "tool", TargetID: toolID, Current: map[string]any{"name": input.Namespace + "." + input.Name, "method": input.HTTPMethod, "credential_stored": credentialID != "", "state": "draft"}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "tool.created", TargetType: "tool", TargetID: toolID, Current: map[string]any{"name": input.Namespace + "." + input.Name, "method": input.HTTPMethod, "authentication": "delegated_vendor_oauth", "state": "draft"}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, err
 }
 
@@ -744,40 +621,6 @@ func (s *Service) SetSourceVisibility(ctx context.Context, productID, sourceID s
 	return updated, nil
 }
 
-func (s *Service) SetPackageVisibility(ctx context.Context, productID, packageID string, visibility model.Visibility, acknowledged bool, expectedRevision int64, actor Actor) (model.Package, error) {
-	if !visibility.Valid() {
-		return model.Package{}, ErrInvalidVisibility
-	}
-	pkg, err := s.store.Package(ctx, productID, packageID)
-	if err != nil {
-		return model.Package{}, err
-	}
-	if pkg.Visibility == visibility {
-		return pkg, nil
-	}
-	if visibility == model.VisibilityPublic {
-		if !acknowledged {
-			return model.Package{}, ErrConfirmationRequired
-		}
-	}
-
-	prior := pkg.Visibility
-	pkg.Visibility = visibility
-	updated, err := s.store.UpdatePackage(ctx, pkg, expectedRevision)
-	if err != nil {
-		return model.Package{}, err
-	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{
-		ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ProductID,
-		ActorID: actor.ID, Action: "package.visibility.changed", TargetType: "package", TargetID: updated.ID,
-		Prior: map[string]any{"visibility": prior}, Current: map[string]any{"visibility": visibility},
-		RequestID: actor.RequestID, CreatedAt: s.now(),
-	}); err != nil {
-		return model.Package{}, err
-	}
-	return updated, nil
-}
-
 func (s *Service) PublishSource(ctx context.Context, productID, sourceID string, expectedRevision int64, actor Actor) (model.Source, error) {
 	current, err := s.store.Source(ctx, productID, sourceID)
 	if err != nil {
@@ -791,19 +634,6 @@ func (s *Service) PublishSource(ctx context.Context, productID, sourceID string,
 		return model.Source{}, err
 	}
 	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "source.published", TargetType: "source", TargetID: sourceID, Prior: map[string]any{"published": current.Published}, Current: map[string]any{"published": true, "visibility": updated.Visibility}, RequestID: actor.RequestID, CreatedAt: s.now()})
-	return updated, err
-}
-
-func (s *Service) PublishPackage(ctx context.Context, productID, packageID string, expectedRevision int64, actor Actor) (model.Package, error) {
-	current, err := s.store.Package(ctx, productID, packageID)
-	if err != nil {
-		return model.Package{}, err
-	}
-	updated, err := s.store.PublishPackage(ctx, productID, packageID, expectedRevision)
-	if err != nil {
-		return model.Package{}, err
-	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "package.published", TargetType: "package", TargetID: packageID, Prior: map[string]any{"published": current.Published}, Current: map[string]any{"published": true, "visibility": updated.Visibility}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return updated, err
 }
 

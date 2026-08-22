@@ -1,4 +1,4 @@
-export type Section = "product" | "sources" | "packages" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
+export type Section = "product" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "runs" | "reporting" | "analytics" | "activity" | "settings";
 
 export type IntegrationTab = "overview" | "resources" | "access" | "history";
 
@@ -6,7 +6,6 @@ export type EntityKind =
   | "integration"
   | "resource-set"
   | "source"
-  | "package"
   | "tool"
   | "connection"
   | "access-definition"
@@ -35,9 +34,8 @@ export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
 export const SECTION_PATHS: Record<Section, string> = {
   product: "/integrations",
   sources: "/integrations/documentation",
-  packages: "/integrations/packages",
   tools: "/integrations/tools",
-  connections: "/integrations/hooks-mcp",
+  connections: "/integrations/mcp",
   projects: "/access",
   distribution: "/agent-access",
   releases: "/distribution/releases",
@@ -52,7 +50,6 @@ const ENTITY_SECTIONS: Record<EntityKind, Section> = {
   integration: "product",
   "resource-set": "product",
   source: "sources",
-  package: "packages",
   tool: "tools",
   connection: "connections",
   "access-definition": "projects",
@@ -102,15 +99,7 @@ export function routeForIntegration(uid: string, integrationTab: IntegrationTab 
 
 export function parseConsolePath(pathname: string): ConsoleRoute {
   const path = normalizePath(pathname);
-  if (path === "/" || path === "/overview") return routeForSection("product");
-
-  const legacySections: Record<string, Section> = {
-    "/distribution": "distribution",
-    "/operations": "runs",
-    "/insights": "runs",
-    "/insights/activity": "runs",
-  };
-  if (legacySections[path]) return routeForSection(legacySections[path]);
+	if (path === "/") return routeForSection("product");
 
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (section) return routeForSection(section);
@@ -118,8 +107,7 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
   const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?$/);
   if (integrationMatch) {
     const requestedTab = integrationMatch[2] ?? "overview";
-    const legacyTabs: Record<string, IntegrationTab> = { tools: "resources", usage: "overview", support: "overview", revisions: "history" };
-    const tab = (legacyTabs[requestedTab] ?? requestedTab) as IntegrationTab;
+    const tab = requestedTab as IntegrationTab;
     if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "product", path };
     try {
       return routeForIntegration(decodeURIComponent(integrationMatch[1]), tab);

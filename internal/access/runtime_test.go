@@ -43,7 +43,7 @@ func accessFixture(t *testing.T, cardinality, credentialScope string, doer doerF
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations := `{"required_entitlements":["developer.pro"],"max_ttl_seconds":3600,"credential_storage_mode":"one_time","authorize":{"method":"POST","path":"/v1/authorize"},"instances.create":{"method":"POST","path":"/v1/instances"},"credentials.create":{"method":"POST","path":"/v1/credentials"},"credentials.revoke":{"method":"POST","path":"/v1/credentials/{credential_id}/revoke"}}`
+	operations := `{"required_grants":["developer.pro"],"max_ttl_seconds":3600,"credential_storage_mode":"one_time","authorize":{"method":"POST","path":"/v1/authorize"},"instances.create":{"method":"POST","path":"/v1/instances"},"credentials.create":{"method":"POST","path":"/v1/credentials"},"credentials.revoke":{"method":"POST","path":"/v1/credentials/{credential_id}/revoke"}}`
 	definition, err := service.CreateAccessDefinition(ctx, platform.AccessDefinitionInput{ServiceKey: "acme-voice", Name: "Acme Voice", InstanceCardinality: cardinality, InstanceLabelSingular: "Project", InstanceLabelPlural: "Projects", CredentialScope: credentialScope, ManagementAuthType: "bearer", Operations: []byte(operations)}, platform.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
@@ -90,8 +90,8 @@ func TestMultiInstanceAccessCreatesListsIssuesOnceAndRevokes(t *testing.T) {
 		}
 	})
 	runtime, _, integration, connection := accessFixture(t, "many", "instance", doer, nil)
-	principal := accessruntime.Principal{Subject: "issuer|subject", VendorOrganisation: "customer-1", InstallationID: "installation-1", Entitlements: map[string]bool{"developer.pro": true}, RequestID: "request-1"}
-	capabilities := runtime.Capabilities(ctx, "prod_acme", principal.Entitlements)
+	principal := accessruntime.Principal{Subject: "issuer|subject", ExternalCustomerID: "customer-1", InstallationID: "installation-1", Grants: map[string]bool{"developer.pro": true}, RequestID: "request-1"}
+	capabilities := runtime.Capabilities(ctx, "prod_acme", principal.Grants)
 	if len(capabilities) != 1 || !capabilities[0].CanCreateInstance || !capabilities[0].CanCreateCredential || capabilities[0].InstanceLabel != "Project" {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
@@ -140,8 +140,8 @@ func TestSingleInstanceServiceSuppressesResourceCreation(t *testing.T) {
 		}
 	})
 	runtime, _, integration, connection := accessFixture(t, "one", "connection", doer, nil)
-	principal := accessruntime.Principal{Subject: "issuer|subject", Entitlements: map[string]bool{"developer.pro": true}}
-	capabilities := runtime.Capabilities(ctx, "prod_acme", principal.Entitlements)
+	principal := accessruntime.Principal{Subject: "issuer|subject", Grants: map[string]bool{"developer.pro": true}}
+	capabilities := runtime.Capabilities(ctx, "prod_acme", principal.Grants)
 	if len(capabilities) != 1 || capabilities[0].CanCreateInstance || capabilities[0].InstanceCardinality != "one" {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
@@ -162,7 +162,7 @@ func TestAccessRuntimeRejectsPrivateDestinationResolution(t *testing.T) {
 	runtime, _, integration, connection := accessFixture(t, "one", "connection", doer, resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("127.0.0.1")}, nil
 	}))
-	_, err := runtime.IssueCredential(context.Background(), "prod_acme", connection.ID, accessruntime.CredentialRequest{IntegrationID: integration.ID, EnvironmentID: "env_prod", IdempotencyKey: "unsafe-credential-0001"}, accessruntime.Principal{Subject: "issuer|subject", Entitlements: map[string]bool{"developer.pro": true}})
+	_, err := runtime.IssueCredential(context.Background(), "prod_acme", connection.ID, accessruntime.CredentialRequest{IntegrationID: integration.ID, EnvironmentID: "env_prod", IdempotencyKey: "unsafe-credential-0001"}, accessruntime.Principal{Subject: "issuer|subject", Grants: map[string]bool{"developer.pro": true}})
 	if err != accessruntime.ErrUnsafeDestination {
 		t.Fatalf("unsafe destination error = %v", err)
 	}

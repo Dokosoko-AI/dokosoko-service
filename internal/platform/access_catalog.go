@@ -17,7 +17,7 @@ type AccessDefinitionInput struct {
 	InstanceLabelPlural   string
 	CredentialScope       string
 	ManagementAuthType    string
-	HookSetID             string
+	APIResourceSetID      string
 	Operations            json.RawMessage
 }
 
@@ -43,7 +43,7 @@ func normalizeAccessDefinition(input AccessDefinitionInput) (AccessDefinitionInp
 	input.InstanceLabelPlural = strings.TrimSpace(input.InstanceLabelPlural)
 	input.CredentialScope = strings.TrimSpace(input.CredentialScope)
 	input.ManagementAuthType = strings.TrimSpace(input.ManagementAuthType)
-	input.HookSetID = strings.TrimSpace(input.HookSetID)
+	input.APIResourceSetID = strings.TrimSpace(input.APIResourceSetID)
 	if !slugPattern.MatchString(input.ServiceKey) || len(input.ServiceKey) > 63 || input.Name == "" || len(input.Name) > 120 {
 		return input, errors.New("access definition service key or name is invalid")
 	}
@@ -84,17 +84,17 @@ func (s *Service) CreateAccessDefinition(ctx context.Context, input AccessDefini
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
-	if input.HookSetID != "" {
-		set, err := s.store.ResourceSet(ctx, deployment.ID, input.HookSetID)
-		if err != nil || set.Kind != "hook" {
-			return model.AccessDefinition{}, errors.New("access definition hook set must reference a hook resource set")
+	if input.APIResourceSetID != "" {
+		set, err := s.store.ResourceSet(ctx, deployment.ID, input.APIResourceSetID)
+		if err != nil || set.Kind != "api" {
+			return model.AccessDefinition{}, errors.New("access definition API resource set must reference an API resource set")
 		}
 	}
 	id, err := randomUUID()
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
-	value, err := s.store.CreateAccessDefinition(ctx, model.AccessDefinition{ID: id, DeploymentID: deployment.ID, OrganisationID: deployment.OrganisationID, ServiceKey: input.ServiceKey, Name: input.Name, InstanceCardinality: input.InstanceCardinality, InstanceLabelSingular: input.InstanceLabelSingular, InstanceLabelPlural: input.InstanceLabelPlural, CredentialScope: input.CredentialScope, ManagementAuthType: input.ManagementAuthType, HookSetID: input.HookSetID, Operations: input.Operations, State: "active"})
+	value, err := s.store.CreateAccessDefinition(ctx, model.AccessDefinition{ID: id, DeploymentID: deployment.ID, OrganisationID: deployment.OrganisationID, ServiceKey: input.ServiceKey, Name: input.Name, InstanceCardinality: input.InstanceCardinality, InstanceLabelSingular: input.InstanceLabelSingular, InstanceLabelPlural: input.InstanceLabelPlural, CredentialScope: input.CredentialScope, ManagementAuthType: input.ManagementAuthType, APIResourceSetID: input.APIResourceSetID, Operations: input.Operations, State: "active"})
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}

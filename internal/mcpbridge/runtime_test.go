@@ -119,7 +119,7 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	imported, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, RequiredEntitlements: []string{"support.write"}, ConfirmationRequired: false, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root", RequestID: "import"})
+	imported, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, RequiredGrants: []string{"support.write"}, ConfirmationRequired: false, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root", RequestID: "import"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,15 +131,15 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := tools.NewRuntime(memory, vault, nil, nil)
+	runtime := tools.NewRuntime(memory, nil, nil)
 	runtime.SetMCPExecutor(manager)
-	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Entitlements: map[string]bool{}}); !errors.Is(err, tools.ErrDenied) {
-		t.Fatalf("missing entitlement error = %v", err)
+	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Grants: map[string]bool{}}); !errors.Is(err, tools.ErrDenied) {
+		t.Fatalf("missing grant error = %v", err)
 	}
 	if toolCalls != 0 {
 		t.Fatalf("upstream was called before authorization: %d", toolCalls)
 	}
-	value, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Entitlements: map[string]bool{"support.write": true}, RequestID: "execute"})
+	value, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Grants: map[string]bool{"support.write": true}, RequestID: "execute"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,20 +147,20 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 		t.Fatalf("value=%#v toolCalls=%d", value, toolCalls)
 	}
 	missingStructuredOutput = true
-	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Entitlements: map[string]bool{"support.write": true}}); err == nil || !strings.Contains(err.Error(), "structuredContent is required") {
+	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Grants: map[string]bool{"support.write": true}}); err == nil || !strings.Contains(err.Error(), "structuredContent is required") {
 		t.Fatalf("missing structured output error = %v", err)
 	}
 	missingStructuredOutput = false
 
 	version = 2
-	drift, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, RequiredEntitlements: []string{"support.write"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root", RequestID: "inspect-again"})
+	drift, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, RequiredGrants: []string{"support.write"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root", RequestID: "inspect-again"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(drift.Drifted) != 1 || !drift.Drifted[0].UpstreamDrifted || drift.Drifted[0].ID != published.ID {
 		t.Fatalf("drift result = %#v", drift)
 	}
-	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Entitlements: map[string]bool{"support.write": true}}); !errors.Is(err, tools.ErrDenied) {
+	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Grants: map[string]bool{"support.write": true}}); !errors.Is(err, tools.ErrDenied) {
 		t.Fatalf("drifted execution error = %v", err)
 	}
 	if listCalls < 2 {
@@ -193,7 +193,7 @@ func TestDelegatedOAuthBindsSeparateUpstreamGrantToDokoSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal := tools.Principal{Subject: "doko-user-7", VendorOrganisation: "org_customer", Entitlements: map[string]bool{"support.write": true}}
+	principal := tools.Principal{Subject: "doko-user-7", ExternalCustomerID: "org_customer", Grants: map[string]bool{"support.write": true}}
 	authorizationURL, err := manager.BeginAuthorization(context.Background(), "prod_acme", connection.ID, principal)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestDelegatedOAuthBindsSeparateUpstreamGrantToDokoSubject(t *testing.T) {
 	if tokenForm.Get("code") != "authorization-code" || tokenForm.Get("resource") != connection.Endpoint || tokenForm.Get("code_verifier") == "" {
 		t.Fatalf("token form = %#v", tokenForm)
 	}
-	imported, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.comment"}, RequiredEntitlements: []string{"support.write"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root"})
+	imported, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.comment"}, RequiredGrants: []string{"support.write"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}

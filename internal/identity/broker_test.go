@@ -1,6 +1,7 @@
 package identity_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,48 +13,87 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
-	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
-type fakeUpstream struct{}
+const (
+	publicURL = "https://doko.example"
+	productID = "prod_acme"
+	resource  = publicURL + "/mcp"
+	clientID  = "https://client.example/oauth/client-metadata.json"
+	redirect  = "https://client.example/callback"
+)
 
-func (fakeUpstream) AuthorizationURL(_ context.Context, _ identity.VendorConfig, state, nonce, challenge, _ string) (string, error) {
+type fakeUpstream struct{ installationID string }
+
+func (fakeUpstream) AuthorizationURL(_ context.Context, _ identity.ProviderConfig, state, nonce, challenge, _ string) (string, error) {
 	values := url.Values{"state": {state}, "nonce": {nonce}, "challenge": {challenge}}
 	return "https://idp.example/authorize?" + values.Encode(), nil
 }
 
-func (fakeUpstream) ExchangeAndVerify(_ context.Context, config identity.VendorConfig, code, verifier, nonce, _, _ string) (identity.Claims, string, error) {
+func (f fakeUpstream) ExchangeAndVerify(_ context.Context, config identity.ProviderConfig, code, verifier, nonce, _ string) (identity.UpstreamIdentity, error) {
 	if code != "vendor-code" || verifier == "" || nonce == "" {
-		return identity.Claims{}, "", errors.New("invalid upstream exchange")
+		return identity.UpstreamIdentity{}, errors.New("invalid upstream exchange")
 	}
-	return identity.Claims{Issuer: config.Issuer, Subject: "vendor-user-42", Email: "alex@example.com", DisplayName: "Alex", VendorOrganisation: "vendor-org-7"}, "vendor-access", nil
+	return identity.UpstreamIdentity{
+		Claims: identity.Claims{
+			Issuer:             config.Issuer,
+			Subject:            "vendor-user-42",
+			Email:              "alex@example.com",
+			DisplayName:        "Alex",
+			ExternalCustomerID: "vendor-account-7",
+			InstallationID:     f.installationID,
+		},
+		AccessToken: "vendor-access-token",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}, nil
 }
 
-type fakeEntitlements struct{ failure error }
+type fakeAccessEvaluator struct{ failure error }
 
-func (f fakeEntitlements) Resolve(_ context.Context, _ identity.VendorConfig, claims identity.Claims, token string) (map[string]bool, error) {
+func (f fakeAccessEvaluator) Resolve(_ context.Context, _ identity.ProviderConfig, upstream identity.UpstreamIdentity) (identity.AccessEvaluation, error) {
 	if f.failure != nil {
-		return nil, f.failure
+		return identity.AccessEvaluation{}, f.failure
 	}
-	if claims.Subject != "vendor-user-42" || token != "vendor-access" {
-		return nil, errors.New("identity was not forwarded")
+	if upstream.Claims.Subject != "vendor-user-42" || upstream.AccessToken != "vendor-access-token" {
+		return identity.AccessEvaluation{}, errors.New("identity was not forwarded")
 	}
-	return map[string]bool{"developer.pro": true, "admin": false}, nil
+	return identity.AccessEvaluation{ID: "eval_7", Grants: []string{"developer.pro"}, PolicyVersion: "2026-08", ExpiresAt: time.Now().UTC().Add(30 * time.Minute)}, nil
 }
 
-func configuredMemory(t *testing.T) *store.Memory {
+type staticClientMetadata struct{}
+
+func (staticClientMetadata) Resolve(_ context.Context, id string) (identity.ClientMetadata, error) {
+	return identity.ClientMetadata{ClientID: id, RedirectURIs: []string{redirect}}, nil
+}
+
+func configuredMemory(t *testing.T) (*store.Memory, *secrets.Vault) {
 	t.Helper()
 	memory := store.NewMemory()
-	_, err := memory.SaveVendorIdentity(context.Background(), identity.VendorConfig{ID: "idp-1", OrganisationID: "org_acme", ProductID: "prod_acme", Issuer: "https://idp.example", ClientID: "upstream-client", Scopes: []string{"openid"}, AllowedRedirectURIs: []string{"https://client.example/callback"}})
+	_, err := memory.SaveIdentityProvider(context.Background(), identity.ProviderConfig{
+		ID:                 "idp-1",
+		OrganisationID:     "org_acme",
+		DeploymentID:       productID,
+		Issuer:             "https://idp.example",
+		ClientID:           "upstream-client",
+		Scopes:             []string{"openid"},
+		OrganisationClaim:  "org_id",
+		DelegatedAPIOrigin: "https://api.vendor.example",
+		State:              "active",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return memory
+	vault, err := secrets.New(bytes.Repeat([]byte{0x7a}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return memory, vault
 }
 
 func challenge(verifier string) string {
@@ -61,24 +101,63 @@ func challenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func TestBrokerOAuthPKCEAndProductBinding(t *testing.T) {
-	memory := configuredMemory(t)
-	broker := identity.NewBroker(memory, nil, "https://doko.example", fakeUpstream{}, fakeEntitlements{})
-	verifier := strings.Repeat("v", 48)
-	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: "prod_acme", ClientID: "prod_acme", RedirectURI: "https://client.example/callback", State: "client-state", CodeChallenge: challenge(verifier)})
+func TestDisabledIdentityProviderFailsClosed(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	provider, err := memory.IdentityProvider(context.Background(), productID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, _ := url.Parse(upstreamURL)
-	result, err := broker.Callback(context.Background(), "prod_acme", parsed.Query().Get("state"), "vendor-code")
+	provider.State = "disabled"
+	if _, err := memory.SaveIdentityProvider(context.Background(), provider); err != nil {
+		t.Fatal(err)
+	}
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+	_, err = broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, Scope: "mcp:private", State: "client-state", CodeChallenge: challenge(strings.Repeat("v", 48))})
+	if !errors.Is(err, identity.ErrIdentityDisabled) {
+		t.Fatalf("disabled identity provider did not fail closed: %v", err)
+	}
+}
+
+func authorize(t *testing.T, broker *identity.Broker, verifier string) string {
+	t.Helper()
+	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{
+		ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource,
+		Scope: "mcp:private", State: "client-state", CodeChallenge: challenge(verifier),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	downstream, _ := url.Parse(result.RedirectURI)
+	parsed, err := url.Parse(upstreamURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream, err := url.Parse(result.RedirectURI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if downstream.Query().Get("state") != "client-state" || downstream.Query().Get("code") == "" {
 		t.Fatalf("invalid downstream callback: %s", result.RedirectURI)
 	}
-	token, err := broker.Exchange(context.Background(), downstream.Query().Get("code"), verifier, "prod_acme", "https://client.example/callback")
+	return downstream.Query().Get("code")
+}
+
+func TestBrokerBindsOAuthToClientResourceAndCustomerAccount(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+	verifier := strings.Repeat("v", 48)
+	code := authorize(t, broker, verifier)
+
+	if _, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, publicURL+"/mcp/another"); !errors.Is(err, identity.ErrInvalidOAuth) {
+		t.Fatalf("authorization code accepted for another resource: %v", err)
+	}
+	// A failed exchange consumes the code. Authorization codes remain single-use
+	// even when a client submits a malformed token request.
+	code = authorize(t, broker, verifier)
+	token, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,28 +165,85 @@ func TestBrokerOAuthPKCEAndProductBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if principal.ProductID != "prod_acme" || principal.Subject != "vendor-user-42" || !principal.Entitlements["developer.pro"] || principal.Entitlements["admin"] {
+	if principal.ProductID != productID || principal.Resource != resource || principal.Subject != "vendor-user-42" || principal.ExternalCustomerID != "vendor-account-7" || principal.CustomerAccountID == "" || principal.UpstreamAccessToken != "vendor-access-token" || !principal.Grants["developer.pro"] {
 		t.Fatalf("unexpected principal: %#v", principal)
 	}
-	if _, err := broker.Exchange(context.Background(), downstream.Query().Get("code"), verifier, "prod_acme", "https://client.example/callback"); !errors.Is(err, identity.ErrInvalidOAuth) {
+	accounts, _, err := memory.CustomerAccounts(context.Background(), productID, "", 50)
+	if err != nil || len(accounts) != 1 || accounts[0].ID != principal.CustomerAccountID {
+		t.Fatalf("customer accounts = %#v, err = %v", accounts, err)
+	}
+	if _, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource); !errors.Is(err, identity.ErrInvalidOAuth) {
 		t.Fatalf("authorization code was reusable: %v", err)
 	}
 }
 
-func TestBrokerRejectsUnregisteredRedirectAndFailsClosed(t *testing.T) {
-	memory := configuredMemory(t)
-	broker := identity.NewBroker(memory, nil, "https://doko.example", fakeUpstream{}, fakeEntitlements{failure: errors.New("vendor unavailable")})
+func TestSuspendingCustomerAccountInvalidatesExistingToken(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
 	verifier := strings.Repeat("v", 48)
-	if _, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: "prod_acme", ClientID: "prod_acme", RedirectURI: "https://attacker.example/callback", State: "state", CodeChallenge: challenge(verifier)}); !errors.Is(err, identity.ErrInvalidOAuth) {
-		t.Fatalf("unregistered redirect accepted: %v", err)
+	code := authorize(t, broker, verifier)
+	token, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource)
+	if err != nil {
+		t.Fatal(err)
 	}
-	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: "prod_acme", ClientID: "prod_acme", RedirectURI: "https://client.example/callback", State: "state", CodeChallenge: challenge(verifier)})
+	principal, err := broker.Authenticate(context.Background(), token.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := memory.CustomerAccount(context.Background(), productID, principal.CustomerAccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account.State = "suspended"
+	if _, err := memory.UpdateCustomerAccount(context.Background(), account, account.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.Authenticate(context.Background(), token.AccessToken); !errors.Is(err, identity.ErrInvalidOAuth) {
+		t.Fatalf("suspended account retained access: %v", err)
+	}
+}
+
+func TestAuthorizationRequiresInstallationToBelongToCustomer(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{installationID: "installation-9"}, fakeAccessEvaluator{}, staticClientMetadata{})
+	verifier := strings.Repeat("v", 48)
+	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, Scope: "mcp:private", State: "state", CodeChallenge: challenge(verifier)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	parsed, _ := url.Parse(upstreamURL)
-	if _, err := broker.Callback(context.Background(), "prod_acme", parsed.Query().Get("state"), "vendor-code"); err == nil {
-		t.Fatal("entitlement failure did not fail closed")
+	if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); !errors.Is(err, identity.ErrInvalidOAuth) {
+		t.Fatalf("unknown installation claim was accepted: %v", err)
+	}
+
+	account, err := memory.ResolveCustomerAccount(context.Background(), identity.CustomerAccount{ID: "account_7", OrganisationID: "org_acme", ProductID: productID, Issuer: "https://idp.example", ExternalID: "vendor-account-7", State: "active", LastAuthenticatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.SaveProductInstallation(context.Background(), model.ProductInstallation{ID: "installation_internal_9", OrganisationID: "org_acme", ProductID: productID, CustomerAccountID: account.ID, EnvironmentID: "env_prod", ExternalID: "installation-9", Name: "Customer production", State: "active"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	code := authorize(t, broker, verifier)
+	token, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource)
+	if err != nil || token.Principal.InstallationID != "installation-9" {
+		t.Fatalf("registered installation authorization failed: token=%#v err=%v", token, err)
+	}
+}
+
+func TestBrokerRequiresRegisteredClientAndFailsClosed(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{failure: errors.New("vendor unavailable")}, staticClientMetadata{})
+	verifier := strings.Repeat("v", 48)
+	if _, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: "https://attacker.example/callback", Resource: resource, State: "state", CodeChallenge: challenge(verifier)}); !errors.Is(err, identity.ErrInvalidOAuth) {
+		t.Fatalf("unregistered redirect accepted: %v", err)
+	}
+	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, State: "state", CodeChallenge: challenge(verifier)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := url.Parse(upstreamURL)
+	if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); err == nil {
+		t.Fatal("access evaluation failure did not fail closed")
 	}
 }
 
@@ -121,159 +257,61 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
-func TestHookEntitlementsRejectsPrivateResolution(t *testing.T) {
-	hook := identity.HookEntitlements{Resolver: resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
-		return []net.IP{net.ParseIP("127.0.0.1")}, nil
-	})}
-	_, err := hook.Resolve(context.Background(), identity.VendorConfig{ProductID: "prod", EntitlementHookURL: "https://hooks.example/entitlements"}, identity.Claims{Subject: "user"}, "vendor-token")
-	if err == nil {
-		t.Fatal("private entitlement hook resolution was accepted")
-	}
-}
-
-func TestHookEntitlementsUsesVendorBearerAndBoundPayload(t *testing.T) {
+func TestAccessEvaluationUsesDelegatedBearerAndRetrySafeHeaders(t *testing.T) {
+	requests := 0
+	var idempotencyKey string
+	var requestIDs []string
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
 		body, _ := io.ReadAll(request.Body)
-		if request.Header.Get("Authorization") != "Bearer vendor-token" || !strings.Contains(string(body), `"product_id":"prod"`) {
-			t.Fatalf("unexpected hook request: headers=%v body=%s", request.Header, body)
+		if request.Method != http.MethodPost || request.URL.String() != "https://api.vendor.example/v1/access/evaluations" || request.Header.Get("Authorization") != "Bearer vendor-token" || string(body) != `{}` {
+			t.Fatalf("unexpected request: method=%s url=%s headers=%v body=%s", request.Method, request.URL, request.Header, body)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"entitlements":{"feature.x":true}}`))}, nil
+		if requests == 1 {
+			idempotencyKey = request.Header.Get("Idempotency-Key")
+		} else if request.Header.Get("Idempotency-Key") != idempotencyKey {
+			t.Fatalf("idempotency key changed across retry")
+		}
+		requestIDs = append(requestIDs, request.Header.Get("X-DokoSoko-Request-ID"))
+		if requests == 1 {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"unavailable"}`))}, nil
+		}
+		expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"eval_1","grants":["projects.read"],"expires_at":"` + expires + `","policy_version":"v7"}`))}, nil
 	})}
-	hook := identity.HookEntitlements{Client: client, Resolver: resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+	evaluation := identity.HTTPAccessEvaluation{Client: client, Resolver: resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("8.8.8.8")}, nil
 	})}
-	values, err := hook.Resolve(context.Background(), identity.VendorConfig{ProductID: "prod", EntitlementHookURL: "https://hooks.example/entitlements"}, identity.Claims{Subject: "user"}, "vendor-token")
-	if err != nil || !values["feature.x"] {
-		t.Fatalf("entitlements = %#v, err = %v", values, err)
+	result, err := evaluation.Resolve(context.Background(), identity.ProviderConfig{DelegatedAPIOrigin: "https://api.vendor.example"}, identity.UpstreamIdentity{Claims: identity.Claims{Issuer: "https://idp.example", Subject: "user_1"}, AccessToken: "vendor-token", ExpiresAt: time.Now().UTC().Add(time.Hour), AccessEvaluationKey: "aeval_0123456789abcdef0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "eval_1" || len(result.Grants) != 1 || requests != 2 || idempotencyKey == "" || requestIDs[0] == requestIDs[1] {
+		t.Fatalf("result=%#v requests=%d idempotency=%q request_ids=%v", result, requests, idempotencyKey, requestIDs)
 	}
 }
 
-func TestOperationAuthorizationUsesServiceCredentialAndRedactsValues(t *testing.T) {
-	ctx := context.Background()
-	memory := configuredMemory(t)
-	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
-	encrypted, _ := vault.Encrypt([]byte("authorization-service-secret"), "org_acme:authorization:auth-secret")
-	_, err := memory.CreateSecret(ctx, model.Secret{ID: "auth-secret", OrganisationID: "org_acme", Name: "auth-secret", Purpose: "vendor_authorization", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
-	if err != nil {
-		t.Fatal(err)
-	}
-	config, _ := memory.VendorIdentity(ctx, "prod_acme")
-	config.AuthorizationHookURL = "https://hooks.example/authorize"
-	config.AuthorizationCredentialID = "auth-secret"
-	if _, err := memory.SaveVendorIdentity(ctx, config); err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		body, _ := io.ReadAll(request.Body)
-		if request.Header.Get("Authorization") != "Bearer authorization-service-secret" || !strings.Contains(string(body), `"argument_keys":["api_key","region"]`) || strings.Contains(string(body), "sensitive-value") {
-			t.Fatalf("unsafe authorization request: headers=%v body=%s", request.Header, body)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"allowed":true}`))}, nil
-	})}
-	hook := identity.NewHookAuthorization(memory, vault)
-	hook.Client = client
-	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
-	err = hook.Authorize(ctx, "prod_acme", model.Tool{Namespace: "projects", Name: "create"}, map[string]any{"api_key": "sensitive-value", "region": "nz"}, toolruntime.Principal{Subject: "issuer|subject", VendorOrganisation: "vendor-org"})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestUsageHookProxiesCustomerDefinedScalarValues(t *testing.T) {
-	ctx := context.Background()
-	memory := configuredMemory(t)
-	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
-	encrypted, _ := vault.Encrypt([]byte("usage-service-secret"), "org_acme:usage:usage-secret")
-	_, err := memory.CreateSecret(ctx, model.Secret{ID: "usage-secret", OrganisationID: "org_acme", Name: "usage-secret", Purpose: "vendor_usage", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
-	if err != nil {
-		t.Fatal(err)
-	}
-	config, _ := memory.VendorIdentity(ctx, "prod_acme")
-	config.UsageHookURL = "https://hooks.example/usage"
-	config.UsageCredentialID = "usage-secret"
-	if _, err := memory.SaveVendorIdentity(ctx, config); err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		body, _ := io.ReadAll(request.Body)
-		requestBody := string(body)
-		if request.Header.Get("Authorization") != "Bearer usage-service-secret" ||
-			!strings.Contains(requestBody, `"product_id":"prod_acme"`) ||
-			!strings.Contains(requestBody, `"subject":"https://idp.example|vendor-user-42"`) ||
-			!strings.Contains(requestBody, `"vendor_organisation_id":"vendor-org-7"`) {
-			t.Fatalf("unexpected usage request: headers=%v body=%s", request.Header, body)
-		}
-		response := `{"as_of":"2026-08-19T05:30:00Z","items":[{"key":"credits_used","label":"Used","value":720,"format":"number","unit":"credits"},{"key":"next_renewal","label":"Next renewal","value":"2026-09-01T00:00:00Z","format":"datetime"},{"key":"trial_active","label":"Trial active","value":true}]}`
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
-	})}
-	hook := identity.NewHookUsage(memory, vault)
-	hook.Client = client
-	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
-	report, err := hook.Report(ctx, "prod_acme", identity.Principal{Issuer: "https://idp.example", Subject: "vendor-user-42", VendorOrganisation: "vendor-org-7"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, _ := json.Marshal(report)
-	if len(report.Items) != 3 || !strings.Contains(string(encoded), `"value":720`) || !strings.Contains(string(encoded), `"value":true`) {
-		t.Fatalf("usage report was not proxied: %s", encoded)
-	}
-}
-
-func TestUsageHookRejectsInvalidReportsAndDenial(t *testing.T) {
-	ctx := context.Background()
-	memory := configuredMemory(t)
-	vault, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
-	encrypted, _ := vault.Encrypt([]byte("usage-service-secret"), "org_acme:usage:usage-secret")
-	_, _ = memory.CreateSecret(ctx, model.Secret{ID: "usage-secret", OrganisationID: "org_acme", Name: "usage-secret", Purpose: "vendor_usage", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint})
-	config, _ := memory.VendorIdentity(ctx, "prod_acme")
-	config.UsageHookURL, config.UsageCredentialID = "https://hooks.example/usage", "usage-secret"
-	_, _ = memory.SaveVendorIdentity(ctx, config)
-
-	for name, response := range map[string]string{
-		"duplicate keys": `{"as_of":"2026-08-19T05:30:00Z","items":[{"key":"used","label":"Used","value":1},{"key":"used","label":"Again","value":2}]}`,
-		"nested value":   `{"as_of":"2026-08-19T05:30:00Z","items":[{"key":"used","label":"Used","value":{"raw":1}}]}`,
-		"unknown field":  `{"as_of":"2026-08-19T05:30:00Z","items":[],"account_secret":"must-not-pass"}`,
-		"invalid time":   `{"as_of":"today","items":[]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			hook := identity.NewHookUsage(memory, vault)
-			hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
-			})}
-			hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
-			if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageUpstream) {
-				t.Fatalf("error = %v, want ErrUsageUpstream", err)
-			}
-		})
-	}
-
-	hook := identity.NewHookUsage(memory, vault)
-	hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusForbidden, Status: "403 Forbidden", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"denied"}`))}, nil
-	})}
-	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
-	if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageDenied) {
-		t.Fatalf("error = %v, want ErrUsageDenied", err)
-	}
-
-	hook = identity.NewHookUsage(memory, vault)
-	hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("usage request reached a privately resolved destination")
-		return nil, nil
-	})}
-	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+func TestAccessEvaluationRejectsPrivateResolution(t *testing.T) {
+	evaluation := identity.HTTPAccessEvaluation{Resolver: resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("127.0.0.1")}, nil
-	})
-	if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageUpstream) {
-		t.Fatalf("private destination error = %v, want ErrUsageUpstream", err)
-	}
-
-	hook = identity.NewHookUsage(memory, vault)
-	hook.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(strings.Repeat(" ", (1<<20)+1)))}, nil
 	})}
-	hook.Resolver = resolverFunc(func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil })
-	if _, err := hook.Report(ctx, "prod_acme", identity.Principal{Subject: "user"}); !errors.Is(err, identity.ErrUsageUpstream) {
-		t.Fatalf("oversized response error = %v, want ErrUsageUpstream", err)
+	_, err := evaluation.Resolve(context.Background(), identity.ProviderConfig{DelegatedAPIOrigin: "https://api.vendor.example"}, identity.UpstreamIdentity{AccessToken: "vendor-token", AccessEvaluationKey: "aeval_0123456789abcdef0123456789abcdef"})
+	if err == nil {
+		t.Fatal("private vendor API resolution was accepted")
+	}
+}
+
+func TestClientMetadataResolverRequiresExactMetadata(t *testing.T) {
+	metadataURL := "https://client.example/oauth/client-metadata.json"
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		payload, _ := json.Marshal(identity.ClientMetadata{ClientID: metadataURL, RedirectURIs: []string{redirect}})
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(payload))}, nil
+	})}
+	resolver := identity.HTTPClientMetadataResolver{Client: client, Resolver: resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	})}
+	metadata, err := resolver.Resolve(context.Background(), metadataURL)
+	if err != nil || metadata.ClientID != metadataURL || len(metadata.RedirectURIs) != 1 {
+		t.Fatalf("metadata=%#v err=%v", metadata, err)
 	}
 }

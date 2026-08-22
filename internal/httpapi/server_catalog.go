@@ -2,12 +2,15 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
 func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +97,8 @@ func (s *Server) integrations(w http.ResponseWriter, r *http.Request) {
 			VersionKey               string     `json:"version_key"`
 			DisplayName              string     `json:"display_name"`
 			Description              string     `json:"description"`
+			Visibility               string     `json:"visibility"`
+			AcknowledgePublic        bool       `json:"acknowledge_public"`
 			Lifecycle                string     `json:"lifecycle"`
 			ReplacementIntegrationID string     `json:"replacement_integration_id"`
 			SunsetAt                 *time.Time `json:"sunset_at"`
@@ -102,9 +107,9 @@ func (s *Server) integrations(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateIntegration(r.Context(), platform.IntegrationInput{FamilyKey: input.FamilyKey, VersionKey: input.VersionKey, DisplayName: input.DisplayName, Description: input.Description, Lifecycle: input.Lifecycle, ReplacementIntegrationID: input.ReplacementIntegrationID, SunsetAt: input.SunsetAt}, actor(r))
+		value, err := s.service.CreateIntegration(r.Context(), platform.IntegrationInput{FamilyKey: input.FamilyKey, VersionKey: input.VersionKey, DisplayName: input.DisplayName, Description: input.Description, Visibility: model.Visibility(input.Visibility), AcknowledgePublic: input.AcknowledgePublic, Lifecycle: input.Lifecycle, ReplacementIntegrationID: input.ReplacementIntegrationID, SunsetAt: input.SunsetAt}, actor(r))
 		if err != nil {
-			s.creationError(w, err)
+			s.integrationError(w, err, true)
 			return
 		}
 		writeJSON(w, http.StatusCreated, value)
@@ -134,31 +139,49 @@ func (s *Server) integration(w http.ResponseWriter, r *http.Request, integration
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"integration": value, "revisions": revisions, "publish_status": publishStatus})
-	case http.MethodPatch:
+	case http.MethodPut:
 		var input struct {
 			FamilyKey                string     `json:"family_key"`
 			VersionKey               string     `json:"version_key"`
 			DisplayName              string     `json:"display_name"`
-			Description              string     `json:"description"`
-			Lifecycle                string     `json:"lifecycle"`
+			Description              *string    `json:"description"`
+			Visibility               *string    `json:"visibility"`
+			AcknowledgePublic        bool       `json:"acknowledge_public"`
+			Lifecycle                *string    `json:"lifecycle"`
 			ReplacementIntegrationID string     `json:"replacement_integration_id"`
 			SunsetAt                 *time.Time `json:"sunset_at"`
-			Revision                 int64      `json:"revision"`
+			Revision                 *int64     `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.UpdateIntegration(r.Context(), integrationID, platform.IntegrationInput{FamilyKey: input.FamilyKey, VersionKey: input.VersionKey, DisplayName: input.DisplayName, Description: input.Description, Lifecycle: input.Lifecycle, ReplacementIntegrationID: input.ReplacementIntegrationID, SunsetAt: input.SunsetAt, Revision: input.Revision}, actor(r))
+		if input.FamilyKey == "" || input.VersionKey == "" || input.DisplayName == "" || input.Description == nil || input.Visibility == nil || input.Lifecycle == nil || input.Revision == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "family_key, version_key, display_name, description, visibility, lifecycle, and revision are required.", nil)
+			return
+		}
+		value, err := s.service.UpdateIntegration(r.Context(), integrationID, platform.IntegrationInput{FamilyKey: input.FamilyKey, VersionKey: input.VersionKey, DisplayName: input.DisplayName, Description: *input.Description, Visibility: model.Visibility(*input.Visibility), AcknowledgePublic: input.AcknowledgePublic, Lifecycle: *input.Lifecycle, ReplacementIntegrationID: input.ReplacementIntegrationID, SunsetAt: input.SunsetAt, Revision: *input.Revision}, actor(r))
 		if err != nil {
-			s.productCatalogError(w, err)
+			s.integrationError(w, err, false)
 			return
 		}
 		writeJSON(w, http.StatusOK, value)
 	default:
-		w.Header().Set("Allow", "GET, PATCH")
+		w.Header().Set("Allow", "GET, PUT")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) integrationError(w http.ResponseWriter, err error, creating bool) {
+	if errors.Is(err, platform.ErrConfirmationRequired) || errors.Is(err, platform.ErrUnsafeForPublic) || errors.Is(err, platform.ErrInvalidVisibility) {
+		s.platformError(w, err, "Confirm that this Integration may be exposed on the unauthenticated public catalog.")
+		return
+	}
+	if creating {
+		s.creationError(w, err)
+		return
+	}
+	s.productCatalogError(w, err)
 }
 
 func (s *Server) integrationAccessConnections(w http.ResponseWriter, r *http.Request, integrationID string) {
@@ -350,14 +373,14 @@ func (s *Server) accessDefinitions(w http.ResponseWriter, r *http.Request) {
 			InstanceLabelPlural   string          `json:"instance_label_plural"`
 			CredentialScope       string          `json:"credential_scope"`
 			ManagementAuthType    string          `json:"management_auth_type"`
-			HookSetID             string          `json:"hook_set_id"`
+			APIResourceSetID      string          `json:"api_resource_set_id"`
 			Operations            json.RawMessage `json:"operations"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateAccessDefinition(r.Context(), platform.AccessDefinitionInput{ServiceKey: input.ServiceKey, Name: input.Name, InstanceCardinality: input.InstanceCardinality, InstanceLabelSingular: input.InstanceLabelSingular, InstanceLabelPlural: input.InstanceLabelPlural, CredentialScope: input.CredentialScope, ManagementAuthType: input.ManagementAuthType, HookSetID: input.HookSetID, Operations: input.Operations}, actor(r))
+		value, err := s.service.CreateAccessDefinition(r.Context(), platform.AccessDefinitionInput{ServiceKey: input.ServiceKey, Name: input.Name, InstanceCardinality: input.InstanceCardinality, InstanceLabelSingular: input.InstanceLabelSingular, InstanceLabelPlural: input.InstanceLabelPlural, CredentialScope: input.CredentialScope, ManagementAuthType: input.ManagementAuthType, APIResourceSetID: input.APIResourceSetID, Operations: input.Operations}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -410,6 +433,118 @@ func (s *Server) accessConnections(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) backendConnections(w http.ResponseWriter, r *http.Request) {
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		values, err := s.service.Store().BackendConnections(r.Context(), deployment.ID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": values})
+	case http.MethodPost:
+		var input struct {
+			Name               string `json:"name"`
+			BaseURL            string `json:"base_url"`
+			AuthenticationType string `json:"authentication_type"`
+			Credential         string `json:"credential"`
+			State              string `json:"state"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.service.CreateBackendConnection(r.Context(), platform.BackendConnectionInput{Name: input.Name, BaseURL: input.BaseURL, AuthenticationType: input.AuthenticationType, Credential: input.Credential, State: input.State}, actor(r))
+		if err != nil {
+			s.backendConnectionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, value)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) backendConnection(w http.ResponseWriter, r *http.Request, connectionID string) {
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		value, err := s.service.Store().BackendConnection(r.Context(), deployment.ID, connectionID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	case http.MethodPut:
+		var input struct {
+			Name               string `json:"name"`
+			BaseURL            string `json:"base_url"`
+			AuthenticationType string `json:"authentication_type"`
+			State              string `json:"state"`
+			Revision           *int64 `json:"revision"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		if input.Revision == nil || input.Name == "" || input.BaseURL == "" || input.AuthenticationType == "" || input.State == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "name, base_url, authentication_type, state, and revision are required.", nil)
+			return
+		}
+		value, err := s.service.UpdateBackendConnection(r.Context(), connectionID, platform.BackendConnectionInput{Name: input.Name, BaseURL: input.BaseURL, AuthenticationType: input.AuthenticationType, State: input.State, Revision: *input.Revision}, actor(r))
+		if err != nil {
+			s.backendConnectionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+	}
+}
+
+func (s *Server) createBackendConnectionCredential(w http.ResponseWriter, r *http.Request, connectionID string) {
+	var input struct {
+		Credential string `json:"credential"`
+		Revision   *int64 `json:"revision"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	if input.Revision == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision is required.", nil)
+		return
+	}
+	value, err := s.service.RotateBackendConnectionCredential(r.Context(), connectionID, input.Credential, *input.Revision, actor(r))
+	if err != nil {
+		s.backendConnectionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (s *Server) backendConnectionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.storeError(w, err)
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "backend_connection_conflict", "The backend connection name or revision conflicts with current state.", nil)
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_backend_connection", err.Error(), nil)
+	}
+}
+
 func (s *Server) accessInstances(w http.ResponseWriter, r *http.Request, connectionID string) {
 	deployment, err := s.service.Store().Deployment(r.Context())
 	if err != nil {
@@ -447,18 +582,15 @@ func (s *Server) accessCredentials(w http.ResponseWriter, r *http.Request, conne
 }
 
 type supportRouteRequest struct {
-	Name                   string   `json:"name"`
-	IsDefault              bool     `json:"is_default"`
-	BugReportsEnabled      bool     `json:"bug_reports_enabled"`
-	FeedbackEnabled        bool     `json:"feedback_enabled"`
-	BugHookURL             string   `json:"bug_hook_url"`
-	BugHookCredential      string   `json:"bug_hook_credential"`
-	FeedbackHookURL        string   `json:"feedback_hook_url"`
-	FeedbackHookCredential string   `json:"feedback_hook_credential"`
-	RetentionDays          int      `json:"retention_days"`
-	State                  string   `json:"state"`
-	IntegrationIDs         []string `json:"integration_ids"`
-	Revision               int64    `json:"revision"`
+	Name                string    `json:"name"`
+	IsDefault           *bool     `json:"is_default"`
+	BugReportsEnabled   *bool     `json:"bug_reports_enabled"`
+	FeedbackEnabled     *bool     `json:"feedback_enabled"`
+	BackendConnectionID string    `json:"backend_connection_id"`
+	RetentionDays       *int      `json:"retention_days"`
+	State               *string   `json:"state"`
+	IntegrationIDs      *[]string `json:"integration_ids"`
+	Revision            *int64    `json:"revision"`
 }
 
 func (s *Server) supportRoutes(w http.ResponseWriter, r *http.Request) {
@@ -485,9 +617,14 @@ func (s *Server) supportRoutes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.reporting.SaveRoute(r.Context(), deployment.ID, "", routeInput(input), actor(r).ID, actor(r).RequestID)
+		route, err := routeInput(input, false)
 		if err != nil {
-			s.productCatalogError(w, err)
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.reporting.SaveRoute(r.Context(), deployment.ID, "", route, actor(r).ID, actor(r).RequestID)
+		if err != nil {
+			s.supportRouteError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, value)
@@ -515,24 +652,50 @@ func (s *Server) supportRoute(w http.ResponseWriter, r *http.Request, routeID st
 			return
 		}
 		writeJSON(w, http.StatusOK, value)
-	case http.MethodPatch:
+	case http.MethodPut:
 		var input supportRouteRequest
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.reporting.SaveRoute(r.Context(), deployment.ID, routeID, routeInput(input), actor(r).ID, actor(r).RequestID)
+		route, err := routeInput(input, true)
 		if err != nil {
-			s.productCatalogError(w, err)
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.reporting.SaveRoute(r.Context(), deployment.ID, routeID, route, actor(r).ID, actor(r).RequestID)
+		if err != nil {
+			s.supportRouteError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, value)
 	default:
-		w.Header().Set("Allow", "GET, PATCH")
+		w.Header().Set("Allow", "GET, PUT")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
 }
 
-func routeInput(input supportRouteRequest) reporting.RouteInput {
-	return reporting.RouteInput{Name: input.Name, IsDefault: input.IsDefault, BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BugHookURL: input.BugHookURL, BugHookCredential: input.BugHookCredential, FeedbackHookURL: input.FeedbackHookURL, FeedbackHookCredential: input.FeedbackHookCredential, RetentionDays: input.RetentionDays, State: input.State, IntegrationIDs: input.IntegrationIDs, Revision: input.Revision}
+func routeInput(input supportRouteRequest, replacing bool) (reporting.RouteInput, error) {
+	if input.IsDefault == nil || input.BugReportsEnabled == nil || input.FeedbackEnabled == nil || input.RetentionDays == nil || input.State == nil || input.IntegrationIDs == nil {
+		return reporting.RouteInput{}, errors.New("is_default, bug_reports_enabled, feedback_enabled, retention_days, state, and integration_ids are required")
+	}
+	if replacing && input.Revision == nil {
+		return reporting.RouteInput{}, errors.New("revision is required when replacing a support route")
+	}
+	if !replacing && input.Revision != nil {
+		return reporting.RouteInput{}, errors.New("revision is not allowed when creating a support route")
+	}
+	revision := int64(0)
+	if input.Revision != nil {
+		revision = *input.Revision
+	}
+	return reporting.RouteInput{Name: input.Name, IsDefault: *input.IsDefault, BugReportsEnabled: *input.BugReportsEnabled, FeedbackEnabled: *input.FeedbackEnabled, BackendConnectionID: input.BackendConnectionID, RetentionDays: *input.RetentionDays, State: *input.State, IntegrationIDs: *input.IntegrationIDs, Revision: revision}, nil
+}
+
+func (s *Server) supportRouteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, reporting.ErrInvalidReport) {
+		writeError(w, http.StatusBadRequest, "invalid_support_route", err.Error(), nil)
+		return
+	}
+	s.storeError(w, err)
 }

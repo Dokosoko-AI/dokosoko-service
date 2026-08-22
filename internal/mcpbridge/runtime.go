@@ -98,7 +98,7 @@ type Catalog struct {
 
 type ImportInput struct {
 	ToolNames            []string
-	RequiredEntitlements []string
+	RequiredGrants       []string
 	ConfirmationRequired bool
 	TimeoutMS            int
 }
@@ -574,7 +574,7 @@ func (m *Manager) Import(ctx context.Context, productID, connectionID string, in
 		}
 	}
 	result := ImportResult{Connection: catalog.Connection, Rejected: make(map[string]string)}
-	policy, _ := json.Marshal(map[string]any{"required_entitlements": normalizeScopes(input.RequiredEntitlements), "confirmation_required": input.ConfirmationRequired})
+	policy, _ := json.Marshal(map[string]any{"required_grants": normalizeScopes(input.RequiredGrants), "confirmation_required": input.ConfirmationRequired})
 	for _, upstream := range catalog.Tools {
 		if !selected[upstream.Name] {
 			continue

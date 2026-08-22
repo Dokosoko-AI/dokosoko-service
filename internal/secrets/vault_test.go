@@ -13,18 +13,18 @@ func TestVaultEncryptsWithContextBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := vault.Encrypt([]byte("vendor-token"), "org-a:package")
+	value, err := vault.Encrypt([]byte("vendor-token"), "org-a:test-scope")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(value.Ciphertext, []byte("vendor-token")) || value.Fingerprint == "" {
 		t.Fatal("secret was not protected")
 	}
-	plaintext, err := vault.Decrypt(value, "org-a:package")
+	plaintext, err := vault.Decrypt(value, "org-a:test-scope")
 	if err != nil || string(plaintext) != "vendor-token" {
 		t.Fatalf("decrypt = %q, %v", plaintext, err)
 	}
-	if _, err := vault.Decrypt(value, "org-b:package"); err == nil {
+	if _, err := vault.Decrypt(value, "org-b:test-scope"); err == nil {
 		t.Fatal("ciphertext decrypted under the wrong tenant context")
 	}
 }

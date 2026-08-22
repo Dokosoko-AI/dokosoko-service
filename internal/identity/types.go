@@ -2,26 +2,38 @@ package identity
 
 import "time"
 
-type VendorConfig struct {
-	ID                        string    `json:"id"`
-	OrganisationID            string    `json:"organisation_id"`
-	ProductID                 string    `json:"product_id"`
-	Issuer                    string    `json:"issuer"`
-	ClientID                  string    `json:"client_id"`
-	ClientSecretID            string    `json:"-"`
-	Scopes                    []string  `json:"scopes"`
-	Audience                  string    `json:"audience"`
-	OrganisationClaim         string    `json:"organisation_claim"`
-	InstallationClaim         string    `json:"installation_claim"`
-	EntitlementHookURL        string    `json:"entitlement_hook_url"`
-	AllowedRedirectURIs       []string  `json:"allowed_redirect_uris"`
-	AuthorizationHookURL      string    `json:"authorization_hook_url"`
-	AuthorizationCredentialID string    `json:"-"`
-	UsageHookURL              string    `json:"usage_hook_url"`
-	UsageCredentialID         string    `json:"-"`
-	Revision                  int64     `json:"revision"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
+// ProviderConfig is the optional delegated customer identity boundary. It does
+// not contain service-to-service delivery credentials.
+type ProviderConfig struct {
+	ID                 string    `json:"id"`
+	OrganisationID     string    `json:"organisation_id"`
+	DeploymentID       string    `json:"deployment_id"`
+	Issuer             string    `json:"issuer"`
+	ClientID           string    `json:"client_id"`
+	ClientSecretID     string    `json:"-"`
+	Scopes             []string  `json:"scopes"`
+	Audience           string    `json:"audience,omitempty"`
+	OAuthResource      string    `json:"oauth_resource,omitempty"`
+	OrganisationClaim  string    `json:"organisation_claim"`
+	InstallationClaim  string    `json:"installation_claim"`
+	DelegatedAPIOrigin string    `json:"delegated_api_origin"`
+	State              string    `json:"state"`
+	Revision           int64     `json:"revision"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type CustomerAccount struct {
+	ID                  string    `json:"id"`
+	OrganisationID      string    `json:"organisation_id"`
+	ProductID           string    `json:"product_id"`
+	Issuer              string    `json:"issuer"`
+	ExternalID          string    `json:"external_id"`
+	State               string    `json:"state"`
+	Revision            int64     `json:"revision"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	LastAuthenticatedAt time.Time `json:"last_authenticated_at"`
 }
 
 type OAuthState struct {
@@ -29,6 +41,8 @@ type OAuthState struct {
 	ProductID           string
 	ClientID            string
 	RedirectURI         string
+	Resource            string
+	Scopes              []string
 	DownstreamState     string
 	DownstreamChallenge string
 	UpstreamVerifier    string
@@ -37,49 +51,67 @@ type OAuthState struct {
 }
 
 type OAuthCode struct {
-	Digest              []byte
+	Digest                 []byte
+	ProductID              string
+	ClientID               string
+	RedirectURI            string
+	Resource               string
+	Scopes                 []string
+	DownstreamChallenge    string
+	Issuer                 string
+	Subject                string
+	Email                  string
+	DisplayName            string
+	CustomerAccountID      string
+	ExternalCustomerID     string
+	InstallationID         string
+	Grants                 map[string]bool
+	AccessEvaluationID     string
+	PolicyVersion          string
+	UpstreamAccessSecretID string
+	AccessExpiresAt        time.Time
+	ExpiresAt              time.Time
+}
+
+type AccessToken struct {
+	Digest                 []byte
+	ProductID              string
+	ClientID               string
+	Resource               string
+	Issuer                 string
+	Subject                string
+	Email                  string
+	DisplayName            string
+	CustomerAccountID      string
+	ExternalCustomerID     string
+	InstallationID         string
+	Grants                 map[string]bool
+	AccessEvaluationID     string
+	PolicyVersion          string
+	UpstreamAccessSecretID string
+	Scopes                 []string
+	ExpiresAt              time.Time
+	CreatedAt              time.Time
+	RevokedAt              *time.Time
+}
+
+type Principal struct {
 	ProductID           string
 	ClientID            string
-	RedirectURI         string
-	DownstreamChallenge string
+	Resource            string
 	Issuer              string
 	Subject             string
 	Email               string
 	DisplayName         string
-	VendorOrganisation  string
+	CustomerAccountID   string
+	ExternalCustomerID  string
 	InstallationID      string
-	Entitlements        map[string]bool
-	ExpiresAt           time.Time
-}
-
-type AccessToken struct {
-	Digest             []byte
-	ProductID          string
-	ClientID           string
-	Issuer             string
-	Subject            string
-	Email              string
-	DisplayName        string
-	VendorOrganisation string
-	InstallationID     string
-	Entitlements       map[string]bool
-	Scopes             []string
-	ExpiresAt          time.Time
-	CreatedAt          time.Time
-	RevokedAt          *time.Time
-}
-
-type Principal struct {
-	ProductID          string
-	ClientID           string
-	Issuer             string
-	Subject            string
-	Email              string
-	DisplayName        string
-	VendorOrganisation string
-	InstallationID     string
-	Entitlements       map[string]bool
-	Scopes             []string
+	Grants              map[string]bool
+	AccessEvaluationID  string
+	PolicyVersion       string
+	DelegatedAPIOrigin  string
+	UpstreamAccessToken string
+	Scopes              []string
 }
 
 type Claims struct {
@@ -87,6 +119,26 @@ type Claims struct {
 	Subject            string
 	Email              string
 	DisplayName        string
-	VendorOrganisation string
+	ExternalCustomerID string
 	InstallationID     string
+}
+
+type UpstreamIdentity struct {
+	Claims              Claims
+	AccessToken         string
+	ExpiresAt           time.Time
+	AccessEvaluationKey string
+}
+
+type AccessEvaluation struct {
+	ID            string    `json:"id"`
+	Grants        []string  `json:"grants"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	PolicyVersion string    `json:"policy_version,omitempty"`
+}
+
+type ClientMetadata struct {
+	ClientID     string   `json:"client_id"`
+	ClientName   string   `json:"client_name,omitempty"`
+	RedirectURIs []string `json:"redirect_uris"`
 }

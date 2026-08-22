@@ -258,11 +258,11 @@ func (p *Postgres) UpdateProductVersion(ctx context.Context, value model.Product
 
 func scanProductVersionPin(row interface{ Scan(...any) error }) (model.ProductVersionPin, error) {
 	var value model.ProductVersionPin
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Scope, &value.ScopeID, &value.CustomerID, &value.EnvironmentID, &value.InstallationID, &value.ProductVersionID, &value.ProductVersion, &value.Reason, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Scope, &value.ScopeID, &value.CustomerAccountID, &value.EnvironmentID, &value.InstallationID, &value.ProductVersionID, &value.ProductVersion, &value.Reason, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const productVersionPinSelect = `SELECT p.id::text,p.organisation_id::text,p.product_id::text,p.scope,p.scope_id,p.customer_id,coalesce(p.environment_id::text,''),coalesce(p.installation_id::text,''),p.connector_release_id::text,r.display_version,p.reason,p.revision,p.created_at,p.updated_at FROM product_version_pins p JOIN connector_releases r ON r.id=p.connector_release_id`
+const productVersionPinSelect = `SELECT p.id::text,p.organisation_id::text,p.product_id::text,p.scope,p.scope_id,p.customer_account_id::text,coalesce(p.environment_id::text,''),coalesce(p.installation_id::text,''),p.connector_release_id::text,r.display_version,p.reason,p.revision,p.created_at,p.updated_at FROM product_version_pins p JOIN connector_releases r ON r.id=p.connector_release_id`
 
 func (p *Postgres) ProductVersionPins(ctx context.Context, productID string) ([]model.ProductVersionPin, error) {
 	rows, err := p.pool.Query(ctx, productVersionPinSelect+` WHERE p.product_id=$1 ORDER BY p.scope,p.scope_id`, productID)
@@ -287,10 +287,10 @@ func (p *Postgres) ProductVersionPin(ctx context.Context, productID, scope, scop
 
 func (p *Postgres) SaveProductVersionPin(ctx context.Context, value model.ProductVersionPin, expected int64) (model.ProductVersionPin, error) {
 	if expected == 0 {
-		created, err := scanProductVersionPin(p.pool.QueryRow(ctx, `INSERT INTO product_version_pins(id,organisation_id,product_id,scope,scope_id,customer_id,environment_id,installation_id,connector_release_id,reason) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,nullif($8,'')::uuid,$9,$10) RETURNING id::text,organisation_id::text,product_id::text,scope,scope_id,customer_id,coalesce(environment_id::text,''),coalesce(installation_id::text,''),connector_release_id::text,(SELECT display_version FROM connector_releases WHERE id=product_version_pins.connector_release_id),reason,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Scope, value.ScopeID, value.CustomerID, value.EnvironmentID, value.InstallationID, value.ProductVersionID, value.Reason))
+		created, err := scanProductVersionPin(p.pool.QueryRow(ctx, `INSERT INTO product_version_pins(id,organisation_id,product_id,scope,scope_id,customer_account_id,environment_id,installation_id,connector_release_id,reason) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,nullif($8,'')::uuid,$9,$10) RETURNING id::text,organisation_id::text,product_id::text,scope,scope_id,customer_account_id::text,coalesce(environment_id::text,''),coalesce(installation_id::text,''),connector_release_id::text,(SELECT display_version FROM connector_releases WHERE id=product_version_pins.connector_release_id),reason,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Scope, value.ScopeID, value.CustomerAccountID, value.EnvironmentID, value.InstallationID, value.ProductVersionID, value.Reason))
 		return created, err
 	}
-	updated, err := scanProductVersionPin(p.pool.QueryRow(ctx, `UPDATE product_version_pins SET connector_release_id=$4,reason=$5,revision=revision+1,updated_at=now() WHERE product_id=$1 AND scope=$2 AND scope_id=$3 AND revision=$6 RETURNING id::text,organisation_id::text,product_id::text,scope,scope_id,customer_id,coalesce(environment_id::text,''),coalesce(installation_id::text,''),connector_release_id::text,(SELECT display_version FROM connector_releases WHERE id=product_version_pins.connector_release_id),reason,revision,created_at,updated_at`, value.ProductID, value.Scope, value.ScopeID, value.ProductVersionID, value.Reason, expected))
+	updated, err := scanProductVersionPin(p.pool.QueryRow(ctx, `UPDATE product_version_pins SET connector_release_id=$4,reason=$5,revision=revision+1,updated_at=now() WHERE product_id=$1 AND scope=$2 AND scope_id=$3 AND revision=$6 RETURNING id::text,organisation_id::text,product_id::text,scope,scope_id,customer_account_id::text,coalesce(environment_id::text,''),coalesce(installation_id::text,''),connector_release_id::text,(SELECT display_version FROM connector_releases WHERE id=product_version_pins.connector_release_id),reason,revision,created_at,updated_at`, value.ProductID, value.Scope, value.ScopeID, value.ProductVersionID, value.Reason, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.ProductVersionPin(ctx, value.ProductID, value.Scope, value.ScopeID); lookupErr == nil {
 			return model.ProductVersionPin{}, ErrConflict
@@ -340,11 +340,11 @@ func (p *Postgres) AppendProductVersionPinHistory(ctx context.Context, value mod
 
 func scanProductInstallation(row interface{ Scan(...any) error }) (model.ProductInstallation, error) {
 	var value model.ProductInstallation
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.CustomerID, &value.EnvironmentID, &value.ExternalID, &value.Name, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.CustomerAccountID, &value.EnvironmentID, &value.ExternalID, &value.Name, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const productInstallationSelect = `SELECT id::text,organisation_id::text,product_id::text,customer_id,environment_id::text,external_id,name,state,revision,created_at,updated_at FROM product_installations`
+const productInstallationSelect = `SELECT id::text,organisation_id::text,product_id::text,customer_account_id::text,environment_id::text,external_id,name,state,revision,created_at,updated_at FROM product_installations`
 
 func (p *Postgres) ProductInstallations(ctx context.Context, productID string) ([]model.ProductInstallation, error) {
 	rows, err := p.pool.Query(ctx, productInstallationSelect+` WHERE product_id=$1 ORDER BY name`, productID)
@@ -373,9 +373,9 @@ func (p *Postgres) ProductInstallationByExternalID(ctx context.Context, productI
 
 func (p *Postgres) SaveProductInstallation(ctx context.Context, value model.ProductInstallation, expected int64) (model.ProductInstallation, error) {
 	if expected == 0 {
-		return scanProductInstallation(p.pool.QueryRow(ctx, `INSERT INTO product_installations(id,organisation_id,product_id,customer_id,environment_id,external_id,name,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,organisation_id::text,product_id::text,customer_id,environment_id::text,external_id,name,state,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.CustomerID, value.EnvironmentID, value.ExternalID, value.Name, value.State))
+		return scanProductInstallation(p.pool.QueryRow(ctx, `INSERT INTO product_installations(id,organisation_id,product_id,customer_account_id,environment_id,external_id,name,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,organisation_id::text,product_id::text,customer_account_id::text,environment_id::text,external_id,name,state,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.CustomerAccountID, value.EnvironmentID, value.ExternalID, value.Name, value.State))
 	}
-	updated, err := scanProductInstallation(p.pool.QueryRow(ctx, `UPDATE product_installations SET customer_id=$3,environment_id=$4,external_id=$5,name=$6,state=$7,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$8 RETURNING id::text,organisation_id::text,product_id::text,customer_id,environment_id::text,external_id,name,state,revision,created_at,updated_at`, value.ProductID, value.ID, value.CustomerID, value.EnvironmentID, value.ExternalID, value.Name, value.State, expected))
+	updated, err := scanProductInstallation(p.pool.QueryRow(ctx, `UPDATE product_installations SET customer_account_id=$3,environment_id=$4,external_id=$5,name=$6,state=$7,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$8 RETURNING id::text,organisation_id::text,product_id::text,customer_account_id::text,environment_id::text,external_id,name,state,revision,created_at,updated_at`, value.ProductID, value.ID, value.CustomerAccountID, value.EnvironmentID, value.ExternalID, value.Name, value.State, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.ProductInstallation(ctx, value.ProductID, value.ID); lookupErr == nil {
 			return model.ProductInstallation{}, ErrConflict
@@ -586,61 +586,6 @@ func (p *Postgres) CreateCrawlJob(ctx context.Context, value model.CrawlJob) (mo
 	return scanCrawlJob(p.pool.QueryRow(ctx, `INSERT INTO crawl_jobs(id, organisation_id, product_id, source_id, state) VALUES ($1, $2, $3, $4, 'queued') RETURNING id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at`, value.ID, value.OrganisationID, value.ProductID, value.SourceID))
 }
 
-func scanPackage(row interface{ Scan(...any) error }) (model.Package, error) {
-	var value model.Package
-	var state string
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Name, &value.Ecosystem, &value.Version, &value.ExternalPackageID, &value.Mode, &value.Location, &value.DownloadURL, &value.CredentialID, &value.ChecksumSHA256, &value.ExpectedSize, &value.Visibility, &state, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
-	value.Published = state == "published"
-	return value, databaseError(err)
-}
-
-func (p *Postgres) Packages(ctx context.Context, productID string) ([]model.Package, error) {
-	rows, err := p.pool.Query(ctx, packageSelect+` WHERE product_id = $1 ORDER BY name`, productID)
-	if err != nil {
-		return nil, databaseError(err)
-	}
-	defer rows.Close()
-	result := make([]model.Package, 0)
-	for rows.Next() {
-		value, err := scanPackage(rows)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, value)
-	}
-	return result, rows.Err()
-}
-
-func (p *Postgres) Package(ctx context.Context, productID, id string) (model.Package, error) {
-	return scanPackage(p.pool.QueryRow(ctx, packageSelect+` WHERE product_id = $1 AND id = $2`, productID, id))
-}
-
-const packageSelect = `SELECT id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at FROM packages`
-
-func (p *Postgres) CreatePackage(ctx context.Context, value model.Package) (model.Package, error) {
-	return scanPackage(p.pool.QueryRow(ctx, `INSERT INTO packages(id, organisation_id, product_id, ecosystem, name, version, external_package_id, mode, visibility, state, upstream_url, download_url, credential_secret_id, checksum_sha256, expected_size) VALUES ($1,$2,$3,$4,$5,$6,nullif($7,''),$8,'private','draft',nullif($9,''),nullif($10,''),nullif($11,'')::uuid,nullif($12,''::bytea),nullif($13,0)) RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Ecosystem, value.Name, value.Version, value.ExternalPackageID, value.Mode, value.Location, value.DownloadURL, value.CredentialID, value.ChecksumSHA256, value.ExpectedSize))
-}
-
-func (p *Postgres) UpdatePackage(ctx context.Context, value model.Package, expected int64) (model.Package, error) {
-	updated, err := scanPackage(p.pool.QueryRow(ctx, `UPDATE packages SET visibility = $3, revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $4 RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, value.ProductID, value.ID, value.Visibility, expected))
-	if errors.Is(err, ErrNotFound) {
-		if _, lookupErr := p.Package(ctx, value.ProductID, value.ID); lookupErr == nil {
-			return model.Package{}, ErrConflict
-		}
-	}
-	return updated, err
-}
-
-func (p *Postgres) PublishPackage(ctx context.Context, productID, packageID string, expected int64) (model.Package, error) {
-	updated, err := scanPackage(p.pool.QueryRow(ctx, `UPDATE packages SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $3 AND state <> 'quarantined' RETURNING id::text, organisation_id::text, product_id::text, name, ecosystem, version, coalesce(external_package_id, ''), mode::text, coalesce(upstream_url, ''), coalesce(download_url, ''), coalesce(credential_secret_id::text, ''), coalesce(checksum_sha256, ''::bytea), coalesce(expected_size, 0), visibility::text, state::text, revision, created_at, updated_at`, productID, packageID, expected))
-	if errors.Is(err, ErrNotFound) {
-		if _, lookupErr := p.Package(ctx, productID, packageID); lookupErr == nil {
-			return model.Package{}, ErrConflict
-		}
-	}
-	return updated, err
-}
-
 func scanSecret(row pgx.Row) (model.Secret, error) {
 	var value model.Secret
 	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Purpose, &value.Ciphertext, &value.Nonce, &value.KeyVersion, &value.Fingerprint, &value.CreatedAt)
@@ -655,11 +600,11 @@ func (p *Postgres) Secret(ctx context.Context, organisationID, id string) (model
 	return scanSecret(p.pool.QueryRow(ctx, `SELECT id::text, organisation_id::text, name, purpose, ciphertext, nonce, key_version, fingerprint, created_at FROM secrets WHERE organisation_id = $1 AND id = $2`, organisationID, id))
 }
 
-const toolSelect = `SELECT t.id::text, t.organisation_id::text, t.product_id::text, t.namespace, t.name, t.description, t.input_schema, t.output_schema, t.state::text, t.revision, coalesce(t.api_connection_id::text, ''), coalesce(c.base_url, ''), t.http_method, coalesce(c.credential_secret_id::text, ''), t.authorization_policy, t.timeout_ms, t.backend_kind, coalesce(t.mcp_connection_id::text, ''), t.upstream_tool_name, t.upstream_schema_hash, t.upstream_annotations, t.upstream_drifted, t.created_at, t.updated_at FROM tool_definitions t LEFT JOIN api_connections c ON c.id = t.api_connection_id`
+const toolSelect = `SELECT t.id::text, t.organisation_id::text, t.product_id::text, t.namespace, t.name, t.description, t.input_schema, t.output_schema, t.state::text, t.revision, coalesce(t.api_connection_id::text, ''), coalesce(c.base_url, ''), t.http_method, t.authorization_policy, t.timeout_ms, t.backend_kind, coalesce(t.mcp_connection_id::text, ''), t.upstream_tool_name, t.upstream_schema_hash, t.upstream_annotations, t.upstream_drifted, t.created_at, t.updated_at FROM tool_definitions t LEFT JOIN api_connections c ON c.id = t.api_connection_id`
 
 func scanTool(row interface{ Scan(...any) error }) (model.Tool, error) {
 	var value model.Tool
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Namespace, &value.Name, &value.Description, &value.InputSchema, &value.OutputSchema, &value.State, &value.Revision, &value.APIConnectionID, &value.BaseURL, &value.HTTPMethod, &value.CredentialID, &value.AuthorizationPolicy, &value.TimeoutMS, &value.BackendKind, &value.MCPConnectionID, &value.UpstreamToolName, &value.UpstreamSchemaHash, &value.UpstreamAnnotations, &value.UpstreamDrifted, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Namespace, &value.Name, &value.Description, &value.InputSchema, &value.OutputSchema, &value.State, &value.Revision, &value.APIConnectionID, &value.BaseURL, &value.HTTPMethod, &value.AuthorizationPolicy, &value.TimeoutMS, &value.BackendKind, &value.MCPConnectionID, &value.UpstreamToolName, &value.UpstreamSchemaHash, &value.UpstreamAnnotations, &value.UpstreamDrifted, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
@@ -704,7 +649,7 @@ func (p *Postgres) CreateTool(ctx context.Context, value model.Tool) (model.Tool
 		if parsed, parseErr := url.Parse(value.BaseURL); parseErr == nil {
 			allowedHost = parsed.Hostname()
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO api_connections(id, organisation_id, product_id, name, base_url, allowed_hosts, credential_secret_id) VALUES ($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid)`, value.APIConnectionID, value.OrganisationID, value.ProductID, value.Namespace+"."+value.Name, parsedBase, []string{allowedHost}, value.CredentialID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO api_connections(id, organisation_id, product_id, name, base_url, allowed_hosts) VALUES ($1,$2,$3,$4,$5,$6)`, value.APIConnectionID, value.OrganisationID, value.ProductID, value.Namespace+"."+value.Name, parsedBase, []string{allowedHost}); err != nil {
 			return model.Tool{}, databaseError(err)
 		}
 	}
@@ -720,7 +665,7 @@ func (p *Postgres) CreateTool(ctx context.Context, value model.Tool) (model.Tool
 }
 
 func (p *Postgres) UpdateImportedTool(ctx context.Context, value model.Tool, expected int64) (model.Tool, error) {
-	updated, err := scanTool(p.pool.QueryRow(ctx, `UPDATE tool_definitions SET description=$4, input_schema=$5, output_schema=$6, authorization_policy=$7, timeout_ms=$8, upstream_schema_hash=$9, upstream_annotations=$10, upstream_drifted=$11, revision=revision+1, updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$3 AND backend_kind='mcp' AND state='draft' RETURNING id::text, organisation_id::text, product_id::text, namespace, name, description, input_schema, output_schema, state::text, revision, coalesce(api_connection_id::text, ''), '', http_method, '', authorization_policy, timeout_ms, backend_kind, coalesce(mcp_connection_id::text, ''), upstream_tool_name, upstream_schema_hash, upstream_annotations, upstream_drifted, created_at, updated_at`, value.ProductID, value.ID, expected, value.Description, value.InputSchema, value.OutputSchema, value.AuthorizationPolicy, value.TimeoutMS, value.UpstreamSchemaHash, value.UpstreamAnnotations, value.UpstreamDrifted))
+	updated, err := scanTool(p.pool.QueryRow(ctx, `UPDATE tool_definitions SET description=$4, input_schema=$5, output_schema=$6, authorization_policy=$7, timeout_ms=$8, upstream_schema_hash=$9, upstream_annotations=$10, upstream_drifted=$11, revision=revision+1, updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$3 AND backend_kind='mcp' AND state='draft' RETURNING id::text, organisation_id::text, product_id::text, namespace, name, description, input_schema, output_schema, state::text, revision, coalesce(api_connection_id::text, ''), '', http_method, authorization_policy, timeout_ms, backend_kind, coalesce(mcp_connection_id::text, ''), upstream_tool_name, upstream_schema_hash, upstream_annotations, upstream_drifted, created_at, updated_at`, value.ProductID, value.ID, expected, value.Description, value.InputSchema, value.OutputSchema, value.AuthorizationPolicy, value.TimeoutMS, value.UpstreamSchemaHash, value.UpstreamAnnotations, value.UpstreamDrifted))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.Tool(ctx, value.ProductID, value.ID); lookupErr == nil {
 			return model.Tool{}, ErrConflict
@@ -981,38 +926,6 @@ func (p *Postgres) CompleteIntegrationRun(ctx context.Context, productID, id str
 	return value, err
 }
 
-func scanReportingConfig(row interface{ Scan(...any) error }) (model.ReportingConfig, error) {
-	var value model.ReportingConfig
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.BugReportsEnabled, &value.FeedbackEnabled, &value.BugHookURL, &value.BugHookCredentialID, &value.FeedbackHookURL, &value.FeedbackHookCredentialID, &value.RetentionDays, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
-	return value, databaseError(err)
-}
-
-const reportingConfigSelect = `SELECT id::text, organisation_id::text, product_id::text, bug_reports_enabled, feedback_enabled, bug_hook_url, coalesce(bug_hook_credential_id::text,''), feedback_hook_url, coalesce(feedback_hook_credential_id::text,''), retention_days, revision, created_at, updated_at FROM reporting_configs`
-
-func (p *Postgres) ReportingConfig(ctx context.Context, productID string) (model.ReportingConfig, error) {
-	return scanReportingConfig(p.pool.QueryRow(ctx, reportingConfigSelect+` WHERE product_id=$1`, productID))
-}
-
-func (p *Postgres) SaveReportingConfig(ctx context.Context, value model.ReportingConfig, expectedRevision int64) (model.ReportingConfig, error) {
-	var row pgx.Row
-	if expectedRevision == 0 {
-		row = p.pool.QueryRow(ctx, `INSERT INTO reporting_configs(id,organisation_id,product_id,bug_reports_enabled,feedback_enabled,bug_hook_url,bug_hook_credential_id,feedback_hook_url,feedback_hook_credential_id,retention_days)
-			VALUES ($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,$8,nullif($9,'')::uuid,$10)
-			RETURNING id::text, organisation_id::text, product_id::text, bug_reports_enabled, feedback_enabled, bug_hook_url, coalesce(bug_hook_credential_id::text,''), feedback_hook_url, coalesce(feedback_hook_credential_id::text,''), retention_days, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.BugReportsEnabled, value.FeedbackEnabled, value.BugHookURL, value.BugHookCredentialID, value.FeedbackHookURL, value.FeedbackHookCredentialID, value.RetentionDays)
-	} else {
-		row = p.pool.QueryRow(ctx, `UPDATE reporting_configs SET bug_reports_enabled=$3, feedback_enabled=$4, bug_hook_url=$5, bug_hook_credential_id=nullif($6,'')::uuid, feedback_hook_url=$7, feedback_hook_credential_id=nullif($8,'')::uuid, retention_days=$9, revision=revision+1, updated_at=now()
-			WHERE product_id=$1 AND revision=$2
-			RETURNING id::text, organisation_id::text, product_id::text, bug_reports_enabled, feedback_enabled, bug_hook_url, coalesce(bug_hook_credential_id::text,''), feedback_hook_url, coalesce(feedback_hook_credential_id::text,''), retention_days, revision, created_at, updated_at`, value.ProductID, expectedRevision, value.BugReportsEnabled, value.FeedbackEnabled, value.BugHookURL, value.BugHookCredentialID, value.FeedbackHookURL, value.FeedbackHookCredentialID, value.RetentionDays)
-	}
-	updated, err := scanReportingConfig(row)
-	if errors.Is(err, ErrNotFound) {
-		if _, lookupErr := p.ReportingConfig(ctx, value.ProductID); lookupErr == nil || expectedRevision != 0 {
-			return model.ReportingConfig{}, ErrConflict
-		}
-	}
-	return updated, err
-}
-
 func scanReportSubmission(row interface{ Scan(...any) error }) (model.ReportSubmission, error) {
 	var value model.ReportSubmission
 	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.IntegrationID, &value.IntegrationSnapshot, &value.SupportRouteID, &value.Kind, &value.State, &value.ActorPseudonym, &value.IdempotencyDigest, &value.PayloadCiphertext, &value.PayloadNonce, &value.PayloadKeyVersion, &value.PayloadFingerprint, &value.Attempts, &value.NextAttemptAt, &value.DeliveryStartedAt, &value.LastError, &value.ExternalID, &value.ExternalURL, &value.DeliveredAt, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt)
@@ -1022,24 +935,41 @@ func scanReportSubmission(row interface{ Scan(...any) error }) (model.ReportSubm
 const reportSubmissionColumns = `id::text, organisation_id::text, product_id::text, coalesce(integration_id::text,''), integration_snapshot, coalesce(support_route_id::text,''), kind, state, actor_pseudonym, idempotency_digest, payload_ciphertext, payload_nonce, payload_key_version, payload_fingerprint, attempts, next_attempt_at, delivery_started_at, last_error, external_id, external_url, delivered_at, expires_at, created_at, updated_at`
 const reportSubmissionSelect = `SELECT ` + reportSubmissionColumns + ` FROM report_submissions`
 
-func (p *Postgres) ReportSubmissions(ctx context.Context, productID string, limit int) ([]model.ReportSubmission, error) {
+func (p *Postgres) ReportSubmissions(ctx context.Context, productID, startingAfter string, limit int) ([]model.ReportSubmission, bool, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := p.pool.Query(ctx, reportSubmissionSelect+` WHERE product_id=$1 ORDER BY created_at DESC LIMIT $2`, productID, limit)
+	query := reportSubmissionSelect + ` WHERE product_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2`
+	arguments := []any{productID, limit + 1}
+	if startingAfter != "" {
+		var cursorCreatedAt time.Time
+		if err := p.pool.QueryRow(ctx, `SELECT created_at FROM report_submissions WHERE product_id=$1 AND id::text=$2`, productID, startingAfter).Scan(&cursorCreatedAt); err != nil {
+			return nil, false, databaseError(err)
+		}
+		query = reportSubmissionSelect + ` WHERE product_id=$1 AND (created_at,id::text)<($3,$4) ORDER BY created_at DESC,id DESC LIMIT $2`
+		arguments = append(arguments, cursorCreatedAt, startingAfter)
+	}
+	rows, err := p.pool.Query(ctx, query, arguments...)
 	if err != nil {
-		return nil, databaseError(err)
+		return nil, false, databaseError(err)
 	}
 	defer rows.Close()
 	result := make([]model.ReportSubmission, 0)
 	for rows.Next() {
 		value, scanErr := scanReportSubmission(rows)
 		if scanErr != nil {
-			return nil, scanErr
+			return nil, false, scanErr
 		}
 		result = append(result, value)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
 }
 
 func (p *Postgres) ReportSubmission(ctx context.Context, productID, id string) (model.ReportSubmission, error) {
@@ -1053,8 +983,8 @@ func (p *Postgres) CreateReportSubmission(ctx context.Context, value model.Repor
 		RETURNING `+reportSubmissionColumns, value.ID, value.OrganisationID, value.ProductID, value.IntegrationID, value.IntegrationSnapshot, value.SupportRouteID, value.Kind, value.State, value.ActorPseudonym, value.IdempotencyDigest, value.PayloadCiphertext, value.PayloadNonce, value.PayloadKeyVersion, value.PayloadFingerprint, value.NextAttemptAt, value.ExpiresAt))
 }
 
-func (p *Postgres) ActivateHeldReportSubmissions(ctx context.Context, productID, kind string, now time.Time) error {
-	_, err := p.pool.Exec(ctx, `UPDATE report_submissions SET state='pending', next_attempt_at=$3, updated_at=$3 WHERE product_id=$1 AND kind=$2 AND state='held' AND expires_at>$3`, productID, kind, now)
+func (p *Postgres) ActivateHeldReportSubmissions(ctx context.Context, productID, routeID, kind string, now time.Time) error {
+	_, err := p.pool.Exec(ctx, `UPDATE report_submissions SET state='pending', next_attempt_at=$4, updated_at=$4 WHERE product_id=$1 AND support_route_id=$2 AND kind=$3 AND state='held' AND expires_at>$4`, productID, routeID, kind, now)
 	return databaseError(err)
 }
 
@@ -1137,75 +1067,147 @@ func (p *Postgres) SaveLLMProfile(ctx context.Context, value model.LLMProfile) (
 	return scanLLMProfile(p.pool.QueryRow(ctx, `INSERT INTO llm_profiles(id,organisation_id,product_id,role,provider,endpoint,model,credential_secret_id,embedding_dimensions,max_input_tokens,max_output_tokens,daily_token_budget,hardening,enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,'')::uuid,nullif($9,0),$10,$11,$12,$13,$14) ON CONFLICT (product_id,role) DO UPDATE SET provider=excluded.provider,endpoint=excluded.endpoint,model=excluded.model,credential_secret_id=excluded.credential_secret_id,embedding_dimensions=excluded.embedding_dimensions,max_input_tokens=excluded.max_input_tokens,max_output_tokens=excluded.max_output_tokens,daily_token_budget=excluded.daily_token_budget,hardening=excluded.hardening,enabled=excluded.enabled,revision=llm_profiles.revision+1,updated_at=now() RETURNING id::text, organisation_id::text, product_id::text, role, provider, endpoint, model, coalesce(credential_secret_id::text,''), coalesce(embedding_dimensions,0), max_input_tokens, max_output_tokens, daily_token_budget, hardening, enabled, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Role, value.Provider, value.Endpoint, value.Model, value.CredentialID, value.EmbeddingDimensions, value.MaxInputTokens, value.MaxOutputTokens, value.DailyTokenBudget, value.Hardening, value.Enabled))
 }
 
-func scanVendorIdentity(row interface{ Scan(...any) error }) (identity.VendorConfig, error) {
-	var value identity.VendorConfig
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Issuer, &value.ClientID, &value.ClientSecretID, &value.Scopes, &value.Audience, &value.OrganisationClaim, &value.InstallationClaim, &value.EntitlementHookURL, &value.AllowedRedirectURIs, &value.AuthorizationHookURL, &value.AuthorizationCredentialID, &value.UsageHookURL, &value.UsageCredentialID, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+func scanIdentityProvider(row interface{ Scan(...any) error }) (identity.ProviderConfig, error) {
+	var value identity.ProviderConfig
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.DeploymentID, &value.Issuer, &value.ClientID, &value.ClientSecretID, &value.Scopes, &value.Audience, &value.OAuthResource, &value.OrganisationClaim, &value.InstallationClaim, &value.DelegatedAPIOrigin, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const vendorIdentitySelect = `SELECT id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, coalesce(authorization_credential_id::text,''), usage_hook_url, coalesce(usage_credential_id::text,''), revision, created_at, updated_at FROM vendor_identity_providers`
+const identityProviderSelect = `SELECT id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, oauth_resource, organisation_claim, installation_claim, delegated_api_origin, state, revision, created_at, updated_at FROM identity_providers`
 
-func (p *Postgres) VendorIdentity(ctx context.Context, productID string) (identity.VendorConfig, error) {
-	return scanVendorIdentity(p.pool.QueryRow(ctx, vendorIdentitySelect+` WHERE product_id = $1`, productID))
+func (p *Postgres) IdentityProvider(ctx context.Context, deploymentID string) (identity.ProviderConfig, error) {
+	return scanIdentityProvider(p.pool.QueryRow(ctx, identityProviderSelect+` WHERE product_id = $1`, deploymentID))
 }
 
-func (p *Postgres) SaveVendorIdentity(ctx context.Context, value identity.VendorConfig) (identity.VendorConfig, error) {
-	return scanVendorIdentity(p.pool.QueryRow(ctx, `INSERT INTO vendor_identity_providers(id, organisation_id, product_id, issuer, client_id, client_secret_id, scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, authorization_credential_id, usage_hook_url, usage_credential_id) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,$13,nullif($14,'')::uuid,$15,nullif($16,'')::uuid) ON CONFLICT (product_id) WHERE product_id IS NOT NULL DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret_id=excluded.client_secret_id, scopes=excluded.scopes, audience=excluded.audience, organisation_claim=excluded.organisation_claim, installation_claim=excluded.installation_claim, entitlement_hook_url=excluded.entitlement_hook_url, allowed_redirect_uris=excluded.allowed_redirect_uris, authorization_hook_url=excluded.authorization_hook_url, authorization_credential_id=excluded.authorization_credential_id, usage_hook_url=excluded.usage_hook_url, usage_credential_id=excluded.usage_credential_id, revision=vendor_identity_providers.revision+1, updated_at=now() RETURNING id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, organisation_claim, installation_claim, entitlement_hook_url, allowed_redirect_uris, authorization_hook_url, coalesce(authorization_credential_id::text,''), usage_hook_url, coalesce(usage_credential_id::text,''), revision, created_at, updated_at`, value.ID, value.OrganisationID, value.ProductID, value.Issuer, value.ClientID, value.ClientSecretID, value.Scopes, value.Audience, value.OrganisationClaim, value.InstallationClaim, value.EntitlementHookURL, value.AllowedRedirectURIs, value.AuthorizationHookURL, value.AuthorizationCredentialID, value.UsageHookURL, value.UsageCredentialID))
+func (p *Postgres) SaveIdentityProvider(ctx context.Context, value identity.ProviderConfig) (identity.ProviderConfig, error) {
+	updated, err := scanIdentityProvider(p.pool.QueryRow(ctx, `INSERT INTO identity_providers(id, organisation_id, product_id, issuer, client_id, client_secret_id, scopes, audience, oauth_resource, organisation_claim, installation_claim, delegated_api_origin, state) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (product_id) DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret_id=excluded.client_secret_id, scopes=excluded.scopes, audience=excluded.audience, oauth_resource=excluded.oauth_resource, organisation_claim=excluded.organisation_claim, installation_claim=excluded.installation_claim, delegated_api_origin=excluded.delegated_api_origin, state=excluded.state, revision=identity_providers.revision+1, updated_at=now() WHERE identity_providers.revision=$14 RETURNING id::text, organisation_id::text, product_id::text, issuer, client_id, coalesce(client_secret_id::text, ''), scopes, audience, oauth_resource, organisation_claim, installation_claim, delegated_api_origin, state, revision, created_at, updated_at`, value.ID, value.OrganisationID, value.DeploymentID, value.Issuer, value.ClientID, value.ClientSecretID, value.Scopes, value.Audience, value.OAuthResource, value.OrganisationClaim, value.InstallationClaim, value.DelegatedAPIOrigin, value.State, value.Revision))
+	if errors.Is(err, ErrNotFound) {
+		if _, lookupErr := p.IdentityProvider(ctx, value.DeploymentID); lookupErr == nil {
+			return identity.ProviderConfig{}, ErrConflict
+		}
+	}
+	return updated, err
+}
+
+func scanCustomerAccount(row interface{ Scan(...any) error }) (identity.CustomerAccount, error) {
+	var value identity.CustomerAccount
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Issuer, &value.ExternalID, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt, &value.LastAuthenticatedAt)
+	return value, databaseError(err)
+}
+
+const customerAccountSelect = `SELECT id::text,organisation_id::text,product_id::text,issuer,external_id,state,revision,created_at,updated_at,last_authenticated_at FROM customer_accounts`
+
+func (p *Postgres) ResolveCustomerAccount(ctx context.Context, value identity.CustomerAccount) (identity.CustomerAccount, error) {
+	return scanCustomerAccount(p.pool.QueryRow(ctx, `INSERT INTO customer_accounts(id,organisation_id,product_id,issuer,external_id,state,last_authenticated_at) VALUES ($1,$2,$3,$4,$5,'active',$6) ON CONFLICT(product_id,issuer,external_id) DO UPDATE SET last_authenticated_at=excluded.last_authenticated_at,updated_at=excluded.last_authenticated_at RETURNING id::text,organisation_id::text,product_id::text,issuer,external_id,state,revision,created_at,updated_at,last_authenticated_at`, value.ID, value.OrganisationID, value.ProductID, value.Issuer, value.ExternalID, value.LastAuthenticatedAt))
+}
+
+func (p *Postgres) CustomerAccounts(ctx context.Context, productID, startingAfter string, limit int) ([]identity.CustomerAccount, bool, error) {
+	if _, err := p.Product(ctx, productID); err != nil {
+		return nil, false, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := customerAccountSelect + ` WHERE product_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2`
+	arguments := []any{productID, limit + 1}
+	if startingAfter != "" {
+		var cursorCreatedAt time.Time
+		if err := p.pool.QueryRow(ctx, `SELECT created_at FROM customer_accounts WHERE product_id=$1 AND id::text=$2`, productID, startingAfter).Scan(&cursorCreatedAt); err != nil {
+			return nil, false, databaseError(err)
+		}
+		query = customerAccountSelect + ` WHERE product_id=$1 AND (created_at,id::text)<($3,$4) ORDER BY created_at DESC,id DESC LIMIT $2`
+		arguments = append(arguments, cursorCreatedAt, startingAfter)
+	}
+	rows, err := p.pool.Query(ctx, query, arguments...)
+	if err != nil {
+		return nil, false, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]identity.CustomerAccount, 0)
+	for rows.Next() {
+		value, scanErr := scanCustomerAccount(rows)
+		if scanErr != nil {
+			return nil, false, scanErr
+		}
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
+}
+
+func (p *Postgres) CustomerAccount(ctx context.Context, productID, id string) (identity.CustomerAccount, error) {
+	return scanCustomerAccount(p.pool.QueryRow(ctx, customerAccountSelect+` WHERE product_id=$1 AND id=$2`, productID, id))
+}
+
+func (p *Postgres) UpdateCustomerAccount(ctx context.Context, value identity.CustomerAccount, expected int64) (identity.CustomerAccount, error) {
+	updated, err := scanCustomerAccount(p.pool.QueryRow(ctx, `UPDATE customer_accounts SET state=$3,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$4 RETURNING id::text,organisation_id::text,product_id::text,issuer,external_id,state,revision,created_at,updated_at,last_authenticated_at`, value.ProductID, value.ID, value.State, expected))
+	if errors.Is(err, ErrNotFound) {
+		if _, lookupErr := p.CustomerAccount(ctx, value.ProductID, value.ID); lookupErr == nil {
+			return identity.CustomerAccount{}, ErrConflict
+		}
+	}
+	return updated, err
 }
 
 func (p *Postgres) CreateOAuthState(ctx context.Context, value identity.OAuthState) error {
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_states(state_digest, product_id, client_id, redirect_uri, downstream_state, downstream_challenge, upstream_verifier, nonce, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.DownstreamState, value.DownstreamChallenge, value.UpstreamVerifier, value.Nonce, value.ExpiresAt)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_states(state_digest, product_id, client_id, redirect_uri, resource, scopes, downstream_state, downstream_challenge, upstream_verifier, nonce, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.Resource, value.Scopes, value.DownstreamState, value.DownstreamChallenge, value.UpstreamVerifier, value.Nonce, value.ExpiresAt)
 	return databaseError(err)
 }
 
 func scanOAuthState(row pgx.Row) (identity.OAuthState, error) {
 	var value identity.OAuthState
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.DownstreamState, &value.DownstreamChallenge, &value.UpstreamVerifier, &value.Nonce, &value.ExpiresAt)
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.Resource, &value.Scopes, &value.DownstreamState, &value.DownstreamChallenge, &value.UpstreamVerifier, &value.Nonce, &value.ExpiresAt)
 	return value, databaseError(err)
 }
 
 func (p *Postgres) ConsumeOAuthState(ctx context.Context, digest []byte) (identity.OAuthState, error) {
-	return scanOAuthState(p.pool.QueryRow(ctx, `DELETE FROM oauth_states WHERE state_digest = $1 RETURNING state_digest, product_id::text, client_id, redirect_uri, downstream_state, downstream_challenge, upstream_verifier, nonce, expires_at`, digest))
+	return scanOAuthState(p.pool.QueryRow(ctx, `DELETE FROM oauth_states WHERE state_digest = $1 RETURNING state_digest, product_id::text, client_id, redirect_uri, resource, scopes, downstream_state, downstream_challenge, upstream_verifier, nonce, expires_at`, digest))
 }
 
 func (p *Postgres) CreateOAuthCode(ctx context.Context, value identity.OAuthCode) error {
-	entitlements, _ := json.Marshal(value.Entitlements)
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_authorization_codes(code_digest, product_id, client_id, redirect_uri, downstream_challenge, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.DownstreamChallenge, value.Issuer, value.Subject, value.Email, value.DisplayName, value.VendorOrganisation, value.InstallationID, entitlements, value.ExpiresAt)
+	grants, _ := json.Marshal(value.Grants)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_authorization_codes(code_digest,product_id,client_id,redirect_uri,resource,scopes,downstream_challenge,issuer,subject,email,display_name,customer_account_id,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id,access_expires_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.Resource, value.Scopes, value.DownstreamChallenge, value.Issuer, value.Subject, value.Email, value.DisplayName, value.CustomerAccountID, value.ExternalCustomerID, value.InstallationID, grants, value.AccessEvaluationID, value.PolicyVersion, value.UpstreamAccessSecretID, value.AccessExpiresAt, value.ExpiresAt)
 	return databaseError(err)
 }
 
 func scanOAuthCode(row pgx.Row) (identity.OAuthCode, error) {
 	var value identity.OAuthCode
-	var entitlements []byte
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.DownstreamChallenge, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.VendorOrganisation, &value.InstallationID, &entitlements, &value.ExpiresAt)
+	var grants []byte
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.Resource, &value.Scopes, &value.DownstreamChallenge, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.CustomerAccountID, &value.ExternalCustomerID, &value.InstallationID, &grants, &value.AccessEvaluationID, &value.PolicyVersion, &value.UpstreamAccessSecretID, &value.AccessExpiresAt, &value.ExpiresAt)
 	if err == nil {
-		err = json.Unmarshal(entitlements, &value.Entitlements)
+		err = json.Unmarshal(grants, &value.Grants)
 	}
 	return value, databaseError(err)
 }
 
 func (p *Postgres) ConsumeOAuthCode(ctx context.Context, digest []byte) (identity.OAuthCode, error) {
-	return scanOAuthCode(p.pool.QueryRow(ctx, `DELETE FROM oauth_authorization_codes WHERE code_digest = $1 RETURNING code_digest, product_id::text, client_id, redirect_uri, downstream_challenge, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, expires_at`, digest))
+	return scanOAuthCode(p.pool.QueryRow(ctx, `DELETE FROM oauth_authorization_codes WHERE code_digest = $1 RETURNING code_digest,product_id::text,client_id,redirect_uri,resource,scopes,downstream_challenge,issuer,subject,email,display_name,customer_account_id::text,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id::text,access_expires_at,expires_at`, digest))
 }
 
 func (p *Postgres) CreateAccessToken(ctx context.Context, value identity.AccessToken) error {
-	entitlements, _ := json.Marshal(value.Entitlements)
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_access_tokens(token_digest, product_id, client_id, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, scopes, expires_at, created_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, value.Digest, value.ProductID, value.ClientID, value.Issuer, value.Subject, value.Email, value.DisplayName, value.VendorOrganisation, value.InstallationID, entitlements, value.Scopes, value.ExpiresAt, value.CreatedAt, value.RevokedAt)
+	grants, _ := json.Marshal(value.Grants)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_access_tokens(token_digest,product_id,client_id,resource,issuer,subject,email,display_name,customer_account_id,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id,scopes,expires_at,created_at,revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, value.Digest, value.ProductID, value.ClientID, value.Resource, value.Issuer, value.Subject, value.Email, value.DisplayName, value.CustomerAccountID, value.ExternalCustomerID, value.InstallationID, grants, value.AccessEvaluationID, value.PolicyVersion, value.UpstreamAccessSecretID, value.Scopes, value.ExpiresAt, value.CreatedAt, value.RevokedAt)
 	return databaseError(err)
 }
 
 func scanAccessToken(row pgx.Row) (identity.AccessToken, error) {
 	var value identity.AccessToken
-	var entitlements []byte
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.VendorOrganisation, &value.InstallationID, &entitlements, &value.Scopes, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
+	var grants []byte
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.Resource, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.CustomerAccountID, &value.ExternalCustomerID, &value.InstallationID, &grants, &value.AccessEvaluationID, &value.PolicyVersion, &value.UpstreamAccessSecretID, &value.Scopes, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
 	if err == nil {
-		err = json.Unmarshal(entitlements, &value.Entitlements)
+		err = json.Unmarshal(grants, &value.Grants)
 	}
 	return value, databaseError(err)
 }
 
 func (p *Postgres) AccessTokenByDigest(ctx context.Context, digest []byte) (identity.AccessToken, error) {
-	return scanAccessToken(p.pool.QueryRow(ctx, `SELECT token_digest, product_id::text, client_id, issuer, subject, email, display_name, vendor_organisation_id, installation_id, entitlements, scopes, expires_at, created_at, revoked_at FROM oauth_access_tokens WHERE token_digest = $1`, digest))
+	return scanAccessToken(p.pool.QueryRow(ctx, `SELECT token_digest,product_id::text,client_id,resource,issuer,subject,email,display_name,customer_account_id::text,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id::text,scopes,expires_at,created_at,revoked_at FROM oauth_access_tokens WHERE token_digest = $1`, digest))
 }
 
 func (p *Postgres) PublicKnowledge(ctx context.Context, productID, query string) ([]model.KnowledgeRecord, error) {
@@ -1265,8 +1267,8 @@ func (p *Postgres) LLMTokensUsed(ctx context.Context, productID, role string, si
 }
 
 func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
-	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "package_acquired": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
-	err := p.pool.QueryRow(ctx, `SELECT count(DISTINCT actor_pseudonym) FILTER (WHERE actor_pseudonym IS NOT NULL), count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called'), count(*) FILTER (WHERE event_name='package.downloaded') FROM analytics_events WHERE product_id=$1 AND created_at >= $2`, productID, since).Scan(&value.ActiveDevelopers, &value.MCPRequests, &value.ToolCalls, &value.PackageDownloads)
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	err := p.pool.QueryRow(ctx, `SELECT count(DISTINCT actor_pseudonym) FILTER (WHERE actor_pseudonym IS NOT NULL), count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called') FROM analytics_events WHERE product_id=$1 AND created_at >= $2`, productID, since).Scan(&value.ActiveDevelopers, &value.MCPRequests, &value.ToolCalls)
 	if err != nil {
 		return value, databaseError(err)
 	}
@@ -1307,7 +1309,7 @@ func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since
 		value.Versions[version] = count
 	}
 	rows.Close()
-	rows, err = p.pool.Query(ctx, `SELECT event_name, count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name = ANY($3) GROUP BY event_name`, productID, since, []string{"connector_authorized", "run_started", "capability_resolved", "package_acquired", "credentials_issued", "implementation_validated", "success_reported"})
+	rows, err = p.pool.Query(ctx, `SELECT event_name, count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name = ANY($3) GROUP BY event_name`, productID, since, []string{"connector_authorized", "run_started", "capability_resolved", "credentials_issued", "implementation_validated", "success_reported"})
 	if err != nil {
 		return value, databaseError(err)
 	}

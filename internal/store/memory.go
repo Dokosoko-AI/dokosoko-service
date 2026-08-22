@@ -30,6 +30,7 @@ type Memory struct {
 	accessInstances          map[string]model.AccessInstance
 	instanceIntegrationLinks map[string]map[string]bool
 	accessCredentials        map[string]model.AccessCredential
+	backendConnections       map[string]model.BackendConnection
 	supportRoutes            map[string]model.SupportRoute
 	integrationSupportRoutes map[string]string
 	products                 map[string]model.Product
@@ -41,7 +42,6 @@ type Memory struct {
 	productBuilds            map[string]map[string]model.ProductBuild
 	envs                     map[string]map[string]model.Environment
 	sources                  map[string]map[string]model.Source
-	packages                 map[string]map[string]model.Package
 	secrets                  map[string]model.Secret
 	tools                    map[string]map[string]model.Tool
 	mcpConnections           map[string]map[string]model.MCPConnection
@@ -51,7 +51,6 @@ type Memory struct {
 	projects                 map[string]map[string]model.Project
 	leases                   map[string]map[string]model.CredentialLease
 	integrationRuns          map[string]map[string]model.IntegrationRun
-	reportingConfigs         map[string]model.ReportingConfig
 	reportSubmissions        map[string]map[string]model.ReportSubmission
 	llmProfiles              map[string]map[string]model.LLMProfile
 	knowledge                map[string][]model.KnowledgeRecord
@@ -62,7 +61,8 @@ type Memory struct {
 	roots                    map[string]auth.RootAccount
 	rootEmail                map[string]string
 	sessions                 map[string]auth.SessionRecord
-	idps                     map[string]identity.VendorConfig
+	idps                     map[string]identity.ProviderConfig
+	customerAccounts         map[string]identity.CustomerAccount
 	oauthState               map[string]identity.OAuthState
 	oauthCodes               map[string]identity.OAuthCode
 	accessTokens             map[string]identity.AccessToken
@@ -77,9 +77,6 @@ func NewMemory() *Memory {
 	sources := map[string]model.Source{
 		"src_docs": {ID: "src_docs", OrganisationID: "org_acme", ProductID: product.ID, Name: "Developer documentation", Kind: "website", Location: "https://docs.acme.dev", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
 		"src_api":  {ID: "src_api", OrganisationID: "org_acme", ProductID: product.ID, Name: "Platform API", Kind: "openapi", Location: "git://api/openapi.yaml", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
-	}
-	packages := map[string]model.Package{
-		"pkg_node": {ID: "pkg_node", OrganisationID: "org_acme", ProductID: product.ID, Name: "@acme/node", Ecosystem: "npm", Version: "2.4.1", Mode: "proxy", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
 	}
 	return &Memory{
 		orgs:                     map[string]model.Organisation{organisation.ID: organisation},
@@ -96,6 +93,7 @@ func NewMemory() *Memory {
 		accessInstances:          make(map[string]model.AccessInstance),
 		instanceIntegrationLinks: make(map[string]map[string]bool),
 		accessCredentials:        make(map[string]model.AccessCredential),
+		backendConnections:       make(map[string]model.BackendConnection),
 		supportRoutes:            make(map[string]model.SupportRoute),
 		integrationSupportRoutes: make(map[string]string),
 		products:                 map[string]model.Product{product.ID: product},
@@ -107,7 +105,6 @@ func NewMemory() *Memory {
 		productBuilds:            map[string]map[string]model.ProductBuild{product.ID: {}},
 		envs:                     map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
 		sources:                  map[string]map[string]model.Source{product.ID: sources},
-		packages:                 map[string]map[string]model.Package{product.ID: packages},
 		secrets:                  make(map[string]model.Secret),
 		tools:                    map[string]map[string]model.Tool{product.ID: {}},
 		mcpConnections:           map[string]map[string]model.MCPConnection{product.ID: {}},
@@ -117,21 +114,21 @@ func NewMemory() *Memory {
 		projects:                 map[string]map[string]model.Project{product.ID: {}},
 		leases:                   map[string]map[string]model.CredentialLease{product.ID: {}},
 		integrationRuns:          map[string]map[string]model.IntegrationRun{product.ID: {}},
-		reportingConfigs:         make(map[string]model.ReportingConfig),
 		reportSubmissions:        map[string]map[string]model.ReportSubmission{product.ID: {}},
 		llmProfiles:              map[string]map[string]model.LLMProfile{product.ID: {}},
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},
 		}},
-		crawls:       make(map[string][]model.CrawlJob),
-		roots:        make(map[string]auth.RootAccount),
-		rootEmail:    make(map[string]string),
-		sessions:     make(map[string]auth.SessionRecord),
-		idps:         make(map[string]identity.VendorConfig),
-		oauthState:   make(map[string]identity.OAuthState),
-		oauthCodes:   make(map[string]identity.OAuthCode),
-		accessTokens: make(map[string]identity.AccessToken),
+		crawls:           make(map[string][]model.CrawlJob),
+		roots:            make(map[string]auth.RootAccount),
+		rootEmail:        make(map[string]string),
+		sessions:         make(map[string]auth.SessionRecord),
+		idps:             make(map[string]identity.ProviderConfig),
+		customerAccounts: make(map[string]identity.CustomerAccount),
+		oauthState:       make(map[string]identity.OAuthState),
+		oauthCodes:       make(map[string]identity.OAuthCode),
+		accessTokens:     make(map[string]identity.AccessToken),
 	}
 }
 
@@ -200,7 +197,6 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 	m.productInstallations[value.ID] = make(map[string]model.ProductInstallation)
 	m.productBuilds[value.ID] = make(map[string]model.ProductBuild)
 	m.sources[value.ID] = make(map[string]model.Source)
-	m.packages[value.ID] = make(map[string]model.Package)
 	m.knowledge[value.ID] = nil
 	m.envs[value.ID] = make(map[string]model.Environment)
 	m.tools[value.ID] = make(map[string]model.Tool)
@@ -769,89 +765,6 @@ func (m *Memory) CreateCrawlJob(_ context.Context, value model.CrawlJob) (model.
 	return value, nil
 }
 
-func sortedPackages(values map[string]model.Package) []model.Package {
-	result := make([]model.Package, 0, len(values))
-	for _, value := range values {
-		result = append(result, value)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
-	return result
-}
-
-func (m *Memory) Packages(_ context.Context, productID string) ([]model.Package, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	values, ok := m.packages[productID]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return sortedPackages(values), nil
-}
-
-func (m *Memory) Package(_ context.Context, productID, id string) (model.Package, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	value, ok := m.packages[productID][id]
-	if !ok {
-		return model.Package{}, ErrNotFound
-	}
-	return value, nil
-}
-
-func (m *Memory) CreatePackage(_ context.Context, value model.Package) (model.Package, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.products[value.ProductID]; !ok {
-		return model.Package{}, ErrNotFound
-	}
-	for _, current := range m.packages[value.ProductID] {
-		if current.Ecosystem == value.Ecosystem && current.Name == value.Name && current.Version == value.Version {
-			return model.Package{}, ErrConflict
-		}
-	}
-	value.Visibility = model.VisibilityPrivate
-	value.Published = false
-	value.Revision = 1
-	value.CreatedAt = time.Now().UTC()
-	value.UpdatedAt = value.CreatedAt
-	m.packages[value.ProductID][value.ID] = value
-	return value, nil
-}
-
-func (m *Memory) UpdatePackage(_ context.Context, value model.Package, expected int64) (model.Package, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	current, ok := m.packages[value.ProductID][value.ID]
-	if !ok {
-		return model.Package{}, ErrNotFound
-	}
-	if current.Revision != expected {
-		return model.Package{}, ErrConflict
-	}
-	value.Revision = current.Revision + 1
-	value.CreatedAt = current.CreatedAt
-	value.UpdatedAt = time.Now().UTC()
-	m.packages[value.ProductID][value.ID] = value
-	return value, nil
-}
-
-func (m *Memory) PublishPackage(_ context.Context, productID, packageID string, expected int64) (model.Package, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	value, ok := m.packages[productID][packageID]
-	if !ok {
-		return model.Package{}, ErrNotFound
-	}
-	if value.Revision != expected {
-		return model.Package{}, ErrConflict
-	}
-	value.Published = true
-	value.Revision++
-	value.UpdatedAt = time.Now().UTC()
-	m.packages[productID][packageID] = value
-	return value, nil
-}
-
 func (m *Memory) CreateSecret(_ context.Context, value model.Secret) (model.Secret, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1268,56 +1181,42 @@ func cloneReportSubmission(value model.ReportSubmission) model.ReportSubmission 
 	return value
 }
 
-func (m *Memory) ReportingConfig(_ context.Context, productID string) (model.ReportingConfig, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	value, ok := m.reportingConfigs[productID]
-	if !ok {
-		return model.ReportingConfig{}, ErrNotFound
-	}
-	return value, nil
-}
-
-func (m *Memory) SaveReportingConfig(_ context.Context, value model.ReportingConfig, expectedRevision int64) (model.ReportingConfig, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.products[value.ProductID]; !ok {
-		return model.ReportingConfig{}, ErrNotFound
-	}
-	current, exists := m.reportingConfigs[value.ProductID]
-	if exists && current.Revision != expectedRevision {
-		return model.ReportingConfig{}, ErrConflict
-	}
-	if !exists && expectedRevision != 0 {
-		return model.ReportingConfig{}, ErrConflict
-	}
-	now := time.Now().UTC()
-	if exists {
-		value.ID, value.CreatedAt, value.Revision = current.ID, current.CreatedAt, current.Revision+1
-	} else {
-		value.Revision, value.CreatedAt = 1, now
-	}
-	value.UpdatedAt = now
-	m.reportingConfigs[value.ProductID] = value
-	return value, nil
-}
-
-func (m *Memory) ReportSubmissions(_ context.Context, productID string, limit int) ([]model.ReportSubmission, error) {
+func (m *Memory) ReportSubmissions(_ context.Context, productID, startingAfter string, limit int) ([]model.ReportSubmission, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	values, ok := m.reportSubmissions[productID]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 	result := make([]model.ReportSubmission, 0, len(values))
 	for _, value := range values {
 		result = append(result, cloneReportSubmission(value))
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
-	if limit > 0 && len(result) > limit {
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID > result[j].ID
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	start := 0
+	if startingAfter != "" {
+		start = -1
+		for index := range result {
+			if result[index].ID == startingAfter {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, ErrNotFound
+		}
+	}
+	result = result[start:]
+	hasMore := len(result) > limit
+	if hasMore {
 		result = result[:limit]
 	}
-	return result, nil
+	return result, hasMore, nil
 }
 
 func (m *Memory) ReportSubmission(_ context.Context, productID, id string) (model.ReportSubmission, error) {
@@ -1351,7 +1250,7 @@ func (m *Memory) CreateReportSubmission(_ context.Context, value model.ReportSub
 	return cloneReportSubmission(value), nil
 }
 
-func (m *Memory) ActivateHeldReportSubmissions(_ context.Context, productID, kind string, now time.Time) error {
+func (m *Memory) ActivateHeldReportSubmissions(_ context.Context, productID, routeID, kind string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	values, ok := m.reportSubmissions[productID]
@@ -1359,7 +1258,7 @@ func (m *Memory) ActivateHeldReportSubmissions(_ context.Context, productID, kin
 		return ErrNotFound
 	}
 	for id, value := range values {
-		if value.Kind == kind && value.State == "held" && value.ExpiresAt.After(now) {
+		if value.SupportRouteID == routeID && value.Kind == kind && value.State == "held" && value.ExpiresAt.After(now) {
 			value.State, value.NextAttemptAt, value.UpdatedAt = "pending", &now, now
 			values[id] = value
 		}
@@ -1544,7 +1443,7 @@ func (m *Memory) LLMTokensUsed(_ context.Context, productID, role string, since 
 func (m *Memory) AnalyticsSummary(_ context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "package_acquired": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "private_widget": 0, "public_widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
 	actors := map[string]bool{}
 	daily := map[string]int64{}
 	for _, event := range m.analytics {
@@ -1565,8 +1464,6 @@ func (m *Memory) AnalyticsSummary(_ context.Context, productID string, since tim
 			}
 		case "tool.called":
 			value.ToolCalls++
-		case "package.downloaded":
-			value.PackageDownloads++
 		}
 		if _, ok := value.Funnel[event.EventName]; ok {
 			value.Funnel[event.EventName]++
@@ -1736,35 +1633,126 @@ func (m *Memory) DeleteSession(_ context.Context, digest []byte) error {
 	return nil
 }
 
-func (m *Memory) VendorIdentity(_ context.Context, productID string) (identity.VendorConfig, error) {
+func (m *Memory) IdentityProvider(_ context.Context, productID string) (identity.ProviderConfig, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	value, ok := m.idps[productID]
 	if !ok {
-		return identity.VendorConfig{}, ErrNotFound
+		return identity.ProviderConfig{}, ErrNotFound
 	}
 	value.Scopes = append([]string(nil), value.Scopes...)
-	value.AllowedRedirectURIs = append([]string(nil), value.AllowedRedirectURIs...)
 	return value, nil
 }
 
-func (m *Memory) SaveVendorIdentity(_ context.Context, value identity.VendorConfig) (identity.VendorConfig, error) {
+func (m *Memory) SaveIdentityProvider(_ context.Context, value identity.ProviderConfig) (identity.ProviderConfig, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.products[value.ProductID]; !ok {
-		return identity.VendorConfig{}, ErrNotFound
+	if _, ok := m.products[value.DeploymentID]; !ok {
+		return identity.ProviderConfig{}, ErrNotFound
 	}
-	if current, ok := m.idps[value.ProductID]; ok {
+	if current, ok := m.idps[value.DeploymentID]; ok {
+		if value.Revision != current.Revision {
+			return identity.ProviderConfig{}, ErrConflict
+		}
 		value.ID, value.CreatedAt, value.Revision = current.ID, current.CreatedAt, current.Revision+1
 	} else {
+		if value.Revision != 0 {
+			return identity.ProviderConfig{}, ErrConflict
+		}
 		value.Revision = 1
 		value.CreatedAt = time.Now().UTC()
 	}
 	value.UpdatedAt = time.Now().UTC()
 	value.Scopes = append([]string(nil), value.Scopes...)
-	value.AllowedRedirectURIs = append([]string(nil), value.AllowedRedirectURIs...)
-	m.idps[value.ProductID] = value
+	m.idps[value.DeploymentID] = value
 	return value, nil
+}
+
+func (m *Memory) ResolveCustomerAccount(_ context.Context, value identity.CustomerAccount) (identity.CustomerAccount, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, current := range m.customerAccounts {
+		if current.ProductID == value.ProductID && current.Issuer == value.Issuer && current.ExternalID == value.ExternalID {
+			current.LastAuthenticatedAt = value.LastAuthenticatedAt
+			current.UpdatedAt = value.LastAuthenticatedAt
+			m.customerAccounts[id] = current
+			return current, nil
+		}
+	}
+	if _, ok := m.products[value.ProductID]; !ok {
+		return identity.CustomerAccount{}, ErrNotFound
+	}
+	value.Revision = 1
+	value.CreatedAt, value.UpdatedAt = value.LastAuthenticatedAt, value.LastAuthenticatedAt
+	m.customerAccounts[value.ID] = value
+	return value, nil
+}
+
+func (m *Memory) CustomerAccounts(_ context.Context, productID, startingAfter string, limit int) ([]identity.CustomerAccount, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.products[productID]; !ok {
+		return nil, false, ErrNotFound
+	}
+	result := make([]identity.CustomerAccount, 0)
+	for _, value := range m.customerAccounts {
+		if value.ProductID == productID {
+			result = append(result, value)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID > result[j].ID
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	start := 0
+	if startingAfter != "" {
+		start = -1
+		for index := range result {
+			if result[index].ID == startingAfter {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, ErrNotFound
+		}
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	result = result[start:]
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
+}
+
+func (m *Memory) CustomerAccount(_ context.Context, productID, id string) (identity.CustomerAccount, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.customerAccounts[id]
+	if !ok || value.ProductID != productID {
+		return identity.CustomerAccount{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (m *Memory) UpdateCustomerAccount(_ context.Context, value identity.CustomerAccount, expected int64) (identity.CustomerAccount, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.customerAccounts[value.ID]
+	if !ok || current.ProductID != value.ProductID {
+		return identity.CustomerAccount{}, ErrNotFound
+	}
+	if current.Revision != expected {
+		return identity.CustomerAccount{}, ErrConflict
+	}
+	current.State, current.Revision, current.UpdatedAt = value.State, current.Revision+1, time.Now().UTC()
+	m.customerAccounts[value.ID] = current
+	return current, nil
 }
 
 func (m *Memory) CreateOAuthState(_ context.Context, value identity.OAuthState) error {
@@ -1882,23 +1870,25 @@ func cloneProvider(value model.Provider) model.Provider {
 
 func cloneOAuthState(value identity.OAuthState) identity.OAuthState {
 	value.Digest = append([]byte(nil), value.Digest...)
+	value.Scopes = append([]string(nil), value.Scopes...)
 	return value
 }
 
 func cloneOAuthCode(value identity.OAuthCode) identity.OAuthCode {
 	value.Digest = append([]byte(nil), value.Digest...)
-	value.Entitlements = cloneEntitlements(value.Entitlements)
+	value.Scopes = append([]string(nil), value.Scopes...)
+	value.Grants = cloneGrants(value.Grants)
 	return value
 }
 
 func cloneAccessToken(value identity.AccessToken) identity.AccessToken {
 	value.Digest = append([]byte(nil), value.Digest...)
-	value.Entitlements = cloneEntitlements(value.Entitlements)
+	value.Grants = cloneGrants(value.Grants)
 	value.Scopes = append([]string(nil), value.Scopes...)
 	return value
 }
 
-func cloneEntitlements(value map[string]bool) map[string]bool {
+func cloneGrants(value map[string]bool) map[string]bool {
 	result := make(map[string]bool, len(value))
 	for key, enabled := range value {
 		result[key] = enabled

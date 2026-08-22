@@ -266,12 +266,12 @@ func (s *Service) UpdateProductVersionLifecycle(ctx context.Context, productID, 
 	return value, nil
 }
 
-func (s *Service) SaveProductVersionPin(ctx context.Context, productID, customerID, versionID, reason string, actor Actor) (model.ProductVersionPin, error) {
+func (s *Service) SaveProductVersionPin(ctx context.Context, productID, customerAccountID, versionID, reason string, actor Actor) (model.ProductVersionPin, error) {
 	revision := int64(0)
-	if current, err := s.store.ProductVersionPin(ctx, productID, "customer", strings.TrimSpace(customerID)); err == nil {
+	if current, err := s.store.ProductVersionPin(ctx, productID, "customer", strings.TrimSpace(customerAccountID)); err == nil {
 		revision = current.Revision
 	}
-	return s.SaveScopedProductVersionPin(ctx, productID, ProductVersionPinInput{Scope: "customer", ScopeID: customerID, CustomerID: customerID, ProductVersionID: versionID, Reason: reason, Revision: revision}, actor)
+	return s.SaveScopedProductVersionPin(ctx, productID, ProductVersionPinInput{Scope: "customer", ScopeID: customerAccountID, CustomerAccountID: customerAccountID, ProductVersionID: versionID, Reason: reason, Revision: revision}, actor)
 }
 
 func (s *Service) DeleteProductVersionPin(ctx context.Context, productID, pinID string, actor Actor) error {
@@ -295,7 +295,7 @@ func (s *Service) DeleteProductVersionPin(ctx context.Context, productID, pinID 
 	historyID, _ := randomUUID()
 	_ = s.store.AppendProductVersionPinHistory(ctx, model.ProductVersionPinHistory{ID: historyID, OrganisationID: current.OrganisationID, ProductID: productID, PinID: pinID, Scope: current.Scope, ScopeID: current.ScopeID, PriorVersion: current.ProductVersion, Action: "deleted", Reason: current.Reason, ActorID: actor.ID, CreatedAt: s.now()})
 	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: current.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.unpinned", TargetType: "product_version_pin", TargetID: pinID, Prior: map[string]any{"scope": current.Scope, "scope_id": current.ScopeID, "customer_id": current.CustomerID, "product_version": current.ProductVersion}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: current.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.unpinned", TargetType: "product_version_pin", TargetID: pinID, Prior: map[string]any{"scope": current.Scope, "scope_id": current.ScopeID, "customer_account_id": current.CustomerAccountID, "product_version": current.ProductVersion}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return nil
 }
 
@@ -353,7 +353,7 @@ func selectedProductArtifacts(version model.ProductVersion) []model.ProductManif
 }
 
 func (s *Service) ProductManifest(ctx context.Context, productID, customerID string) (model.ProductManifest, error) {
-	return s.ProductManifestFor(ctx, productID, model.ProductSelectionContext{CustomerID: customerID})
+	return s.ProductManifestFor(ctx, productID, model.ProductSelectionContext{CustomerAccountID: customerID})
 }
 
 func (s *Service) ProductManifestFor(ctx context.Context, productID string, selection model.ProductSelectionContext) (model.ProductManifest, error) {
@@ -365,8 +365,8 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return model.ProductManifest{}, err
 	}
-	selection.CustomerID, selection.EnvironmentID, selection.InstallationID = strings.TrimSpace(selection.CustomerID), strings.TrimSpace(selection.EnvironmentID), strings.TrimSpace(selection.InstallationID)
-	manifest := model.ProductManifest{DeploymentID: product.ID, DeploymentSlug: product.Slug, DeploymentName: product.Name, ProductID: product.ID, ProductSlug: product.Slug, ProductName: product.Name, Description: product.Description, DefaultVersionPolicy: product.DefaultVersionPolicy, CatalogRevision: product.CatalogRevision, SelectionSource: "unversioned", CustomerID: selection.CustomerID, EnvironmentID: selection.EnvironmentID, InstallationID: selection.InstallationID, OperationalWarnings: []string{}, Artifacts: []model.ProductManifestArtifact{}, Capabilities: []model.ProductManifestCapability{}, Integrations: []model.IntegrationManifest{}, AvailableVersions: []model.ProductVersionSummary{}}
+	selection.CustomerAccountID, selection.EnvironmentID, selection.InstallationID = strings.TrimSpace(selection.CustomerAccountID), strings.TrimSpace(selection.EnvironmentID), strings.TrimSpace(selection.InstallationID)
+	manifest := model.ProductManifest{DeploymentID: product.ID, DeploymentSlug: product.Slug, DeploymentName: product.Name, ProductID: product.ID, ProductSlug: product.Slug, ProductName: product.Name, Description: product.Description, DefaultVersionPolicy: product.DefaultVersionPolicy, CatalogRevision: product.CatalogRevision, SelectionSource: "unversioned", CustomerAccountID: selection.CustomerAccountID, EnvironmentID: selection.EnvironmentID, InstallationID: selection.InstallationID, OperationalWarnings: []string{}, Artifacts: []model.ProductManifestArtifact{}, Capabilities: []model.ProductManifestCapability{}, Integrations: []model.IntegrationManifest{}, AvailableVersions: []model.ProductVersionSummary{}}
 	if deployment, deploymentErr := s.store.Deployment(ctx); deploymentErr == nil && deployment.ID == productID {
 		manifest.DeploymentID, manifest.DeploymentSlug, manifest.DeploymentName = deployment.ID, deployment.Slug, deployment.Name
 		manifest.CatalogRevision = deployment.CatalogRevision
@@ -385,20 +385,32 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		}
 		var published model.IntegrationRevision
 		for _, revision := range revisions {
-			if revision.State == "published" {
+			if revision.State == "published" && revision.Revision > published.Revision {
 				published = revision
-				break
 			}
 		}
 		if published.ID == "" {
 			continue
 		}
-		entry := model.IntegrationManifest{ID: integration.ID, FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Revision: published.Revision, ManifestHash: published.ManifestHash, Resources: []model.IntegrationManifestResource{}}
-		for _, link := range integration.Resources {
-			if link.ResolvedRevision == nil {
-				continue
+		var snapshot integrationSnapshot
+		if err := json.Unmarshal(published.Snapshot, &snapshot); err != nil {
+			return model.ProductManifest{}, fmt.Errorf("integration %s has an invalid published snapshot: %w", integration.ID, err)
+		}
+		if snapshot.Visibility == "" {
+			snapshot.Visibility = model.VisibilityPrivate
+		}
+		// Current state is an immediate kill switch. A transition into public,
+		// however, is visible only after a public snapshot is explicitly published.
+		if selection.Public && (integration.Visibility != model.VisibilityPublic || snapshot.Visibility != model.VisibilityPublic) {
+			continue
+		}
+		entry := model.IntegrationManifest{ID: integration.ID, FamilyKey: snapshot.FamilyKey, VersionKey: snapshot.VersionKey, DisplayName: snapshot.DisplayName, Description: snapshot.Description, Visibility: snapshot.Visibility, Lifecycle: snapshot.Lifecycle, ReplacementIntegrationID: snapshot.ReplacementIntegrationID, SunsetAt: snapshot.SunsetAt, Revision: published.Revision, ManifestHash: published.ManifestHash, Resources: []model.IntegrationManifestResource{}}
+		for _, resource := range snapshot.Resources {
+			name := resource.Name
+			if name == "" {
+				name = resource.SetID
 			}
-			entry.Resources = append(entry.Resources, model.IntegrationManifestResource{ResourceSetID: link.ResourceSetID, Kind: link.Kind, Name: link.Name, Revision: link.ResolvedRevision.Revision, ContentHash: link.ResolvedRevision.ContentHash})
+			entry.Resources = append(entry.Resources, model.IntegrationManifestResource{ResourceSetID: resource.SetID, Kind: resource.Kind, Name: name, Revision: resource.Revision, ContentHash: resource.ContentHash})
 		}
 		sort.SliceStable(entry.Resources, func(i, j int) bool {
 			if entry.Resources[i].Kind == entry.Resources[j].Kind {
@@ -414,6 +426,14 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		}
 		return manifest.Integrations[i].FamilyKey < manifest.Integrations[j].FamilyKey
 	})
+	if selection.Public {
+		// Product-version selection may encode customer policy, private artifacts,
+		// and non-public capabilities. Public discovery is intentionally only the
+		// explicitly published integration catalog.
+		manifest.SelectionSource = "public"
+		manifest.CustomerAccountID, manifest.EnvironmentID, manifest.InstallationID = "", "", ""
+		return manifest, nil
+	}
 	var selected model.ProductVersion
 	findVersion := func(id, source string) bool {
 		for _, version := range versions {
@@ -426,17 +446,18 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 	}
 	if selection.InstallationID != "" {
 		installation, installationErr := s.store.ProductInstallationByExternalID(ctx, productID, selection.InstallationID)
-		if installationErr == nil && installation.State == "active" && (selection.CustomerID == "" || installation.CustomerID == selection.CustomerID) {
-			manifest.InstallationID, manifest.EnvironmentID, manifest.CustomerID = installation.ID, installation.EnvironmentID, installation.CustomerID
+		if installationErr == nil && installation.State == "active" && (selection.CustomerAccountID == "" || installation.CustomerAccountID == selection.CustomerAccountID) {
+			manifest.InstallationID, manifest.EnvironmentID, manifest.CustomerAccountID = installation.ID, installation.EnvironmentID, installation.CustomerAccountID
 			if pin, pinErr := s.store.ProductVersionPin(ctx, productID, "installation", installation.ID); pinErr == nil {
 				findVersion(pin.ProductVersionID, "installation_pin")
 			} else if !errors.Is(pinErr, store.ErrNotFound) {
 				return model.ProductManifest{}, pinErr
 			}
-		} else if installationErr != nil && !errors.Is(installationErr, store.ErrNotFound) {
-			return model.ProductManifest{}, installationErr
 		} else {
-			manifest.OperationalWarnings = append(manifest.OperationalWarnings, "The authenticated installation is not active or does not match the authenticated customer.")
+			if installationErr != nil {
+				return model.ProductManifest{}, fmt.Errorf("installation claim does not identify a registered installation: %w", installationErr)
+			}
+			return model.ProductManifest{}, errors.New("installation is not active for the authenticated customer account")
 		}
 	}
 	if selected.ID == "" && manifest.EnvironmentID != "" {
@@ -446,8 +467,8 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 			return model.ProductManifest{}, pinErr
 		}
 	}
-	if selected.ID == "" && selection.CustomerID != "" {
-		if pin, pinErr := s.store.ProductVersionPin(ctx, productID, "customer", selection.CustomerID); pinErr == nil {
+	if selected.ID == "" && selection.CustomerAccountID != "" {
+		if pin, pinErr := s.store.ProductVersionPin(ctx, productID, "customer", selection.CustomerAccountID); pinErr == nil {
 			for _, version := range versions {
 				if version.ID == pin.ProductVersionID {
 					selected, manifest.SelectionSource = version, "customer_pin"
@@ -480,7 +501,7 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 			}
 			rolloutKey := manifest.InstallationID
 			if rolloutKey == "" {
-				rolloutKey = selection.CustomerID
+				rolloutKey = selection.CustomerAccountID
 			}
 			if productVersionRolloutSelected(rolloutKey, version.ID, version.RolloutPercentage) {
 				selected, manifest.SelectionSource = version, "default_latest"
@@ -530,7 +551,7 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 }
 
 func (s *Service) ProductVersionAllowsTool(ctx context.Context, productID, customerID string, tool model.Tool) (bool, bool, error) {
-	return s.ProductVersionAllowsToolFor(ctx, productID, model.ProductSelectionContext{CustomerID: customerID}, tool)
+	return s.ProductVersionAllowsToolFor(ctx, productID, model.ProductSelectionContext{CustomerAccountID: customerID}, tool)
 }
 
 func (s *Service) ProductVersionAllowsToolFor(ctx context.Context, productID string, selection model.ProductSelectionContext, tool model.Tool) (bool, bool, error) {

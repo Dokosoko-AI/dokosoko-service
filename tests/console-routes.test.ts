@@ -21,15 +21,15 @@ test("primary console sections have canonical, round-trippable URLs", () => {
   }
 });
 
-test("the root and retired overview path canonicalize to APIs", () => {
+test("the root canonicalizes to APIs without legacy aliases", () => {
   assert.deepEqual(parseConsolePath("/"), {
     kind: "section",
     section: "product",
     path: "/integrations",
   });
-  assert.deepEqual(parseConsolePath("/overview"), parseConsolePath("/"));
-  assert.deepEqual(parseConsolePath("/distribution"), parseConsolePath("/agent-access"));
-  assert.deepEqual(parseConsolePath("/operations"), parseConsolePath("/activity"));
+  assert.equal(parseConsolePath("/overview").kind, "not-found");
+  assert.equal(parseConsolePath("/distribution").kind, "not-found");
+  assert.equal(parseConsolePath("/operations").kind, "not-found");
 });
 
 test("entity URLs encode UIDs and resolve to their owning section", () => {
@@ -50,12 +50,11 @@ test("API workspaces have four stable, round-trippable tab URLs", () => {
   }
 });
 
-test("retired API tabs resolve to their simpler destination", () => {
+test("unknown API tabs do not create compatibility aliases", () => {
   const uid = "voice-api";
-  assert.deepEqual(parseConsolePath(`/integration/${uid}/tools`), routeForIntegration(uid, "resources"));
-  assert.deepEqual(parseConsolePath(`/integration/${uid}/usage`), routeForIntegration(uid, "overview"));
-  assert.deepEqual(parseConsolePath(`/integration/${uid}/support`), routeForIntegration(uid, "overview"));
-  assert.deepEqual(parseConsolePath(`/integration/${uid}/revisions`), routeForIntegration(uid, "history"));
+  for (const tab of ["tools", "usage", "support", "revisions"]) {
+    assert.equal(parseConsolePath(`/integration/${uid}/${tab}`).kind, "not-found");
+  }
 });
 
 test("unknown and malformed paths render the console not-found route", () => {

@@ -52,12 +52,11 @@ test("keeps the global navigation to four obvious destinations", async () => {
   for (const path of ["/integrations", "/agent-access", "/activity", "/settings"]) {
     assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
   }
-  for (const entity of ["integration", "resource-set", "source", "package", "tool", "connection", "release", "run", "support-route", "report", "audit-event", "root-user"]) {
+  for (const entity of ["integration", "resource-set", "source", "tool", "connection", "release", "run", "support-route", "report", "audit-event", "root-user"]) {
     assert.ok(routes.includes(`| "${entity}"`) || routes.includes(`  ${entity}:`), `${entity} should be routable`);
   }
   assert.match(styles, /\.sidebar > nav/);
   assert.match(styles, /\.entity-detail-grid/);
-  assert.match(styles, /\.package-columns \{ grid-template-columns: [^}]+ 104px; \}/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
 });
 
@@ -77,7 +76,7 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
   assert.match(source, /Published history/);
   assert.match(source, /Switch API/);
   assert.match(source, /Only unresolved actions appear here/);
-  assert.match(source, /Customer usage/);
+  assert.match(source, /Customer access/);
   assert.match(source, /Advanced details/);
   assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state/);
   assert.match(styles, /\.integration-directory-columns/);
@@ -147,39 +146,44 @@ test("keeps immutable publishing controls behind advanced settings", async () =>
   assert.match(client, /productVersions/);
 });
 
-test("ships the private vendor-proxied usage report configuration", async () => {
+test("ships the optional customer-identity and delegated API contract", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Customer usage endpoint/);
-  assert.match(source, /Customer account data/);
-  assert.match(source, /read-only usage\.get tool on Private MCP/);
-  assert.match(source, /customer-defined values are proxied without storage/i);
-  assert.match(source, /Rotate usage credential/);
-  assert.match(source, /Up to 50 customer-defined values/);
-  assert.doesNotMatch(source, /label: "Usage"/);
-  assert.match(client, /usage_hook_url/);
-  assert.match(client, /usage_credential/);
+  assert.match(source, /Customer identity contract/);
+  assert.match(source, /durable internal account/);
+	assert.match(source, /Delegated API origin/);
+	assert.match(source, /POST \/v1\/access\/evaluations/);
+	assert.match(source, /Delegated user token/);
+	assert.match(client, /customerAccounts/);
+	assert.match(client, /updateCustomerAccount/);
+	assert.match(client, /delegated_api_origin/);
+	assert.match(client, /\/api\/v1\/identity-provider/);
+	assert.doesNotMatch(client, /usage_hook_url|allowed_redirect_uris|entitlement_hook_url/);
 });
 
 test("ships consent-gated support reporting configuration and inbox", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  assert.match(source, /Bug reports & feedback/);
-  assert.match(source, /Consent is enforced/);
-  assert.match(source, /Encrypted local holding/);
-  assert.match(source, /Delivery policies/);
+	assert.match(source, /Bug reports & feedback/);
+	assert.match(source, /Consent is enforced/);
+	assert.match(source, /Backend connections/);
+	assert.match(source, /independent of customer identity/);
+	assert.match(source, /Delivery policies/);
   assert.match(source, />View<\/Button>/);
   assert.match(source, />Retry<\/Button>/);
   assert.match(source, /className="activity-toolbar"/);
-  assert.match(client, /report-submissions/);
+  assert.match(client, /support-submissions/);
   assert.match(source, /Use as the default for all APIs/);
-  assert.match(source, /Support webhook configured/);
-  assert.match(source, /Leave empty to hold locally/);
+  assert.match(source, /\/v1\/support-submissions/);
+	assert.match(source, /separately authenticated backend connection/);
+	assert.match(source, /credentials rotate on the connection/);
+	assert.match(client, /backendConnections/);
+	assert.match(client, /createBackendConnectionCredential/);
   assert.match(client, /createSupportRoute/);
-  assert.match(client, /updateSupportRoute/);
-  assert.match(client, /retryReportSubmission/);
+  assert.match(client, /replaceSupportRoute/);
+  assert.match(client, /createSupportDeliveryAttempt/);
 });
 
 test("ships first-class API, reusable resource, and service-connection management", async () => {
@@ -194,7 +198,7 @@ test("ships first-class API, reusable resource, and service-connection managemen
   assert.match(source, /One fixed instance/);
   assert.match(source, /Multiple provider resources/);
   assert.match(source, /Allowed APIs/);
-  assert.match(source, /Tool backend/);
+  assert.match(source, /API contract set/);
   assert.match(client, /createIntegration/);
   assert.match(client, /updateIntegration/);
   assert.match(client, /duplicateResourceSet/);

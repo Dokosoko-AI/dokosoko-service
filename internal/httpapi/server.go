@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,7 +25,6 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/model"
-	packagegateway "github.com/dokosoko/dokosoko-service/internal/packages"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
@@ -40,10 +40,8 @@ const (
 type Server struct {
 	service         *platform.Service
 	auth            *auth.Manager
-	packageGateway  *packagegateway.Gateway
 	toolRuntime     *toolruntime.Runtime
 	identityBroker  *identity.Broker
-	usageReporter   identity.UsageReporter
 	accessRuntime   *accessruntime.Runtime
 	providerRuntime *providerruntime.Runtime
 	mcpBridge       *mcpbridge.Manager
@@ -59,10 +57,8 @@ type Options struct {
 	BaseURL         string
 	UIDirectory     string
 	Auth            *auth.Manager
-	PackageGateway  *packagegateway.Gateway
 	ToolRuntime     *toolruntime.Runtime
 	IdentityBroker  *identity.Broker
-	UsageReporter   identity.UsageReporter
 	AccessRuntime   *accessruntime.Runtime
 	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
@@ -94,7 +90,7 @@ func NewWithUI(service *platform.Service, baseURL, uiDirectory string) http.Hand
 
 func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	baseURL := strings.TrimRight(options.BaseURL, "/")
-	server := &Server{service: service, auth: options.Auth, packageGateway: options.PackageGateway, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, usageReporter: options.UsageReporter, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
+	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -104,17 +100,16 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", server.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", server.logout)
 	mux.HandleFunc("GET /api/v1/auth/session", server.currentSession)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", server.oauthAuthorizationServerMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", server.oauthProtectedResourceMetadata)
 	mux.HandleFunc("GET /oauth/authorize", server.oauthAuthorize)
-	mux.HandleFunc("GET /oauth/callback/{productID}", server.oauthCallback)
+	mux.HandleFunc("GET /oauth/callback", server.oauthCallback)
 	mux.HandleFunc("POST /oauth/token", server.oauthToken)
 	mux.HandleFunc("GET /oauth/upstream/callback", server.upstreamOAuthCallback)
 	mux.HandleFunc("/api/v1/", server.adminAPI)
-	mux.HandleFunc("POST /mcp/public/{productID}", server.publicMCP)
-	mux.HandleFunc("POST /mcp/{productID}", server.privateMCP)
 	mux.HandleFunc("POST /mcp/public", server.publicMCP)
 	mux.HandleFunc("POST /mcp", server.privateMCP)
 	mux.HandleFunc("GET /widgets/{productID}/{asset}", server.widgetScript)
-	mux.HandleFunc("GET /artifacts/{productID}/{packageID}", server.packageArtifact)
 	if options.UIDirectory != "" {
 		mux.Handle("/", staticConsole(options.UIDirectory))
 	}
@@ -559,6 +554,59 @@ func oauthError(w http.ResponseWriter, status int, code, description string) {
 	writeJSON(w, status, map[string]string{"error": code, "error_description": description})
 }
 
+func (s *Server) oauthAuthorizationServerMetadata(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issuer":                                s.baseURL,
+		"authorization_endpoint":                s.baseURL + "/oauth/authorize",
+		"token_endpoint":                        s.baseURL + "/oauth/token",
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"token_endpoint_auth_methods_supported": []string{"none"},
+		"scopes_supported":                      []string{"mcp:private"},
+		"resource_parameter_supported":          true,
+		"client_id_metadata_document_supported": true,
+	})
+}
+
+func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	provider, err := s.service.Store().IdentityProvider(r.Context(), deployment.ID)
+	if err != nil || provider.State != "active" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"resource":                 s.baseURL + "/mcp",
+		"authorization_servers":    []string{s.baseURL},
+		"scopes_supported":         []string{"mcp:private"},
+		"bearer_methods_supported": []string{"header"},
+	})
+}
+
+func (s *Server) productFromMCPResource(ctx context.Context, raw string) (string, bool) {
+	resource, err := url.Parse(raw)
+	base, baseErr := url.Parse(s.baseURL)
+	if err != nil || baseErr != nil || resource.RawQuery != "" || resource.Fragment != "" || resource.User != nil || !strings.EqualFold(resource.Scheme, base.Scheme) || !strings.EqualFold(resource.Host, base.Host) {
+		return "", false
+	}
+	expectedPath := strings.TrimRight(base.EscapedPath(), "/") + "/mcp"
+	if resource.EscapedPath() != expectedPath {
+		return "", false
+	}
+	deployment, err := s.service.Store().Deployment(ctx)
+	if err != nil {
+		return "", false
+	}
+	return deployment.ID, true
+}
+
 func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	if s.identityBroker == nil {
 		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Identity broker is not configured.")
@@ -572,8 +620,14 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable", "Authorization request limit exceeded.")
 		return
 	}
+	resource := r.URL.Query().Get("resource")
+	productID, ok := s.productFromMCPResource(r.Context(), resource)
+	if !ok {
+		oauthError(w, http.StatusBadRequest, "invalid_target", "The resource must identify a DokoSoko MCP endpoint.")
+		return
+	}
 	redirect, err := s.identityBroker.Begin(r.Context(), identity.AuthorizationRequest{
-		ProductID: r.URL.Query().Get("product_id"), ClientID: r.URL.Query().Get("client_id"), RedirectURI: r.URL.Query().Get("redirect_uri"), State: r.URL.Query().Get("state"), CodeChallenge: r.URL.Query().Get("code_challenge"),
+		ProductID: productID, ClientID: r.URL.Query().Get("client_id"), RedirectURI: r.URL.Query().Get("redirect_uri"), Resource: resource, Scope: r.URL.Query().Get("scope"), State: r.URL.Query().Get("state"), CodeChallenge: r.URL.Query().Get("code_challenge"),
 	})
 	if err != nil {
 		oauthError(w, http.StatusBadRequest, "invalid_request", "The OAuth client, redirect URI, or product identity configuration is invalid.")
@@ -587,9 +641,13 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Identity broker is not configured.")
 		return
 	}
-	result, err := s.identityBroker.Callback(r.Context(), r.PathValue("productID"), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
+	if r.URL.Query().Get("error") != "" {
+		oauthError(w, http.StatusUnauthorized, "access_denied", "The vendor authorization server denied access.")
+		return
+	}
+	result, err := s.identityBroker.Callback(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
 	if err != nil {
-		oauthError(w, http.StatusUnauthorized, "access_denied", "Vendor identity or entitlement verification failed.")
+		oauthError(w, http.StatusUnauthorized, "access_denied", "Vendor identity or access verification failed.")
 		return
 	}
 	http.Redirect(w, r, result.RedirectURI, http.StatusFound)
@@ -609,7 +667,7 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable", "Token request limit exceeded.")
 		return
 	}
-	result, err := s.identityBroker.Exchange(r.Context(), r.PostForm.Get("code"), r.PostForm.Get("code_verifier"), r.PostForm.Get("client_id"), r.PostForm.Get("redirect_uri"))
+	result, err := s.identityBroker.Exchange(r.Context(), r.PostForm.Get("code"), r.PostForm.Get("code_verifier"), r.PostForm.Get("client_id"), r.PostForm.Get("redirect_uri"), r.PostForm.Get("resource"))
 	if err != nil {
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "The authorization code or PKCE verifier is invalid.")
 		return
@@ -640,10 +698,15 @@ func (s *Server) upstreamOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, `<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Connected</title><style>body{font:16px system-ui;margin:4rem;max-width:42rem}h1{color:#18181b}</style></head><body><h1>Stateless MCPv2 connection authorized</h1><p>Your upstream user grant is encrypted and bound to this DokoSoko identity. You can close this window.</p></body></html>`)
 }
 
-func (s *Server) vendorIdentity(w http.ResponseWriter, r *http.Request, productID string) {
+func (s *Server) identityProvider(w http.ResponseWriter, r *http.Request) {
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
-		value, err := s.service.Store().VendorIdentity(r.Context(), productID)
+		value, err := s.service.Store().IdentityProvider(r.Context(), deployment.ID)
 		if err != nil {
 			s.storeError(w, err)
 			return
@@ -651,26 +714,27 @@ func (s *Server) vendorIdentity(w http.ResponseWriter, r *http.Request, productI
 		writeJSON(w, http.StatusOK, value)
 	case http.MethodPut:
 		var input struct {
-			OrganisationID          string   `json:"organisation_id"`
-			Issuer                  string   `json:"issuer"`
-			ClientID                string   `json:"client_id"`
-			ClientSecret            string   `json:"client_secret"`
-			Scopes                  []string `json:"scopes"`
-			Audience                string   `json:"audience"`
-			OrganisationClaim       string   `json:"organisation_claim"`
-			InstallationClaim       string   `json:"installation_claim"`
-			EntitlementHookURL      string   `json:"entitlement_hook_url"`
-			AllowedRedirectURIs     []string `json:"allowed_redirect_uris"`
-			AuthorizationHookURL    string   `json:"authorization_hook_url"`
-			AuthorizationCredential string   `json:"authorization_credential"`
-			UsageHookURL            string   `json:"usage_hook_url"`
-			UsageCredential         string   `json:"usage_credential"`
+			Issuer             string   `json:"issuer"`
+			ClientID           string   `json:"client_id"`
+			ClientSecret       string   `json:"client_secret"`
+			Scopes             []string `json:"scopes"`
+			Audience           string   `json:"audience"`
+			OAuthResource      string   `json:"oauth_resource"`
+			OrganisationClaim  string   `json:"organisation_claim"`
+			InstallationClaim  string   `json:"installation_claim"`
+			DelegatedAPIOrigin string   `json:"delegated_api_origin"`
+			State              *string  `json:"state"`
+			Revision           *int64   `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.ConfigureIdentity(r.Context(), platform.IdentityInput{OrganisationID: input.OrganisationID, ProductID: productID, Issuer: input.Issuer, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: input.Scopes, Audience: input.Audience, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, EntitlementHookURL: input.EntitlementHookURL, AllowedRedirectURIs: input.AllowedRedirectURIs, AuthorizationHookURL: input.AuthorizationHookURL, AuthorizationCredential: input.AuthorizationCredential, UsageHookURL: input.UsageHookURL, UsageCredential: input.UsageCredential}, actor(r))
+		if input.Issuer == "" || input.ClientID == "" || input.DelegatedAPIOrigin == "" || input.State == nil || input.Revision == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "issuer, client_id, delegated_api_origin, state, and revision are required.", nil)
+			return
+		}
+		value, err := s.service.ConfigureIdentity(r.Context(), platform.IdentityInput{DeploymentID: deployment.ID, Issuer: input.Issuer, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: input.Scopes, Audience: input.Audience, OAuthResource: input.OAuthResource, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, DelegatedAPIOrigin: input.DelegatedAPIOrigin, State: *input.State, Revision: *input.Revision}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -746,7 +810,7 @@ func (s *Server) importMCPConnection(w http.ResponseWriter, r *http.Request, pro
 	}
 	var input struct {
 		ToolNames            []string `json:"tool_names"`
-		RequiredEntitlements []string `json:"required_entitlements"`
+		RequiredGrants       []string `json:"required_grants"`
 		ConfirmationRequired bool     `json:"confirmation_required"`
 		TimeoutMS            int      `json:"timeout_ms"`
 	}
@@ -755,7 +819,7 @@ func (s *Server) importMCPConnection(w http.ResponseWriter, r *http.Request, pro
 		return
 	}
 	adminActor := actor(r)
-	value, err := s.mcpBridge.Import(r.Context(), productID, connectionID, mcpbridge.ImportInput{ToolNames: input.ToolNames, RequiredEntitlements: input.RequiredEntitlements, ConfirmationRequired: input.ConfirmationRequired, TimeoutMS: input.TimeoutMS}, mcpbridge.Actor{ID: adminActor.ID, RequestID: adminActor.RequestID})
+	value, err := s.mcpBridge.Import(r.Context(), productID, connectionID, mcpbridge.ImportInput{ToolNames: input.ToolNames, RequiredGrants: input.RequiredGrants, ConfirmationRequired: input.ConfirmationRequired, TimeoutMS: input.TimeoutMS}, mcpbridge.Actor{ID: adminActor.ID, RequestID: adminActor.RequestID})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "mcp_upstream_import_failed", err.Error(), nil)
 		return
@@ -792,18 +856,18 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request, productID str
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			OrganisationID       string   `json:"organisation_id"`
-			Name                 string   `json:"name"`
-			BaseURL              string   `json:"base_url"`
-			Credential           string   `json:"credential"`
-			RequiredEntitlements []string `json:"required_entitlements"`
-			MaxTTLSeconds        int      `json:"max_ttl_seconds"`
+			OrganisationID string   `json:"organisation_id"`
+			Name           string   `json:"name"`
+			BaseURL        string   `json:"base_url"`
+			Credential     string   `json:"credential"`
+			RequiredGrants []string `json:"required_grants"`
+			MaxTTLSeconds  int      `json:"max_ttl_seconds"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateProvider(r.Context(), platform.ProviderInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, BaseURL: input.BaseURL, Credential: input.Credential, RequiredEntitlements: input.RequiredEntitlements, MaxTTLSeconds: input.MaxTTLSeconds}, actor(r))
+		value, err := s.service.CreateProvider(r.Context(), platform.ProviderInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, BaseURL: input.BaseURL, Credential: input.Credential, RequiredGrants: input.RequiredGrants, MaxTTLSeconds: input.MaxTTLSeconds}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -876,8 +940,15 @@ func pseudonym(productID string, principal identity.Principal) string {
 	if principal.Subject == "" {
 		return ""
 	}
-	digest := sha256.Sum256([]byte(productID + "\x00" + principal.Issuer + "\x00" + principal.Subject))
+	digest := sha256.Sum256([]byte(productID + "\x00" + vendorActorID(principal)))
 	return hex.EncodeToString(digest[:16])
+}
+
+func vendorActorID(principal identity.Principal) string {
+	if principal.Subject == "" {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(principal.Issuer)) + "." + base64.RawURLEncoding.EncodeToString([]byte(principal.Subject))
 }
 
 func (s *Server) recordAnalytics(ctx context.Context, productID, eventName, actorKind, actorPseudonym string, dimensions map[string]any) {
@@ -950,10 +1021,22 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.accessDefinitions(w, r)
 	case len(parts) == 3 && parts[2] == "access-connections":
 		s.accessConnections(w, r)
+	case len(parts) == 3 && parts[2] == "backend-connections":
+		s.backendConnections(w, r)
+	case len(parts) == 4 && parts[2] == "backend-connections":
+		s.backendConnection(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "backend-connections" && parts[4] == "credentials" && r.Method == http.MethodPost:
+		s.createBackendConnectionCredential(w, r, parts[3])
 	case len(parts) == 3 && parts[2] == "support-routes":
 		s.supportRoutes(w, r)
 	case len(parts) == 4 && parts[2] == "support-routes":
 		s.supportRoute(w, r, parts[3])
+	case len(parts) == 3 && parts[2] == "support-submissions" && r.Method == http.MethodGet:
+		s.supportSubmissions(w, r)
+	case len(parts) == 4 && parts[2] == "support-submissions" && r.Method == http.MethodGet:
+		s.supportSubmission(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "support-submissions" && parts[4] == "delivery-attempts" && r.Method == http.MethodPost:
+		s.createSupportDeliveryAttempt(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "access-connections" && parts[4] == "instances" && r.Method == http.MethodGet:
 		s.accessInstances(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "access-connections" && parts[4] == "credentials" && r.Method == http.MethodGet:
@@ -986,6 +1069,10 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.deleteProductVersionPin(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "installations":
 		s.productInstallations(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "customer-accounts" && r.Method == http.MethodGet:
+		s.customerAccounts(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "customer-accounts" && r.Method == http.MethodPatch:
+		s.customerAccount(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "organisations" && parts[4] == "audit" && r.Method == http.MethodGet:
 		s.auditEvents(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "environments":
@@ -1008,12 +1095,6 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.publishSource(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawls" && r.Method == http.MethodGet:
 		s.crawlJobs(w, r, parts[3], parts[5])
-	case len(parts) == 5 && parts[2] == "products" && parts[4] == "packages":
-		s.packages(w, r, parts[3])
-	case len(parts) == 7 && parts[2] == "products" && parts[4] == "packages" && parts[6] == "visibility" && r.Method == http.MethodPatch:
-		s.packageVisibility(w, r, parts[3], parts[5])
-	case len(parts) == 7 && parts[2] == "products" && parts[4] == "packages" && parts[6] == "publish" && r.Method == http.MethodPost:
-		s.publishPackage(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "widgets" && r.Method == http.MethodGet:
 		s.widgets(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "tools":
@@ -1024,16 +1105,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.inspectMCPConnection(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "mcp-connections" && parts[6] == "import" && r.Method == http.MethodPost:
 		s.importMCPConnection(w, r, parts[3], parts[5])
-	case len(parts) == 5 && parts[2] == "products" && parts[4] == "identity":
-		s.vendorIdentity(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "products" && parts[4] == "reporting":
-		s.reportingConfig(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "products" && parts[4] == "report-submissions" && r.Method == http.MethodGet:
-		s.reportSubmissions(w, r, parts[3])
-	case len(parts) == 6 && parts[2] == "products" && parts[4] == "report-submissions" && r.Method == http.MethodGet:
-		s.reportSubmission(w, r, parts[3], parts[5])
-	case len(parts) == 7 && parts[2] == "products" && parts[4] == "report-submissions" && parts[6] == "retry" && r.Method == http.MethodPost:
-		s.retryReportSubmission(w, r, parts[3], parts[5])
+	case len(parts) == 3 && parts[2] == "identity-provider":
+		s.identityProvider(w, r)
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "analytics" && r.Method == http.MethodGet:
 		s.analytics(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "integration-runs":
@@ -1055,79 +1128,53 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) reportingConfig(w http.ResponseWriter, r *http.Request, productID string) {
+func (s *Server) supportSubmissions(w http.ResponseWriter, r *http.Request) {
 	if s.reporting == nil {
 		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		value, err := s.reporting.Config(r.Context(), productID)
-		if errors.Is(err, reporting.ErrNotConfigured) {
-			product, productErr := s.service.Store().Product(r.Context(), productID)
-			if productErr != nil {
-				s.storeError(w, productErr)
-				return
-			}
-			writeJSON(w, http.StatusOK, model.ReportingConfig{OrganisationID: product.OrganisationID, ProductID: productID, RetentionDays: 30})
-			return
-		}
-		if err != nil {
-			s.storeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, value)
-	case http.MethodPut:
-		var input struct {
-			BugReportsEnabled      bool   `json:"bug_reports_enabled"`
-			FeedbackEnabled        bool   `json:"feedback_enabled"`
-			BugHookURL             string `json:"bug_hook_url"`
-			BugHookCredential      string `json:"bug_hook_credential"`
-			FeedbackHookURL        string `json:"feedback_hook_url"`
-			FeedbackHookCredential string `json:"feedback_hook_credential"`
-			RetentionDays          int    `json:"retention_days"`
-			Revision               int64  `json:"revision"`
-		}
-		if err := decodeJSON(r.Body, &input); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-			return
-		}
-		currentActor := actor(r)
-		value, err := s.reporting.Configure(r.Context(), productID, reporting.ConfigInput{BugReportsEnabled: input.BugReportsEnabled, FeedbackEnabled: input.FeedbackEnabled, BugHookURL: input.BugHookURL, BugHookCredential: input.BugHookCredential, FeedbackHookURL: input.FeedbackHookURL, FeedbackHookCredential: input.FeedbackHookCredential, RetentionDays: input.RetentionDays, Revision: input.Revision}, currentActor.ID, currentActor.RequestID)
-		if errors.Is(err, store.ErrConflict) {
-			writeError(w, http.StatusConflict, "revision_conflict", "Reporting configuration changed; reload and try again.", nil)
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_reporting_config", err.Error(), nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, value)
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
-	}
-}
-
-func (s *Server) reportSubmissions(w http.ResponseWriter, r *http.Request, productID string) {
-	if s.reporting == nil {
-		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
-		return
-	}
-	values, err := s.reporting.Submissions(r.Context(), productID, 200)
+	deployment, err := s.service.Store().Deployment(r.Context())
 	if err != nil {
 		s.storeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+	limit := 50
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsed, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			writeError(w, http.StatusBadRequest, "invalid_request", "limit must be an integer between 1 and 200.", nil)
+			return
+		}
+		limit = parsed
+	}
+	startingAfter := r.URL.Query().Get("starting_after")
+	if len(startingAfter) > 200 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "starting_after is invalid.", nil)
+		return
+	}
+	values, hasMore, err := s.reporting.Submissions(r.Context(), deployment.ID, startingAfter, limit)
+	if startingAfter != "" && errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "starting_after does not identify a support submission in this deployment.", nil)
+		return
+	}
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values, "has_more": hasMore})
 }
 
-func (s *Server) reportSubmission(w http.ResponseWriter, r *http.Request, productID, submissionID string) {
+func (s *Server) supportSubmission(w http.ResponseWriter, r *http.Request, submissionID string) {
 	if s.reporting == nil {
 		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
 		return
 	}
-	value, err := s.reporting.Submission(r.Context(), productID, submissionID)
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	value, err := s.reporting.Submission(r.Context(), deployment.ID, submissionID)
 	if err != nil {
 		s.storeError(w, err)
 		return
@@ -1135,14 +1182,19 @@ func (s *Server) reportSubmission(w http.ResponseWriter, r *http.Request, produc
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) retryReportSubmission(w http.ResponseWriter, r *http.Request, productID, submissionID string) {
+func (s *Server) createSupportDeliveryAttempt(w http.ResponseWriter, r *http.Request, submissionID string) {
 	if s.reporting == nil {
 		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
 		return
 	}
-	value, err := s.reporting.Retry(r.Context(), productID, submissionID)
-	if errors.Is(err, reporting.ErrHookUnavailable) {
-		writeError(w, http.StatusConflict, "reporting_hook_unavailable", "Configure the corresponding delivery hook before retrying.", nil)
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	value, err := s.reporting.Retry(r.Context(), deployment.ID, submissionID)
+	if errors.Is(err, reporting.ErrDeliveryUnavailable) {
+		writeError(w, http.StatusConflict, "reporting_delivery_unavailable", "Configure support delivery before retrying.", nil)
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
@@ -1153,12 +1205,10 @@ func (s *Server) retryReportSubmission(w http.ResponseWriter, r *http.Request, p
 		s.storeError(w, err)
 		return
 	}
-	if product, productErr := s.service.Store().Product(r.Context(), productID); productErr == nil {
-		currentActor := actor(r)
-		requestID, _ := r.Context().Value(requestIDKey).(string)
-		_ = s.service.Store().AppendAudit(r.Context(), model.AuditEvent{ID: "audit_" + strconv.FormatInt(time.Now().UnixNano(), 10), OrganisationID: product.OrganisationID, ProductID: productID, ActorID: currentActor.ID, Action: "reporting.submission_retried", TargetType: "report_submission", TargetID: submissionID, Current: map[string]any{"kind": value.Kind, "state": value.State}, RequestID: requestID, CreatedAt: time.Now().UTC()})
-	}
-	writeJSON(w, http.StatusOK, value)
+	currentActor := actor(r)
+	requestID, _ := r.Context().Value(requestIDKey).(string)
+	_ = s.service.Store().AppendAudit(r.Context(), model.AuditEvent{ID: "audit_" + strconv.FormatInt(time.Now().UnixNano(), 10), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: currentActor.ID, Action: "support_submission.delivery_attempt_created", TargetType: "support_submission", TargetID: submissionID, Current: map[string]any{"kind": value.Kind, "state": value.State}, RequestID: requestID, CreatedAt: time.Now().UTC()})
+	writeJSON(w, http.StatusAccepted, value)
 }
 
 func (s *Server) productSettings(w http.ResponseWriter, r *http.Request, productID string) {
@@ -1265,23 +1315,23 @@ func (s *Server) productVersionPins(w http.ResponseWriter, r *http.Request, prod
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			Scope            string `json:"scope"`
-			ScopeID          string `json:"scope_id"`
-			CustomerID       string `json:"customer_id"`
-			EnvironmentID    string `json:"environment_id"`
-			InstallationID   string `json:"installation_id"`
-			ProductVersionID string `json:"product_version_id"`
-			Reason           string `json:"reason"`
-			Revision         int64  `json:"revision"`
+			Scope             string `json:"scope"`
+			ScopeID           string `json:"scope_id"`
+			CustomerAccountID string `json:"customer_account_id"`
+			EnvironmentID     string `json:"environment_id"`
+			InstallationID    string `json:"installation_id"`
+			ProductVersionID  string `json:"product_version_id"`
+			Reason            string `json:"reason"`
+			Revision          int64  `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
 		if input.Scope == "" {
-			input.Scope, input.ScopeID = "customer", input.CustomerID
+			input.Scope, input.ScopeID = "customer", input.CustomerAccountID
 		}
-		value, err := s.service.SaveScopedProductVersionPin(r.Context(), productID, platform.ProductVersionPinInput{Scope: input.Scope, ScopeID: input.ScopeID, CustomerID: input.CustomerID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: input.ProductVersionID, Reason: input.Reason, Revision: input.Revision}, actor(r))
+		value, err := s.service.SaveScopedProductVersionPin(r.Context(), productID, platform.ProductVersionPinInput{Scope: input.Scope, ScopeID: input.ScopeID, CustomerAccountID: input.CustomerAccountID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: input.ProductVersionID, Reason: input.Reason, Revision: input.Revision}, actor(r))
 		if err != nil {
 			s.productCatalogError(w, err)
 			return
@@ -1313,19 +1363,19 @@ func (s *Server) productInstallations(w http.ResponseWriter, r *http.Request, pr
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			ID            string `json:"id"`
-			CustomerID    string `json:"customer_id"`
-			EnvironmentID string `json:"environment_id"`
-			ExternalID    string `json:"external_id"`
-			Name          string `json:"name"`
-			State         string `json:"state"`
-			Revision      int64  `json:"revision"`
+			ID                string `json:"id"`
+			CustomerAccountID string `json:"customer_account_id"`
+			EnvironmentID     string `json:"environment_id"`
+			ExternalID        string `json:"external_id"`
+			Name              string `json:"name"`
+			State             string `json:"state"`
+			Revision          int64  `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.SaveProductInstallation(r.Context(), productID, platform.ProductInstallationInput{ID: input.ID, CustomerID: input.CustomerID, EnvironmentID: input.EnvironmentID, ExternalID: input.ExternalID, Name: input.Name, State: input.State, Revision: input.Revision}, actor(r))
+		value, err := s.service.SaveProductInstallation(r.Context(), productID, platform.ProductInstallationInput{ID: input.ID, CustomerAccountID: input.CustomerAccountID, EnvironmentID: input.EnvironmentID, ExternalID: input.ExternalID, Name: input.Name, State: input.State, Revision: input.Revision}, actor(r))
 		if err != nil {
 			s.productCatalogError(w, err)
 			return
@@ -1335,6 +1385,50 @@ func (s *Server) productInstallations(w http.ResponseWriter, r *http.Request, pr
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) customerAccounts(w http.ResponseWriter, r *http.Request, productID string) {
+	limit := 50
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsed, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			writeError(w, http.StatusBadRequest, "invalid_request", "limit must be an integer between 1 and 200.", nil)
+			return
+		}
+		limit = parsed
+	}
+	startingAfter := r.URL.Query().Get("starting_after")
+	if len(startingAfter) > 200 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "starting_after is invalid.", nil)
+		return
+	}
+	values, hasMore, err := s.service.Store().CustomerAccounts(r.Context(), productID, startingAfter, limit)
+	if startingAfter != "" && errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "starting_after does not identify a customer account in this product.", nil)
+		return
+	}
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values, "has_more": hasMore})
+}
+
+func (s *Server) customerAccount(w http.ResponseWriter, r *http.Request, productID, accountID string) {
+	var input struct {
+		State    string `json:"state"`
+		Revision int64  `json:"revision"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.UpdateCustomerAccountState(r.Context(), productID, accountID, input.State, input.Revision, actor(r))
+	if err != nil {
+		s.creationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) productVersionImpact(w http.ResponseWriter, r *http.Request, productID, versionID string) {
@@ -1714,85 +1808,6 @@ func (s *Server) publishSource(w http.ResponseWriter, r *http.Request, productID
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) publishPackage(w http.ResponseWriter, r *http.Request, productID, packageID string) {
-	revision, err := revisionInput(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	value, err := s.service.PublishPackage(r.Context(), productID, packageID, revision, actor(r))
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
-func (s *Server) packages(w http.ResponseWriter, r *http.Request, productID string) {
-	switch r.Method {
-	case http.MethodGet:
-		values, err := s.service.Store().Packages(r.Context(), productID)
-		if err != nil {
-			s.storeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": values})
-	case http.MethodPost:
-		var input struct {
-			OrganisationID    string  `json:"organisation_id"`
-			Name              string  `json:"name"`
-			Ecosystem         string  `json:"ecosystem"`
-			Version           string  `json:"version"`
-			ExternalPackageID *string `json:"external_package_id"`
-			Mode              string  `json:"mode"`
-			UpstreamURL       *string `json:"upstream_url"`
-			DownloadURL       *string `json:"download_url"`
-			Credential        *string `json:"credential"`
-			ChecksumSHA256    *string `json:"checksum_sha256"`
-			ExpectedSize      *int64  `json:"expected_size"`
-		}
-		if err := decodeJSON(r.Body, &input); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-			return
-		}
-		mode := strings.ToLower(strings.TrimSpace(input.Mode))
-		invalidShape := (mode == "public" && (input.DownloadURL != nil || input.ExternalPackageID != nil || input.Credential != nil)) ||
-			(mode == "proxy" && (input.DownloadURL != nil || input.ExternalPackageID != nil)) ||
-			(mode == "download" && input.UpstreamURL != nil)
-		if invalidShape {
-			writeError(w, http.StatusBadRequest, "invalid_request", "Package delivery fields do not match the selected mode.", nil)
-			return
-		}
-		if input.ChecksumSHA256 != nil && strings.TrimSpace(*input.ChecksumSHA256) == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request", "checksum_sha256 cannot be empty when provided.", nil)
-			return
-		}
-		if input.ExpectedSize != nil && *input.ExpectedSize == 0 {
-			writeError(w, http.StatusBadRequest, "invalid_request", "expected_size must be positive when provided.", nil)
-			return
-		}
-		stringValue := func(value *string) string {
-			if value == nil {
-				return ""
-			}
-			return *value
-		}
-		expectedSize := int64(0)
-		if input.ExpectedSize != nil {
-			expectedSize = *input.ExpectedSize
-		}
-		value, err := s.service.CreatePackage(r.Context(), platform.PackageInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, Ecosystem: input.Ecosystem, Version: input.Version, ExternalPackageID: stringValue(input.ExternalPackageID), Mode: input.Mode, UpstreamURL: stringValue(input.UpstreamURL), DownloadURL: stringValue(input.DownloadURL), Credential: stringValue(input.Credential), ChecksumSHA256: stringValue(input.ChecksumSHA256), ExpectedSize: expectedSize}, actor(r))
-		if err != nil {
-			s.creationError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusCreated, value)
-	default:
-		w.Header().Set("Allow", "GET, POST")
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
-	}
-}
-
 func (s *Server) tools(w http.ResponseWriter, r *http.Request, productID string) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1810,9 +1825,8 @@ func (s *Server) tools(w http.ResponseWriter, r *http.Request, productID string)
 			Description         string          `json:"description"`
 			InputSchema         json.RawMessage `json:"input_schema"`
 			OutputSchema        json.RawMessage `json:"output_schema"`
-			APIHookURL          string          `json:"api_hook_url"`
+			Endpoint            string          `json:"endpoint"`
 			HTTPMethod          string          `json:"http_method"`
-			Credential          string          `json:"credential"`
 			AuthorizationPolicy json.RawMessage `json:"authorization_policy"`
 			TimeoutMS           int             `json:"timeout_ms"`
 		}
@@ -1820,7 +1834,7 @@ func (s *Server) tools(w http.ResponseWriter, r *http.Request, productID string)
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateTool(r.Context(), platform.ToolInput{OrganisationID: input.OrganisationID, ProductID: productID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIHookURL: input.APIHookURL, HTTPMethod: input.HTTPMethod, Credential: input.Credential, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS}, actor(r))
+		value, err := s.service.CreateTool(r.Context(), platform.ToolInput{OrganisationID: input.OrganisationID, ProductID: productID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, Endpoint: input.Endpoint, HTTPMethod: input.HTTPMethod, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -1873,23 +1887,17 @@ func (s *Server) distribution(w http.ResponseWriter, r *http.Request, productID 
 			return
 		}
 		sources, _ := s.service.Store().Sources(r.Context(), productID)
-		packages, _ := s.service.Store().Packages(r.Context(), productID)
-		publicSources, publicPackages := 0, 0
+		publicSources := 0
 		for _, item := range sources {
 			if item.Visibility == model.VisibilityPublic && item.Published {
 				publicSources++
 			}
 		}
-		for _, item := range packages {
-			if item.Visibility == model.VisibilityPublic && item.Published {
-				publicPackages++
-			}
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"product":              product,
-			"public_mcp_endpoint":  s.baseURL + "/mcp/public/" + productID,
-			"private_mcp_endpoint": s.baseURL + "/mcp/" + productID,
-			"public_sources":       publicSources, "public_packages": publicPackages,
+			"public_mcp_endpoint":  s.baseURL + "/mcp/public",
+			"private_mcp_endpoint": s.baseURL + "/mcp",
+			"public_sources":       publicSources,
 		})
 	case http.MethodPatch:
 		var input distributionPatch
@@ -1929,20 +1937,6 @@ func (s *Server) sourceVisibility(w http.ResponseWriter, r *http.Request, produc
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) packageVisibility(w http.ResponseWriter, r *http.Request, productID, packageID string) {
-	var input visibilityPatch
-	if err := decodeJSON(r.Body, &input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	value, err := s.service.SetPackageVisibility(r.Context(), productID, packageID, input.Visibility, input.AcknowledgePublic, input.Revision, actor(r))
-	if err != nil {
-		s.platformError(w, err, "This package's published metadata and artifact link will be accessible without authentication through Public MCP and the public widget.")
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
 func actor(r *http.Request) platform.Actor {
 	requestID, _ := r.Context().Value(requestIDKey).(string)
 	actorID, _ := r.Context().Value(actorIDKey).(string)
@@ -1971,38 +1965,6 @@ type rpcRequest struct {
 	ID      any             `json:"id"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
-}
-
-func usageToolDefinition() map[string]any {
-	valueSchema := map[string]any{"oneOf": []map[string]any{{"type": "string", "maxLength": 500}, {"type": "number"}, {"type": "boolean"}, {"type": "null"}}}
-	itemSchema := map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"key":         map[string]any{"type": "string", "pattern": `^[a-z][a-z0-9_.-]{0,63}$`},
-			"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": 80},
-			"value":       valueSchema,
-			"format":      map[string]any{"type": "string", "enum": []string{"text", "number", "percentage", "date", "datetime", "duration", "currency"}},
-			"unit":        map[string]any{"type": "string", "maxLength": 32},
-			"description": map[string]any{"type": "string", "maxLength": 500},
-		},
-		"required": []string{"key", "label", "value"},
-	}
-	return map[string]any{
-		"name":        "usage.get",
-		"description": "Return the current vendor-provided usage report for the authenticated account. DokoSoko does not calculate or store these values.",
-		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}},
-		"outputSchema": map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"as_of": map[string]any{"type": "string", "format": "date-time"},
-				"items": map[string]any{"type": "array", "maxItems": 50, "items": itemSchema},
-			},
-			"required": []string{"as_of", "items"},
-		},
-		"annotations": map[string]any{"readOnlyHint": true, "idempotentHint": true, "destructiveHint": false},
-	}
 }
 
 const reportingAgentInstructions = " When a likely connector-specific defect is found, offer to prepare a bug report but do not submit automatically. Before using a support reporting tool, show the user a concise preview of what will be shared and obtain explicit approval. Explain that DokoSoko adds the authenticated subject, account or installation, applicable Integration, current connector release, and request metadata; contact name and email are added only when allow_contact is approved. Submit only relevant, sanitized context; never include credentials, tokens, unrelated conversation, complete files, or unapproved personal data. For feedback, preserve the user's meaning and never invent ratings, sentiment, or claims."
@@ -2161,13 +2123,14 @@ func (s *Server) privateMCP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if principal.Subject == "" && s.allowDemoTokens && isBearer(r, demoPrivateToken) {
-		principal = identity.Principal{ProductID: productID, ClientID: productID, Issuer: "development", Subject: "private_mcp_demo", Entitlements: map[string]bool{}}
+		principal = identity.Principal{ProductID: productID, ClientID: productID, Issuer: "development", Subject: "private_mcp_demo", Grants: map[string]bool{}}
 	}
 	if principal.Subject == "" {
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, s.baseURL+"/.well-known/oauth-protected-resource/mcp", "mcp:private"))
 		writeError(w, http.StatusUnauthorized, "authentication_required", "Private MCP requires a DokoSoko access token.", nil)
 		return
 	}
-	if !s.allowFixedWindow("private-mcp|"+productID+"|"+principal.Issuer+"|"+principal.Subject, 600, time.Now().UTC()) {
+	if !s.allowFixedWindow("private-mcp|"+productID+"|"+vendorActorID(principal), 600, time.Now().UTC()) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "Private MCP request limit exceeded.", nil)
 		return
 	}
@@ -2186,13 +2149,17 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	channel, actorKind, actorID := "public_mcp", "anonymous", ""
-	selection := model.ProductSelectionContext{}
+	selection := model.ProductSelectionContext{Public: public}
 	if !public {
 		principal, _ := r.Context().Value(principalKey).(identity.Principal)
 		channel, actorKind, actorID = "private_mcp", "vendor_user", pseudonym(productID, principal)
-		selection.CustomerID, selection.InstallationID = principal.VendorOrganisation, principal.InstallationID
+		selection.CustomerAccountID, selection.InstallationID = principal.CustomerAccountID, principal.InstallationID
 	}
 	productManifest, manifestErr := s.service.ProductManifestFor(r.Context(), productID, selection)
+	if manifestErr != nil {
+		writeRPCError(w, request.ID, -32603, "Deployment context could not be resolved")
+		return
+	}
 	analyticsDimensions := map[string]any{"channel": channel, "method": request.Method}
 	if manifestErr == nil {
 		analyticsDimensions["catalog_revision"] = productManifest.CatalogRevision
@@ -2223,11 +2190,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			for _, capability := range capabilities {
 				reportingEnabled = reportingEnabled || capability.BugReportsEnabled || capability.FeedbackEnabled
 			}
-			if !reportingEnabled {
-				if config, configErr := s.reporting.Config(r.Context(), productID); configErr == nil {
-					reportingEnabled = config.BugReportsEnabled || config.FeedbackEnabled
-				}
-			}
 			if reportingEnabled {
 				instructions += reportingAgentInstructions
 			}
@@ -2242,8 +2204,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment, its applicable Integration revisions, effective pinned or default connector release, and available releases.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "deployment.releases.list", "description": "List published connector releases and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "search_knowledge", "description": "Search published connector knowledge.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
-			{"name": "find_package", "description": "Find published packages.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}},
-			{"name": "get_package", "description": "Get published package metadata.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"package_id": map[string]any{"type": "string"}}, "required": []string{"package_id"}}},
 		}
 		if !public {
 			principal, _ := r.Context().Value(principalKey).(identity.Principal)
@@ -2251,25 +2211,12 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				map[string]any{"name": "integration_runs.start", "description": "Start an environment-scoped integration outcome run.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"environment_id": map[string]any{"type": "string"}, "requested_outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"environment_id", "requested_outcome"}}},
 				map[string]any{"name": "integration_runs.complete", "description": "Complete a run with a deterministic validation result.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"run_id": map[string]any{"type": "string"}, "reported_success": map[string]any{"type": "boolean"}, "validated_success": map[string]any{"type": "boolean"}, "failure_code": map[string]any{"type": "string", "maxLength": 120}}, "required": []string{"run_id", "validated_success"}}},
 			)
-			if s.usageReporter != nil {
-				config, err := s.service.Store().VendorIdentity(r.Context(), productID)
-				if err == nil && config.UsageHookURL != "" {
-					tools = append(tools, usageToolDefinition())
-				}
-			}
 			if s.reporting != nil {
 				capabilities, _ := s.reporting.Capabilities(r.Context(), productID)
 				bugEnabled, feedbackEnabled := false, false
 				for _, capability := range capabilities {
 					bugEnabled = bugEnabled || capability.BugReportsEnabled
 					feedbackEnabled = feedbackEnabled || capability.FeedbackEnabled
-				}
-				// Compatibility for deployments that have not yet materialized an
-				// Integration catalog. New deployments are routed only by Integration.
-				if len(capabilities) == 0 {
-					if config, err := s.reporting.Config(r.Context(), productID); err == nil {
-						bugEnabled, feedbackEnabled = config.BugReportsEnabled, config.FeedbackEnabled
-					}
 				}
 				metadata := map[string]any{"com.dokosoko/supportCapabilities": capabilities}
 				if bugEnabled {
@@ -2293,7 +2240,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				}
 			}
 			if s.accessRuntime != nil {
-				capabilities := s.accessRuntime.Capabilities(r.Context(), productID, principal.Entitlements)
+				capabilities := s.accessRuntime.Capabilities(r.Context(), productID, principal.Grants)
 				if len(capabilities) > 0 {
 					metadata := map[string]any{"com.dokosoko/accessConnections": capabilities}
 					canCreateInstance, canCreateCredential, canRevokeCredential := false, false, false
@@ -2318,7 +2265,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				}
 			}
 			if s.toolRuntime != nil {
-				custom, err := s.toolRuntime.Available(r.Context(), productID, principal.Entitlements)
+				custom, err := s.toolRuntime.Available(r.Context(), productID, principal.Grants)
 				if err == nil {
 					for _, item := range custom {
 						_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(r.Context(), productID, selection, item)
@@ -2413,9 +2360,9 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 	if !public {
 		actorKind, actorID, channel = "vendor_user", pseudonym(productID, principal), "private_mcp"
 	}
-	selection := model.ProductSelectionContext{}
+	selection := model.ProductSelectionContext{Public: public}
 	if !public {
-		selection.CustomerID, selection.InstallationID = principal.VendorOrganisation, principal.InstallationID
+		selection.CustomerAccountID, selection.InstallationID = principal.CustomerAccountID, principal.InstallationID
 	}
 	dimensions := map[string]any{"channel": channel, "tool": params.Name}
 	if manifestErr == nil {
@@ -2448,7 +2395,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32003, "Explicit user confirmation is required after previewing the exact bug report")
 			return
 		}
-		if !s.allowFixedWindow("support-reporting|"+productID+"|"+principal.Issuer+"|"+principal.Subject, 30, time.Now().UTC()) {
+		if !s.allowFixedWindow("support-reporting|"+productID+"|"+vendorActorID(principal), 30, time.Now().UTC()) {
 			w.Header().Set("Retry-After", "60")
 			writeRPCError(w, request.ID, -32029, "Support reporting request limit exceeded")
 			return
@@ -2484,7 +2431,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32003, "Explicit user confirmation is required after previewing the exact feedback")
 			return
 		}
-		if !s.allowFixedWindow("support-reporting|"+productID+"|"+principal.Issuer+"|"+principal.Subject, 30, time.Now().UTC()) {
+		if !s.allowFixedWindow("support-reporting|"+productID+"|"+vendorActorID(principal), 30, time.Now().UTC()) {
 			w.Header().Set("Retry-After", "60")
 			writeRPCError(w, request.ID, -32029, "Support reporting request limit exceeded")
 			return
@@ -2511,26 +2458,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		s.recordAnalytics(ctx, productID, "support.feedback_submitted", "vendor_user", actorID, map[string]any{"channel": "private_mcp", "state": value.State})
 		writeToolResult(w, request.ID, reportToolResult(value))
-	case "usage.get":
-		if public || s.usageReporter == nil {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		if len(params.Arguments) != 0 {
-			writeRPCError(w, request.ID, -32602, "Invalid params")
-			return
-		}
-		value, err := s.usageReporter.Report(ctx, productID, principal)
-		if err != nil {
-			if errors.Is(err, identity.ErrUsageDenied) {
-				writeRPCError(w, request.ID, -32003, "Usage report is unavailable for this identity")
-				return
-			}
-			writeRPCError(w, request.ID, -32603, "Usage report could not be retrieved")
-			return
-		}
-		s.recordAnalytics(ctx, productID, "usage.retrieved", "vendor_user", pseudonym(productID, principal), map[string]any{"channel": "private_mcp"})
-		writeToolResult(w, request.ID, value)
 	case "mcp_connections.authorize":
 		if public || s.mcpBridge == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
@@ -2538,7 +2465,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		connectionID, _ := params.Arguments["connection_id"].(string)
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID})
+		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolPrincipal(principal, false, requestID))
 		if err != nil {
 			writeRPCError(w, request.ID, -32003, "Upstream user authorization could not be started")
 			return
@@ -2558,7 +2485,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			return
 		}
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		value, err := s.service.StartIntegrationRun(ctx, productID, input.EnvironmentID, input.RequestedOutcome, platform.Actor{ID: principal.Issuer + "|" + principal.Subject, RequestID: requestID})
+		value, err := s.service.StartIntegrationRun(ctx, productID, input.EnvironmentID, input.RequestedOutcome, platform.Actor{ID: vendorActorID(principal), RequestID: requestID})
 		if err != nil {
 			writeRPCError(w, request.ID, -32602, "Integration run could not be started")
 			return
@@ -2580,7 +2507,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			return
 		}
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		value, err := s.service.CompleteIntegrationRun(ctx, productID, input.RunID, input.ReportedSuccess, input.ValidatedSuccess, input.FailureCode, platform.Actor{ID: principal.Issuer + "|" + principal.Subject, RequestID: requestID})
+		value, err := s.service.CompleteIntegrationRun(ctx, productID, input.RunID, input.ReportedSuccess, input.ValidatedSuccess, input.FailureCode, platform.Actor{ID: vendorActorID(principal), RequestID: requestID})
 		if err != nil {
 			writeRPCError(w, request.ID, -32602, "Integration run could not be completed")
 			return
@@ -2714,40 +2641,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			}
 		}
 		writeToolResult(w, request.ID, filtered)
-	case "find_package":
-		packages, err := s.service.Store().Packages(ctx, productID)
-		if err != nil {
-			writeRPCError(w, request.ID, -32603, "Package lookup failed")
-			return
-		}
-		items := make([]model.Package, 0)
-		query, _ := params.Arguments["query"].(string)
-		for _, item := range packages {
-			if public && (!item.Published || item.Visibility != model.VisibilityPublic) {
-				continue
-			}
-			managed, allowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, "package", item.ID, item.Name, item.Version)
-			if allowErr != nil || (managed && !allowed) {
-				continue
-			}
-			if query == "" || strings.Contains(strings.ToLower(item.Name), strings.ToLower(query)) {
-				items = append(items, item)
-			}
-		}
-		writeToolResult(w, request.ID, items)
-	case "get_package":
-		id, _ := params.Arguments["package_id"].(string)
-		item, err := s.service.Store().Package(ctx, productID, id)
-		if err != nil || (public && (!item.Published || item.Visibility != model.VisibilityPublic)) {
-			writeToolResult(w, request.ID, map[string]any{"error": "package_not_found"})
-			return
-		}
-		managed, allowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, "package", item.ID, item.Name, item.Version)
-		if allowErr != nil || (managed && !allowed) {
-			writeToolResult(w, request.ID, map[string]any{"error": "package_not_in_effective_product_version"})
-			return
-		}
-		writeToolResult(w, request.ID, item)
 	default:
 		if public {
 			writeRPCError(w, request.ID, -32601, "Tool is not available on Public MCP")
@@ -2770,7 +2663,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 					break
 				}
 			}
-			value, err := s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, Confirmed: params.Meta.Confirmed, RequestID: requestID})
+			value, err := s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolPrincipal(principal, params.Meta.Confirmed, requestID))
 			if err == nil {
 				if upstream, ok := value.(toolruntime.MCPCallResult); ok {
 					writeRPC(w, request.ID, upstream.Result)
@@ -2860,12 +2753,27 @@ func decodeArguments(arguments map[string]any, destination any) error {
 
 func providerPrincipal(principal identity.Principal, ctx context.Context) providerruntime.Principal {
 	requestID, _ := ctx.Value(requestIDKey).(string)
-	return providerruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID}
+	return providerruntime.Principal{Subject: vendorActorID(principal), ExternalCustomerID: principal.ExternalCustomerID, InstallationID: principal.InstallationID, Grants: principal.Grants, RequestID: requestID}
 }
 
 func accessPrincipal(principal identity.Principal, ctx context.Context) accessruntime.Principal {
 	requestID, _ := ctx.Value(requestIDKey).(string)
-	return accessruntime.Principal{Subject: principal.Issuer + "|" + principal.Subject, VendorOrganisation: principal.VendorOrganisation, InstallationID: principal.InstallationID, Entitlements: principal.Entitlements, RequestID: requestID}
+	return accessruntime.Principal{Subject: vendorActorID(principal), ExternalCustomerID: principal.ExternalCustomerID, InstallationID: principal.InstallationID, Grants: principal.Grants, RequestID: requestID}
+}
+
+func toolPrincipal(principal identity.Principal, confirmed bool, requestID string) toolruntime.Principal {
+	return toolruntime.Principal{
+		Subject:              principal.Subject,
+		Issuer:               principal.Issuer,
+		CustomerAccountID:    principal.CustomerAccountID,
+		ExternalCustomerID:   principal.ExternalCustomerID,
+		InstallationID:       principal.InstallationID,
+		Grants:               principal.Grants,
+		DelegatedAPIOrigin:   principal.DelegatedAPIOrigin,
+		DelegatedAccessToken: principal.UpstreamAccessToken,
+		Confirmed:            confirmed,
+		RequestID:            requestID,
+	}
 }
 
 func accessRPCError(w http.ResponseWriter, id any, err error) {
@@ -2916,62 +2824,6 @@ func (s *Server) widgetScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	fmt.Fprintf(w, `(function(){const s=document.currentScript;if(!s)return;const b=document.createElement('button');b.type='button';b.textContent='Ask %s';b.setAttribute('aria-label','Open %s DokoSoko assistant');b.style.cssText='position:fixed;right:20px;bottom:20px;border:0;border-radius:999px;padding:12px 16px;background:#18181b;color:#fff;font:600 14px system-ui;box-shadow:0 8px 30px rgba(0,0,0,.18);z-index:2147483647';b.onclick=function(){window.dispatchEvent(new CustomEvent('dokosoko:open',{detail:{product:%q,kind:%q}}))};document.body.appendChild(b)})();`, product.Name, kind, productID, kind)
-}
-
-func (s *Server) packageArtifact(w http.ResponseWriter, r *http.Request) {
-	productID, packageID := r.PathValue("productID"), r.PathValue("packageID")
-	pkg, err := s.service.Store().Package(r.Context(), productID, packageID)
-	if err != nil || !pkg.Published {
-		http.NotFound(w, r)
-		return
-	}
-	public := pkg.Visibility == model.VisibilityPublic
-	var packagePrincipal identity.Principal
-	if !public {
-		_, _, _, cookieAuthenticated := s.cookieSession(r)
-		demoAuthenticated := s.allowDemoTokens && isBearer(r, demoPrivateToken)
-		authenticated := false
-		if s.identityBroker != nil {
-			principal, authErr := s.identityBroker.Authenticate(r.Context(), bearerToken(r))
-			authenticated = authErr == nil && principal.ProductID == productID
-			if authenticated {
-				packagePrincipal = principal
-			}
-		}
-		if !cookieAuthenticated && !demoAuthenticated && !authenticated {
-			writeError(w, http.StatusUnauthorized, "authentication_required", "Private package access requires an authorized DokoSoko identity.", nil)
-			return
-		}
-	}
-	if s.packageGateway == nil {
-		writeError(w, http.StatusServiceUnavailable, "package_gateway_unavailable", "Package delivery is not configured.", nil)
-		return
-	}
-	artifact, err := s.packageGateway.Acquire(r.Context(), productID, packageID)
-	if err != nil {
-		if errors.Is(err, packagegateway.ErrArtifactInvalid) {
-			writeError(w, http.StatusBadGateway, "artifact_integrity_failed", "The upstream package failed checksum or size verification.", nil)
-			return
-		}
-		writeError(w, http.StatusBadGateway, "package_upstream_failed", "The package could not be acquired safely.", nil)
-		return
-	}
-	defer artifact.Close()
-	actorKind, actorID, channel := "anonymous", "", "public"
-	if !public {
-		actorKind, actorID, channel = "vendor_user", pseudonym(productID, packagePrincipal), "private"
-	}
-	s.recordAnalytics(r.Context(), productID, "package.downloaded", actorKind, actorID, map[string]any{"channel": channel, "ecosystem": pkg.Ecosystem, "mode": pkg.Mode})
-	s.recordAnalytics(r.Context(), productID, "package_acquired", actorKind, actorID, map[string]any{"channel": channel, "ecosystem": pkg.Ecosystem})
-	w.Header().Set("Content-Type", artifact.ContentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, artifact.Filename))
-	w.Header().Set("Content-Length", strconv.FormatInt(artifact.Size, 10))
-	w.Header().Set("X-Checksum-SHA256", artifact.SHA256)
-	w.Header().Set("Cache-Control", "private, no-store")
-	if public {
-		w.Header().Set("Cache-Control", "public, max-age=300")
-	}
-	http.ServeContent(w, r, artifact.Filename, time.Time{}, artifact.File)
 }
 
 func decodeJSON(reader io.Reader, value any) error {

@@ -24,24 +24,24 @@ var (
 )
 
 type ProductInstallationInput struct {
-	ID            string
-	CustomerID    string
-	EnvironmentID string
-	ExternalID    string
-	Name          string
-	State         string
-	Revision      int64
+	ID                string
+	CustomerAccountID string
+	EnvironmentID     string
+	ExternalID        string
+	Name              string
+	State             string
+	Revision          int64
 }
 
 type ProductVersionPinInput struct {
-	Scope            string
-	ScopeID          string
-	CustomerID       string
-	EnvironmentID    string
-	InstallationID   string
-	ProductVersionID string
-	Reason           string
-	Revision         int64
+	Scope             string
+	ScopeID           string
+	CustomerAccountID string
+	EnvironmentID     string
+	InstallationID    string
+	ProductVersionID  string
+	Reason            string
+	Revision          int64
 }
 
 type ProductVersionPromotionInput struct {
@@ -205,18 +205,6 @@ func (s *Service) inspectProductVersionDrift(ctx context.Context, version model.
 			} else if !value.Published || value.Quarantined {
 				drift.Status, drift.Message = "unavailable", "source is unpublished or quarantined"
 			}
-		case "package":
-			value, err := s.store.Package(ctx, version.ProductID, binding.ReferenceID)
-			if err != nil {
-				drift.Status, drift.Message = "missing", "package no longer exists"
-			} else if !value.Published {
-				drift.Status, drift.Message = "unavailable", "package is not published"
-			} else {
-				drift.Observed = value.Version
-				if binding.Version != "" && binding.Version != value.Version {
-					drift.Status, drift.Message = "changed", "package version no longer matches the snapshot"
-				}
-			}
 		case "tool":
 			value, err := s.store.Tool(ctx, version.ProductID, binding.ReferenceID)
 			if err != nil {
@@ -328,8 +316,8 @@ func validScopedIdentifier(value string) bool {
 }
 
 func (s *Service) SaveProductInstallation(ctx context.Context, productID string, input ProductInstallationInput, actor Actor) (model.ProductInstallation, error) {
-	input.ID, input.CustomerID, input.EnvironmentID, input.ExternalID, input.Name, input.State = strings.TrimSpace(input.ID), strings.TrimSpace(input.CustomerID), strings.TrimSpace(input.EnvironmentID), strings.TrimSpace(input.ExternalID), strings.TrimSpace(input.Name), strings.ToLower(strings.TrimSpace(input.State))
-	if !validScopedIdentifier(input.CustomerID) || !validScopedIdentifier(input.ExternalID) || input.EnvironmentID == "" || input.Name == "" || len(input.Name) > 120 || (input.State != "active" && input.State != "paused") {
+	input.ID, input.CustomerAccountID, input.EnvironmentID, input.ExternalID, input.Name, input.State = strings.TrimSpace(input.ID), strings.TrimSpace(input.CustomerAccountID), strings.TrimSpace(input.EnvironmentID), strings.TrimSpace(input.ExternalID), strings.TrimSpace(input.Name), strings.ToLower(strings.TrimSpace(input.State))
+	if !validScopedIdentifier(input.CustomerAccountID) || !validScopedIdentifier(input.ExternalID) || input.EnvironmentID == "" || input.Name == "" || len(input.Name) > 120 || (input.State != "active" && input.State != "paused") {
 		return model.ProductInstallation{}, errors.New("installation fields are invalid")
 	}
 	product, err := s.store.Product(ctx, productID)
@@ -353,12 +341,16 @@ func (s *Service) SaveProductInstallation(ctx context.Context, productID string,
 			return model.ProductInstallation{}, err
 		}
 	}
-	value, err := s.store.SaveProductInstallation(ctx, model.ProductInstallation{ID: input.ID, OrganisationID: product.OrganisationID, ProductID: productID, CustomerID: input.CustomerID, EnvironmentID: input.EnvironmentID, ExternalID: input.ExternalID, Name: input.Name, State: input.State}, input.Revision)
+	account, err := s.store.CustomerAccount(ctx, productID, input.CustomerAccountID)
+	if err != nil || account.State != "active" {
+		return model.ProductInstallation{}, errors.New("customer account is not active for this product")
+	}
+	value, err := s.store.SaveProductInstallation(ctx, model.ProductInstallation{ID: input.ID, OrganisationID: product.OrganisationID, ProductID: productID, CustomerAccountID: input.CustomerAccountID, EnvironmentID: input.EnvironmentID, ExternalID: input.ExternalID, Name: input.Name, State: input.State}, input.Revision)
 	if err != nil {
 		return model.ProductInstallation{}, err
 	}
 	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.installation.saved", TargetType: "product_installation", TargetID: value.ID, Current: map[string]any{"customer_id": value.CustomerID, "environment_id": value.EnvironmentID, "external_id": value.ExternalID, "state": value.State}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.installation.saved", TargetType: "product_installation", TargetID: value.ID, Current: map[string]any{"customer_account_id": value.CustomerAccountID, "environment_id": value.EnvironmentID, "external_id": value.ExternalID, "state": value.State}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, nil
 }
 
@@ -397,7 +389,7 @@ func (s *Service) ProductVersionImpact(ctx context.Context, productID, versionID
 }
 
 func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID string, input ProductVersionPinInput, actor Actor) (model.ProductVersionPin, error) {
-	input.Scope, input.ScopeID, input.CustomerID, input.EnvironmentID, input.InstallationID, input.Reason = strings.ToLower(strings.TrimSpace(input.Scope)), strings.TrimSpace(input.ScopeID), strings.TrimSpace(input.CustomerID), strings.TrimSpace(input.EnvironmentID), strings.TrimSpace(input.InstallationID), strings.TrimSpace(input.Reason)
+	input.Scope, input.ScopeID, input.CustomerAccountID, input.EnvironmentID, input.InstallationID, input.Reason = strings.ToLower(strings.TrimSpace(input.Scope)), strings.TrimSpace(input.ScopeID), strings.TrimSpace(input.CustomerAccountID), strings.TrimSpace(input.EnvironmentID), strings.TrimSpace(input.InstallationID), strings.TrimSpace(input.Reason)
 	if !validScopedIdentifier(input.ScopeID) || len(input.Reason) > 500 || (input.Scope != "customer" && input.Scope != "environment" && input.Scope != "installation") {
 		return model.ProductVersionPin{}, errors.New("pin scope, identifier, or reason is invalid")
 	}
@@ -413,7 +405,10 @@ func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID str
 		return model.ProductVersionPin{}, ErrProductVersionDeprecated
 	}
 	if input.Scope == "customer" {
-		input.CustomerID, input.ScopeID = input.ScopeID, input.ScopeID
+		input.CustomerAccountID, input.ScopeID = input.ScopeID, input.ScopeID
+		if _, accountErr := s.store.CustomerAccount(ctx, productID, input.CustomerAccountID); accountErr != nil {
+			return model.ProductVersionPin{}, errors.New("pin customer account does not belong to this product")
+		}
 	}
 	if input.Scope == "environment" {
 		environments, environmentErr := s.store.Environments(ctx, productID)
@@ -434,7 +429,7 @@ func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID str
 		if installationErr != nil {
 			return model.ProductVersionPin{}, installationErr
 		}
-		input.InstallationID, input.EnvironmentID, input.CustomerID = installation.ID, installation.EnvironmentID, installation.CustomerID
+		input.InstallationID, input.EnvironmentID, input.CustomerAccountID = installation.ID, installation.EnvironmentID, installation.CustomerAccountID
 	}
 	var prior model.ProductVersionPin
 	prior, err = s.store.ProductVersionPin(ctx, productID, input.Scope, input.ScopeID)
@@ -445,7 +440,7 @@ func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID str
 	if err != nil {
 		return model.ProductVersionPin{}, err
 	}
-	value, err := s.store.SaveProductVersionPin(ctx, model.ProductVersionPin{ID: id, OrganisationID: product.OrganisationID, ProductID: productID, Scope: input.Scope, ScopeID: input.ScopeID, CustomerID: input.CustomerID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: version.ID, ProductVersion: version.Version, Reason: input.Reason}, input.Revision)
+	value, err := s.store.SaveProductVersionPin(ctx, model.ProductVersionPin{ID: id, OrganisationID: product.OrganisationID, ProductID: productID, Scope: input.Scope, ScopeID: input.ScopeID, CustomerAccountID: input.CustomerAccountID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: version.ID, ProductVersion: version.Version, Reason: input.Reason}, input.Revision)
 	if err != nil {
 		return model.ProductVersionPin{}, err
 	}
@@ -456,6 +451,6 @@ func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID str
 	historyID, _ := randomUUID()
 	_ = s.store.AppendProductVersionPinHistory(ctx, model.ProductVersionPinHistory{ID: historyID, OrganisationID: value.OrganisationID, ProductID: productID, PinID: value.ID, Scope: value.Scope, ScopeID: value.ScopeID, PriorVersion: prior.ProductVersion, ProductVersion: value.ProductVersion, Action: action, Reason: value.Reason, ActorID: actor.ID, CreatedAt: s.now()})
 	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.pinned", TargetType: "product_version_pin", TargetID: value.ID, Prior: map[string]any{"product_version": prior.ProductVersion}, Current: map[string]any{"scope": value.Scope, "scope_id": value.ScopeID, "customer_id": value.CustomerID, "product_version": value.ProductVersion, "reason": value.Reason}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.pinned", TargetType: "product_version_pin", TargetID: value.ID, Prior: map[string]any{"product_version": prior.ProductVersion}, Current: map[string]any{"scope": value.Scope, "scope_id": value.ScopeID, "customer_account_id": value.CustomerAccountID, "product_version": value.ProductVersion, "reason": value.Reason}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, nil
 }

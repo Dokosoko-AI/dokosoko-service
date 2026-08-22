@@ -77,6 +77,7 @@ type Integration struct {
 	VersionKey               string                    `json:"version_key"`
 	DisplayName              string                    `json:"display_name"`
 	Description              string                    `json:"description"`
+	Visibility               Visibility                `json:"visibility"`
 	Lifecycle                string                    `json:"lifecycle"`
 	ReplacementIntegrationID string                    `json:"replacement_integration_id,omitempty"`
 	SunsetAt                 *time.Time                `json:"sunset_at,omitempty"`
@@ -86,6 +87,32 @@ type Integration struct {
 	SupportRouteID           string                    `json:"support_route_id,omitempty"`
 	CreatedAt                time.Time                 `json:"created_at"`
 	UpdatedAt                time.Time                 `json:"updated_at"`
+}
+
+// BackendConnection is an operator-managed service-to-service connection.
+// CredentialSecretID is deliberately excluded from the public representation;
+// callers only see the non-secret fingerprint of the active credential.
+type BackendConnection struct {
+	ID                    string    `json:"id"`
+	DeploymentID          string    `json:"deployment_id"`
+	OrganisationID        string    `json:"organisation_id"`
+	Name                  string    `json:"name"`
+	BaseURL               string    `json:"base_url"`
+	AuthenticationType    string    `json:"authentication_type"`
+	CredentialSecretID    string    `json:"-"`
+	CredentialFingerprint string    `json:"credential_fingerprint,omitempty"`
+	State                 string    `json:"state"`
+	Revision              int64     `json:"revision"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+type BackendConnectionCredential struct {
+	ID                  string    `json:"id"`
+	BackendConnectionID string    `json:"backend_connection_id"`
+	Fingerprint         string    `json:"fingerprint"`
+	ConnectionRevision  int64     `json:"connection_revision"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 type IntegrationRevision struct {
@@ -149,7 +176,7 @@ type AccessDefinition struct {
 	InstanceLabelPlural   string          `json:"instance_label_plural"`
 	CredentialScope       string          `json:"credential_scope"`
 	ManagementAuthType    string          `json:"management_auth_type"`
-	HookSetID             string          `json:"hook_set_id,omitempty"`
+	APIResourceSetID      string          `json:"api_resource_set_id,omitempty"`
 	Operations            json.RawMessage `json:"operations"`
 	State                 string          `json:"state"`
 	Revision              int64           `json:"revision"`
@@ -218,23 +245,20 @@ type AccessCredential struct {
 }
 
 type SupportRoute struct {
-	ID                       string    `json:"id"`
-	DeploymentID             string    `json:"deployment_id"`
-	OrganisationID           string    `json:"organisation_id"`
-	Name                     string    `json:"name"`
-	IsDefault                bool      `json:"is_default"`
-	BugReportsEnabled        bool      `json:"bug_reports_enabled"`
-	FeedbackEnabled          bool      `json:"feedback_enabled"`
-	BugHookURL               string    `json:"bug_hook_url"`
-	BugHookCredentialID      string    `json:"-"`
-	FeedbackHookURL          string    `json:"feedback_hook_url"`
-	FeedbackHookCredentialID string    `json:"-"`
-	RetentionDays            int       `json:"retention_days"`
-	State                    string    `json:"state"`
-	Revision                 int64     `json:"revision"`
-	IntegrationIDs           []string  `json:"integration_ids,omitempty"`
-	CreatedAt                time.Time `json:"created_at"`
-	UpdatedAt                time.Time `json:"updated_at"`
+	ID                  string    `json:"id"`
+	DeploymentID        string    `json:"deployment_id"`
+	OrganisationID      string    `json:"organisation_id"`
+	Name                string    `json:"name"`
+	IsDefault           bool      `json:"is_default"`
+	BugReportsEnabled   bool      `json:"bug_reports_enabled"`
+	FeedbackEnabled     bool      `json:"feedback_enabled"`
+	BackendConnectionID string    `json:"backend_connection_id,omitempty"`
+	RetentionDays       int       `json:"retention_days"`
+	State               string    `json:"state"`
+	Revision            int64     `json:"revision"`
+	IntegrationIDs      []string  `json:"integration_ids,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type ProductVersion struct {
@@ -274,34 +298,34 @@ type ProductVersion struct {
 }
 
 type ProductVersionPin struct {
-	ID               string    `json:"id"`
-	OrganisationID   string    `json:"organisation_id"`
-	ProductID        string    `json:"product_id"`
-	Scope            string    `json:"scope"`
-	ScopeID          string    `json:"scope_id"`
-	CustomerID       string    `json:"customer_id"`
-	EnvironmentID    string    `json:"environment_id,omitempty"`
-	InstallationID   string    `json:"installation_id,omitempty"`
-	ProductVersionID string    `json:"product_version_id"`
-	ProductVersion   string    `json:"product_version"`
-	Reason           string    `json:"reason,omitempty"`
-	Revision         int64     `json:"revision"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	OrganisationID    string    `json:"organisation_id"`
+	ProductID         string    `json:"product_id"`
+	Scope             string    `json:"scope"`
+	ScopeID           string    `json:"scope_id"`
+	CustomerAccountID string    `json:"customer_account_id"`
+	EnvironmentID     string    `json:"environment_id,omitempty"`
+	InstallationID    string    `json:"installation_id,omitempty"`
+	ProductVersionID  string    `json:"product_version_id"`
+	ProductVersion    string    `json:"product_version"`
+	Reason            string    `json:"reason,omitempty"`
+	Revision          int64     `json:"revision"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type ProductInstallation struct {
-	ID             string    `json:"id"`
-	OrganisationID string    `json:"organisation_id"`
-	ProductID      string    `json:"product_id"`
-	CustomerID     string    `json:"customer_id"`
-	EnvironmentID  string    `json:"environment_id"`
-	ExternalID     string    `json:"external_id"`
-	Name           string    `json:"name"`
-	State          string    `json:"state"`
-	Revision       int64     `json:"revision"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	OrganisationID    string    `json:"organisation_id"`
+	ProductID         string    `json:"product_id"`
+	CustomerAccountID string    `json:"customer_account_id"`
+	EnvironmentID     string    `json:"environment_id"`
+	ExternalID        string    `json:"external_id"`
+	Name              string    `json:"name"`
+	State             string    `json:"state"`
+	Revision          int64     `json:"revision"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type ProductVersionPinHistory struct {
@@ -373,6 +397,7 @@ type IntegrationManifest struct {
 	VersionKey               string                        `json:"version_key"`
 	DisplayName              string                        `json:"display_name"`
 	Description              string                        `json:"description"`
+	Visibility               Visibility                    `json:"visibility"`
 	Lifecycle                string                        `json:"lifecycle"`
 	ReplacementIntegrationID string                        `json:"replacement_integration_id,omitempty"`
 	SunsetAt                 *time.Time                    `json:"sunset_at,omitempty"`
@@ -412,7 +437,7 @@ type ProductManifest struct {
 	DefinitionRevision   int64                       `json:"definition_revision,omitempty"`
 	EffectiveVersion     *ProductVersionSummary      `json:"effective_version,omitempty"`
 	SelectionSource      string                      `json:"selection_source"`
-	CustomerID           string                      `json:"customer_id,omitempty"`
+	CustomerAccountID    string                      `json:"customer_account_id,omitempty"`
 	EnvironmentID        string                      `json:"environment_id,omitempty"`
 	InstallationID       string                      `json:"installation_id,omitempty"`
 	OperationalWarnings  []string                    `json:"operational_warnings"`
@@ -423,9 +448,10 @@ type ProductManifest struct {
 }
 
 type ProductSelectionContext struct {
-	CustomerID     string
-	EnvironmentID  string
-	InstallationID string
+	CustomerAccountID string
+	EnvironmentID     string
+	InstallationID    string
+	Public            bool
 }
 
 type ProductVersionImpact struct {
@@ -518,12 +544,11 @@ type ProductDefinition struct {
 }
 
 type ProductBuildInput struct {
-	Kind      string            `json:"kind"`
-	Name      string            `json:"name,omitempty"`
-	Location  string            `json:"location"`
-	Version   string            `json:"version,omitempty"`
-	Ecosystem string            `json:"ecosystem,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	Kind     string            `json:"kind"`
+	Name     string            `json:"name,omitempty"`
+	Location string            `json:"location"`
+	Version  string            `json:"version,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type ProductBuild struct {
@@ -571,27 +596,6 @@ type CrawlJob struct {
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
-type Package struct {
-	ID                string     `json:"id"`
-	OrganisationID    string     `json:"organisation_id"`
-	ProductID         string     `json:"product_id"`
-	Name              string     `json:"name"`
-	Ecosystem         string     `json:"ecosystem"`
-	Version           string     `json:"version"`
-	ExternalPackageID string     `json:"external_package_id,omitempty"`
-	Mode              string     `json:"mode"`
-	Location          string     `json:"-"`
-	DownloadURL       string     `json:"-"`
-	CredentialID      string     `json:"-"`
-	ChecksumSHA256    []byte     `json:"-"`
-	ExpectedSize      int64      `json:"-"`
-	Visibility        Visibility `json:"visibility"`
-	Published         bool       `json:"published"`
-	Revision          int64      `json:"revision"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-}
-
 type Secret struct {
 	ID             string
 	OrganisationID string
@@ -618,7 +622,6 @@ type Tool struct {
 	APIConnectionID     string          `json:"-"`
 	BaseURL             string          `json:"-"`
 	HTTPMethod          string          `json:"http_method"`
-	CredentialID        string          `json:"-"`
 	AuthorizationPolicy json.RawMessage `json:"authorization_policy"`
 	TimeoutMS           int             `json:"timeout_ms"`
 	BackendKind         string          `json:"backend_kind"`
@@ -751,25 +754,6 @@ type IntegrationRun struct {
 // APIs avoid confusing a run with a first-class Integration.
 type ConnectorRun = IntegrationRun
 
-// ReportingConfig controls the two product-owned Private MCP reporting tools.
-// Hook credentials are referenced by ID and are never serialized to an API or
-// MCP client.
-type ReportingConfig struct {
-	ID                       string    `json:"id"`
-	OrganisationID           string    `json:"organisation_id"`
-	ProductID                string    `json:"product_id"`
-	BugReportsEnabled        bool      `json:"bug_reports_enabled"`
-	FeedbackEnabled          bool      `json:"feedback_enabled"`
-	BugHookURL               string    `json:"bug_hook_url"`
-	BugHookCredentialID      string    `json:"-"`
-	FeedbackHookURL          string    `json:"feedback_hook_url"`
-	FeedbackHookCredentialID string    `json:"-"`
-	RetentionDays            int       `json:"retention_days"`
-	Revision                 int64     `json:"revision"`
-	CreatedAt                time.Time `json:"created_at"`
-	UpdatedAt                time.Time `json:"updated_at"`
-}
-
 // ReportSubmission is the durable outbox record. PayloadCiphertext contains
 // both user-authored content and trusted reporter/product context. Only routing
 // and delivery state are stored in plaintext.
@@ -867,7 +851,6 @@ type AnalyticsSummary struct {
 	AuthorizedUsers  int64            `json:"authorized_users"`
 	MCPRequests      int64            `json:"mcp_requests"`
 	ToolCalls        int64            `json:"tool_calls"`
-	PackageDownloads int64            `json:"package_downloads"`
 	IntegrationRuns  int64            `json:"integration_runs"`
 	ValidatedRuns    int64            `json:"validated_runs"`
 	ValidatedSuccess int64            `json:"validated_success"`

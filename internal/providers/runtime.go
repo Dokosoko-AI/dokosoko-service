@@ -58,9 +58,9 @@ type Runtime struct {
 
 type Principal struct {
 	Subject            string
-	VendorOrganisation string
+	ExternalCustomerID string
 	InstallationID     string
-	Entitlements       map[string]bool
+	Grants             map[string]bool
 	RequestID          string
 }
 
@@ -86,13 +86,13 @@ type CredentialResult struct {
 }
 
 type providerConfig struct {
-	ContractVersion      string   `json:"contract_version"`
-	AuthorizePath        string   `json:"authorize_path"`
-	ProjectPath          string   `json:"project_path"`
-	CredentialPath       string   `json:"credential_path"`
-	RevokePath           string   `json:"revoke_path"`
-	RequiredEntitlements []string `json:"required_entitlements"`
-	MaxTTLSeconds        int      `json:"max_ttl_seconds"`
+	ContractVersion string   `json:"contract_version"`
+	AuthorizePath   string   `json:"authorize_path"`
+	ProjectPath     string   `json:"project_path"`
+	CredentialPath  string   `json:"credential_path"`
+	RevokePath      string   `json:"revoke_path"`
+	RequiredGrants  []string `json:"required_grants"`
+	MaxTTLSeconds   int      `json:"max_ttl_seconds"`
 }
 
 func New(store Store, vault *secrets.Vault, resolver Resolver, doer Doer) *Runtime {
@@ -102,14 +102,14 @@ func New(store Store, vault *secrets.Vault, resolver Resolver, doer Doer) *Runti
 	return &Runtime{store: store, vault: vault, resolver: resolver, doer: doer, now: func() time.Time { return time.Now().UTC() }}
 }
 
-func (r *Runtime) HasCapabilities(ctx context.Context, productID string, entitlements map[string]bool) bool {
+func (r *Runtime) HasCapabilities(ctx context.Context, productID string, grants map[string]bool) bool {
 	values, err := r.store.Providers(ctx, productID)
 	if err != nil {
 		return false
 	}
 	for _, value := range values {
 		cfg, err := config(value)
-		if err == nil && allow(cfg, Principal{Subject: "discovery", Entitlements: entitlements}) {
+		if err == nil && allow(cfg, Principal{Subject: "discovery", Grants: grants}) {
 			return true
 		}
 	}
@@ -151,8 +151,8 @@ func allow(config providerConfig, principal Principal) bool {
 	if principal.Subject == "" {
 		return false
 	}
-	for _, required := range config.RequiredEntitlements {
-		if !principal.Entitlements[required] {
+	for _, required := range config.RequiredGrants {
+		if !principal.Grants[required] {
 			return false
 		}
 	}
@@ -253,7 +253,7 @@ func (r *Runtime) authorize(ctx context.Context, provider model.Provider, cfg pr
 		Allowed bool   `json:"allowed"`
 		Reason  string `json:"reason"`
 	}
-	err := r.post(ctx, provider, cfg.AuthorizePath, map[string]any{"operation": operation, "subject": principal.Subject, "vendor_organisation_id": principal.VendorOrganisation, "installation_id": principal.InstallationID, "product_id": provider.ProductID, "details": details}, &response)
+	err := r.post(ctx, provider, cfg.AuthorizePath, map[string]any{"operation": operation, "subject": principal.Subject, "external_customer_id": principal.ExternalCustomerID, "installation_id": principal.InstallationID, "product_id": provider.ProductID, "details": details}, &response)
 	if err != nil || !response.Allowed {
 		return ErrDenied
 	}

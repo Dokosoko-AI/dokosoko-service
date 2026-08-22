@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
-	"github.com/dokosoko/dokosoko-service/internal/secrets"
 )
 
 var (
@@ -28,17 +27,20 @@ var (
 
 type Store interface {
 	Tools(context.Context, string, bool) ([]model.Tool, error)
-	Secret(context.Context, string, string) (model.Secret, error)
 	AppendAudit(context.Context, model.AuditEvent) error
 }
 
 type Principal struct {
-	Subject            string
-	VendorOrganisation string
-	InstallationID     string
-	Entitlements       map[string]bool
-	Confirmed          bool
-	RequestID          string
+	Subject              string
+	Issuer               string
+	CustomerAccountID    string
+	ExternalCustomerID   string
+	InstallationID       string
+	Grants               map[string]bool
+	DelegatedAPIOrigin   string
+	DelegatedAccessToken string
+	Confirmed            bool
+	RequestID            string
 }
 
 type Resolver interface {
@@ -63,15 +65,9 @@ func unsafeIP(address net.IP) bool {
 
 type Runtime struct {
 	store       Store
-	vault       *secrets.Vault
 	resolver    Resolver
 	doer        Doer
-	authorizer  ExternalAuthorizer
 	mcpExecutor MCPExecutor
-}
-
-type ExternalAuthorizer interface {
-	Authorize(context.Context, string, model.Tool, map[string]any, Principal) error
 }
 
 type MCPExecutor interface {
@@ -82,28 +78,27 @@ type MCPCallResult struct {
 	Result map[string]any
 }
 
-func NewRuntime(store Store, vault *secrets.Vault, resolver Resolver, doer Doer) *Runtime {
+func NewRuntime(store Store, resolver Resolver, doer Doer) *Runtime {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
-	return &Runtime{store: store, vault: vault, resolver: resolver, doer: doer}
+	return &Runtime{store: store, resolver: resolver, doer: doer}
 }
 
-func (r *Runtime) SetAuthorizer(authorizer ExternalAuthorizer) { r.authorizer = authorizer }
-func (r *Runtime) SetMCPExecutor(executor MCPExecutor)         { r.mcpExecutor = executor }
+func (r *Runtime) SetMCPExecutor(executor MCPExecutor) { r.mcpExecutor = executor }
 
 func (r *Runtime) Published(ctx context.Context, productID string) ([]model.Tool, error) {
 	return r.store.Tools(ctx, productID, true)
 }
 
-func (r *Runtime) Available(ctx context.Context, productID string, entitlements map[string]bool) ([]model.Tool, error) {
+func (r *Runtime) Available(ctx context.Context, productID string, grants map[string]bool) ([]model.Tool, error) {
 	values, err := r.Published(ctx, productID)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]model.Tool, 0, len(values))
 	for _, value := range values {
-		if !value.UpstreamDrifted && entitlementsAllow(value, entitlements) {
+		if !value.UpstreamDrifted && grantsAllow(value, grants) {
 			result = append(result, value)
 		}
 	}
@@ -125,14 +120,14 @@ func (r *Runtime) find(ctx context.Context, productID, fullName string) (model.T
 
 func authorize(tool model.Tool, principal Principal) error {
 	var policy struct {
-		RequiredEntitlements []string `json:"required_entitlements"`
+		RequiredGrants       []string `json:"required_grants"`
 		ConfirmationRequired bool     `json:"confirmation_required"`
 	}
 	if err := json.Unmarshal(tool.AuthorizationPolicy, &policy); err != nil {
 		return ErrDenied
 	}
-	for _, required := range policy.RequiredEntitlements {
-		if !principal.Entitlements[required] {
+	for _, required := range policy.RequiredGrants {
+		if !principal.Grants[required] {
 			return ErrDenied
 		}
 	}
@@ -142,15 +137,15 @@ func authorize(tool model.Tool, principal Principal) error {
 	return nil
 }
 
-func entitlementsAllow(tool model.Tool, entitlements map[string]bool) bool {
+func grantsAllow(tool model.Tool, grants map[string]bool) bool {
 	var policy struct {
-		RequiredEntitlements []string `json:"required_entitlements"`
+		RequiredGrants []string `json:"required_grants"`
 	}
 	if err := json.Unmarshal(tool.AuthorizationPolicy, &policy); err != nil {
 		return false
 	}
-	for _, required := range policy.RequiredEntitlements {
-		if !entitlements[required] {
+	for _, required := range policy.RequiredGrants {
+		if !grants[required] {
 			return false
 		}
 	}
@@ -185,21 +180,6 @@ func (r *Runtime) client(parsed *url.URL, address net.IP, timeout time.Duration)
 	return &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func (r *Runtime) credential(ctx context.Context, tool model.Tool) (string, error) {
-	if tool.CredentialID == "" {
-		return "", nil
-	}
-	if r.vault == nil {
-		return "", errors.New("tool credential vault unavailable")
-	}
-	value, err := r.store.Secret(ctx, tool.OrganisationID, tool.CredentialID)
-	if err != nil {
-		return "", err
-	}
-	plaintext, err := r.vault.Decrypt(secrets.Encrypted{Ciphertext: value.Ciphertext, Nonce: value.Nonce, KeyVersion: value.KeyVersion, Fingerprint: value.Fingerprint}, tool.OrganisationID+":tool:"+tool.CredentialID)
-	return string(plaintext), err
-}
-
 func auditID() string {
 	buffer := make([]byte, 16)
 	_, _ = rand.Read(buffer)
@@ -220,11 +200,6 @@ func (r *Runtime) Execute(ctx context.Context, productID, fullName string, argum
 	if err := authorize(tool, principal); err != nil {
 		return nil, err
 	}
-	if r.authorizer != nil {
-		if err := r.authorizer.Authorize(ctx, productID, tool, arguments, principal); err != nil {
-			return nil, ErrDenied
-		}
-	}
 	if tool.BackendKind == "mcp" {
 		if r.mcpExecutor == nil {
 			return nil, errors.New("Stateless MCPv2 bridge is unavailable")
@@ -234,6 +209,12 @@ func (r *Runtime) Execute(ctx context.Context, productID, fullName string, argum
 	parsed, address, err := r.safeDestination(ctx, tool.BaseURL)
 	if err != nil {
 		return nil, err
+	}
+	if principal.DelegatedAPIOrigin == "" || principal.DelegatedAccessToken == "" {
+		return nil, ErrDenied
+	}
+	if !sameOrigin(parsed.String(), principal.DelegatedAPIOrigin) {
+		return nil, ErrUnsafeDestination
 	}
 	method := strings.ToUpper(tool.HTTPMethod)
 	var body io.Reader
@@ -255,13 +236,7 @@ func (r *Runtime) Execute(ctx context.Context, productID, fullName string, argum
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	credential, err := r.credential(ctx, tool)
-	if err != nil {
-		return nil, err
-	}
-	if credential != "" {
-		request.Header.Set("Authorization", "Bearer "+credential)
-	}
+	request.Header.Set("Authorization", "Bearer "+principal.DelegatedAccessToken)
 	response, err := r.client(parsed, address, time.Duration(tool.TimeoutMS)*time.Millisecond).Do(request)
 	if err != nil {
 		return nil, err
@@ -287,4 +262,10 @@ func (r *Runtime) Execute(ctx context.Context, productID, fullName string, argum
 	}
 	_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: tool.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "tool.executed", TargetType: "tool", TargetID: tool.ID, Current: map[string]any{"tool": fullName, "status": response.StatusCode}, RequestID: principal.RequestID, CreatedAt: time.Now().UTC()})
 	return output, nil
+}
+
+func sameOrigin(left, right string) bool {
+	a, errA := url.Parse(left)
+	b, errB := url.Parse(right)
+	return errA == nil && errB == nil && strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }

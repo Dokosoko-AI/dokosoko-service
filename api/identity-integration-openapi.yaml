@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: DokoSoko Customer Identity Integration API
+  version: 1.0.0
+  description: >-
+    Optional vendor-owned delegated customer operation called by DokoSoko.
+    This contract is deployed on the identity provider's configured delegated
+    API origin and uses the live delegated customer access token. It is
+    independent of backend delivery and its service credential.
+servers:
+  - url: https://delegated-api.vendor.example.com
+tags:
+  - name: Access
+paths:
+  /v1/access/evaluations:
+    post:
+      tags: [Access]
+      operationId: createAccessEvaluation
+      summary: Evaluate the authenticated delegated customer identity
+      description: >-
+        Called once during federated OAuth authorization. The bearer token is
+        the vendor access token issued for this API origin and audience. The
+        vendor derives the user and customer account from that token; DokoSoko
+        never supplies an independently mutable subject in the request body.
+        A network, HTTP, or response-validation failure denies authorization.
+      security: [{ delegatedCustomerToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DokoSokoRequestID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccessEvaluationRequest" }
+            example: {}
+      responses:
+        "200":
+          description: Current grants and their explicit validity boundary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessEvaluation" }
+              example:
+                id: aeval_01JY4R8T7N6M5K4J3H2G1F0E9D
+                grants: [developer.pro, voice.calls.read]
+                expires_at: "2026-08-22T13:00:00Z"
+                policy_version: policy_2026_08_22
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    delegatedCustomerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Vendor OAuth access token audience-bound to the delegated API.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Stable for retries of one authorization-time evaluation and unique for
+        the next evaluation. Retain the result for at least 10 minutes.
+      schema: { type: string, pattern: '^aeval_[a-f0-9]{32}$' }
+    DokoSokoRequestID:
+      name: X-DokoSoko-Request-ID
+      in: header
+      required: true
+      description: Unique identifier for this HTTP attempt; retries use a new value.
+      schema: { type: string, pattern: '^req_[a-f0-9]{32}$' }
+  responses:
+    Error:
+      description: Structured error without credentials.
+      headers:
+        Retry-After:
+          description: Optional delay for 429 and temporary dependency failures.
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    AccessEvaluationRequest:
+      type: object
+      additionalProperties: false
+      properties: {}
+    AccessEvaluation:
+      type: object
+      description: DokoSoko ignores unknown response fields for additive evolution.
+      properties:
+        id: { type: string, minLength: 1, maxLength: 200 }
+        grants:
+          type: array
+          maxItems: 500
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_.:-]{0,127}$' }
+        expires_at:
+          type: string
+          format: date-time
+          description: Evaluation validity; DokoSoko never issues a longer-lived token.
+        policy_version: { type: string, maxLength: 200 }
+      required: [id, grants, expires_at]
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, minLength: 1, maxLength: 100 }
+            message: { type: string, minLength: 1, maxLength: 500 }
+            request_id: { type: string }
+          required: [code, message]
+      required: [error]

@@ -1,0 +1,209 @@
+openapi: 3.1.0
+info:
+  title: DokoSoko Backend Integration API
+  version: 1.0.0
+  description: >-
+    Vendor-owned service-to-service operation called by DokoSoko's durable
+    support-delivery worker. This contract is deployed on a configured backend
+    connection origin and uses that connection's service credential. It is
+    independent of customer identity and delegated user access tokens.
+servers:
+  - url: https://backend.vendor.example.com
+tags:
+  - name: Support
+paths:
+  /v1/support-submissions:
+    post:
+      tags: [Support]
+      operationId: createSupportSubmission
+      summary: Accept one consented support submission
+      description: >-
+        Called asynchronously from DokoSoko's durable outbox. Delivery is at
+        least once. DokoSoko retries network errors, 408, 429, and 5xx responses
+        with the same Idempotency-Key and a new X-DokoSoko-Request-ID. Vendors
+        retain an exact idempotency result for at least 24 hours. Reusing a key
+        with a different payload returns 409. Other 4xx responses are permanent.
+      security: [{ serviceBearer: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DokoSokoRequestID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SupportSubmissionRequest" }
+      responses:
+        "202":
+          description: Submission accepted synchronously or queued by the vendor.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SupportSubmissionReceipt" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "408": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    serviceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Vendor-issued delivery credential stored encrypted by DokoSoko.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable identifier for one logical support submission.
+      schema: { type: string, minLength: 16, maxLength: 200 }
+    DokoSokoRequestID:
+      name: X-DokoSoko-Request-ID
+      in: header
+      required: true
+      description: Unique identifier for this HTTP attempt; retries use a new value.
+      schema: { type: string, pattern: '^req_[a-f0-9]{32}$' }
+  responses:
+    Error:
+      description: Structured error without credentials or report content.
+      headers:
+        Retry-After:
+          description: Optional delay for 429 and temporary dependency failures.
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    SupportSubmissionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        submission_id: { type: string, minLength: 1, maxLength: 200 }
+        created_at: { type: string, format: date-time }
+        submission: { $ref: "#/components/schemas/SupportSubmission" }
+      required: [submission_id, created_at, submission]
+    SupportSubmission:
+      type: object
+      additionalProperties: false
+      properties:
+        schema_version: { const: "2026-08-20" }
+        kind: { type: string, enum: [bug, feedback] }
+        bug: { $ref: "#/components/schemas/BugReport" }
+        feedback: { $ref: "#/components/schemas/FeedbackReport" }
+        reporter: { $ref: "#/components/schemas/ReporterContext" }
+        product: { $ref: "#/components/schemas/ProductContext" }
+        integration: { $ref: "#/components/schemas/IntegrationContext" }
+        source: { const: private_mcp }
+        confirmed_at: { type: string, format: date-time }
+        request_id: { type: string }
+      required: [schema_version, kind, reporter, product, source, confirmed_at, request_id]
+      oneOf:
+        - properties: { kind: { const: bug }, feedback: false }
+          required: [bug]
+        - properties: { kind: { const: feedback }, bug: false }
+          required: [feedback]
+    ReporterContext:
+      type: object
+      additionalProperties: false
+      properties:
+        principal:
+          type: object
+          additionalProperties: false
+          properties:
+            issuer: { type: string, format: uri }
+            subject: { type: string, minLength: 1 }
+          required: [issuer, subject]
+        display_name: { type: string, maxLength: 200 }
+        email: { type: string, format: email, maxLength: 320 }
+        external_customer_id:
+          type: string
+          maxLength: 200
+          description: Vendor-owned customer identifier derived from authenticated identity.
+        installation_id: { type: string, maxLength: 200 }
+        allow_contact: { type: boolean }
+      required: [principal, allow_contact]
+    ProductContext:
+      type: object
+      additionalProperties: false
+      properties:
+        product_id: { type: string, minLength: 1 }
+        product_name: { type: string, minLength: 1 }
+        product_version_id: { type: string }
+        product_version: { type: string }
+        manifest_hash: { type: string }
+        catalog_revision: { type: integer, format: int64 }
+        selection_source: { type: string }
+        environment_id: { type: string }
+        installation_id: { type: string }
+      required: [product_id, product_name]
+    IntegrationContext:
+      type: object
+      additionalProperties: false
+      properties:
+        integration_id: { type: string }
+        family_key: { type: string }
+        version_key: { type: string }
+        display_name: { type: string }
+        lifecycle: { type: string }
+        revision: { type: integer, format: int64 }
+        manifest_hash: { type: string }
+        snapshot:
+          type: object
+          additionalProperties: true
+          description: Immutable published Integration revision snapshot.
+      required: [integration_id, family_key, version_key, display_name, lifecycle, revision]
+    BugReport:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, minLength: 1, maxLength: 10000 }
+        reproduction_steps:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 1000 }
+        expected_behavior: { type: string, maxLength: 4000 }
+        actual_behavior: { type: string, maxLength: 4000 }
+        error_code: { type: string, maxLength: 120 }
+        error_message: { type: string, maxLength: 8000 }
+        stack_trace: { type: string, maxLength: 16000 }
+        diagnostic_context: { type: string, maxLength: 20000 }
+        related_tool: { type: string, maxLength: 160 }
+        integration_run_id: { type: string, maxLength: 160 }
+        severity: { type: string, enum: [unknown, low, medium, high, critical] }
+        allow_contact: { type: boolean }
+      required: [summary, description]
+    FeedbackReport:
+      type: object
+      additionalProperties: false
+      properties:
+        message: { type: string, minLength: 1, maxLength: 10000 }
+        category: { type: string, enum: [general, usability, documentation, performance, feature_request, other] }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        related_tool: { type: string, maxLength: 160 }
+        integration_run_id: { type: string, maxLength: 160 }
+        allow_contact: { type: boolean }
+      required: [message]
+    SupportSubmissionReceipt:
+      type: object
+      description: DokoSoko ignores unknown response fields for additive evolution.
+      properties:
+        id: { type: string, minLength: 1, maxLength: 200 }
+        status: { const: accepted }
+        external_id: { type: string, maxLength: 200 }
+        external_url: { type: string, format: uri, pattern: '^https://', maxLength: 2000 }
+      required: [id, status]
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, minLength: 1, maxLength: 100 }
+            message: { type: string, minLength: 1, maxLength: 500 }
+            request_id: { type: string }
+          required: [code, message]
+      required: [error]

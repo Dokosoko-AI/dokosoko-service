@@ -37,6 +37,13 @@ func cloneAccessCredential(value model.AccessCredential) model.AccessCredential 
 	return cloned
 }
 
+func cloneBackendConnection(value model.BackendConnection) model.BackendConnection {
+	credentialSecretID := value.CredentialSecretID
+	cloned := memoryClone(value)
+	cloned.CredentialSecretID = credentialSecretID
+	return cloned
+}
+
 func (m *Memory) Deployment(context.Context) (model.Deployment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -70,7 +77,6 @@ func (m *Memory) CreateDeployment(_ context.Context, value model.Deployment) (mo
 	m.productInstallations[value.ID] = make(map[string]model.ProductInstallation)
 	m.productBuilds[value.ID] = make(map[string]model.ProductBuild)
 	m.sources[value.ID] = make(map[string]model.Source)
-	m.packages[value.ID] = make(map[string]model.Package)
 	m.knowledge[value.ID] = nil
 	m.envs[value.ID] = make(map[string]model.Environment)
 	m.tools[value.ID] = make(map[string]model.Tool)
@@ -175,6 +181,9 @@ func (m *Memory) CreateIntegration(_ context.Context, value model.Integration) (
 	value.Revision, value.CreatedAt, value.UpdatedAt = 1, now, now
 	if value.Lifecycle == "" {
 		value.Lifecycle = "draft"
+	}
+	if value.Visibility == "" {
+		value.Visibility = model.VisibilityPrivate
 	}
 	m.integrations[value.ID] = value
 	m.integrationResourceLinks[value.ID] = make(map[string]model.IntegrationResourceLink)
@@ -649,6 +658,66 @@ func (m *Memory) RevokeAccessCredential(_ context.Context, deploymentID, id stri
 	return cloneAccessCredential(value), nil
 }
 
+func (m *Memory) BackendConnections(_ context.Context, deploymentID string) ([]model.BackendConnection, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]model.BackendConnection, 0)
+	for _, value := range m.backendConnections {
+		if value.DeploymentID == deploymentID {
+			result = append(result, cloneBackendConnection(value))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func (m *Memory) BackendConnection(_ context.Context, deploymentID, id string) (model.BackendConnection, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.backendConnections[id]
+	if !ok || value.DeploymentID != deploymentID {
+		return model.BackendConnection{}, ErrNotFound
+	}
+	return cloneBackendConnection(value), nil
+}
+
+func (m *Memory) CreateBackendConnection(_ context.Context, value model.BackendConnection) (model.BackendConnection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasDeployment || value.DeploymentID != m.deployment.ID {
+		return model.BackendConnection{}, ErrNotFound
+	}
+	for _, current := range m.backendConnections {
+		if current.DeploymentID == value.DeploymentID && current.Name == value.Name {
+			return model.BackendConnection{}, ErrConflict
+		}
+	}
+	now := time.Now().UTC()
+	value.Revision, value.CreatedAt, value.UpdatedAt = 1, now, now
+	m.backendConnections[value.ID] = cloneBackendConnection(value)
+	return cloneBackendConnection(value), nil
+}
+
+func (m *Memory) UpdateBackendConnection(_ context.Context, value model.BackendConnection, expected int64) (model.BackendConnection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.backendConnections[value.ID]
+	if !ok || current.DeploymentID != value.DeploymentID {
+		return model.BackendConnection{}, ErrNotFound
+	}
+	if current.Revision != expected {
+		return model.BackendConnection{}, ErrConflict
+	}
+	for id, candidate := range m.backendConnections {
+		if id != value.ID && candidate.DeploymentID == value.DeploymentID && candidate.Name == value.Name {
+			return model.BackendConnection{}, ErrConflict
+		}
+	}
+	value.CreatedAt, value.Revision, value.UpdatedAt = current.CreatedAt, expected+1, time.Now().UTC()
+	m.backendConnections[value.ID] = cloneBackendConnection(value)
+	return cloneBackendConnection(value), nil
+}
+
 func (m *Memory) supportRouteLocked(value model.SupportRoute) model.SupportRoute {
 	value.IntegrationIDs = nil
 	for integrationID, routeID := range m.integrationSupportRoutes {
@@ -690,6 +759,7 @@ func (m *Memory) SupportRouteForIntegration(_ context.Context, deploymentID, int
 		if value, ok := m.supportRoutes[routeID]; ok && value.DeploymentID == deploymentID && value.State == "active" {
 			return m.supportRouteLocked(value), nil
 		}
+		return model.SupportRoute{}, ErrNotFound
 	}
 	for _, value := range m.supportRoutes {
 		if value.DeploymentID == deploymentID && value.IsDefault && value.State == "active" {

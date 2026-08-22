@@ -64,11 +64,11 @@ func bumpDeploymentCatalog(ctx context.Context, tx pgx.Tx, deploymentID string) 
 	return databaseError(err)
 }
 
-const integrationSelect = `SELECT id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at FROM integrations`
+const integrationSelect = `SELECT id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,visibility,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at FROM integrations`
 
 func scanIntegration(row pgx.Row) (model.Integration, error) {
 	var value model.Integration
-	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.FamilyKey, &value.VersionKey, &value.DisplayName, &value.Description, &value.Lifecycle, &value.ReplacementIntegrationID, &value.SunsetAt, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.FamilyKey, &value.VersionKey, &value.DisplayName, &value.Description, &value.Visibility, &value.Lifecycle, &value.ReplacementIntegrationID, &value.SunsetAt, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
@@ -140,7 +140,7 @@ func (p *Postgres) CreateIntegration(ctx context.Context, value model.Integratio
 		return model.Integration{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	created, err := scanIntegration(tx.QueryRow(ctx, `INSERT INTO integrations(id,deployment_id,organisation_id,family_key,version_key,display_name,description,lifecycle,replacement_integration_id,sunset_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,nullif($9,'')::uuid,$10) RETURNING id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at`, value.ID, value.DeploymentID, value.OrganisationID, value.FamilyKey, value.VersionKey, value.DisplayName, value.Description, value.Lifecycle, value.ReplacementIntegrationID, value.SunsetAt))
+	created, err := scanIntegration(tx.QueryRow(ctx, `INSERT INTO integrations(id,deployment_id,organisation_id,family_key,version_key,display_name,description,visibility,lifecycle,replacement_integration_id,sunset_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,'')::uuid,$11) RETURNING id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,visibility,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at`, value.ID, value.DeploymentID, value.OrganisationID, value.FamilyKey, value.VersionKey, value.DisplayName, value.Description, value.Visibility, value.Lifecycle, value.ReplacementIntegrationID, value.SunsetAt))
 	if err != nil {
 		return model.Integration{}, err
 	}
@@ -159,7 +159,7 @@ func (p *Postgres) UpdateIntegration(ctx context.Context, value model.Integratio
 		return model.Integration{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	updated, err := scanIntegration(tx.QueryRow(ctx, `UPDATE integrations SET family_key=$3,version_key=$4,display_name=$5,description=$6,lifecycle=$7,replacement_integration_id=nullif($8,'')::uuid,sunset_at=$9,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$10 RETURNING id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at`, value.DeploymentID, value.ID, value.FamilyKey, value.VersionKey, value.DisplayName, value.Description, value.Lifecycle, value.ReplacementIntegrationID, value.SunsetAt, expected))
+	updated, err := scanIntegration(tx.QueryRow(ctx, `UPDATE integrations SET family_key=$3,version_key=$4,display_name=$5,description=$6,visibility=$7,lifecycle=$8,replacement_integration_id=nullif($9,'')::uuid,sunset_at=$10,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$11 RETURNING id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,visibility,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at`, value.DeploymentID, value.ID, value.FamilyKey, value.VersionKey, value.DisplayName, value.Description, value.Visibility, value.Lifecycle, value.ReplacementIntegrationID, value.SunsetAt, expected))
 	if err != nil {
 		return model.Integration{}, err
 	}
@@ -418,11 +418,11 @@ func (p *Postgres) DeleteIntegrationResourceLink(ctx context.Context, integratio
 	return tx.Commit(ctx)
 }
 
-const accessDefinitionSelect = `SELECT id::text,deployment_id::text,organisation_id::text,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,coalesce(hook_set_id::text,''),operations,state,revision,created_at,updated_at FROM access_definitions`
+const accessDefinitionSelect = `SELECT id::text,deployment_id::text,organisation_id::text,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,coalesce(api_resource_set_id::text,''),operations,state,revision,created_at,updated_at FROM access_definitions`
 
 func scanAccessDefinition(row pgx.Row) (model.AccessDefinition, error) {
 	var value model.AccessDefinition
-	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.ServiceKey, &value.Name, &value.InstanceCardinality, &value.InstanceLabelSingular, &value.InstanceLabelPlural, &value.CredentialScope, &value.ManagementAuthType, &value.HookSetID, &value.Operations, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.ServiceKey, &value.Name, &value.InstanceCardinality, &value.InstanceLabelSingular, &value.InstanceLabelPlural, &value.CredentialScope, &value.ManagementAuthType, &value.APIResourceSetID, &value.Operations, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
@@ -453,11 +453,11 @@ func (p *Postgres) CreateAccessDefinition(ctx context.Context, value model.Acces
 		return model.AccessDefinition{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	created, err := scanAccessDefinition(tx.QueryRow(ctx, `INSERT INTO access_definitions(id,deployment_id,organisation_id,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,hook_set_id,operations,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,nullif($11,'')::uuid,$12,$13) RETURNING id::text,deployment_id::text,organisation_id::text,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,coalesce(hook_set_id::text,''),operations,state,revision,created_at,updated_at`, value.ID, value.DeploymentID, value.OrganisationID, value.ServiceKey, value.Name, value.InstanceCardinality, value.InstanceLabelSingular, value.InstanceLabelPlural, value.CredentialScope, value.ManagementAuthType, value.HookSetID, value.Operations, value.State))
+	created, err := scanAccessDefinition(tx.QueryRow(ctx, `INSERT INTO access_definitions(id,deployment_id,organisation_id,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,api_resource_set_id,operations,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,nullif($11,'')::uuid,$12,$13) RETURNING id::text,deployment_id::text,organisation_id::text,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,coalesce(api_resource_set_id::text,''),operations,state,revision,created_at,updated_at`, value.ID, value.DeploymentID, value.OrganisationID, value.ServiceKey, value.Name, value.InstanceCardinality, value.InstanceLabelSingular, value.InstanceLabelPlural, value.CredentialScope, value.ManagementAuthType, value.APIResourceSetID, value.Operations, value.State))
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
-	snapshot, err := json.Marshal(map[string]any{"service_key": created.ServiceKey, "name": created.Name, "instance_cardinality": created.InstanceCardinality, "instance_label_singular": created.InstanceLabelSingular, "instance_label_plural": created.InstanceLabelPlural, "credential_scope": created.CredentialScope, "management_auth_type": created.ManagementAuthType, "hook_set_id": created.HookSetID, "operations": json.RawMessage(created.Operations), "state": created.State})
+	snapshot, err := json.Marshal(map[string]any{"service_key": created.ServiceKey, "name": created.Name, "instance_cardinality": created.InstanceCardinality, "instance_label_singular": created.InstanceLabelSingular, "instance_label_plural": created.InstanceLabelPlural, "credential_scope": created.CredentialScope, "management_auth_type": created.ManagementAuthType, "api_resource_set_id": created.APIResourceSetID, "operations": json.RawMessage(created.Operations), "state": created.State})
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
@@ -726,11 +726,62 @@ func (p *Postgres) RevokeAccessCredential(ctx context.Context, deploymentID, id 
 	return scanAccessCredential(p.pool.QueryRow(ctx, `UPDATE access_credentials SET state='revoked',revoked_at=$3 WHERE deployment_id=$1 AND id=$2 AND revoked_at IS NULL RETURNING id::text,deployment_id::text,organisation_id::text,access_connection_id::text,coalesce(access_instance_id::text,''),environment_id::text,subject_id,external_id,idempotency_key,scopes,secret_fingerprint,storage_mode,coalesce(encrypted_secret_id::text,''),state,expires_at,coalesce(rotated_from_id::text,''),revoked_at,created_at`, deploymentID, id, revokedAt))
 }
 
-const supportRouteSelect = `SELECT id::text,deployment_id::text,organisation_id::text,name,is_default,bug_reports_enabled,feedback_enabled,bug_hook_url,coalesce(bug_hook_credential_id::text,''),feedback_hook_url,coalesce(feedback_hook_credential_id::text,''),retention_days,state,revision,created_at,updated_at FROM support_routes`
+const backendConnectionSelect = `SELECT connection.id::text,connection.deployment_id::text,connection.organisation_id::text,connection.name,connection.base_url,connection.authentication_type,coalesce(connection.credential_secret_id::text,''),coalesce(secret.fingerprint,''),connection.state,connection.revision,connection.created_at,connection.updated_at FROM backend_connections connection LEFT JOIN secrets secret ON secret.id=connection.credential_secret_id`
+
+func scanBackendConnection(row pgx.Row) (model.BackendConnection, error) {
+	var value model.BackendConnection
+	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.Name, &value.BaseURL, &value.AuthenticationType, &value.CredentialSecretID, &value.CredentialFingerprint, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	return value, databaseError(err)
+}
+
+func (p *Postgres) BackendConnections(ctx context.Context, deploymentID string) ([]model.BackendConnection, error) {
+	rows, err := p.pool.Query(ctx, backendConnectionSelect+` WHERE connection.deployment_id=$1 ORDER BY connection.name`, deploymentID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.BackendConnection, 0)
+	for rows.Next() {
+		value, err := scanBackendConnection(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) BackendConnection(ctx context.Context, deploymentID, id string) (model.BackendConnection, error) {
+	return scanBackendConnection(p.pool.QueryRow(ctx, backendConnectionSelect+` WHERE connection.deployment_id=$1 AND connection.id=$2`, deploymentID, id))
+}
+
+func (p *Postgres) CreateBackendConnection(ctx context.Context, value model.BackendConnection) (model.BackendConnection, error) {
+	_, err := p.pool.Exec(ctx, `INSERT INTO backend_connections(id,deployment_id,organisation_id,name,base_url,authentication_type,credential_secret_id,state) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,$8)`, value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.BaseURL, value.AuthenticationType, value.CredentialSecretID, value.State)
+	if err != nil {
+		return model.BackendConnection{}, databaseError(err)
+	}
+	return p.BackendConnection(ctx, value.DeploymentID, value.ID)
+}
+
+func (p *Postgres) UpdateBackendConnection(ctx context.Context, value model.BackendConnection, expected int64) (model.BackendConnection, error) {
+	tag, err := p.pool.Exec(ctx, `UPDATE backend_connections SET name=$3,base_url=$4,authentication_type=$5,credential_secret_id=nullif($6,'')::uuid,state=$7,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$8`, value.DeploymentID, value.ID, value.Name, value.BaseURL, value.AuthenticationType, value.CredentialSecretID, value.State, expected)
+	if err != nil {
+		return model.BackendConnection{}, databaseError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		if _, lookupErr := p.BackendConnection(ctx, value.DeploymentID, value.ID); lookupErr == nil {
+			return model.BackendConnection{}, ErrConflict
+		}
+		return model.BackendConnection{}, ErrNotFound
+	}
+	return p.BackendConnection(ctx, value.DeploymentID, value.ID)
+}
+
+const supportRouteSelect = `SELECT id::text,deployment_id::text,organisation_id::text,name,is_default,bug_reports_enabled,feedback_enabled,coalesce(backend_connection_id::text,''),retention_days,state,revision,created_at,updated_at FROM support_routes`
 
 func scanSupportRoute(row pgx.Row) (model.SupportRoute, error) {
 	var value model.SupportRoute
-	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.Name, &value.IsDefault, &value.BugReportsEnabled, &value.FeedbackEnabled, &value.BugHookURL, &value.BugHookCredentialID, &value.FeedbackHookURL, &value.FeedbackHookCredentialID, &value.RetentionDays, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.Name, &value.IsDefault, &value.BugReportsEnabled, &value.FeedbackEnabled, &value.BackendConnectionID, &value.RetentionDays, &value.State, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
@@ -787,7 +838,7 @@ func (p *Postgres) SupportRoute(ctx context.Context, deploymentID, id string) (m
 }
 
 func (p *Postgres) SupportRouteForIntegration(ctx context.Context, deploymentID, integrationID string) (model.SupportRoute, error) {
-	value, err := scanSupportRoute(p.pool.QueryRow(ctx, supportRouteSelect+` route WHERE route.deployment_id=$1 AND route.state='active' AND (EXISTS(SELECT 1 FROM integration_support_bindings binding WHERE binding.support_route_id=route.id AND binding.integration_id=nullif($2,'')::uuid) OR route.is_default) ORDER BY EXISTS(SELECT 1 FROM integration_support_bindings binding WHERE binding.support_route_id=route.id AND binding.integration_id=nullif($2,'')::uuid) DESC LIMIT 1`, deploymentID, integrationID))
+	value, err := scanSupportRoute(p.pool.QueryRow(ctx, supportRouteSelect+` route WHERE route.deployment_id=$1 AND route.state='active' AND (EXISTS(SELECT 1 FROM integration_support_bindings binding WHERE binding.support_route_id=route.id AND binding.integration_id=nullif($2,'')::uuid) OR (route.is_default AND NOT EXISTS(SELECT 1 FROM integration_support_bindings binding WHERE binding.integration_id=nullif($2,'')::uuid))) ORDER BY route.is_default LIMIT 1`, deploymentID, integrationID))
 	if err != nil {
 		return model.SupportRoute{}, err
 	}
@@ -807,9 +858,9 @@ func (p *Postgres) SaveSupportRoute(ctx context.Context, value model.SupportRout
 	}
 	var saved model.SupportRoute
 	if expected == 0 {
-		saved, err = scanSupportRoute(tx.QueryRow(ctx, `INSERT INTO support_routes(id,deployment_id,organisation_id,name,is_default,bug_reports_enabled,feedback_enabled,bug_hook_url,bug_hook_credential_id,feedback_hook_url,feedback_hook_credential_id,retention_days,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,nullif($9,'')::uuid,$10,nullif($11,'')::uuid,$12,$13) RETURNING id::text,deployment_id::text,organisation_id::text,name,is_default,bug_reports_enabled,feedback_enabled,bug_hook_url,coalesce(bug_hook_credential_id::text,''),feedback_hook_url,coalesce(feedback_hook_credential_id::text,''),retention_days,state,revision,created_at,updated_at`, value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.IsDefault, value.BugReportsEnabled, value.FeedbackEnabled, value.BugHookURL, value.BugHookCredentialID, value.FeedbackHookURL, value.FeedbackHookCredentialID, value.RetentionDays, value.State))
+		saved, err = scanSupportRoute(tx.QueryRow(ctx, `INSERT INTO support_routes(id,deployment_id,organisation_id,name,is_default,bug_reports_enabled,feedback_enabled,backend_connection_id,retention_days,state) VALUES($1,$2,$3,$4,$5,$6,$7,nullif($8,'')::uuid,$9,$10) RETURNING id::text,deployment_id::text,organisation_id::text,name,is_default,bug_reports_enabled,feedback_enabled,coalesce(backend_connection_id::text,''),retention_days,state,revision,created_at,updated_at`, value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.IsDefault, value.BugReportsEnabled, value.FeedbackEnabled, value.BackendConnectionID, value.RetentionDays, value.State))
 	} else {
-		saved, err = scanSupportRoute(tx.QueryRow(ctx, `UPDATE support_routes SET name=$3,is_default=$4,bug_reports_enabled=$5,feedback_enabled=$6,bug_hook_url=$7,bug_hook_credential_id=nullif($8,'')::uuid,feedback_hook_url=$9,feedback_hook_credential_id=nullif($10,'')::uuid,retention_days=$11,state=$12,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$13 RETURNING id::text,deployment_id::text,organisation_id::text,name,is_default,bug_reports_enabled,feedback_enabled,bug_hook_url,coalesce(bug_hook_credential_id::text,''),feedback_hook_url,coalesce(feedback_hook_credential_id::text,''),retention_days,state,revision,created_at,updated_at`, value.DeploymentID, value.ID, value.Name, value.IsDefault, value.BugReportsEnabled, value.FeedbackEnabled, value.BugHookURL, value.BugHookCredentialID, value.FeedbackHookURL, value.FeedbackHookCredentialID, value.RetentionDays, value.State, expected))
+		saved, err = scanSupportRoute(tx.QueryRow(ctx, `UPDATE support_routes SET name=$3,is_default=$4,bug_reports_enabled=$5,feedback_enabled=$6,backend_connection_id=nullif($7,'')::uuid,retention_days=$8,state=$9,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$10 RETURNING id::text,deployment_id::text,organisation_id::text,name,is_default,bug_reports_enabled,feedback_enabled,coalesce(backend_connection_id::text,''),retention_days,state,revision,created_at,updated_at`, value.DeploymentID, value.ID, value.Name, value.IsDefault, value.BugReportsEnabled, value.FeedbackEnabled, value.BackendConnectionID, value.RetentionDays, value.State, expected))
 	}
 	if err != nil {
 		return model.SupportRoute{}, err
