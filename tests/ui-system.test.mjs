@@ -54,23 +54,21 @@ test("uses one interface contract for headers, tabs, sections, panels, filters, 
   assert.match(routes, /"audit-event":\s*"runs"/);
 });
 
-test("maps the Figma typography and semantic theme into one UI contract", async () => {
+test("maps the owned typography and Figma semantic theme into one UI contract", async () => {
   const figmaTheme = await readFile(repositoryFile("New Figma Designs - DokoSoko Control Plane UI/src/styles/theme.css"), "utf8");
-  const figmaFonts = await readFile(repositoryFile("New Figma Designs - DokoSoko Control Plane UI/src/styles/fonts.css"), "utf8");
   const layout = await readFile(appFile("app/layout.tsx"), "utf8");
   const styles = await readFile(appFile("app/globals.css"), "utf8");
   const themeToggle = await readFile(appFile("app/components/ThemeToggle.tsx"), "utf8");
   const consoleApp = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
 
   assert.match(figmaTheme, /--primary:\s*#4f46e5/);
-  assert.match(figmaFonts, /family=Inter/);
-  assert.match(figmaFonts, /family=JetBrains\+Mono/);
-  assert.match(layout, /Inter, JetBrains_Mono/);
-  assert.match(layout, /--font-inter/);
+  assert.match(layout, /Geist, JetBrains_Mono/);
+  assert.match(layout, /--font-geist/);
   assert.match(layout, /--font-jetbrains-mono/);
-  assert.match(layout, /<html[\s\S]*className=\{`\$\{inter\.variable\} \$\{jetBrainsMono\.variable\}`\}/);
+  assert.match(layout, /<html[\s\S]*className=\{`\$\{geist\.variable\} \$\{jetBrainsMono\.variable\}`\}/);
   assert.doesNotMatch(layout, /<body className=/);
-  assert.doesNotMatch(`${layout}\n${styles}`, /font-geist|Geist_Mono|\bGeist\b/);
+  assert.doesNotMatch(`${layout}\n${styles}`, /font-inter|\bInter\b|Geist_Mono/);
+  assert.match(styles, /--font-ui:\s*var\(--font-geist\), Geist/);
 
   const rootTheme = styles.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
   const darkTheme = styles.match(/html\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";

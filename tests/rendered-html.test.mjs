@@ -36,6 +36,9 @@ test("keeps the global navigation to five obvious destinations", async () => {
   }
   assert.match(source, /\{ id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes"/);
   assert.doesNotMatch(source, /<BookOpen data-slot="icon" \/>Recipes<\/Button>/);
+  assert.doesNotMatch(source, /Control plane/);
+  assert.doesNotMatch(source, /className="environment"/);
+  assert.doesNotMatch(styles, /\.environment\s*\{/);
   for (const removed of ["label: \"Overview\"", "label: \"Integrations\"", "label: \"Access\"", "label: \"Distribution\"", "label: \"Operations\"", "label: \"Insights\""]) {
     assert.ok(!source.includes(removed), `${removed} should not remain in primary navigation`);
   }
@@ -137,11 +140,12 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
   assert.match(source, /IntegrationWorkspaceView/);
   assert.match(source, /Published history/);
   assert.match(source, /Switch API/);
-  assert.match(source, /Only unresolved actions appear here/);
+  assert.doesNotMatch(source, /Only unresolved actions appear here/);
   assert.match(source, /Customer access/);
   assert.match(source, /Advanced details/);
-  assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state/);
+  assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state|integration-family-heading|groupedIntegrations/);
   assert.match(styles, /\.integration-directory-columns/);
+  assert.doesNotMatch(styles, /\.integration-family-heading/);
   assert.match(styles, /\.page-tab\.active/);
   assert.match(styles, /\.advanced-details/);
   assert.match(styles, /\.advanced-details > summary::after\s*\{[^}]*content:\s*""[^}]*border-right:[^}]*transform:\s*rotate\(45deg\)/);
@@ -188,6 +192,53 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.match(packageJson, /"@headlessui\/react"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
+});
+
+test("keeps Agent access headings and setup cards concise", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+
+  for (const removed of [
+    "Control how authenticated and public agents reach your APIs and knowledge.",
+    "Add a secret-free MCP connection button to your developer portal.",
+    "Anonymous, read-only access to explicitly public resources.",
+    "Customer access through the configured identity provider and browser OAuth.",
+    "changing to public always requires confirmation.",
+  ]) assert.doesNotMatch(source, new RegExp(removed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("keeps page and panel headings concise across the console", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+
+  for (const removed of [
+    "Authenticated assistants embedded in your customers' applications.",
+    "Install once, authenticate through your backend",
+    "Vendor and deployment data is shown read-only",
+    "Manage ingestion, review, and publication",
+    "Choose an API to configure what developers and agents can use.",
+    "Only unresolved actions appear here.",
+    "Everything agents need to discover and invoke this API.",
+    "Published actions and imported MCP tools available to this API.",
+    "Vendor accounts this API can reach.",
+    "Open an entry to inspect the immutable manifest.",
+    "Runs, developer reports, and administrative changes in one place.",
+    "Requested outcomes with deterministic completion evidence.",
+    "Consent-gated submissions.",
+    "Append-only security and configuration events.",
+    "Use one default policy and add API-specific exceptions only when necessary.",
+    "Import selected third-party MCP tools behind DokoSoko",
+    "Publish reviewed HTTP actions and imported Stateless MCPv2 tools",
+    "Immutable compatibility snapshots and scoped pins are retained",
+    "Application data, encrypted objects, and schema state are monitored together.",
+    "Select the primary provider and model for each job.",
+    "Credentials are encrypted once per provider.",
+  ]) assert.ok(!source.includes(removed), `redundant description should be removed: ${removed}`);
+
+  for (const retained of [
+    "Secrets are never recorded.",
+    "Plaintext credentials are never listed.",
+    "Suspended accounts and a disabled identity provider fail closed immediately.",
+    "Root access is independent from vendor identities and always requires MFA.",
+  ]) assert.ok(source.includes(retained), `safety guidance should remain: ${retained}`);
 });
 
 test("imports APIs without exposing Product Definition as a product concept", async () => {

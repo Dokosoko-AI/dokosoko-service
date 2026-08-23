@@ -92,7 +92,7 @@ These components live under `app/components/core`; no vendor kit is a public con
 
 ## Typography catalogue
 
-Only Inter and JetBrains Mono are loaded. Inter is used for interface copy and controls. JetBrains Mono is limited to code, identifiers, endpoints, hashes, and machine-readable values.
+Only Geist and JetBrains Mono are loaded. Geist is used for interface copy and controls. JetBrains Mono is limited to code, identifiers, endpoints, hashes, and machine-readable values.
 
 | Token | CSS value | Browser size | Use |
 | --- | --- | --- | --- |
