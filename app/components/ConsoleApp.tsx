@@ -2093,11 +2093,14 @@ function CrawlBadge({ state }: { state: Source["crawlState"] }) {
 }
 
 function IntegrationDirectoryView({ integrations, connections, supportRoutes, query, onQueryChange, onCreate, onBuild, onNavigate }: { integrations: APIIntegration[]; connections: APIAccessConnection[]; supportRoutes: APISupportRoute[]; query: string; onQueryChange: (query: string) => void; onCreate: () => void; onBuild: () => void; onNavigate: (path: string) => void }) {
+  const [showRetired, setShowRetired] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();
+  const retiredCount = integrations.filter((integration) => integration.lifecycle === "retired").length;
   const connectionCount = (integration: APIIntegration) => connections.filter((connection) => connection.integration_ids?.includes(integration.id) || integration.access_connection_ids?.includes(connection.id)).length;
   const hasSupport = (integration: APIIntegration) => Boolean(supportRoutes.find((route) => route.id === integration.support_route_id || route.integration_ids?.includes(integration.id)) ?? supportRoutes.find((route) => route.is_default));
   const setupIssueCount = (integration: APIIntegration) => Number((integration.resources?.length ?? 0) === 0) + Number(connectionCount(integration) === 0) + Number(!hasSupport(integration));
   const filteredIntegrations = integrations
+    .filter((integration) => showRetired || integration.lifecycle !== "retired")
     .filter((integration) => !normalizedQuery || [integration.display_name, integration.family_key, integration.version_key, integration.description].some((value) => value.toLowerCase().includes(normalizedQuery)))
     .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.version_key.localeCompare(right.version_key, undefined, { numeric: true }));
 
@@ -2108,7 +2111,7 @@ function IntegrationDirectoryView({ integrations, connections, supportRoutes, qu
       <span className="toolbar-count">{filteredIntegrations.length} API{filteredIntegrations.length === 1 ? "" : "s"}</span>
     </div>
     <div className="integration-directory-wrap">
-      {filteredIntegrations.length > 0 && <DataTable label="APIs" className="integration-directory">
+      <DataTable label="APIs" className="integration-directory">
         <DataTableHeader className="integration-directory-columns"><span>API</span><span>Lifecycle</span><span>Setup</span><span>Resources</span><span>Open</span></DataTableHeader>
         {filteredIntegrations.map((integration) => { const issues = setupIssueCount(integration); return <DataTableRow key={integration.id} className="integration-directory-columns integration-directory-row">
           <span className="resource-name"><span className="resource-icon"><GitBranch /></span><span><ConsoleLink path={integrationPath(integration.id)} onNavigate={onNavigate} className="entity-link"><strong>{integration.display_name}</strong></ConsoleLink><small>{integration.version_key}</small></span></span>
@@ -2117,8 +2120,9 @@ function IntegrationDirectoryView({ integrations, connections, supportRoutes, qu
           <span><strong className="cell-value">{integration.resources?.length ?? 0}</strong><small className="cell-note">attached sets</small></span>
           <span className="table-open-cell"><ConsoleLink path={integrationPath(integration.id)} onNavigate={onNavigate} className="row-arrow" ariaLabel={`Open ${integration.display_name}`}><ChevronRight /></ConsoleLink></span>
         </DataTableRow>; })}
-      </DataTable>}
-      {filteredIntegrations.length === 0 && <DataTable label="APIs"><DataTableEmpty>{integrations.length === 0 ? "No APIs yet. Add one manually or import your existing API sources." : "No APIs match this search."}</DataTableEmpty></DataTable>}
+        {filteredIntegrations.length === 0 && <DataTableEmpty columns={5}>{integrations.length === 0 ? "No APIs yet. Add one manually or import your existing API sources." : retiredCount === integrations.length && !showRetired && !normalizedQuery ? "No current APIs. Show retired APIs to view the archive." : "No APIs match this search."}</DataTableEmpty>}
+      </DataTable>
+      {retiredCount > 0 && <button type="button" className="retired-directory-toggle" aria-pressed={showRetired} onClick={() => setShowRetired((visible) => !visible)}>{showRetired ? "Hide retired" : `Show retired (${retiredCount})`}</button>}
     </div>
   </>;
 }

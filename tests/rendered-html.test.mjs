@@ -138,6 +138,11 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
   assert.match(source, /<PageTabs label=.*integration\.display_name/);
   assert.match(source, /IntegrationDirectoryView/);
   assert.match(source, /IntegrationWorkspaceView/);
+  assert.match(source, /integration\.lifecycle !== "retired"/);
+  assert.match(source, /Show retired \(\$\{retiredCount\}\)/);
+  assert.match(source, /className="retired-directory-toggle"/);
+  assert.match(source, /aria-pressed=\{showRetired\}/);
+  assert.match(source, /<DataTableEmpty columns=\{5\}>/);
   assert.match(source, /Published history/);
   assert.match(source, /Switch API/);
   assert.doesNotMatch(source, /Only unresolved actions appear here/);

@@ -882,7 +882,10 @@ h1 { margin: 0; font-size: var(--text-title); line-height: 1.2; letter-spacing: 
 .toolbar-select { display: grid; gap: 4px; color: var(--muted); font-size: var(--text-caption); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: .05em; }
 .toolbar-select select { min-height: 35px; padding: 0 28px 0 9px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface); font-size: var(--text-caption); text-transform: none; letter-spacing: 0; }
 .integration-toolbar > .toolbar-count { align-self: center; color: var(--subtle); font-size: var(--text-caption); }
-.integration-directory-wrap { display: grid; }
+.integration-directory-wrap { display: grid; gap: 8px; }
+.retired-directory-toggle { justify-self: start; min-height: 28px; padding: 0; border: 0; color: var(--subtle); background: transparent; font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.retired-directory-toggle:hover { color: var(--text); }
+.retired-directory-toggle:focus-visible { border-radius: 4px; outline: 2px solid var(--accent); outline-offset: 2px; }
 .integration-directory-columns { grid-template-columns: minmax(240px, 1.5fr) minmax(90px, .45fr) minmax(100px, .55fr) minmax(90px, .4fr) 32px; }
 .integration-directory-row { color: var(--text); text-decoration: none; }
 .integration-directory-row:hover { background: var(--accent-soft); }
