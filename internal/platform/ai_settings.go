@@ -15,6 +15,9 @@ var supportedAIProviders = map[string]bool{
 	"openai":            true,
 	"google":            true,
 	"anthropic":         true,
+	"digitalocean":      true,
+	"xai":               true,
+	"deepseek":          true,
 	"openai-compatible": true,
 }
 
@@ -25,6 +28,8 @@ type AIProviderConnectionInput struct {
 	Endpoint       string
 	Credential     string
 	Enabled        bool
+	IsBackup       bool
+	BackupModels   map[string]string
 	Revision       int64
 }
 
@@ -33,7 +38,7 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 	input.Endpoint = strings.TrimRight(strings.TrimSpace(input.Endpoint), "/")
 	input.Credential = strings.TrimSpace(input.Credential)
 	if !supportedAIProviders[input.Provider] {
-		return model.AIProviderConnection{}, errors.New("choose OpenAI, Google, Anthropic, or an OpenAI-compatible provider")
+		return model.AIProviderConnection{}, errors.New("choose a supported AI provider")
 	}
 	if input.Provider != "openai-compatible" {
 		expected := aiProviderOrigin(input.Provider)
@@ -68,6 +73,22 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 	if current.ManagedBy == "environment" {
 		return model.AIProviderConnection{}, errors.New("this provider is managed by environment variables")
 	}
+	if input.IsBackup {
+		for _, value := range connections {
+			if value.IsBackup && value.ID != current.ID {
+				return model.AIProviderConnection{}, errors.New("only one backup provider can be active")
+			}
+		}
+		profiles, profileErr := s.store.AIWorkloadProfiles(ctx, input.DeploymentID)
+		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
+			return model.AIProviderConnection{}, profileErr
+		}
+		for _, profile := range profiles {
+			if current.ID != "" && profile.ProviderConnectionID == current.ID {
+				return model.AIProviderConnection{}, errors.New("choose another primary provider before making this connection the backup")
+			}
+		}
+	}
 	connectionID := current.ID
 	if connectionID == "" {
 		connectionID, err = randomUUID()
@@ -95,11 +116,28 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 	if input.Enabled && credentialID == "" {
 		return model.AIProviderConnection{}, errors.New("enter a provider API credential before enabling this connection")
 	}
-	value, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: input.OrganisationID, DeploymentID: input.DeploymentID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: input.Enabled, LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, input.Revision)
+	backupModels := map[string]string{}
+	if input.IsBackup {
+		if !input.Enabled {
+			return model.AIProviderConnection{}, errors.New("enable a provider before using it as backup")
+		}
+		for _, workload := range []airuntime.Workload{airuntime.WorkloadAnalysis, airuntime.WorkloadAssistant} {
+			modelID := strings.TrimSpace(input.BackupModels[string(workload)])
+			if modelID == "" {
+				modelID = aiDefaultModel(input.Provider, workload)
+			}
+			if modelID == "" || len(modelID) > 160 || strings.IndexFunc(modelID, func(value rune) bool { return value < 0x20 || value == 0x7f }) >= 0 {
+				return model.AIProviderConnection{}, errors.New("choose valid Analysis and Assistant models for the backup provider")
+			}
+			backupModels[string(workload)] = modelID
+		}
+	}
+	backupModelsJSON, _ := json.Marshal(backupModels)
+	value, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: input.OrganisationID, DeploymentID: input.DeploymentID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: input.Enabled, IsBackup: input.IsBackup, BackupModels: backupModelsJSON, LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, input.Revision)
 	if err != nil {
 		return model.AIProviderConnection{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "ai.provider.saved", TargetType: "ai_provider_connection", TargetID: value.ID, Current: map[string]any{"provider": value.Provider, "managed_by": value.ManagedBy, "enabled": value.Enabled, "credential_rotated": input.Credential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "ai.provider.saved", TargetType: "ai_provider_connection", TargetID: value.ID, Current: map[string]any{"provider": value.Provider, "managed_by": value.ManagedBy, "enabled": value.Enabled, "is_backup": value.IsBackup, "backup_models": backupModels, "credential_rotated": input.Credential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, nil
 }
 
@@ -120,7 +158,7 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 	input.Workload = strings.ToLower(strings.TrimSpace(input.Workload))
 	input.Model = strings.TrimSpace(input.Model)
 	if !airuntime.ValidWorkload(input.Workload) {
-		return model.AIWorkloadProfile{}, errors.New("AI workload must be extraction, authoring, review, or support")
+		return model.AIWorkloadProfile{}, errors.New("AI workload must be analysis or assistant")
 	}
 	if input.MaxInputTokens < 256 || input.MaxInputTokens > 1_000_000 || input.MaxOutputTokens < 1 || input.MaxOutputTokens > 32_768 || input.DailyTokenBudget < 0 || input.DailyTokenBudget > 10_000_000_000 {
 		return model.AIWorkloadProfile{}, errors.New("AI token limits or daily budget are outside supported bounds")
@@ -135,6 +173,9 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 	}
 	if input.Enabled && !connection.Enabled {
 		return model.AIWorkloadProfile{}, errors.New("enable the provider connection before enabling this workload")
+	}
+	if connection.IsBackup {
+		return model.AIWorkloadProfile{}, errors.New("the backup provider cannot also be selected as a primary workload provider")
 	}
 	if input.Model == "" {
 		input.Model = aiDefaultModel(connection.Provider, airuntime.Workload(input.Workload))
@@ -213,12 +254,12 @@ func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironme
 			return err
 		}
 	}
-	connection, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: deployment.OrganisationID, DeploymentID: deployment.ID, Provider: config.Provider, Endpoint: config.Endpoint, ManagedBy: "environment", Enabled: true, LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, current.Revision)
+	connection, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: deployment.OrganisationID, DeploymentID: deployment.ID, Provider: config.Provider, Endpoint: config.Endpoint, ManagedBy: "environment", Enabled: true, BackupModels: json.RawMessage(`{}`), LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, current.Revision)
 	if err != nil {
 		return err
 	}
 	s.aiEnvironmentCredentials[config.Provider] = config.APIKey
-	for _, workload := range []airuntime.Workload{airuntime.WorkloadExtraction, airuntime.WorkloadAuthoring, airuntime.WorkloadReview, airuntime.WorkloadSupport} {
+	for _, workload := range []airuntime.Workload{airuntime.WorkloadAnalysis, airuntime.WorkloadAssistant} {
 		currentProfile, profileErr := s.store.AIWorkloadProfile(ctx, deployment.ID, string(workload))
 		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
 			return profileErr
@@ -235,7 +276,7 @@ func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironme
 			modelID = aiDefaultModel(config.Provider, workload)
 		}
 		maxOutput := 4096
-		if workload == airuntime.WorkloadSupport {
+		if workload == airuntime.WorkloadAssistant {
 			maxOutput = 1024
 		}
 		hardening := json.RawMessage(`{"context_is_untrusted":true,"tool_calls_disabled":true,"authorization_disabled":true,"require_citations":true,"no_answer_on_low_confidence":true}`)
@@ -264,15 +305,24 @@ func (s *Service) TestAIProviderConnection(ctx context.Context, deploymentID, co
 		if profile.ProviderConnectionID != connection.ID || strings.TrimSpace(profile.Model) == "" {
 			continue
 		}
-		if modelID == "" || profile.Workload == string(airuntime.WorkloadExtraction) {
+		if modelID == "" || profile.Workload == string(airuntime.WorkloadAnalysis) {
 			modelID = profile.Model
 		}
-		if profile.Workload == string(airuntime.WorkloadExtraction) {
+		if profile.Workload == string(airuntime.WorkloadAnalysis) {
 			break
 		}
 	}
+	if connection.IsBackup {
+		var backupModels map[string]string
+		_ = json.Unmarshal(connection.BackupModels, &backupModels)
+		if candidate := strings.TrimSpace(backupModels[string(airuntime.WorkloadAnalysis)]); candidate != "" {
+			modelID = candidate
+		} else if candidate := strings.TrimSpace(backupModels[string(airuntime.WorkloadAssistant)]); candidate != "" {
+			modelID = candidate
+		}
+	}
 	if modelID == "" {
-		modelID = aiDefaultModel(connection.Provider, airuntime.WorkloadExtraction)
+		modelID = aiDefaultModel(connection.Provider, airuntime.WorkloadAnalysis)
 	}
 	if modelID == "" {
 		return connection, errors.New("configure a workload model before testing an OpenAI-compatible provider")
@@ -282,7 +332,8 @@ func (s *Service) TestAIProviderConnection(ctx context.Context, deploymentID, co
 		return model.AIProviderConnection{}, err
 	}
 	defer zeroBytes(credential)
-	_, testErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: connection.Provider, Endpoint: connection.Endpoint, Credential: string(credential)}, Model: modelID, System: "Return only the JSON object requested by the user. Do not call tools.", User: `Return {"ok":true}.`, SchemaName: "connection_test", MaxOutputTokens: 32})
+	connectionTestSchema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)
+	_, testErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: connection.Provider, Endpoint: connection.Endpoint, Credential: string(credential)}, Model: modelID, System: "Return only the JSON object requested by the user. Do not call tools.", User: `Return {"ok":true}.`, SchemaName: "connection_test", Schema: connectionTestSchema, MaxOutputTokens: 256})
 	now := s.now()
 	connection.LastTestedAt = &now
 	connection.LastErrorCode = ""

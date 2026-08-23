@@ -42,6 +42,7 @@ test("entity URLs encode UIDs and resolve to their owning section", () => {
   assert.equal(entityPath("widget", "widget_123"), "/widget/widget_123");
   assert.equal(routeForEntity("widget", "widget_123").section, "widgets");
   assert.equal(routeForEntity("report", "report_123").section, "reporting");
+  assert.equal(routeForEntity("audit-event", "event_123").section, "runs");
 });
 
 test("API workspaces have four stable, round-trippable tab URLs", () => {
@@ -54,19 +55,22 @@ test("API workspaces have four stable, round-trippable tab URLs", () => {
   }
 });
 
-test("settings has an explicit, stable AI provider sub-tab", () => {
+test("settings has stable routes for every overview area", () => {
   assert.deepEqual(SETTINGS_TABS, [
     { id: "overview", label: "Overview" },
+    { id: "identity", label: "Customer identity" },
+    { id: "connections", label: "Service connections" },
+    { id: "reporting", label: "Bug reports & feedback" },
+    { id: "storage", label: "Database & storage" },
     { id: "ai", label: "AI providers" },
+    { id: "root", label: "Root access" },
   ]);
   assert.equal(settingsPath(), "/settings");
-  assert.equal(settingsPath("ai"), "/settings/ai");
-  assert.deepEqual(parseConsolePath("/settings/ai"), {
-    kind: "section",
-    section: "settings",
-    settingsTab: "ai",
-    path: "/settings/ai",
-  });
+  for (const tab of SETTINGS_TABS.filter((candidate) => candidate.id !== "overview")) {
+    const path = settingsPath(tab.id);
+    assert.equal(path, `/settings/${tab.id}`);
+    assert.deepEqual(parseConsolePath(path), { kind: "section", section: "settings", settingsTab: tab.id, path });
+  }
   assert.deepEqual(parseConsolePath("/settings/ai/"), parseConsolePath("/settings/ai"));
   assert.equal(parseConsolePath("/settings/models").kind, "not-found");
 });
@@ -97,4 +101,6 @@ test("unknown and malformed paths render the console not-found route", () => {
   assert.equal(parseConsolePath("/integration/%E0%A4%A").kind, "not-found");
   assert.equal(parseConsolePath("/integration").kind, "not-found");
   assert.equal(parseConsolePath("/integration/voice-api/not-a-tab").kind, "not-found");
+  assert.equal(parseConsolePath("/insights").kind, "not-found");
+  assert.equal(parseConsolePath("/insights/activity").kind, "not-found");
 });

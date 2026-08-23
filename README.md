@@ -89,47 +89,67 @@ DOKOSOKO_DEV_PROXY=http://127.0.0.1:8080 pnpm dev
 
 ## AI providers and recipes
 
-AI is optional. Without it, DokoSoko still produces a deterministic integration plan and reviewable Markdown recipes. With it, four narrow workloads can use different models: extraction, authoring, review, and support. Provider credentials are stored once per provider; workload profiles only select a connection, model, token limits, and daily budget.
+AI is optional. Without it, DokoSoko still fetches, parses, indexes, authorizes, retrieves, and publishes deterministically. With it, two understandable workloads remove the parts that benefit from judgment: **Analysis** examines integration evidence and creates or reviews recipes, while **Assistant** produces fast, grounded answers from evidence DokoSoko has already retrieved and authorized. Provider credentials are stored once per provider; workload profiles only select a connection, model, token limits, and daily budget.
 
-Configure OpenAI, Google, Anthropic, or a fixed HTTPS OpenAI-compatible endpoint in **Settings → AI providers**. Environment-managed installations use one provider connection at a time:
+Configure OpenAI, Google, Anthropic, DigitalOcean Gradient, xAI, DeepSeek, or a fixed HTTPS OpenAI-compatible endpoint in **Settings → AI providers**. Environment-managed installations use one provider connection at a time:
 
-The bundled presets follow the current [OpenAI model guidance](https://developers.openai.com/api/docs/guides/latest-model), [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models), and [Claude model catalog](https://platform.claude.com/docs/en/about-claude/models/overview). They are defaults, not a hidden routing service; every model ID remains visible and editable.
+The bundled presets follow the current [OpenAI model guidance](https://developers.openai.com/api/docs/guides/latest-model), [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models), [Claude model catalog](https://platform.claude.com/docs/en/about-claude/models/overview), [DigitalOcean model catalog](https://docs.digitalocean.com/products/inference/details/models/), [xAI model catalog](https://docs.x.ai/developers/models), and [DeepSeek model catalog](https://api-docs.deepseek.com/quick_start/pricing/). They are defaults, not a hidden routing service; every model ID remains visible and editable.
 
 ```bash
-# OpenAI defaults: Luna for extraction, Terra for authoring/support, Sol for review.
+# OpenAI defaults: Terra for strong analysis and Luna for economical answers.
 export DOKOSOKO_AI_PROVIDER=openai
 export DOKOSOKO_AI_API_KEY='...'
-export DOKOSOKO_AI_MODEL_EXTRACTION=gpt-5.6-luna
-export DOKOSOKO_AI_MODEL_AUTHORING=gpt-5.6-terra
-export DOKOSOKO_AI_MODEL_REVIEW=gpt-5.6-sol
-export DOKOSOKO_AI_MODEL_SUPPORT=gpt-5.6-terra
+export DOKOSOKO_AI_MODEL_ANALYSIS=gpt-5.6-terra
+export DOKOSOKO_AI_MODEL_ASSISTANT=gpt-5.6-luna
 ```
 
 ```bash
 # Google defaults use stable Gemini models.
 export DOKOSOKO_AI_PROVIDER=google
 export DOKOSOKO_AI_API_KEY='...'
-export DOKOSOKO_AI_MODEL_EXTRACTION=gemini-3.5-flash-lite
-export DOKOSOKO_AI_MODEL_AUTHORING=gemini-3.6-flash
-export DOKOSOKO_AI_MODEL_REVIEW=gemini-3.5-flash
-export DOKOSOKO_AI_MODEL_SUPPORT=gemini-3.6-flash
+export DOKOSOKO_AI_MODEL_ANALYSIS=gemini-3.5-flash
+export DOKOSOKO_AI_MODEL_ASSISTANT=gemini-3.5-flash-lite
 ```
 
 ```bash
-# Anthropic defaults follow the same cheap / balanced / strongest split.
+# Anthropic defaults use Sonnet for analysis and Haiku for answers.
 export DOKOSOKO_AI_PROVIDER=anthropic
 export DOKOSOKO_AI_API_KEY='...'
-export DOKOSOKO_AI_MODEL_EXTRACTION=claude-haiku-4-5
-export DOKOSOKO_AI_MODEL_AUTHORING=claude-sonnet-5
-export DOKOSOKO_AI_MODEL_REVIEW=claude-opus-5
-export DOKOSOKO_AI_MODEL_SUPPORT=claude-sonnet-5
+export DOKOSOKO_AI_MODEL_ANALYSIS=claude-sonnet-5
+export DOKOSOKO_AI_MODEL_ASSISTANT=claude-haiku-4-5
 ```
 
-For an OpenAI-compatible service, also set `DOKOSOKO_AI_ENDPOINT` to its fixed public HTTPS origin and provide the model IDs it exposes. Native provider origins are fixed and cannot be redirected. DokoSoko sends no model tools, treats retrieved content as untrusted, requires structured extraction, records usage and normalized failures, and never silently falls back to another provider.
+```bash
+# DigitalOcean Gradient uses a scoped serverless inference key.
+export DOKOSOKO_AI_PROVIDER=digitalocean
+export DOKOSOKO_AI_API_KEY='...'
+export DOKOSOKO_AI_MODEL_ANALYSIS=openai-gpt-5.6-terra
+export DOKOSOKO_AI_MODEL_ASSISTANT=openai-gpt-5.6-luna
+```
+
+```bash
+# xAI defaults to frontier Grok for analysis and the lower-cost stable model for answers.
+export DOKOSOKO_AI_PROVIDER=xai
+export DOKOSOKO_AI_API_KEY='...'
+export DOKOSOKO_AI_MODEL_ANALYSIS=grok-4.6
+export DOKOSOKO_AI_MODEL_ASSISTANT=grok-4.3
+```
+
+```bash
+# DeepSeek defaults to V4 Pro for analysis and V4 Flash for answers.
+export DOKOSOKO_AI_PROVIDER=deepseek
+export DOKOSOKO_AI_API_KEY='...'
+export DOKOSOKO_AI_MODEL_ANALYSIS=deepseek-v4-pro
+export DOKOSOKO_AI_MODEL_ASSISTANT=deepseek-v4-flash
+```
+
+For an OpenAI-compatible service, also set `DOKOSOKO_AI_ENDPOINT` to its fixed public HTTPS origin and provide the model IDs it exposes. Native provider origins are fixed and cannot be redirected. DokoSoko sends no model tools, treats retrieved content as untrusted, requires structured analysis, and records usage and normalized failures.
+
+The console can designate one separately configured provider as a backup. DokoSoko tries it once only after a timeout, rate limit, or provider outage. It does not hide invalid credentials, invalid configuration, unsupported models, exhausted quotas or budgets, unsafe input, or invalid model output. Every primary and backup attempt is recorded with its provider role and fallback reason.
 
 Recipes are immutable, versioned Markdown revisions. Generated content is visibly marked, validated, reviewed, and held for human approval. Published recipes appear as MCP resources with stable `dokosoko://products/{product}/recipes/{recipe}` URIs. A recipe may link to an exact canonical documentation or sample-code page only when that published page was included in the analysis evidence; there is no arbitrary URL-fetch tool and no automatic publication.
 
-Integration analysis uses bounded API manifests, tool schemas and authorization policy, identity configuration, and excerpts from already-published knowledge. When extraction AI is enabled, that material is sent to the configured provider as untrusted evidence: at most three documents and 6,000 characters per source, with a 32,000-character total cap across knowledge, APIs, and tools. The exact evidence fingerprint is retained as the recipe dependency so a changed crawl or contract moves published guidance into the attention queue.
+Integration analysis uses bounded API manifests, tool schemas and authorization policy, identity configuration, and excerpts from already-published knowledge. When the Analysis workload is enabled, that material is sent to its configured provider as untrusted evidence: at most three documents and 6,000 characters per source, with a 32,000-character total cap across knowledge, APIs, and tools. The exact evidence fingerprint is retained as the recipe dependency so a changed crawl or contract moves published guidance into the attention queue.
 
 ## Deploy
 

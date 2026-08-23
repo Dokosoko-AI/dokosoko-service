@@ -9,15 +9,13 @@ import (
 type Workload string
 
 const (
-	WorkloadExtraction Workload = "extraction"
-	WorkloadAuthoring  Workload = "authoring"
-	WorkloadReview     Workload = "review"
-	WorkloadSupport    Workload = "support"
+	WorkloadAnalysis  Workload = "analysis"
+	WorkloadAssistant Workload = "assistant"
 )
 
 func ValidWorkload(value string) bool {
 	switch Workload(value) {
-	case WorkloadExtraction, WorkloadAuthoring, WorkloadReview, WorkloadSupport:
+	case WorkloadAnalysis, WorkloadAssistant:
 		return true
 	default:
 		return false

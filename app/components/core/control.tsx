@@ -2,77 +2,62 @@
 
 import * as Headless from "@headlessui/react";
 import clsx from "clsx";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import { Badge as BaseBadge } from "./badge";
+import { Button as BaseButton } from "./button";
+import { Switch as BaseSwitch } from "./switch";
 
-export function Button({
-  color = "dark",
-  outline = false,
-  className,
-  children,
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+type ButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "color"> & {
   color?: "dark" | "red" | "indigo";
   outline?: boolean;
   children: ReactNode;
-}) {
-  return (
-    <Headless.Button
-      {...props}
-      className={clsx(
-        "catalyst-button",
-        outline ? "catalyst-button-outline" : `catalyst-button-${color}`,
-        className,
-      )}
-    >
-      {children}
-    </Headless.Button>
+};
+
+export function Button({ color = "dark", outline = false, className, children, ...props }: ButtonProps) {
+  const classes = clsx(
+    "core-button",
+    outline ? "core-button-outline" : `core-button-${color}`,
+    className,
   );
+
+  if (outline) {
+    return <BaseButton {...props} outline className={classes}>{children}</BaseButton>;
+  }
+
+  return <BaseButton {...props} color={color} className={classes}>{children}</BaseButton>;
 }
 
-export function Badge({
-  color = "zinc",
-  className,
-  children,
-}: {
+export function Badge({ color = "zinc", className, children, ...props }: {
   color?: "zinc" | "green" | "blue" | "violet" | "amber" | "red";
   className?: string;
   children: ReactNode;
-}) {
-  return <span className={clsx("catalyst-badge", `catalyst-badge-${color}`, className)}>{children}</span>;
+} & Omit<HTMLAttributes<HTMLSpanElement>, "color">) {
+  return (
+    <BaseBadge {...props} color={color} className={clsx("core-badge", `core-badge-${color}`, className)}>
+      {children}
+    </BaseBadge>
+  );
 }
 
-export function Switch({
-  checked,
-  onChange,
-  disabled = false,
-  label,
-}: {
+export function Switch({ checked, onChange, disabled = false, label }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
   label: string;
 }) {
   return (
-    <Headless.Switch
+    <BaseSwitch
       checked={checked}
       onChange={onChange}
       disabled={disabled}
       aria-label={label}
-      className="catalyst-switch"
-    >
-      <span aria-hidden="true" />
-    </Headless.Switch>
+      color="indigo"
+      className="core-switch"
+    />
   );
 }
 
-export function Dialog({
-  open,
-  onClose,
-  title,
-  description,
-  children,
-  actions,
-}: {
+export function Dialog({ open, onClose, title, description, children, actions }: {
   open: boolean;
   onClose: (open: boolean) => void;
   title: string;
@@ -94,4 +79,3 @@ export function Dialog({
     </Headless.Dialog>
   );
 }
-

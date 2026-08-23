@@ -118,3 +118,14 @@ func TestNativeProvidersNormalizeRateLimitsAndTimeouts(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderHTTPErrorDoesNotTreatBadRequestsAsOutages(t *testing.T) {
+	t.Parallel()
+
+	if err := providerHTTPError("openai", http.StatusBadRequest, []byte(`{"error":{"type":"invalid_request_error","code":"invalid_json_schema"}}`)); Code(err) != ErrorInvalidConfiguration || Retryable(err) {
+		t.Fatalf("invalid request normalized as %q (retryable %v)", Code(err), Retryable(err))
+	}
+	if err := providerHTTPError("openai", http.StatusBadRequest, []byte(`{"error":{"type":"invalid_request_error","code":"model_not_found"}}`)); Code(err) != ErrorUnsupportedModel || Retryable(err) {
+		t.Fatalf("missing model normalized as %q (retryable %v)", Code(err), Retryable(err))
+	}
+}

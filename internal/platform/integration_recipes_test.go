@@ -94,6 +94,29 @@ func TestIntegrationAnalysisGeneratesReviewableRecipesAndDetectsDrift(t *testing
 	}
 }
 
+func TestCreateRecipeFromPromptAnalysesEvidenceAndReturnsEditableDraft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "root", RequestID: "req-prompt-recipe"}
+
+	recipe, err := service.CreateRecipeFromPrompt(ctx, "prod_acme", "Show developers how to connect Acme to MCP and verify access.", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recipe.State != "review" || !recipe.Generated || recipe.AnalysisID == "" || recipe.CurrentRevision == nil {
+		t.Fatalf("recipe = %#v", recipe)
+	}
+	if !strings.Contains(recipe.CurrentRevision.Markdown, "## Implementation") {
+		t.Fatalf("markdown = %q", recipe.CurrentRevision.Markdown)
+	}
+	analysis, err := memory.IntegrationAnalysis(ctx, "prod_acme", recipe.AnalysisID)
+	if err != nil || len(analysis.Evidence) == 0 {
+		t.Fatalf("analysis = %#v err=%v", analysis, err)
+	}
+}
+
 func TestRecipeGenerationTreatsModelOutputAsUntrustedEvidence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -102,7 +125,7 @@ func TestRecipeGenerationTreatsModelOutputAsUntrustedEvidence(t *testing.T) {
 	service := platform.NewWithVaultAndProductBuilderDoer(memory, nil, doer)
 	if err := service.ConfigureEnvironmentAI(ctx, platform.AIEnvironmentConfig{
 		Provider: "openai-compatible", APIKey: "fixture-secret", Endpoint: "https://llm.example.com",
-		Models: map[ai.Workload]string{ai.WorkloadExtraction: "fixture", ai.WorkloadAuthoring: "fixture", ai.WorkloadReview: "fixture", ai.WorkloadSupport: "fixture"},
+		Models: map[ai.Workload]string{ai.WorkloadAnalysis: "fixture", ai.WorkloadAssistant: "fixture"},
 	}); err != nil {
 		t.Fatal(err)
 	}

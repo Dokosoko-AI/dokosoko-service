@@ -25,14 +25,23 @@ type ClientFactory func(context.Context, string) (HTTPDoer, *url.URL, error)
 type HTTPClientFactory func(context.Context, string) (*http.Client, error)
 
 type CompatibleAdapter struct {
-	clientFactory ClientFactory
+	clientFactory  ClientFactory
+	maxTokensField string
 }
 
 func NewCompatibleAdapter(factory ClientFactory) *CompatibleAdapter {
 	if factory == nil {
 		factory = FixedHTTPSClient
 	}
-	return &CompatibleAdapter{clientFactory: factory}
+	return &CompatibleAdapter{clientFactory: factory, maxTokensField: "max_tokens"}
+}
+
+// NewCompatibleAdapterWithMaxCompletionTokens is for OpenAI-compatible
+// gateways that have retired max_tokens from their Chat Completions contract.
+func NewCompatibleAdapterWithMaxCompletionTokens(factory ClientFactory) *CompatibleAdapter {
+	adapter := NewCompatibleAdapter(factory)
+	adapter.maxTokensField = "max_completion_tokens"
+	return adapter
 }
 
 func (a *CompatibleAdapter) GenerateStructured(ctx context.Context, request StructuredRequest) (Result, error) {
@@ -57,12 +66,12 @@ func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfi
 	payload := map[string]any{
 		"model":       model,
 		"temperature": temperature,
-		"max_tokens":  maxOutputTokens,
 		"messages": []map[string]string{
 			{"role": "system", "content": system},
 			{"role": "user", "content": user},
 		},
 	}
+	payload[a.maxTokensField] = maxOutputTokens
 	if structured {
 		payload["response_format"] = map[string]string{"type": "json_object"}
 	}
@@ -126,6 +135,8 @@ func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfi
 func providerHTTPError(provider string, status int, body []byte) error {
 	code, retryable := ErrorProviderUnavailable, status >= 500
 	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		code = ErrorInvalidConfiguration
 	case http.StatusUnauthorized, http.StatusForbidden:
 		code = ErrorInvalidCredential
 	case http.StatusNotFound:
@@ -145,6 +156,12 @@ func providerHTTPError(provider string, status int, body []byte) error {
 	}
 	_ = json.Unmarshal(body, &providerError)
 	value := strings.ToLower(providerError.Error.Code + " " + providerError.Error.Type)
+	if strings.Contains(value, "model") || strings.Contains(value, "unsupported") || strings.Contains(value, "not_found") {
+		code, retryable = ErrorUnsupportedModel, false
+	}
+	if strings.Contains(value, "authentication") || strings.Contains(value, "api_key") || strings.Contains(value, "permission") {
+		code, retryable = ErrorInvalidCredential, false
+	}
 	if strings.Contains(value, "quota") || strings.Contains(value, "billing") {
 		code, retryable = ErrorQuotaExhausted, false
 	}

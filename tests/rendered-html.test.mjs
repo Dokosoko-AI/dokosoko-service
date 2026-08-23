@@ -13,32 +13,29 @@ async function render() {
   );
 }
 
-test("server-renders the DokoSoko API directory", async () => {
+test("server-renders an authentication-safe loading shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>DokoSoko — Agent delivery control plane<\/title>/i);
-  assert.match(html, />APIs</);
-  assert.match(html, /Agent access/);
-  assert.match(html, /Activity/);
-  assert.doesNotMatch(html, /Connector readiness|Quick actions|>Overview</);
-  assert.match(html, /href="\/integrations"/);
-  assert.match(html, /href="\/agent-access"/);
-  assert.match(html, /href="\/activity"/);
-  assert.match(html, /href="\/settings"/);
+  assert.match(html, /Opening DokoSoko/);
+  assert.match(html, /Loading the authenticated deployment/);
+  assert.doesNotMatch(html, /Acme Platform|prod_acme|org_acme/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("keeps the global navigation to four obvious destinations", async () => {
+test("keeps the global navigation to five obvious destinations", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
 
-  for (const label of ["APIs", "Agent access", "Activity"]) {
+  for (const label of ["APIs", "Recipes", "Agent access", "Activity"]) {
     assert.match(source, new RegExp(`label: "${label}"`));
   }
+  assert.match(source, /\{ id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes"/);
+  assert.doesNotMatch(source, /<BookOpen data-slot="icon" \/>Recipes<\/Button>/);
   for (const removed of ["label: \"Overview\"", "label: \"Integrations\"", "label: \"Access\"", "label: \"Distribution\"", "label: \"Operations\"", "label: \"Insights\""]) {
     assert.ok(!source.includes(removed), `${removed} should not remain in primary navigation`);
   }
@@ -49,7 +46,7 @@ test("keeps the global navigation to four obvious destinations", async () => {
   assert.doesNotMatch(source, /replaceState\(null, "", `\$\{sectionPath\("overview"\)/);
   assert.doesNotMatch(source, /className="section-tabs"/);
   assert.match(source, /className="mobile-navigation"/);
-  for (const path of ["/integrations", "/agent-access", "/activity", "/settings"]) {
+  for (const path of ["/integrations", "/recipes", "/agent-access", "/activity", "/settings"]) {
     assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
   }
   for (const entity of ["integration", "resource-set", "source", "tool", "connection", "release", "run", "support-route", "report", "audit-event", "root-user"]) {
@@ -58,7 +55,7 @@ test("keeps the global navigation to four obvious destinations", async () => {
   assert.match(styles, /\.sidebar > nav/);
   assert.match(styles, /\.entity-detail-grid/);
   assert.match(styles, /\.agent-setup-grid/);
-  assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: 20px; \}/);
+  assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: var\(--space-section\); \}/);
 });
 
 test("gives AI providers a dedicated, guarded settings workspace", async () => {
@@ -70,41 +67,58 @@ test("gives AI providers a dedicated, guarded settings workspace", async () => {
   assert.match(routes, /label: "AI providers"/);
   assert.match(routes, /settingsPath/);
   assert.match(source, /title="AI providers"/);
-  assert.match(source, /Use AI where it removes work/);
-  assert.match(source, /Widgets require an enabled Assistant model/);
+  assert.doesNotMatch(source, /Two models, two clear jobs|AI ready|workloads enabled/);
+  assert.match(source, /title="Workloads"/);
+  assert.match(source, /title="Providers"/);
+  assert.doesNotMatch(source, /Choose one strong model for analysis|Fetching, retrieval, authorization/);
   assert.match(source, /OpenAI-compatible/);
-  assert.match(source, /No model tools/);
+  assert.doesNotMatch(source, /Mandatory AI safeguards|No model tools|Grounded output/);
   assert.match(source, /Citations required/);
+  assert.match(source, /<strong>Connect \{provider\.name\}<\/strong>/);
+  for (const provider of ["OpenAI", "Google", "Anthropic", "DigitalOcean", "xAI", "DeepSeek"]) assert.ok(source.includes(`name: "${provider}"`));
+  assert.match(source, /name: "Other OpenAPI compatible providers"/);
+  assert.doesNotMatch(source, /Already connected · manage settings/);
+  assert.match(source, /OpenAIProviderMark/);
+  assert.match(source, /GeminiProviderMark/);
+  assert.match(source, /ClaudeProviderMark/);
+  assert.match(source, /DigitalOceanProviderMark/);
+  assert.match(source, /XAIProviderMark/);
+  assert.match(source, /DeepSeekProviderMark/);
+  assert.match(source, /Backup provider/);
+  assert.doesNotMatch(source, /<Badge[^>]*>Native<\/Badge>|<Badge[^>]*>Custom<\/Badge>/);
   assert.match(source, /title=\{`Configure \$\{/);
   assert.match(source, /Leave blank to keep the stored credential/);
   assert.doesNotMatch(source, /title="Configure LLM profile"/);
-  assert.match(styles, /\.ai-settings-hero/);
-  assert.match(styles, /\.ai-workload-grid/);
-  assert.match(styles, /\.ai-provider-card/);
+  assert.doesNotMatch(styles, /\.ai-settings-hero|\.ai-hero-mark|\.ai-hero-stat/);
+  assert.match(styles, /\.ai-settings-table/);
+  assert.match(styles, /\.ai-provider-suggestions/);
+  assert.match(styles, /\.ai-provider-logo/);
   assert.match(api, /Credential-redacted role-based AI profiles/);
+  assert.match(api, /enum: \[analysis, assistant\]/);
+  assert.match(api, /provider_role: \{ type: string, enum: \[primary, backup\] \}/);
   assert.match(api, /endpoint: \{ type: string, format: uri, description: Fixed HTTPS provider origin/);
+  for (const provider of ["digitalocean", "xai", "deepseek"]) assert.match(api, new RegExp(provider));
 });
 
 test("ships one evidence-to-recipe review workflow", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Turn verified integration evidence into implementation guides/);
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
   assert.match(routes, /recipes: "\/recipes"/);
-  assert.match(source, /Start from evidence, not a blank prompt/);
-  assert.match(source, /Generated means “drafted by a model,” never “approved.”/);
-  assert.match(source, /Edit Markdown and references/);
-  assert.match(source, /Ask AI to rework this revision/);
-  assert.match(source, /Save human revision/);
-  assert.match(source, /Publish to MCP/);
-  assert.match(source, /Most used · 30 days/);
-  assert.match(styles, /\.recipe-markdown-preview/);
-  assert.match(styles, /\.recipe-reference-list/);
-  assert.match(client, /recipeAnalytics/);
-  assert.match(client, /aiUsage/);
+  for (const label of ["Add recipe", "Create recipe", "Build recipe", "All recipes", "Save changes", "Publish recipe"]) assert.match(source, new RegExp(label));
+  assert.match(source, /What should this recipe help developers do/);
+  assert.match(source, /documentation, API definitions, service connections, MCP connectors, and tools/);
+  assert.match(source, /Ask AI to revise this recipe/);
+  assert.doesNotMatch(source, /Start from evidence, not a blank prompt|Review queue|Most used · 30 days/);
+  assert.match(styles, /\.recipe-library-row/);
+  assert.match(styles, /\.recipe-editor-layout/);
+  assert.match(client, /createRecipe/);
   assert.match(api, /\/api\/v1\/products\/\{product_id\}\/recipes:/);
+  assert.match(api, /operationId: createRecipe/);
   assert.match(api, /resources\/list, resources\/read/);
 });
 
@@ -118,7 +132,7 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
     assert.ok(routes.includes(`label: "${label}"`), `${label} API tab should be registered`);
   }
   for (const removed of ["Tools & hooks", "label: \"Usage\"", "label: \"Support\"", "label: \"Revisions\""]) assert.ok(!routes.includes(removed));
-  assert.match(source, /className="integration-tabs"/);
+  assert.match(source, /<PageTabs label=.*integration\.display_name/);
   assert.match(source, /IntegrationDirectoryView/);
   assert.match(source, /IntegrationWorkspaceView/);
   assert.match(source, /Published history/);
@@ -128,8 +142,11 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
   assert.match(source, /Advanced details/);
   assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state/);
   assert.match(styles, /\.integration-directory-columns/);
-  assert.match(styles, /\.integration-tab\.active/);
+  assert.match(styles, /\.page-tab\.active/);
   assert.match(styles, /\.advanced-details/);
+  assert.match(styles, /\.advanced-details > summary::after\s*\{[^}]*content:\s*""[^}]*border-right:[^}]*transform:\s*rotate\(45deg\)/);
+  assert.doesNotMatch(styles, /\.advanced-details > summary::after\s*\{[^}]*content:\s*"\+"/);
+  assert.match(styles, /\.inline-advanced > summary\s*\{[^}]*min-height:\s*48px[^}]*padding-inline:\s*18px/);
   assert.match(client, /integration: \(integrationID: string\)/);
   assert.match(client, /APIIntegrationRevision/);
   assert.match(client, /APIIntegrationPublishStatus/);
@@ -213,6 +230,11 @@ test("ships the optional customer-identity and delegated API contract", async ()
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
   assert.match(source, /Customer identity contract/);
+  assert.match(source, /eyebrow="Settings" title="Settings" action=/);
+  for (const tab of ["identity", "connections", "reporting", "storage", "ai", "root"]) {
+    assert.match(source, new RegExp(`settingsPath\\("${tab}"\\)`));
+  }
+  assert.doesNotMatch(source, /Shared configuration for identity, customer data, service connections, and security/);
   assert.match(source, /durable internal account/);
 	assert.match(source, /Delegated API origin/);
 	assert.match(source, /POST \/v1\/access\/evaluations/);
@@ -229,13 +251,14 @@ test("ships consent-gated support reporting configuration and inbox", async () =
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
 	assert.match(source, /Bug reports & feedback/);
-	assert.match(source, /Consent is enforced/);
+	assert.doesNotMatch(source, /Configure consent-gated reporting and secure delivery/);
+	assert.doesNotMatch(source, /Consent is enforced|Agents preview the sanitized report/);
 	assert.match(source, /Backend connections/);
 	assert.match(source, /independent of customer identity/);
 	assert.match(source, /Delivery policies/);
   assert.match(source, />View<\/Button>/);
   assert.match(source, />Retry<\/Button>/);
-  assert.match(source, /className="activity-toolbar"/);
+  assert.match(source, /<SegmentedControl label="Filter activity"/);
   assert.match(client, /support-submissions/);
   assert.match(source, /Use as the default for all APIs/);
   assert.match(source, /\/v1\/support-submissions/);
@@ -257,6 +280,12 @@ test("ships first-class API, reusable resource, and service-connection managemen
   assert.match(source, /Duplicate resource set/);
   assert.match(source, /Pin the current revision instead of following latest/);
   assert.match(source, /Create service type/);
+  assert.doesNotMatch(source, /Connect vendor services once/);
+  assert.match(source, /Create a private draft/);
+  assert.match(source, /<span>API name<\/span>/);
+  assert.match(source, /editingIntegration \? "Save changes" : "Create API"/);
+  assert.match(source, /apiFamilyKeyFromName\(displayName\)/);
+  assert.doesNotMatch(source, /Each API record represents one family and one version/);
   assert.match(source, /One fixed instance/);
   assert.match(source, /Multiple provider resources/);
   assert.match(source, /Allowed APIs/);

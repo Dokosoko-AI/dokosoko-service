@@ -18,6 +18,7 @@ func (m *Memory) AIProviderConnections(_ context.Context, deploymentID string) (
 	}
 	result := make([]model.AIProviderConnection, 0, len(values))
 	for _, value := range values {
+		value.BackupModels = append([]byte(nil), value.BackupModels...)
 		result = append(result, value)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Provider < result[j].Provider })
@@ -29,6 +30,7 @@ func (m *Memory) AIProviderConnection(_ context.Context, deploymentID, id string
 	defer m.mu.RUnlock()
 	for _, value := range m.aiProviderConnections[deploymentID] {
 		if value.ID == id {
+			value.BackupModels = append([]byte(nil), value.BackupModels...)
 			return value, nil
 		}
 	}
@@ -43,6 +45,9 @@ func (m *Memory) SaveAIProviderConnection(_ context.Context, value model.AIProvi
 		return model.AIProviderConnection{}, ErrNotFound
 	}
 	now := time.Now().UTC()
+	if len(value.BackupModels) == 0 {
+		value.BackupModels = []byte(`{}`)
+	}
 	if current, exists := values[value.Provider]; exists {
 		if expectedRevision != current.Revision {
 			return model.AIProviderConnection{}, ErrConflict
@@ -55,6 +60,7 @@ func (m *Memory) SaveAIProviderConnection(_ context.Context, value model.AIProvi
 		value.Revision, value.CreatedAt = 1, now
 	}
 	value.UpdatedAt = now
+	value.BackupModels = append([]byte(nil), value.BackupModels...)
 	values[value.Provider] = value
 	return value, nil
 }

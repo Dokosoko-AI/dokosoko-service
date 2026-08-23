@@ -22,18 +22,20 @@ func (s *Server) aiProviderConnections(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			OrganisationID string `json:"organisation_id"`
-			Provider       string `json:"provider"`
-			Endpoint       string `json:"endpoint"`
-			Credential     string `json:"credential"`
-			Enabled        bool   `json:"enabled"`
-			Revision       int64  `json:"revision"`
+			OrganisationID string            `json:"organisation_id"`
+			Provider       string            `json:"provider"`
+			Endpoint       string            `json:"endpoint"`
+			Credential     string            `json:"credential"`
+			Enabled        bool              `json:"enabled"`
+			IsBackup       bool              `json:"is_backup"`
+			BackupModels   map[string]string `json:"backup_models"`
+			Revision       int64             `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.SaveAIProviderConnection(r.Context(), platform.AIProviderConnectionInput{OrganisationID: input.OrganisationID, DeploymentID: deployment.ID, Provider: input.Provider, Endpoint: input.Endpoint, Credential: input.Credential, Enabled: input.Enabled, Revision: input.Revision}, actor(r))
+		value, err := s.service.SaveAIProviderConnection(r.Context(), platform.AIProviderConnectionInput{OrganisationID: input.OrganisationID, DeploymentID: deployment.ID, Provider: input.Provider, Endpoint: input.Endpoint, Credential: input.Credential, Enabled: input.Enabled, IsBackup: input.IsBackup, BackupModels: input.BackupModels, Revision: input.Revision}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return

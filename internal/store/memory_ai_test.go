@@ -20,7 +20,7 @@ func TestAIBudgetReservationsAreConcurrencySafe(t *testing.T) {
 		group.Add(1)
 		go func(index int) {
 			defer group.Done()
-			ok, err := memory.ReserveAIBudget(context.Background(), model.AIBudgetReservation{ID: fmt.Sprintf("reservation-%d", index), ProductID: "prod_acme", Workload: "authoring", Day: day, ReservedTokens: 100, ExpiresAt: time.Now().UTC().Add(time.Minute)}, 1000)
+			ok, err := memory.ReserveAIBudget(context.Background(), model.AIBudgetReservation{ID: fmt.Sprintf("reservation-%d", index), ProductID: "prod_acme", Workload: "analysis", Day: day, ReservedTokens: 100, ExpiresAt: time.Now().UTC().Add(time.Minute)}, 1000)
 			if err != nil {
 				t.Errorf("reserve: %v", err)
 				return

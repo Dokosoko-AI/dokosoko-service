@@ -100,17 +100,32 @@ func (s *Server) generateRecipes(w http.ResponseWriter, r *http.Request, product
 }
 
 func (s *Server) recipes(w http.ResponseWriter, r *http.Request, productID string) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+	switch r.Method {
+	case http.MethodGet:
+		values, err := s.service.ReconcileRecipeDrift(r.Context(), productID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": values})
+	case http.MethodPost:
+		var input struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+		value, err := s.service.CreateRecipeFromPrompt(r.Context(), productID, input.Prompt, actor(r))
+		if err != nil {
+			s.creationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, value)
+	default:
+		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
-		return
 	}
-	values, err := s.service.ReconcileRecipeDrift(r.Context(), productID)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": values})
 }
 
 func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
@@ -276,7 +291,18 @@ func (s *Server) aiUsage(w http.ResponseWriter, r *http.Request, productID strin
 		OutputTokens int64  `json:"output_tokens"`
 		DurationMS   int64  `json:"duration_ms"`
 	}
+	type providerUsage struct {
+		Provider     string    `json:"provider"`
+		Calls        int64     `json:"calls"`
+		Errors       int64     `json:"errors"`
+		InputTokens  int64     `json:"input_tokens"`
+		OutputTokens int64     `json:"output_tokens"`
+		DurationMS   int64     `json:"duration_ms"`
+		BackupCalls  int64     `json:"backup_calls"`
+		LastUsedAt   time.Time `json:"last_used_at"`
+	}
 	byWorkload := map[string]workloadUsage{}
+	byProvider := map[string]providerUsage{}
 	for _, event := range events {
 		value := byWorkload[event.Workload]
 		value.Workload = event.Workload
@@ -288,12 +314,35 @@ func (s *Server) aiUsage(w http.ResponseWriter, r *http.Request, productID strin
 		value.OutputTokens += event.OutputTokens
 		value.DurationMS += event.DurationMS
 		byWorkload[event.Workload] = value
+
+		providerValue := byProvider[event.Provider]
+		providerValue.Provider = event.Provider
+		providerValue.Calls++
+		if event.Outcome != "succeeded" {
+			providerValue.Errors++
+		}
+		if event.ProviderRole == "backup" {
+			providerValue.BackupCalls++
+		}
+		providerValue.InputTokens += event.InputTokens
+		providerValue.OutputTokens += event.OutputTokens
+		providerValue.DurationMS += event.DurationMS
+		if event.CreatedAt.After(providerValue.LastUsedAt) {
+			providerValue.LastUsedAt = event.CreatedAt
+		}
+		byProvider[event.Provider] = providerValue
 	}
 	workloads := make([]workloadUsage, 0, len(byWorkload))
-	for _, name := range []string{"extraction", "authoring", "review", "support"} {
+	for _, name := range []string{"analysis", "assistant"} {
 		if value, exists := byWorkload[name]; exists {
 			workloads = append(workloads, value)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": events, "workloads": workloads, "since": since, "generated_at": time.Now().UTC()})
+	providers := make([]providerUsage, 0, len(byProvider))
+	for _, name := range []string{"openai", "google", "anthropic", "digitalocean", "xai", "deepseek", "openai-compatible"} {
+		if value, exists := byProvider[name]; exists {
+			providers = append(providers, value)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": events, "workloads": workloads, "providers": providers, "since": since, "generated_at": time.Now().UTC()})
 }

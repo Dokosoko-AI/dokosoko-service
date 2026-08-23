@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -11,11 +12,11 @@ import (
 
 func scanAIProviderConnection(row interface{ Scan(...any) error }) (model.AIProviderConnection, error) {
 	var value model.AIProviderConnection
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.DeploymentID, &value.Provider, &value.Endpoint, &value.CredentialID, &value.ManagedBy, &value.Enabled, &value.LastTestedAt, &value.LastErrorCode, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.DeploymentID, &value.Provider, &value.Endpoint, &value.CredentialID, &value.ManagedBy, &value.Enabled, &value.IsBackup, &value.BackupModels, &value.LastTestedAt, &value.LastErrorCode, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const aiProviderConnectionColumns = `id::text,organisation_id::text,deployment_id::text,provider,endpoint,coalesce(credential_secret_id::text,''),managed_by,enabled,last_tested_at,last_error_code,revision,created_at,updated_at`
+const aiProviderConnectionColumns = `id::text,organisation_id::text,deployment_id::text,provider,endpoint,coalesce(credential_secret_id::text,''),managed_by,enabled,is_backup,backup_models,last_tested_at,last_error_code,revision,created_at,updated_at`
 
 func (p *Postgres) AIProviderConnections(ctx context.Context, deploymentID string) ([]model.AIProviderConnection, error) {
 	rows, err := p.pool.Query(ctx, `SELECT `+aiProviderConnectionColumns+` FROM ai_provider_connections WHERE deployment_id=$1 ORDER BY provider`, deploymentID)
@@ -39,10 +40,13 @@ func (p *Postgres) AIProviderConnection(ctx context.Context, deploymentID, id st
 }
 
 func (p *Postgres) SaveAIProviderConnection(ctx context.Context, value model.AIProviderConnection, expectedRevision int64) (model.AIProviderConnection, error) {
-	updated, err := scanAIProviderConnection(p.pool.QueryRow(ctx, `INSERT INTO ai_provider_connections(id,organisation_id,deployment_id,provider,endpoint,credential_secret_id,managed_by,enabled,last_tested_at,last_error_code) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8,$9,$10)
-		ON CONFLICT (deployment_id,provider) DO UPDATE SET endpoint=excluded.endpoint,credential_secret_id=excluded.credential_secret_id,managed_by=excluded.managed_by,enabled=excluded.enabled,last_tested_at=excluded.last_tested_at,last_error_code=excluded.last_error_code,revision=ai_provider_connections.revision+1,updated_at=now()
-		WHERE ai_provider_connections.revision=$11
-		RETURNING `+aiProviderConnectionColumns, value.ID, value.OrganisationID, value.DeploymentID, value.Provider, value.Endpoint, value.CredentialID, value.ManagedBy, value.Enabled, value.LastTestedAt, value.LastErrorCode, expectedRevision))
+	if len(value.BackupModels) == 0 {
+		value.BackupModels = json.RawMessage(`{}`)
+	}
+	updated, err := scanAIProviderConnection(p.pool.QueryRow(ctx, `INSERT INTO ai_provider_connections(id,organisation_id,deployment_id,provider,endpoint,credential_secret_id,managed_by,enabled,is_backup,backup_models,last_tested_at,last_error_code) VALUES ($1,$2,$3,$4,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (deployment_id,provider) DO UPDATE SET endpoint=excluded.endpoint,credential_secret_id=excluded.credential_secret_id,managed_by=excluded.managed_by,enabled=excluded.enabled,is_backup=excluded.is_backup,backup_models=excluded.backup_models,last_tested_at=excluded.last_tested_at,last_error_code=excluded.last_error_code,revision=ai_provider_connections.revision+1,updated_at=now()
+		WHERE ai_provider_connections.revision=$13
+		RETURNING `+aiProviderConnectionColumns, value.ID, value.OrganisationID, value.DeploymentID, value.Provider, value.Endpoint, value.CredentialID, value.ManagedBy, value.Enabled, value.IsBackup, value.BackupModels, value.LastTestedAt, value.LastErrorCode, expectedRevision))
 	if errors.Is(err, ErrNotFound) {
 		connections, lookupErr := p.AIProviderConnections(ctx, value.DeploymentID)
 		if lookupErr == nil {
@@ -153,7 +157,7 @@ func (p *Postgres) FinishAIUsage(ctx context.Context, reservationID string, even
 	if event.DurationMS == 0 && event.Duration > 0 {
 		event.DurationMS = event.Duration.Milliseconds()
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO ai_usage_events(id,organisation_id,product_id,workload,action,provider,requested_model,resolved_model,provider_request_id,input_tokens,output_tokens,duration_ms,outcome,error_code,prompt_version,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, event.ID, event.OrganisationID, event.ProductID, event.Workload, event.Action, event.Provider, event.RequestedModel, event.ResolvedModel, event.ProviderRequestID, event.InputTokens, event.OutputTokens, event.DurationMS, event.Outcome, event.ErrorCode, event.PromptVersion, event.CreatedAt); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO ai_usage_events(id,organisation_id,product_id,workload,action,provider,provider_role,fallback_reason,requested_model,resolved_model,provider_request_id,input_tokens,output_tokens,duration_ms,outcome,error_code,prompt_version,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, event.ID, event.OrganisationID, event.ProductID, event.Workload, event.Action, event.Provider, event.ProviderRole, event.FallbackReason, event.RequestedModel, event.ResolvedModel, event.ProviderRequestID, event.InputTokens, event.OutputTokens, event.DurationMS, event.Outcome, event.ErrorCode, event.PromptVersion, event.CreatedAt); err != nil {
 		return databaseError(err)
 	}
 	return databaseError(tx.Commit(ctx))
@@ -161,13 +165,13 @@ func (p *Postgres) FinishAIUsage(ctx context.Context, reservationID string, even
 
 func scanAIUsageEvent(row interface{ Scan(...any) error }) (model.AIUsageEvent, error) {
 	var value model.AIUsageEvent
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Workload, &value.Action, &value.Provider, &value.RequestedModel, &value.ResolvedModel, &value.ProviderRequestID, &value.InputTokens, &value.OutputTokens, &value.DurationMS, &value.Outcome, &value.ErrorCode, &value.PromptVersion, &value.CreatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Workload, &value.Action, &value.Provider, &value.ProviderRole, &value.FallbackReason, &value.RequestedModel, &value.ResolvedModel, &value.ProviderRequestID, &value.InputTokens, &value.OutputTokens, &value.DurationMS, &value.Outcome, &value.ErrorCode, &value.PromptVersion, &value.CreatedAt)
 	value.Duration = time.Duration(value.DurationMS) * time.Millisecond
 	return value, databaseError(err)
 }
 
 func (p *Postgres) AIUsageEvents(ctx context.Context, productID string, since time.Time) ([]model.AIUsageEvent, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id::text,organisation_id::text,product_id::text,workload,action,provider,requested_model,resolved_model,provider_request_id,input_tokens,output_tokens,duration_ms,outcome,error_code,prompt_version,created_at FROM ai_usage_events WHERE product_id=$1 AND created_at>=$2 ORDER BY created_at DESC`, productID, since)
+	rows, err := p.pool.Query(ctx, `SELECT id::text,organisation_id::text,product_id::text,workload,action,provider,provider_role,fallback_reason,requested_model,resolved_model,provider_request_id,input_tokens,output_tokens,duration_ms,outcome,error_code,prompt_version,created_at FROM ai_usage_events WHERE product_id=$1 AND created_at>=$2 ORDER BY created_at DESC`, productID, since)
 	if err != nil {
 		return nil, databaseError(err)
 	}

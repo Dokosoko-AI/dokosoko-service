@@ -226,5 +226,11 @@ func (p *Postgres) AIJob(ctx context.Context, productID, id string) (model.AIJob
 }
 
 func (p *Postgres) SaveAIJob(ctx context.Context, value model.AIJob) (model.AIJob, error) {
+	if len(value.Input) == 0 {
+		value.Input = json.RawMessage(`{}`)
+	}
+	if len(value.Output) == 0 {
+		value.Output = json.RawMessage(`{}`)
+	}
 	return scanAIJob(p.pool.QueryRow(ctx, `INSERT INTO ai_jobs(id,organisation_id,product_id,kind,target_id,state,attempt,input,output,error_code,created_by,started_at,finished_at) VALUES($1,$2,$3,$4,nullif($5,'')::uuid,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(id) DO UPDATE SET target_id=excluded.target_id,state=excluded.state,attempt=excluded.attempt,input=excluded.input,output=excluded.output,error_code=excluded.error_code,started_at=excluded.started_at,finished_at=excluded.finished_at RETURNING id::text,organisation_id::text,product_id::text,kind,coalesce(target_id::text,''),state,attempt,input,output,error_code,created_by,created_at,started_at,finished_at`, value.ID, value.OrganisationID, value.ProductID, value.Kind, value.TargetID, value.State, value.Attempt, value.Input, value.Output, value.ErrorCode, value.CreatedBy, value.StartedAt, value.FinishedAt))
 }

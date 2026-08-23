@@ -478,7 +478,7 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 	if err != nil {
 		return model.LLMProfile{}, err
 	}
-	workloads := map[string]string{"extraction": "extraction", "evaluation": "review", "assistant": "support"}
+	workloads := map[string]string{"extraction": "analysis", "evaluation": "analysis", "assistant": "assistant"}
 	if workload := workloads[input.Role]; workload != "" {
 		connections, connectionErr := s.store.AIProviderConnections(ctx, input.ProductID)
 		if connectionErr != nil && !errors.Is(connectionErr, store.ErrNotFound) {
@@ -501,7 +501,7 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 		if input.Credential == "" && connection.CredentialID != "" {
 			credentialID = connection.CredentialID
 		}
-		connection, err = s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connection.ID, OrganisationID: input.OrganisationID, DeploymentID: input.ProductID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: true, LastTestedAt: connection.LastTestedAt, LastErrorCode: connection.LastErrorCode}, connectionRevision)
+		connection, err = s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connection.ID, OrganisationID: input.OrganisationID, DeploymentID: input.ProductID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: true, BackupModels: json.RawMessage(`{}`), LastTestedAt: connection.LastTestedAt, LastErrorCode: connection.LastErrorCode}, connectionRevision)
 		if err != nil {
 			return model.LLMProfile{}, err
 		}

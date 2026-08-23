@@ -1008,21 +1008,23 @@ type LLMProfile struct {
 
 // AIProviderConnection owns one provider credential and its transport
 // boundary. Workload profiles reference this record so the same credential is
-// not copied for extraction, authoring, review, and support.
+// not copied between Analysis and Assistant.
 type AIProviderConnection struct {
-	ID             string     `json:"id"`
-	OrganisationID string     `json:"organisation_id"`
-	DeploymentID   string     `json:"deployment_id"`
-	Provider       string     `json:"provider"`
-	Endpoint       string     `json:"endpoint"`
-	CredentialID   string     `json:"-"`
-	ManagedBy      string     `json:"managed_by"`
-	Enabled        bool       `json:"enabled"`
-	LastTestedAt   *time.Time `json:"last_tested_at,omitempty"`
-	LastErrorCode  string     `json:"last_error_code,omitempty"`
-	Revision       int64      `json:"revision"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID             string          `json:"id"`
+	OrganisationID string          `json:"organisation_id"`
+	DeploymentID   string          `json:"deployment_id"`
+	Provider       string          `json:"provider"`
+	Endpoint       string          `json:"endpoint"`
+	CredentialID   string          `json:"-"`
+	ManagedBy      string          `json:"managed_by"`
+	Enabled        bool            `json:"enabled"`
+	IsBackup       bool            `json:"is_backup"`
+	BackupModels   json.RawMessage `json:"backup_models"`
+	LastTestedAt   *time.Time      `json:"last_tested_at,omitempty"`
+	LastErrorCode  string          `json:"last_error_code,omitempty"`
+	Revision       int64           `json:"revision"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 type AIWorkloadProfile struct {
@@ -1061,6 +1063,8 @@ type AIUsageEvent struct {
 	Workload          string        `json:"workload"`
 	Action            string        `json:"action"`
 	Provider          string        `json:"provider"`
+	ProviderRole      string        `json:"provider_role"`
+	FallbackReason    string        `json:"fallback_reason,omitempty"`
 	RequestedModel    string        `json:"requested_model"`
 	ResolvedModel     string        `json:"resolved_model"`
 	ProviderRequestID string        `json:"provider_request_id,omitempty"`

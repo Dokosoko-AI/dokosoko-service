@@ -686,10 +686,12 @@ export type APIAIProviderConnection = {
   id: string;
   organisation_id: string;
   deployment_id: string;
-  provider: "openai" | "google" | "anthropic" | "openai-compatible";
+  provider: "openai" | "google" | "anthropic" | "digitalocean" | "xai" | "deepseek" | "openai-compatible";
   endpoint: string;
   managed_by: "console" | "environment";
   enabled: boolean;
+  is_backup: boolean;
+  backup_models: Partial<Record<"analysis" | "assistant", string>>;
   last_tested_at?: string;
   last_error_code?: string;
   revision: number;
@@ -701,7 +703,7 @@ export type APIAIWorkloadProfile = {
   id: string;
   organisation_id: string;
   product_id: string;
-  workload: "extraction" | "authoring" | "review" | "support";
+  workload: "analysis" | "assistant";
   provider_connection_id: string;
   model: string;
   max_input_tokens: number;
@@ -778,6 +780,17 @@ export type APIAIWorkloadUsage = {
   input_tokens: number;
   output_tokens: number;
   duration_ms: number;
+};
+
+export type APIAIProviderUsage = {
+  provider: APIAIProviderConnection["provider"];
+  calls: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  backup_calls: number;
+  last_used_at: string;
 };
 
 export type APIIntegrationRun = {
@@ -976,7 +989,7 @@ export const api = {
   llmProfiles: async (productID: string) => (await request<{ items: APILLMProfile[] }>(`${productPath(productID)}/llm-profiles`)).items,
   saveLLMProfile: (productID: string, input: { organisation_id: string; role: string; provider: string; endpoint: string; model: string; credential: string; embedding_dimensions: number; max_input_tokens: number; max_output_tokens: number; daily_token_budget: number; enabled: boolean }) => request<APILLMProfile>(`${productPath(productID)}/llm-profiles`, { method: "PUT", body: JSON.stringify(input) }),
   aiConnections: async () => (await request<{ items: APIAIProviderConnection[] }>("/api/v1/ai/connections")).items,
-  saveAIConnection: (input: { organisation_id: string; provider: APIAIProviderConnection["provider"]; endpoint: string; credential: string; enabled: boolean; revision: number }) => request<APIAIProviderConnection>("/api/v1/ai/connections", { method: "POST", body: JSON.stringify(input) }),
+  saveAIConnection: (input: { organisation_id: string; provider: APIAIProviderConnection["provider"]; endpoint: string; credential: string; enabled: boolean; is_backup: boolean; backup_models: Partial<Record<APIAIWorkloadProfile["workload"], string>>; revision: number }) => request<APIAIProviderConnection>("/api/v1/ai/connections", { method: "POST", body: JSON.stringify(input) }),
   testAIConnection: (connectionID: string) => request<APIAIProviderConnection>(`/api/v1/ai/connections/${encodeURIComponent(connectionID)}/test`, { method: "POST", body: JSON.stringify({}) }),
   aiProfiles: async (productID: string) => (await request<{ items: APIAIWorkloadProfile[] }>(`${productPath(productID)}/ai-profiles`)).items,
   saveAIProfile: (productID: string, workload: APIAIWorkloadProfile["workload"], input: { organisation_id: string; provider_connection_id: string; model: string; max_input_tokens: number; max_output_tokens: number; daily_token_budget: number; enabled: boolean; revision: number }) => request<APIAIWorkloadProfile>(`${productPath(productID)}/ai-profiles/${encodeURIComponent(workload)}`, { method: "PUT", body: JSON.stringify(input) }),
@@ -985,13 +998,14 @@ export const api = {
   answerAnalysis: (productID: string, analysisID: string, answers: Record<string, string>) => request<APIIntegrationAnalysis>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}`, { method: "PATCH", body: JSON.stringify({ answers }) }),
   generateRecipes: async (productID: string, analysisID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}/recipes`, { method: "POST", body: JSON.stringify({}) })).items,
   recipes: async (productID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/recipes`)).items,
+  createRecipe: (productID: string, prompt: string) => request<APIRecipe>(`${productPath(productID)}/recipes`, { method: "POST", body: JSON.stringify({ prompt }) }),
   recipe: (productID: string, recipeID: string) => request<{ recipe: APIRecipe; revisions: APIRecipeRevision[] }>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`),
   updateRecipe: (productID: string, recipeID: string, markdown: string, references: APIRecipeReference[], visibility: APIVisibility) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`, { method: "PATCH", body: JSON.stringify({ markdown, references, visibility }) }),
   reworkRecipe: (productID: string, recipeID: string, instruction: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/rework`, { method: "POST", body: JSON.stringify({ instruction }) }),
   approveRecipe: (productID: string, recipeID: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/approve`, { method: "POST", body: JSON.stringify({}) }),
   publishRecipe: (productID: string, recipeID: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
   recipeAnalytics: async (productID: string, days = 30) => (await request<{ items: APIRecipePopularity[] }>(`${productPath(productID)}/recipe-analytics?days=${days}`)).items,
-  aiUsage: async (productID: string, days = 30) => (await request<{ workloads: APIAIWorkloadUsage[] }>(`${productPath(productID)}/ai-usage?days=${days}`)).workloads,
+  aiUsage: (productID: string, days = 30) => request<{ workloads: APIAIWorkloadUsage[]; providers: APIAIProviderUsage[] }>(`${productPath(productID)}/ai-usage?days=${days}`),
   sources: async (productID: string) => (await request<{ items: APISource[] }>(`${productPath(productID)}/sources`)).items,
   createSource: (productID: string, organisationID: string, name: string, kind: string, location: string) => request<APISource>(`${productPath(productID)}/sources`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, kind, location }) }),
   queueCrawl: (productID: string, sourceID: string) => request<APICrawlJob>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/crawl`, { method: "POST" }),

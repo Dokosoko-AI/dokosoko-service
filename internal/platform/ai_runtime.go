@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ var ErrAIUnavailable = errors.New("AI workload is unavailable")
 
 func newAIRuntime(doer ProductBuilderDoer) airuntime.Runtime {
 	var factory airuntime.ClientFactory
+	var nativeFactory airuntime.HTTPClientFactory
 	if doer != nil {
 		factory = func(_ context.Context, raw string) (airuntime.HTTPDoer, *url.URL, error) {
 			if !validHTTPSBaseOrigin(strings.TrimRight(strings.TrimSpace(raw), "/")) {
@@ -27,28 +29,48 @@ func newAIRuntime(doer ProductBuilderDoer) airuntime.Runtime {
 			endpoint.Path = "/v1/chat/completions"
 			return doer, endpoint, nil
 		}
+		nativeFactory = func(_ context.Context, raw string) (*http.Client, error) {
+			if !validHTTPSBaseOrigin(strings.TrimRight(strings.TrimSpace(raw), "/")) {
+				return nil, errors.New("provider endpoint must be a fixed HTTPS origin")
+			}
+			return &http.Client{Transport: productBuilderRoundTripper{doer: doer}}, nil
+		}
 	}
 	compatible := airuntime.NewCompatibleAdapter(factory)
+	digitalOcean := airuntime.NewCompatibleAdapterWithMaxCompletionTokens(factory)
 	registry := airuntime.NewRegistry()
-	registry.Register("openai", airuntime.NewOpenAIAdapter(nil))
-	registry.Register("google", airuntime.NewGoogleAdapter(nil))
-	registry.Register("anthropic", airuntime.NewAnthropicAdapter(nil))
+	registry.Register("openai", airuntime.NewOpenAIAdapter(nativeFactory))
+	registry.Register("google", airuntime.NewGoogleAdapter(nativeFactory))
+	registry.Register("anthropic", airuntime.NewAnthropicAdapter(nativeFactory))
+	registry.Register("digitalocean", digitalOcean)
+	registry.Register("xai", airuntime.NewOpenAIAdapter(nativeFactory))
+	registry.Register("deepseek", compatible)
 	registry.Register("openai-compatible", compatible)
 	return registry
 }
 
+type productBuilderRoundTripper struct {
+	doer ProductBuilderDoer
+}
+
+func (transport productBuilderRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport.doer.Do(request)
+}
+
 type aiInvocation struct {
-	Product       model.Product
-	Workload      airuntime.Workload
-	Action        string
-	PromptVersion string
-	System        string
-	User          string
-	SchemaName    string
-	Schema        json.RawMessage
-	MaxOutput     int
-	Temperature   float64
-	ActorKind     string
+	Product        model.Product
+	Workload       airuntime.Workload
+	Action         string
+	PromptVersion  string
+	System         string
+	User           string
+	SchemaName     string
+	Schema         json.RawMessage
+	MaxOutput      int
+	Temperature    float64
+	ActorKind      string
+	ProviderRole   string
+	FallbackReason string
 }
 
 func (s *Service) aiWorkloadConfiguration(ctx context.Context, product model.Product, workload airuntime.Workload) (model.AIWorkloadProfile, model.AIProviderConnection, []byte, error) {
@@ -65,6 +87,34 @@ func (s *Service) aiWorkloadConfiguration(ctx context.Context, product model.Pro
 		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, err
 	}
 	return profile, connection, credential, nil
+}
+
+func (s *Service) aiBackupConfiguration(ctx context.Context, product model.Product, workload airuntime.Workload, primary model.AIProviderConnection, profile model.AIWorkloadProfile) (model.AIWorkloadProfile, model.AIProviderConnection, []byte, error) {
+	connections, err := s.store.AIProviderConnections(ctx, product.ID)
+	if err != nil {
+		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, ErrAIUnavailable
+	}
+	for _, connection := range connections {
+		if !connection.Enabled || !connection.IsBackup || connection.ID == primary.ID {
+			continue
+		}
+		var models map[string]string
+		if json.Unmarshal(connection.BackupModels, &models) != nil {
+			return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, ErrAIUnavailable
+		}
+		modelID := strings.TrimSpace(models[string(workload)])
+		if modelID == "" {
+			return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, ErrAIUnavailable
+		}
+		credential, credentialErr := s.aiConnectionCredential(ctx, product, connection)
+		if credentialErr != nil {
+			return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, credentialErr
+		}
+		profile.ProviderConnectionID = connection.ID
+		profile.Model = modelID
+		return profile, connection, credential, nil
+	}
+	return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, ErrAIUnavailable
 }
 
 func (s *Service) aiConnectionCredential(ctx context.Context, product model.Product, connection model.AIProviderConnection) ([]byte, error) {
@@ -124,16 +174,14 @@ func (s *Service) finishAI(ctx context.Context, invocation aiInvocation, reserva
 		result.OutputTokens = estimateAITokens(result.Text)
 	}
 	eventID, _ := randomUUID()
-	event := model.AIUsageEvent{ID: eventID, OrganisationID: invocation.Product.OrganisationID, ProductID: invocation.Product.ID, Workload: string(invocation.Workload), Action: invocation.Action, Provider: connection.Provider, RequestedModel: profile.Model, ResolvedModel: result.ResolvedModel, ProviderRequestID: result.RequestID, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, Duration: result.Duration, DurationMS: result.Duration.Milliseconds(), Outcome: outcome, ErrorCode: errorCode, PromptVersion: invocation.PromptVersion, CreatedAt: s.now()}
+	providerRole := invocation.ProviderRole
+	if providerRole == "" {
+		providerRole = "primary"
+	}
+	event := model.AIUsageEvent{ID: eventID, OrganisationID: invocation.Product.OrganisationID, ProductID: invocation.Product.ID, Workload: string(invocation.Workload), Action: invocation.Action, Provider: connection.Provider, ProviderRole: providerRole, FallbackReason: invocation.FallbackReason, RequestedModel: profile.Model, ResolvedModel: result.ResolvedModel, ProviderRequestID: result.RequestID, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, Duration: result.Duration, DurationMS: result.Duration.Milliseconds(), Outcome: outcome, ErrorCode: errorCode, PromptVersion: invocation.PromptVersion, CreatedAt: s.now()}
 	_ = s.store.FinishAIUsage(ctx, reservation.ID, event)
 	if runErr == nil {
-		legacyRole := string(invocation.Workload)
-		if invocation.Workload == airuntime.WorkloadSupport || invocation.Workload == airuntime.WorkloadAuthoring {
-			legacyRole = "assistant"
-		} else if invocation.Workload == airuntime.WorkloadReview {
-			legacyRole = "evaluation"
-		}
-		_ = s.store.AppendAnalytics(ctx, model.AnalyticsEvent{OrganisationID: invocation.Product.OrganisationID, ProductID: invocation.Product.ID, EventName: "llm.tokens", ActorKind: invocation.ActorKind, Dimensions: map[string]any{"role": legacyRole, "workload": invocation.Workload, "action": invocation.Action, "provider": connection.Provider, "model": profile.Model, "prompt_version": invocation.PromptVersion}, Value: float64(result.InputTokens + result.OutputTokens), CreatedAt: s.now()})
+		_ = s.store.AppendAnalytics(ctx, model.AnalyticsEvent{OrganisationID: invocation.Product.OrganisationID, ProductID: invocation.Product.ID, EventName: "llm.tokens", ActorKind: invocation.ActorKind, Dimensions: map[string]any{"role": string(invocation.Workload), "workload": string(invocation.Workload), "action": invocation.Action, "provider": connection.Provider, "provider_role": providerRole, "model": profile.Model, "prompt_version": invocation.PromptVersion}, Value: float64(result.InputTokens + result.OutputTokens), CreatedAt: s.now()})
 	}
 }
 
@@ -142,17 +190,32 @@ func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocat
 	if err != nil {
 		return airuntime.Result{}, err
 	}
-	defer zeroBytes(credential)
 	if invocation.MaxOutput <= 0 || invocation.MaxOutput > profile.MaxOutputTokens {
 		invocation.MaxOutput = profile.MaxOutputTokens
 	}
-	reservation, err := s.reserveAI(ctx, invocation, profile)
-	if err != nil {
-		return airuntime.Result{}, err
+	run := func(activeProfile model.AIWorkloadProfile, activeConnection model.AIProviderConnection, activeCredential []byte, activeInvocation aiInvocation) (airuntime.Result, error) {
+		reservation, reserveErr := s.reserveAI(ctx, activeInvocation, activeProfile)
+		if reserveErr != nil {
+			return airuntime.Result{}, reserveErr
+		}
+		result, runErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: activeConnection.Provider, Endpoint: activeConnection.Endpoint, Credential: string(activeCredential)}, Model: activeProfile.Model, System: activeInvocation.System, User: activeInvocation.User, SchemaName: activeInvocation.SchemaName, Schema: activeInvocation.Schema, MaxOutputTokens: activeInvocation.MaxOutput, Temperature: activeInvocation.Temperature})
+		s.finishAI(ctx, activeInvocation, reservation, activeConnection, activeProfile, result, runErr)
+		return result, runErr
 	}
-	result, runErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: connection.Provider, Endpoint: connection.Endpoint, Credential: string(credential)}, Model: profile.Model, System: invocation.System, User: invocation.User, SchemaName: invocation.SchemaName, Schema: invocation.Schema, MaxOutputTokens: invocation.MaxOutput, Temperature: invocation.Temperature})
-	s.finishAI(ctx, invocation, reservation, connection, profile, result, runErr)
-	return result, runErr
+	result, runErr := run(profile, connection, credential, invocation)
+	zeroBytes(credential)
+	if runErr == nil || !airuntime.Retryable(runErr) {
+		return result, runErr
+	}
+	backupProfile, backupConnection, backupCredential, backupErr := s.aiBackupConfiguration(ctx, invocation.Product, invocation.Workload, connection, profile)
+	if backupErr != nil {
+		return result, runErr
+	}
+	defer zeroBytes(backupCredential)
+	backupInvocation := invocation
+	backupInvocation.ProviderRole = "backup"
+	backupInvocation.FallbackReason = string(airuntime.Code(runErr))
+	return run(backupProfile, backupConnection, backupCredential, backupInvocation)
 }
 
 func (s *Service) generateAIText(ctx context.Context, invocation aiInvocation) (airuntime.Result, error) {
@@ -160,17 +223,32 @@ func (s *Service) generateAIText(ctx context.Context, invocation aiInvocation) (
 	if err != nil {
 		return airuntime.Result{}, err
 	}
-	defer zeroBytes(credential)
 	if invocation.MaxOutput <= 0 || invocation.MaxOutput > profile.MaxOutputTokens {
 		invocation.MaxOutput = profile.MaxOutputTokens
 	}
-	reservation, err := s.reserveAI(ctx, invocation, profile)
-	if err != nil {
-		return airuntime.Result{}, err
+	run := func(activeProfile model.AIWorkloadProfile, activeConnection model.AIProviderConnection, activeCredential []byte, activeInvocation aiInvocation) (airuntime.Result, error) {
+		reservation, reserveErr := s.reserveAI(ctx, activeInvocation, activeProfile)
+		if reserveErr != nil {
+			return airuntime.Result{}, reserveErr
+		}
+		result, runErr := s.aiRuntime.GenerateText(ctx, airuntime.TextRequest{Provider: airuntime.ProviderConfig{Provider: activeConnection.Provider, Endpoint: activeConnection.Endpoint, Credential: string(activeCredential)}, Model: activeProfile.Model, System: activeInvocation.System, User: activeInvocation.User, MaxOutputTokens: activeInvocation.MaxOutput, Temperature: activeInvocation.Temperature})
+		s.finishAI(ctx, activeInvocation, reservation, activeConnection, activeProfile, result, runErr)
+		return result, runErr
 	}
-	result, runErr := s.aiRuntime.GenerateText(ctx, airuntime.TextRequest{Provider: airuntime.ProviderConfig{Provider: connection.Provider, Endpoint: connection.Endpoint, Credential: string(credential)}, Model: profile.Model, System: invocation.System, User: invocation.User, MaxOutputTokens: invocation.MaxOutput, Temperature: invocation.Temperature})
-	s.finishAI(ctx, invocation, reservation, connection, profile, result, runErr)
-	return result, runErr
+	result, runErr := run(profile, connection, credential, invocation)
+	zeroBytes(credential)
+	if runErr == nil || !airuntime.Retryable(runErr) {
+		return result, runErr
+	}
+	backupProfile, backupConnection, backupCredential, backupErr := s.aiBackupConfiguration(ctx, invocation.Product, invocation.Workload, connection, profile)
+	if backupErr != nil {
+		return result, runErr
+	}
+	defer zeroBytes(backupCredential)
+	backupInvocation := invocation
+	backupInvocation.ProviderRole = "backup"
+	backupInvocation.FallbackReason = string(airuntime.Code(runErr))
+	return run(backupProfile, backupConnection, backupCredential, backupInvocation)
 }
 
 func estimateAITokens(value string) int64 {
@@ -194,6 +272,12 @@ func aiProviderOrigin(provider string) string {
 		return "https://generativelanguage.googleapis.com"
 	case "anthropic":
 		return "https://api.anthropic.com"
+	case "digitalocean":
+		return "https://inference.do-ai.run"
+	case "xai":
+		return "https://api.x.ai"
+	case "deepseek":
+		return "https://api.deepseek.com"
 	default:
 		return ""
 	}
@@ -201,9 +285,21 @@ func aiProviderOrigin(provider string) string {
 
 func aiDefaultModel(provider string, workload airuntime.Workload) string {
 	defaults := map[string]map[airuntime.Workload]string{
-		"openai":    {airuntime.WorkloadExtraction: "gpt-5.6-luna", airuntime.WorkloadAuthoring: "gpt-5.6-terra", airuntime.WorkloadReview: "gpt-5.6-sol", airuntime.WorkloadSupport: "gpt-5.6-terra"},
-		"google":    {airuntime.WorkloadExtraction: "gemini-3.5-flash-lite", airuntime.WorkloadAuthoring: "gemini-3.6-flash", airuntime.WorkloadReview: "gemini-3.5-flash", airuntime.WorkloadSupport: "gemini-3.6-flash"},
-		"anthropic": {airuntime.WorkloadExtraction: "claude-haiku-4-5", airuntime.WorkloadAuthoring: "claude-sonnet-5", airuntime.WorkloadReview: "claude-opus-5", airuntime.WorkloadSupport: "claude-sonnet-5"},
+		"openai":    {airuntime.WorkloadAnalysis: "gpt-5.6-terra", airuntime.WorkloadAssistant: "gpt-5.6-luna"},
+		"google":    {airuntime.WorkloadAnalysis: "gemini-3.5-flash", airuntime.WorkloadAssistant: "gemini-3.5-flash-lite"},
+		"anthropic": {airuntime.WorkloadAnalysis: "claude-sonnet-5", airuntime.WorkloadAssistant: "claude-haiku-4-5"},
+		"digitalocean": {
+			airuntime.WorkloadAnalysis:  "openai-gpt-5.6-terra",
+			airuntime.WorkloadAssistant: "openai-gpt-5.6-luna",
+		},
+		"xai": {
+			airuntime.WorkloadAnalysis:  "grok-4.6",
+			airuntime.WorkloadAssistant: "grok-4.3",
+		},
+		"deepseek": {
+			airuntime.WorkloadAnalysis:  "deepseek-v4-pro",
+			airuntime.WorkloadAssistant: "deepseek-v4-flash",
+		},
 	}
 	return defaults[provider][workload]
 }

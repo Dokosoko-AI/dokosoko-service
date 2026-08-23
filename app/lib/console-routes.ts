@@ -1,7 +1,7 @@
-export type Section = "product" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "analytics" | "activity" | "settings";
+export type Section = "product" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "settings";
 
 export type IntegrationTab = "overview" | "resources" | "access" | "history";
-export type SettingsTab = "overview" | "ai";
+export type SettingsTab = "overview" | "identity" | "connections" | "reporting" | "storage" | "ai" | "root";
 
 export type EntityKind =
   | "integration"
@@ -35,7 +35,12 @@ export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "overview", label: "Overview" },
+  { id: "identity", label: "Customer identity" },
+  { id: "connections", label: "Service connections" },
+  { id: "reporting", label: "Bug reports & feedback" },
+  { id: "storage", label: "Database & storage" },
   { id: "ai", label: "AI providers" },
+  { id: "root", label: "Root access" },
 ];
 
 export const SECTION_PATHS: Record<Section, string> = {
@@ -50,8 +55,6 @@ export const SECTION_PATHS: Record<Section, string> = {
   releases: "/distribution/releases",
   runs: "/activity",
   reporting: "/operations/reporting",
-  analytics: "/insights",
-  activity: "/insights/activity",
   settings: "/settings",
 };
 
@@ -69,7 +72,7 @@ const ENTITY_SECTIONS: Record<EntityKind, Section> = {
   run: "runs",
   "support-route": "reporting",
   report: "reporting",
-  "audit-event": "activity",
+  "audit-event": "runs",
   "root-user": "settings",
 };
 

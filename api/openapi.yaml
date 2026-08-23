@@ -1319,7 +1319,7 @@ paths:
   /api/v1/ai/connections:
     get:
       operationId: listAIProviderConnections
-      description: Lists credential-redacted provider connections shared by the four AI workloads.
+      description: Lists credential-redacted provider connections shared by the Analysis and Assistant workloads.
       responses:
         "200": { description: AI provider connections., content: { application/json: { schema: { $ref: "#/components/schemas/AIProviderConnectionList" } } } }
     post:
@@ -1434,6 +1434,22 @@ paths:
       description: Reconciles source drift before returning the human review queue.
       responses:
         "200": { description: Recipes with their current immutable revision., content: { application/json: { schema: { $ref: "#/components/schemas/RecipeList" } } } }
+    post:
+      operationId: createRecipe
+      description: Analyses current product evidence and creates one AI-assisted recipe from a developer outcome prompt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                prompt: { type: string, minLength: 1, maxLength: 4000 }
+              required: [prompt]
+      responses:
+        "201": { description: Generated recipe ready for review., content: { application/json: { schema: { $ref: "#/components/schemas/Recipe" } } } }
+        "422": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/recipes/{recipe_id}:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -2977,10 +2993,17 @@ components:
       required: [items]
     AIProvider:
       type: string
-      enum: [openai, google, anthropic, openai-compatible]
+      enum: [openai, google, anthropic, digitalocean, xai, deepseek, openai-compatible]
     AIWorkload:
       type: string
-      enum: [extraction, authoring, review, support]
+      enum: [analysis, assistant]
+
+    AIBackupModels:
+      type: object
+      additionalProperties: false
+      properties:
+        analysis: { type: string, maxLength: 160 }
+        assistant: { type: string, maxLength: 160 }
     AIProviderConnection:
       type: object
       additionalProperties: false
@@ -2992,12 +3015,14 @@ components:
         endpoint: { type: string, format: uri, description: Fixed HTTPS provider origin; credentials are never returned. }
         managed_by: { type: string, enum: [console, environment] }
         enabled: { type: boolean }
+        is_backup: { type: boolean, description: True when this is the deployment's single transient-error fallback. }
+        backup_models: { $ref: "#/components/schemas/AIBackupModels" }
         last_tested_at: { type: string, format: date-time }
         last_error_code: { type: string }
         revision: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, deployment_id, provider, endpoint, managed_by, enabled, revision, created_at, updated_at]
+      required: [id, organisation_id, deployment_id, provider, endpoint, managed_by, enabled, is_backup, backup_models, revision, created_at, updated_at]
     AIProviderConnectionList:
       type: object
       additionalProperties: false
@@ -3013,8 +3038,10 @@ components:
         endpoint: { type: string, format: uri, description: Required for OpenAI-compatible services; native origins are fixed. }
         credential: { type: string, format: password, writeOnly: true, description: Required before enabling a new connection; empty retains the current encrypted credential. }
         enabled: { type: boolean }
+        is_backup: { type: boolean, description: Designates this enabled connection as the single backup provider. }
+        backup_models: { $ref: "#/components/schemas/AIBackupModels" }
         revision: { type: integer, format: int64, minimum: 0 }
-      required: [organisation_id, provider, endpoint, credential, enabled, revision]
+      required: [organisation_id, provider, endpoint, credential, enabled, is_backup, backup_models, revision]
     AIHardening:
       type: object
       additionalProperties: { type: boolean }
@@ -3071,7 +3098,7 @@ components:
         resource_id: { type: string }
         label: { type: string }
         location: { type: string }
-        excerpt: { type: string, maxLength: 6000, description: Bounded excerpt from published knowledge. Treat as untrusted data; sent only to the configured extraction provider during analysis. }
+        excerpt: { type: string, maxLength: 6000, description: Bounded excerpt from published knowledge. Treat as untrusted data; sent only to the configured Analysis provider. }
         references: { type: array, description: Exact canonical pages included in this evidence, items: { $ref: "#/components/schemas/RecipeReference" } }
         version: { type: string }
         visibility: { $ref: "#/components/schemas/Visibility" }
@@ -3303,6 +3330,8 @@ components:
         workload: { $ref: "#/components/schemas/AIWorkload" }
         action: { type: string }
         provider: { type: string }
+        provider_role: { type: string, enum: [primary, backup] }
+        fallback_reason: { type: string, description: Normalized primary failure that caused this backup attempt; empty for primary attempts. }
         requested_model: { type: string }
         resolved_model: { type: string }
         provider_request_id: { type: string }
@@ -3313,7 +3342,7 @@ components:
         error_code: { type: string }
         prompt_version: { type: string }
         created_at: { type: string, format: date-time }
-      required: [id, organisation_id, product_id, workload, action, provider, requested_model, resolved_model, input_tokens, output_tokens, duration_ms, outcome, prompt_version, created_at]
+      required: [id, organisation_id, product_id, workload, action, provider, provider_role, fallback_reason, requested_model, resolved_model, input_tokens, output_tokens, duration_ms, outcome, prompt_version, created_at]
     AIWorkloadUsage:
       type: object
       additionalProperties: false
@@ -3325,15 +3354,30 @@ components:
         output_tokens: { type: integer, format: int64, minimum: 0 }
         duration_ms: { type: integer, format: int64, minimum: 0 }
       required: [workload, calls, errors, input_tokens, output_tokens, duration_ms]
+
+    AIProviderUsage:
+      type: object
+      additionalProperties: false
+      properties:
+        provider: { $ref: "#/components/schemas/AIProvider" }
+        calls: { type: integer, format: int64, minimum: 0 }
+        errors: { type: integer, format: int64, minimum: 0 }
+        input_tokens: { type: integer, format: int64, minimum: 0 }
+        output_tokens: { type: integer, format: int64, minimum: 0 }
+        duration_ms: { type: integer, format: int64, minimum: 0 }
+        backup_calls: { type: integer, format: int64, minimum: 0 }
+        last_used_at: { type: string, format: date-time }
+      required: [provider, calls, errors, input_tokens, output_tokens, duration_ms, backup_calls, last_used_at]
     AIUsage:
       type: object
       additionalProperties: false
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/AIUsageEvent" } }
         workloads: { type: array, items: { $ref: "#/components/schemas/AIWorkloadUsage" } }
+        providers: { type: array, items: { $ref: "#/components/schemas/AIProviderUsage" } }
         since: { type: string, format: date-time }
         generated_at: { type: string, format: date-time }
-      required: [items, workloads, since, generated_at]
+      required: [items, workloads, providers, since, generated_at]
     AuditEvent:
       type: object
       additionalProperties: false

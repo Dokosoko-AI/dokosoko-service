@@ -25,6 +25,99 @@ type productBuilderDoer struct {
 	response      string
 }
 
+type aiFailoverDoer struct {
+	primaryStatus int
+	requests      []string
+}
+
+func (d *aiFailoverDoer) Do(request *http.Request) (*http.Response, error) {
+	d.requests = append(d.requests, request.URL.String())
+	status := http.StatusOK
+	body := `{"id":"resp_backup","model":"gpt-5.6-luna","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"description\":\"A grounded answer from the backup provider.\"}","annotations":[]}]}],"usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}}`
+	if request.URL.Host == "primary.example.com" {
+		status = d.primaryStatus
+		body = `{"error":{"type":"provider_error"}}`
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}, Request: request}, nil
+}
+
+func configureAIPrimaryAndBackup(t *testing.T, primaryStatus int) (*store.Memory, *platform.Service, model.Product, platform.Actor, *aiFailoverDoer) {
+	t.Helper()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x52}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doer := &aiFailoverDoer{primaryStatus: primaryStatus}
+	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, doer)
+	product, err := memory.Product(ctx, "prod_acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := platform.Actor{ID: "root_ai", RequestID: "req_ai_failover"}
+	primary, err := service.SaveAIProviderConnection(ctx, platform.AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: "openai-compatible", Endpoint: "https://primary.example.com", Credential: "primary-secret", Enabled: true}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveAIProviderConnection(ctx, platform.AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: "openai", Credential: "backup-secret", Enabled: true, IsBackup: true, BackupModels: map[string]string{"analysis": "gpt-5.6-terra", "assistant": "gpt-5.6-luna"}}, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "assistant", ProviderConnectionID: primary.ID, Model: "primary-assistant", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
+		t.Fatal(err)
+	}
+	return memory, service, product, actor, doer
+}
+
+func TestAIBackupRetriesOneTransientFailureAndAuditsBothAttempts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory, service, product, actor, doer := configureAIPrimaryAndBackup(t, http.StatusServiceUnavailable)
+
+	draft, err := service.RewriteProductDescription(ctx, product.ID, "Explain the API without inventing capabilities.", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(draft, "backup provider") || len(doer.requests) != 2 || !strings.Contains(doer.requests[0], "primary.example.com") || !strings.Contains(doer.requests[1], "api.openai.com/v1/responses") {
+		t.Fatalf("fallback result=%q requests=%#v", draft, doer.requests)
+	}
+	events, err := memory.AIUsageEvents(ctx, product.ID, time.Now().UTC().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var primary, backup *model.AIUsageEvent
+	for index := range events {
+		if events[index].ProviderRole == "backup" {
+			backup = &events[index]
+		} else {
+			primary = &events[index]
+		}
+	}
+	if len(events) != 2 || primary == nil || primary.Outcome != "failed" || primary.ErrorCode != "provider_unavailable" || backup == nil || backup.FallbackReason != "provider_unavailable" || backup.Outcome != "succeeded" {
+		t.Fatalf("fallback usage events = %#v", events)
+	}
+}
+
+func TestAIBackupNeverHidesInvalidCredentials(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory, service, product, actor, doer := configureAIPrimaryAndBackup(t, http.StatusUnauthorized)
+
+	if _, err := service.RewriteProductDescription(ctx, product.ID, "Explain the API.", actor); err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("invalid credential error = %v", err)
+	}
+	if len(doer.requests) != 1 || !strings.Contains(doer.requests[0], "primary.example.com") {
+		t.Fatalf("invalid credentials unexpectedly used backup: %#v", doer.requests)
+	}
+	events, err := memory.AIUsageEvents(ctx, product.ID, time.Now().UTC().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].ProviderRole != "primary" || events[0].ErrorCode != "invalid_credential" {
+		t.Fatalf("invalid credential usage events = %#v", events)
+	}
+}
+
 func (d *productBuilderDoer) Do(request *http.Request) (*http.Response, error) {
 	d.authorization = request.Header.Get("Authorization")
 	d.requestURL = request.URL.String()
@@ -541,11 +634,11 @@ func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
 	if !bytes.Contains(encodedAudits, []byte("mcp-product-description-v1")) || bytes.Contains(encodedAudits, []byte("Voice API v3 and Messages API v2 for developers.")) {
 		t.Fatalf("rewrite audit omitted prompt version or retained raw draft: %s", encodedAudits)
 	}
-	supportProfile, err := memory.AIWorkloadProfile(ctx, product.ID, "support")
+	supportProfile, err := memory.AIWorkloadProfile(ctx, product.ID, "assistant")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "support", ProviderConnectionID: supportProfile.ProviderConnectionID, Model: supportProfile.Model, MaxInputTokens: supportProfile.MaxInputTokens, MaxOutputTokens: supportProfile.MaxOutputTokens, DailyTokenBudget: 1, Enabled: true, Revision: supportProfile.Revision}, actor); err != nil {
+	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "assistant", ProviderConnectionID: supportProfile.ProviderConnectionID, Model: supportProfile.Model, MaxInputTokens: supportProfile.MaxInputTokens, MaxOutputTokens: supportProfile.MaxOutputTokens, DailyTokenBudget: 1, Enabled: true, Revision: supportProfile.Revision}, actor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.RewriteProductDescription(ctx, product.ID, "A second bounded draft.", actor); err == nil || !strings.Contains(err.Error(), "daily token budget") {
@@ -572,7 +665,7 @@ func TestWidgetActivationRequiresAHardenedAssistantAndAnswersWithoutIdentityOrCr
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SetWidgetState(ctx, provisioning.Widget.ID, "active", provisioning.Widget.Revision, actor); err == nil || !strings.Contains(err.Error(), "support AI workload") {
+	if _, err := service.SetWidgetState(ctx, provisioning.Widget.ID, "active", provisioning.Widget.Revision, actor); err == nil || !strings.Contains(err.Error(), "Assistant workload") {
 		t.Fatalf("activation without assistant error = %v", err)
 	}
 	if _, err := service.SaveLLMProfile(ctx, platform.LLMProfileInput{OrganisationID: provisioning.Widget.OrganisationID, ProductID: provisioning.Widget.DeploymentID, Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "widget-assistant-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 512, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {

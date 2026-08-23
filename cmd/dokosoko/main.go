@@ -98,10 +98,8 @@ func run() error {
 		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
 		Endpoint: os.Getenv("DOKOSOKO_AI_ENDPOINT"),
 		Models: map[airuntime.Workload]string{
-			airuntime.WorkloadExtraction: os.Getenv("DOKOSOKO_AI_MODEL_EXTRACTION"),
-			airuntime.WorkloadAuthoring:  os.Getenv("DOKOSOKO_AI_MODEL_AUTHORING"),
-			airuntime.WorkloadReview:     os.Getenv("DOKOSOKO_AI_MODEL_REVIEW"),
-			airuntime.WorkloadSupport:    os.Getenv("DOKOSOKO_AI_MODEL_SUPPORT"),
+			airuntime.WorkloadAnalysis:  os.Getenv("DOKOSOKO_AI_MODEL_ANALYSIS"),
+			airuntime.WorkloadAssistant: os.Getenv("DOKOSOKO_AI_MODEL_ASSISTANT"),
 		},
 	}); err != nil {
 		return fmt.Errorf("configure AI: %w", err)

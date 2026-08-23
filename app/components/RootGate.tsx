@@ -4,10 +4,10 @@ import { Check, Copy, Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck, TriangleA
 import { QRCodeSVG } from "qrcode.react";
 import { FormEvent, useEffect, useState } from "react";
 import { APIDeployment, APIError, APIOrganisation, APIUser, SetupEnrollment, api } from "../lib/api";
-import { Button } from "./catalyst";
+import { Button } from "./core/control";
 import { ConsoleApp } from "./ConsoleApp";
 
-type Gate = "console" | "setup" | "login" | "onboarding" | "error";
+type Gate = "loading" | "console" | "setup" | "login" | "onboarding" | "error";
 type SetupStep = "identity" | "mfa" | "recovery";
 
 function errorMessage(error: unknown): string {
@@ -15,7 +15,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function RootGate() {
-  const [gate, setGate] = useState<Gate>("console");
+  const [gate, setGate] = useState<Gate>("loading");
   const [user, setUser] = useState<APIUser | null>(null);
   const [deployment, setDeployment] = useState<APIDeployment | null>(null);
   const [onboardingOrganisation, setOnboardingOrganisation] = useState<APIOrganisation | null>(null);
@@ -26,6 +26,10 @@ export function RootGate() {
       process.env.NODE_ENV === "development" &&
       new URLSearchParams(window.location.search).get("preview") === "fixtures"
     ) {
+      // Fixture mode is URL-driven browser state. Resolve it after hydration so
+      // the server and first client render share the same safe loading shell.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGate("console");
       return;
     }
 
@@ -47,9 +51,13 @@ export function RootGate() {
     }).catch((error) => {
       // A standalone static preview has no service API and intentionally displays
       // the fixture console. A responding, misconfigured service gets an error gate.
-      if (!cancelled && error instanceof APIError) {
-        setProblem(error.message);
-        setGate("error");
+      if (!cancelled) {
+        if (error instanceof APIError) {
+          setProblem(error.message);
+          setGate("error");
+        } else {
+          setGate("console");
+        }
       }
     });
     return () => { cancelled = true; };
@@ -89,11 +97,12 @@ export function RootGate() {
     }
   }
 
+  if (gate === "loading") return <AuthShell icon={<ShieldCheck />} title="Opening DokoSoko" description="Loading the authenticated deployment…" />;
   if (gate === "setup") return <SetupScreen onComplete={openWorkspace} />;
   if (gate === "login") return <LoginScreen onComplete={openWorkspace} />;
   if (gate === "onboarding") return <WorkspaceSetup existingOrganisation={onboardingOrganisation} onComplete={(value) => { setDeployment(value); setGate("console"); }} />;
   if (gate === "error") return <AuthShell icon={<TriangleAlert />} title="Deployment needs attention" description={problem || "Authentication is not configured. Check the setup token, master key, database, and public URL."} />;
-  return <ConsoleApp currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
+  return <ConsoleApp key={deployment?.id ?? "fixture-preview"} currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
 }
 
 function slugify(value: string): string {
