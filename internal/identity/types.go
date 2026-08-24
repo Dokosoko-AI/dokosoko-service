@@ -67,6 +67,7 @@ type OAuthCode struct {
 	InstallationID         string
 	Grants                 map[string]bool
 	AccessEvaluationID     string
+	AccessEvaluatedAt      time.Time
 	PolicyVersion          string
 	UpstreamAccessSecretID string
 	AccessExpiresAt        time.Time
@@ -87,6 +88,7 @@ type AccessToken struct {
 	InstallationID         string
 	Grants                 map[string]bool
 	AccessEvaluationID     string
+	AccessEvaluatedAt      time.Time
 	PolicyVersion          string
 	UpstreamAccessSecretID string
 	Scopes                 []string
@@ -108,6 +110,7 @@ type Principal struct {
 	InstallationID      string
 	Grants              map[string]bool
 	AccessEvaluationID  string
+	AccessEvaluatedAt   time.Time
 	PolicyVersion       string
 	DelegatedAPIOrigin  string
 	UpstreamAccessToken string

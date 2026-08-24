@@ -125,14 +125,24 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(api, /resources\/list, resources\/read/);
 });
 
-test("uses an API directory and a four-tab contextual workspace", async () => {
+test("recovers stale recipe analysis and refreshes outdated evidence", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  assert.match(source, /staleRunning/);
+  assert.match(source, /recipe\.state === "outdated"/);
+  assert.match(source, /Date\.now\(\) - runningSince > 5 \* 60 \* 1000/);
+});
+
+test("uses an API directory and a complete onboarding workspace", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
 
-  for (const label of ["Overview", "Resources", "Access", "History"]) {
+  for (const label of ["Overview", "Resources", "Authorization", "Tools", "Recipes", "Delivery", "Test", "History"]) {
     assert.ok(routes.includes(`label: "${label}"`), `${label} API tab should be registered`);
+  }
+  for (const label of ["Documentation", "API contracts", "SDKs & Packages"]) {
+    assert.ok(routes.includes(`label: "${label}"`), `${label} resource sub-tab should be registered`);
   }
   for (const removed of ["Tools & hooks", "label: \"Usage\"", "label: \"Support\"", "label: \"Revisions\""]) assert.ok(!routes.includes(removed));
   assert.match(source, /<PageTabs label=.*integration\.display_name/);
@@ -146,7 +156,7 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
   assert.match(source, /Published history/);
   assert.match(source, /Switch API/);
   assert.doesNotMatch(source, /Only unresolved actions appear here/);
-  assert.match(source, /Customer access/);
+  assert.match(source, /Customer identity/);
   assert.match(source, /Advanced details/);
   assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state|integration-family-heading|groupedIntegrations/);
   assert.match(styles, /\.integration-directory-columns/);
@@ -161,6 +171,113 @@ test("uses an API directory and a four-tab contextual workspace", async () => {
   assert.match(client, /APIIntegrationPublishStatus/);
   assert.match(client, /setIntegrationAccessConnections/);
   assert.match(client, /setIntegrationSupportRoute/);
+});
+
+test("uses recoverable, lifecycle-safe package publication flows", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const server = await readFile(new URL("../internal/httpapi/server_packages.go", import.meta.url), "utf8");
+  const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
+  const releaseContract = client.slice(client.indexOf("export type APIPackageRelease"), client.indexOf("export type APIPackageArtifact"));
+
+  for (const label of ["Reusable artifact PURL", "Exact release PURL", "Publish release", "Lifecycle message:", "Replacement:", "Sunset:", "Retire package"]) {
+    assert.ok(source.includes(label), `${label} should be present in the package workspace`);
+  }
+  assert.match(source, /purl: artifactPURL\.trim\(\)/);
+  assert.match(source, /purl: releasePURL\.trim\(\)/);
+  assert.match(source, /recoverPackageWorkflow/);
+  assert.match(source, /packageArtifactCanBind/);
+  assert.match(source, /packageArtifactCanPublishForIntegration/);
+  assert.match(source, /integration\.visibility !== "public" \|\| release\.visibility === "public"/);
+  assert.match(source, /The private release was saved, but it cannot be bound to a public Integration/);
+  assert.match(source, /pattern="\[a-z\]\[a-z0-9\._-\]\{0,63\}"/);
+  assert.doesNotMatch(source, /<option value="other">/);
+  assert.doesNotMatch(releaseContract, /lifecycle|replacement|deprecation|sunset/);
+  assert.doesNotMatch(source, /release\.(?:lifecycle|sunset_at)/);
+  assert.match(client, /packageArtifact: \(artifactID: string\)/);
+  assert.match(client, /package-artifacts\/\$\{encodeURIComponent\(artifactID\)\}\/retire/);
+  assert.match(client, /replacement_package_artifact_id\?: string; message: string; revision: number/);
+  assert.match(source, /Publishing the first release freezes all artifact metadata/);
+  assert.match(source, /Deprecation immediately blocks new releases, new bindings, and candidate publication/);
+  assert.match(source, /sunset is migration guidance only/);
+  assert.match(source, /public Integration discovery/);
+  assert.match(source, /Public MCP/);
+  assert.match(server, /discoverable through Public MCP after an exact public binding and published public Integration/);
+  assert.doesNotMatch(`${source}\n${server}`, /unauthenticated public (?:package )?catalog(?:ue)?/i);
+  assert.ok(openapi.includes(String.raw`(?![^@?#\s]*//)`), "artifact PURL schema should reject empty path segments");
+  assert.ok(openapi.includes(String.raw`(?![^?#\s]*//)`), "release PURL schema should reject empty path segments");
+});
+
+test("uses the finalized authorization and tool-editor contracts", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  for (const capability of ["grantDefinitions", "createGrantDefinition", "updateGrantDefinition", "authorizationPoints", "createAuthorizationPoint", "updateAuthorizationPoint", "simulateAuthorizationPoint"]) {
+    assert.match(client, new RegExp(`\\b${capability}\\b`));
+  }
+  assert.match(client, /\/api\/v1\/grant-definitions/);
+  assert.match(client, /authorization-points\/\$\{encodeURIComponent\(pointID\)\}\/simulate/);
+  assert.match(client, /granted_grants: grantedGrants, confirmed/);
+  assert.doesNotMatch(client, /integrations\/\$\{[^}]+\}\/authorization\/simulate|simulateIntegrationAuthorization|access\/evaluations/);
+
+  assert.match(client, /tool_revision: number/);
+  assert.match(client, /tools: Array<\{ tool_id: string; revision: number; authorization_point_id: string; authorization_point_revision: number \}>/);
+  assert.match(client, /tool: \(productID: string, toolID: string\)/);
+  assert.match(client, /JSON\.stringify\(\{ namespace, name \}\)/);
+  assert.match(client, /\/dry-run`[\s\S]*JSON\.stringify\(\{ arguments: args \}\)/);
+  assert.match(client, /\/retire`[\s\S]*JSON\.stringify\(\{ revision \}\)/);
+  assert.match(client, /state: "draft" \| "published" \| "retired"/);
+
+  assert.match(source, /populateEditor\(await api\.tool\(productID, tool\.id\)\)/);
+  assert.match(source, /http_method: editorTool\.http_method/);
+  assert.match(source, /authorization_policy: \{ \.\.\.editorTool\.authorization_policy/);
+  assert.match(source, /binding\.tool_revision/);
+  for (const label of ["Grant registry", "Authorization points", "Policy simulator", "Simulation only", "Bounded dry-run", "Run dry-run", "Clone tool to a draft", "Retire"]) {
+    assert.ok(source.includes(label), `${label} should be present in the API workspace`);
+  }
+  assert.match(source, /api\.simulateAuthorizationPoint\(integration\.id, selectedPoint\.id, granted, confirmed\)/);
+  assert.match(source, /network_call_performed/);
+  assert.match(source, /Require an explicit confirmation marker for this exact MCP call/);
+  assert.doesNotMatch(source, /one-time confirmation receipt/);
+  assert.match(source, /<span>Fixed endpoint<\/span>/);
+  assert.match(source, /publishValidationCodes\.has\("authorization_missing"\)/);
+  assert.match(source, /publishValidationCodes\.has\("tools_missing"\)/);
+});
+
+test("uploads local knowledge files with a browser-managed multipart request", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+
+  assert.match(client, /uploadSource: \(productID: string, organisationID: string, name: string, file: File\)/);
+  assert.match(client, /const body = new FormData\(\)/);
+  for (const field of ["organisation_id", "name", "file"]) assert.match(client, new RegExp(`body\\.append\\("${field}"`));
+  assert.match(client, /\/sources\/upload`/);
+  assert.match(client, /const multipartBody = typeof FormData !== "undefined" && init\?\.body instanceof FormData/);
+  assert.match(client, /init\?\.body && !multipartBody \? \{ "Content-Type": "application\/json" \} : \{\}/);
+  assert.doesNotMatch(client, /uploadSource:[\s\S]{0,700}Content-Type/);
+
+  assert.match(source, /type SourceKind = "website" \| "openapi" \| "git" \| "upload"/);
+  assert.match(source, /const sourceUploadMaxBytes = 5_000_000/);
+  assert.match(source, /new TextDecoder\("utf-8", \{ fatal: true \}\)/);
+  assert.match(source, /type="file"/);
+  for (const extension of [".md", ".mdx", ".txt", ".html", ".htm", ".json", ".yaml", ".yml"]) assert.ok(source.includes(extension));
+  for (const option of ["Website", "OpenAPI", "Git repository", "Upload a file"]) assert.ok(source.includes(`>${option}</option>`));
+  assert.match(source, /up to 5 MB in this setup/);
+  assert.match(source, /Content is treated as untrusted text, and embedded scripts are never executed/);
+  assert.match(source, /sourceKind === "upload"[\s\S]*api\.uploadSource/);
+  assert.match(source, /resetSourceForm\(\)/);
+  assert.match(styles, /input\[type="file"\]::file-selector-button/);
+});
+
+test("shows exact crawler classifier indicators during source review", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
+
+  assert.match(client, /injection_indicators: string\[\]/);
+  assert.match(source, /Classifier indicators: \{document\.injection_indicators\.join\(", "\)\}/);
+  assert.match(openapi, /injection_indicators: \{ type: array, items: \{ type: string \} \}/);
 });
 
 test("keeps private defaults and guarded public transitions in the client contract", async () => {

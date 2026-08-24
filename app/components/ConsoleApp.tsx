@@ -37,9 +37,9 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAnalytics, APIAuditEvent, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIIdentity, APIIntegration, APIIntegrationAnalysis, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APIMCPCatalog, APIMCPConnection, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIRecipe, APIRecipeReference, APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
-import { ConsoleRoute, EntityKind, INTEGRATION_TABS, IntegrationTab, SETTINGS_TABS, Section, SettingsTab, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath, settingsPath } from "../lib/console-routes";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAnalytics, APIAuditEvent, APIAuthorizationPoint, APIAuthorizationSimulation, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIGrantDefinition, APIIdentity, APIIntegration, APIIntegrationAnalysis, APIIntegrationPackageBinding, APIIntegrationPreflight, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APIIntegrationToolBinding, APIMCPCatalog, APIMCPConnection, APIPackageArtifact, APIPackageRelease, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIRecipe, APIRecipeReference, APIResourceSet, APISourcePublication, APISourceReview, APISupportRoute, APISupportSubmission, APITool, APIToolDryRun, APIUser, APIVisibility, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
+import { ConsoleRoute, EntityKind, INTEGRATION_RESOURCE_TABS, INTEGRATION_TABS, IntegrationResourceTab, IntegrationTab, SETTINGS_TABS, Section, SettingsTab, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath, settingsPath } from "../lib/console-routes";
 import { Badge, Button, Dialog, Switch } from "./core/control";
 import { Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./core";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader, SectionHeader, SegmentedControl, ViewStack } from "./core/layout";
@@ -48,6 +48,29 @@ import { ThemeToggle } from "./ThemeToggle";
 type NavigationGroup = "apis" | "recipes" | "agent-access" | "activity";
 type Visibility = "private" | "public";
 type AIWorkload = APIAIWorkloadProfile["workload"];
+type SourceKind = "website" | "openapi" | "git" | "upload";
+
+const sourceUploadMaxBytes = 5_000_000;
+const sourceUploadExtensions = new Set([".md", ".mdx", ".txt", ".html", ".htm", ".json", ".yaml", ".yml"]);
+const integrationRecipeScopeKind = "integration_scope";
+
+function analysisMatchesIntegration(analysis: APIIntegrationAnalysis, integrationID?: string) {
+  const scopes = analysis.evidence.filter((item) => item.kind === integrationRecipeScopeKind);
+  return integrationID ? scopes.some((item) => item.resource_id === integrationID) : scopes.length === 0;
+}
+
+function recipeMatchesIntegration(recipe: APIRecipe, integrationID?: string) {
+  const scopes = recipe.dependencies.filter((item) => item.kind === integrationRecipeScopeKind);
+  return integrationID ? scopes.some((item) => item.resource_id === integrationID) : scopes.length === 0;
+}
+
+function sourceUploadValidationError(file: File) {
+  const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  if (!sourceUploadExtensions.has(extension)) return "Choose a Markdown, text, HTML, JSON, or YAML file.";
+  if (file.size > sourceUploadMaxBytes) return "The selected file is larger than the 5 MB limit for this setup.";
+  if (file.size === 0) return "The selected file is empty.";
+  return "";
+}
 
 const aiWorkloads: Array<{
   role: AIWorkload;
@@ -109,10 +132,11 @@ type Source = {
   visibility: Visibility;
   published: boolean;
   quarantined: boolean;
-  crawlState: "queued" | "running" | "synced" | "review" | "failed";
+  crawlState: "draft" | "queued" | "running" | "synced" | "review" | "failed" | "cancelled";
   pages: number;
   lastCrawl: string;
   revision: number;
+  latestPublication?: APISourcePublication;
 };
 
 type PendingPublication = {
@@ -319,8 +343,9 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const section = consoleRoute.section;
   const settingsTab: SettingsTab = consoleRoute.kind === "section" && consoleRoute.section === "settings" ? consoleRoute.settingsTab ?? "overview" : "overview";
   const [productDefinition, setProductDefinition] = useState<APIProductDefinition | null>(fixtureDefinition);
-  const [, setLatestProductBuild] = useState<APIProductBuild | null>(fixtureProductBuild);
+  const [latestProductBuild, setLatestProductBuild] = useState<APIProductBuild | null>(fixtureProductBuild);
   const [productBuilderOpen, setProductBuilderOpen] = useState(false);
+  const [productBuildReviewOpen, setProductBuildReviewOpen] = useState(false);
   const [productBuilderBusy, setProductBuilderBusy] = useState(false);
   const [productBuilderInputs, setProductBuilderInputs] = useState("");
   const [sources, setSources] = useState(initialSources);
@@ -361,9 +386,16 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [apiConnected, setAPIConnected] = useState(false);
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [sourceName, setSourceName] = useState("");
-  const [sourceKind, setSourceKind] = useState("website");
+  const [sourceKind, setSourceKind] = useState<SourceKind>("website");
   const [sourceLocation, setSourceLocation] = useState("");
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceFileError, setSourceFileError] = useState("");
+  const sourceFileInput = useRef<HTMLInputElement>(null);
   const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceReview, setSourceReview] = useState<APISourceReview | null>(null);
+  const [sourceReviewSelection, setSourceReviewSelection] = useState<string[]>([]);
+  const [sourceReviewAcknowledged, setSourceReviewAcknowledged] = useState(false);
+  const [sourceReviewBusy, setSourceReviewBusy] = useState(false);
   const [addToolOpen, setAddToolOpen] = useState(false);
   const [toolNamespace, setToolNamespace] = useState("access");
   const [toolName, setToolName] = useState("");
@@ -496,14 +528,34 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     }
 
     let cancelled = false;
-	    Promise.all([api.distribution(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(([distributionValue, remoteSources, remoteTools, remoteMCPConnections]) => {
+	    Promise.all([api.distribution(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(async ([distributionValue, remoteSources, remoteTools, remoteMCPConnections]) => {
+	      const [crawlHistories, publicationHistories] = await Promise.all([
+	        Promise.all(remoteSources.map((source) => api.crawlJobs(product.id, source.id).catch(() => []))),
+	        Promise.all(remoteSources.map((source) => api.sourcePublications(product.id, source.id).catch(() => []))),
+	      ]);
       if (cancelled) return;
       setDistribution(distributionValue);
       setProduct(distributionValue.product);
       setPublicMCPEnabled(distributionValue.product.public_mcp_enabled);
       setProductRevision(distributionValue.product.revision);
-      setSources((current) => remoteSources.map((source) => {
+      setSources((current) => remoteSources.map((source, index) => {
         const local = current.find((item) => item.id === source.id);
+	        const latest = crawlHistories[index]?.[0];
+	        const latestPublication = publicationHistories[index]?.[0];
+	        const generationPublished = Boolean(latest && latestPublication?.crawl_job_id === latest.id);
+	        const crawlState: Source["crawlState"] = latest
+	          ? latest.state === "failed"
+	            ? "failed"
+	            : latest.state === "cancelled"
+	              ? "cancelled"
+	            : latest.state === "review" || latest.state === "succeeded"
+	              ? "review"
+	              : latest.state === "running"
+	                ? "running"
+	                : "queued"
+	          : source.published
+	            ? "synced"
+	            : local?.crawlState ?? "draft";
         return {
           id: source.id,
           name: source.name,
@@ -512,10 +564,11 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           visibility: source.visibility,
           published: source.published,
           quarantined: source.quarantined,
-          crawlState: local?.crawlState ?? "synced",
-          pages: local?.pages ?? 0,
-          lastCrawl: local?.lastCrawl ?? "Not crawled",
+	          crawlState: generationPublished && crawlState === "review" ? "synced" : crawlState,
+	          pages: latest?.fetched_count ?? local?.pages ?? 0,
+	          lastCrawl: latest ? latest.finished_at ? new Date(latest.finished_at).toLocaleString() : latest.state : local?.lastCrawl ?? "Not crawled",
           revision: source.revision,
+          latestPublication,
         };
       }));
       setTools(remoteTools);
@@ -572,13 +625,14 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   }
 
 	async function refreshCatalog() {
-		const [integrationValues, setValues, definitionValues, connectionValues, backendValues, routeValues] = await Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]);
+		const [integrationValues, setValues, definitionValues, connectionValues, backendValues, routeValues, toolValues] = await Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes(), api.tools(product.id)]);
 		setIntegrations(integrationValues);
 		setResourceSets(setValues);
 		setAccessDefinitions(definitionValues);
 		setAccessConnections(connectionValues);
 		setBackendConnections(backendValues);
 		setSupportRoutes(routeValues);
+		setTools(toolValues);
 		const instanceGroups = await Promise.all(connectionValues.map((connection) => api.accessInstances(connection.id).catch(() => [])));
 		const credentialGroups = await Promise.all(connectionValues.map((connection) => api.accessCredentials(connection.id).catch(() => [])));
 		setAccessInstances(instanceGroups.flat());
@@ -770,11 +824,31 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         : { ...fixtureProductBuild, id: fallbackBuildID, state: "review" as const, created_at: new Date().toISOString(), completed_at: new Date().toISOString(), inputs: [...fixtureProductBuild.inputs, ...additionalInputs], proposal: { ...fixtureDefinition, state: "draft" as const, source_build_id: fallbackBuildID } };
       setLatestProductBuild(value);
       setProductBuilderOpen(false);
+      setProductBuildReviewOpen(true);
       setProductBuilderInputs("");
-      navigateToSection("product");
       showToast(`${value.inputs.length} sources scanned. Review ${value.unresolved.length || "no"} exception${value.unresolved.length === 1 ? "" : "s"}.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "The APIs could not be imported.");
+    } finally {
+      setProductBuilderBusy(false);
+    }
+  }
+
+  async function publishImportedAPIs() {
+    if (!latestProductBuild || latestProductBuild.state !== "review") return;
+    setProductBuilderBusy(true);
+    try {
+      const definition = apiConnected
+        ? await api.publishProductBuild(product.id, latestProductBuild.id)
+        : { ...latestProductBuild.proposal, state: "published" as const, revision: latestProductBuild.proposal.revision + 1, published_at: new Date().toISOString() };
+      setProductDefinition(definition);
+      setLatestProductBuild({ ...latestProductBuild, state: "published", proposal: definition, completed_at: latestProductBuild.completed_at ?? new Date().toISOString() });
+      setProductBuildReviewOpen(false);
+      await refreshCatalog().catch(() => {});
+      navigateToSection("product");
+      showToast(`${definition.components.length} API proposal${definition.components.length === 1 ? "" : "s"} published to the catalogue.`);
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "The imported API proposal could not be published.");
     } finally {
       setProductBuilderBusy(false);
     }
@@ -862,16 +936,64 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     showToast("Public MCP is enabled and audit logged.");
   }
 
+  function resetSourceForm() {
+    setSourceName("");
+    setSourceKind("website");
+    setSourceLocation("");
+    setSourceFile(null);
+    setSourceFileError("");
+    if (sourceFileInput.current) sourceFileInput.current.value = "";
+  }
+
+  function closeSourceDialog(open: boolean) {
+    if (!open && sourceBusy) return;
+    setAddSourceOpen(open);
+    if (!open && !sourceBusy) resetSourceForm();
+  }
+
+  function selectSourceKind(kind: SourceKind) {
+    setSourceKind(kind);
+    setSourceFileError("");
+    if (kind !== "upload") {
+      setSourceFile(null);
+      if (sourceFileInput.current) sourceFileInput.current.value = "";
+    }
+  }
+
+  function selectSourceFile(file: File | null) {
+    setSourceFile(file);
+    setSourceFileError(file ? sourceUploadValidationError(file) : "Choose a file to upload.");
+    if (file && !sourceName.trim()) setSourceName(file.name.replace(/\.[^.]+$/, ""));
+  }
+
   async function createSource() {
+    if (sourceKind === "upload" && !sourceFile) {
+      setSourceFileError("Choose a file to upload.");
+      return;
+    }
     setSourceBusy(true);
     try {
+      if (sourceKind === "upload" && sourceFile) {
+        const validationError = sourceUploadValidationError(sourceFile);
+        if (validationError) {
+          setSourceFileError(validationError);
+          return;
+        }
+        try {
+          new TextDecoder("utf-8", { fatal: true }).decode(await sourceFile.arrayBuffer());
+        } catch {
+          setSourceFileError("The selected file is not valid UTF-8 text.");
+          return;
+        }
+      }
       const created = apiConnected
-        ? await api.createSource(product.id, product.organisation_id, sourceName, sourceKind, sourceLocation)
-        : { id: `src_${Date.now()}`, name: sourceName, kind: sourceKind, location: sourceLocation, visibility: "private" as const, published: false, quarantined: false, revision: 1 };
-      setSources((items) => [...items, { id: created.id, name: created.name, kind: created.kind, location: created.location, visibility: created.visibility, published: created.published, quarantined: created.quarantined, crawlState: "review", pages: 0, lastCrawl: "Not crawled", revision: created.revision }]);
+        ? sourceKind === "upload" && sourceFile
+          ? await api.uploadSource(product.id, product.organisation_id, sourceName.trim(), sourceFile)
+          : await api.createSource(product.id, product.organisation_id, sourceName.trim(), sourceKind, sourceLocation.trim())
+        : { id: `src_${Date.now()}`, name: sourceName.trim(), kind: sourceKind, location: sourceKind === "upload" ? sourceFile?.name ?? "uploaded file" : sourceLocation.trim(), visibility: "private" as const, published: false, quarantined: false, revision: 1 };
+      setSources((items) => [...items, { id: created.id, name: created.name, kind: created.kind, location: created.location, visibility: created.visibility, published: created.published, quarantined: created.quarantined, crawlState: "draft", pages: 0, lastCrawl: "Not crawled", revision: created.revision }]);
       setAddSourceOpen(false);
-      setSourceName("");
-      setSourceLocation("");
+      resetSourceForm();
       showToast(`${created.name} was added privately.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not add source.");
@@ -898,7 +1020,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const jobs = await api.crawlJobs(product.id, id);
 	  const latest = jobs[0];
 	  if (!latest) return;
-	  const crawlState: Source["crawlState"] = latest.state === "failed" ? "failed" : latest.state === "review" || latest.state === "succeeded" ? "review" : latest.state === "running" ? "running" : "queued";
+	  const crawlState: Source["crawlState"] = latest.state === "failed" ? "failed" : latest.state === "cancelled" ? "cancelled" : latest.state === "review" || latest.state === "succeeded" ? "review" : latest.state === "running" ? "running" : "queued";
 	  setSources((items) => items.map((item) => item.id === id ? { ...item, crawlState, pages: latest.fetched_count, lastCrawl: latest.finished_at ? new Date(latest.finished_at).toLocaleString() : latest.state } : item));
 	  if ((latest.state === "queued" || latest.state === "running") && attempt < 40) {
 		window.setTimeout(() => pollCrawl(id, attempt + 1), 3000);
@@ -906,7 +1028,8 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  }
 	  if (latest.state === "review" || latest.state === "succeeded") {
 		const refreshed = (await api.sources(product.id)).find((source) => source.id === id);
-		if (refreshed) setSources((items) => items.map((item) => item.id === id ? { ...item, revision: refreshed.revision, published: refreshed.published, quarantined: refreshed.quarantined, crawlState: refreshed.quarantined ? "review" : item.crawlState } : item));
+		const review = await api.sourceReview(product.id, id, latest.id).catch(() => null);
+		if (refreshed) setSources((items) => items.map((item) => item.id === id ? { ...item, revision: refreshed.revision, published: refreshed.published, quarantined: refreshed.quarantined, crawlState: review?.publication ? "synced" : "review", latestPublication: review?.publication ?? item.latestPublication } : item));
 	  }
 	} catch {
 	  if (attempt < 5) window.setTimeout(() => pollCrawl(id, attempt + 1), 3000);
@@ -914,12 +1037,38 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   }
 
   async function publishSource(source: Source) {
+	if (!apiConnected) {
+	  showToast("Generation review is available in the live console.");
+	  return;
+	}
+	setSourceReviewBusy(true);
 	try {
-	  const value = apiConnected ? await api.publishSource(product.id, source.id, source.revision) : { ...source, published: true, revision: source.revision + 1 };
-	  setSources((items) => items.map((item) => item.id === source.id ? { ...item, published: value.published, revision: value.revision, crawlState: "synced" } : item));
-	  showToast(`${source.name} was atomically published.`);
+	  const review = await api.sourceReview(product.id, source.id);
+	  const safe = review.documents.filter((document) => (document.state === "validated" || document.state === "published") && document.injection_indicators.length === 0).map((document) => document.id);
+	  setSourceReview(review);
+	  setSourceReviewSelection(safe);
+	  setSourceReviewAcknowledged(false);
 	} catch (error) {
-	  showToast(error instanceof APIError ? error.message : "Could not publish source.");
+	  showToast(error instanceof APIError ? error.message : "Could not load this crawl generation for review.");
+	} finally {
+	  setSourceReviewBusy(false);
+	}
+  }
+
+  async function confirmSourcePublication() {
+	if (!sourceReview || !sourceReviewAcknowledged || sourceReviewSelection.length === 0) return;
+	setSourceReviewBusy(true);
+	try {
+	  const result = await api.publishSource(product.id, sourceReview.source.id, { revision: sourceReview.source.revision, crawl_job_id: sourceReview.crawl_job.id, document_ids: sourceReviewSelection, acknowledge_reviewed: true });
+	  setSources((items) => items.map((item) => item.id === result.source.id ? { ...item, published: result.source.published, quarantined: result.source.quarantined, revision: result.source.revision, crawlState: "synced", latestPublication: result.publication } : item));
+	  setSourceReview(null);
+	  setSourceReviewSelection([]);
+	  setSourceReviewAcknowledged(false);
+	  showToast(`${result.source.name} generation r${result.publication.revision} was atomically published.`);
+	} catch (error) {
+	  showToast(error instanceof APIError ? error.message : "Could not publish this reviewed generation.");
+	} finally {
+	  setSourceReviewBusy(false);
 	}
   }
 
@@ -1228,6 +1377,34 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	    }
 	  }
 
+	  async function generateRecipesFromEvidence(integrationID?: string) {
+	    setRecipeBusy(true);
+	    try {
+	      const scopedAnalyses = analyses.filter((candidate) => analysisMatchesIntegration(candidate, integrationID));
+	      const scopedRecipes = recipes.filter((candidate) => recipeMatchesIntegration(candidate, integrationID));
+	      let analysis = [...scopedAnalyses].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
+	      const runningSince = analysis?.state === "running" ? Date.parse(analysis.created_at) : Number.NaN;
+	      const staleRunning = analysis?.state === "running" && (!Number.isFinite(runningSince) || Date.now() - runningSince > 5 * 60 * 1000);
+	      const evidenceChanged = scopedRecipes.some((recipe) => recipe.state === "outdated");
+	      if (!analysis || analysis.state === "failed" || staleRunning || evidenceChanged) {
+	        analysis = await api.analyseIntegration(product.id, integrationID);
+	        setAnalyses((items) => [analysis, ...items.filter((item) => item.id !== analysis.id)]);
+	      }
+	      const unansweredBlocker = analysis.unknowns.find((unknown) => unknown.blocking && !unknown.answer?.trim());
+	      if (analysis.state !== "review" || unansweredBlocker) {
+	        showToast(unansweredBlocker ? `Answer “${unansweredBlocker.question}” before generating recipes.` : "Evidence analysis is still running. Try again when it is ready for review.");
+	        return;
+	      }
+	      const generated = await api.generateRecipes(product.id, analysis.id, integrationID);
+	      setRecipes((items) => [...generated, ...items.filter((item) => !generated.some((candidate) => candidate.id === item.id))]);
+	      showToast(`${generated.length} grounded recipe${generated.length === 1 ? "" : "s"} generated for review.`);
+	    } catch (error) {
+	      showToast(error instanceof APIError ? error.message : "Recipes could not be generated from the current evidence.");
+	    } finally {
+	      setRecipeBusy(false);
+	    }
+	  }
+
 	  async function reworkRecipe(recipe: APIRecipe, instruction: string) {
 	    setRecipeBusy(true);
 	    try {
@@ -1520,7 +1697,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </header>
 
         <div className="content"><ViewStack>
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={aiProfiles.some((profile) => profile.workload === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("assistant"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
+          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView productID={product.id} integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} activeResourceTab={consoleRoute.integrationResourceTab ?? "documentation"} recipeBusy={recipeBusy} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onAddTool={() => setAddToolOpen(true)} onGenerateRecipes={generateRecipesFromEvidence} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={aiProfiles.some((profile) => profile.workload === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("assistant"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "resource-set" ? <ResourceSetDetailView resource={resourceSets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "tool" ? <ToolDetailView tool={tools.find((item) => item.id === consoleRoute.uid) ?? null} connections={mcpConnections} integrations={integrations} onPublish={publishTool} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
           {section === "distribution" && (
             <DistributionView
               enabled={publicMCPEnabled}
@@ -1541,7 +1718,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
             />
           )}
           {section === "widgets" && <WidgetsView widgets={widgets} integrations={integrations} onCreate={() => setWidgetCreateOpen(true)} onNavigate={navigateToPath} />}
-          {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} onBuild={() => setProductBuilderOpen(true)} onAddTool={() => setAddToolOpen(true)} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+          {section === "product" && <IntegrationsView productID={product.id} integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onAddTool={() => setAddToolOpen(true)} onGenerateRecipes={generateRecipesFromEvidence} recipeBusy={recipeBusy} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "recipes" && <RecipesView analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={createRecipe} onEdit={editRecipe} onRework={reworkRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
@@ -1614,7 +1791,31 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           </div>
           <label className="auth-field"><span>Anything else?</span><textarea value={productBuilderInputs} onChange={(event) => setProductBuilderInputs(event.target.value)} placeholder={"Paste specs, documentation, repositories, or MCP endpoints—one per line.\nhttps://api.example.com/voice/v3/openapi.yaml\nhttps://github.com/acme/voice-examples"} /><small>Optional. DokoSoko automatically classifies each input and never retrieves credentials embedded in a URL.</small></label>
           <div className="builder-magic-note"><Sparkles /><span><strong>Review exceptions, not configuration.</strong> Exact matches are joined automatically. Ambiguous version relationships stay unresolved and cannot silently fall back.</span></div>
+          {latestProductBuild?.state === "review" && <button type="button" className="panel-footer-link builder-review-link" onClick={() => { setProductBuilderOpen(false); setProductBuildReviewOpen(true); }}>Review the latest unpublished proposal <ChevronRight /></button>}
         </div>
+      </Dialog>
+
+      <Dialog
+        open={productBuildReviewOpen}
+        onClose={setProductBuildReviewOpen}
+        title="Review imported APIs"
+        description="Nothing is added to the catalogue until this exact proposal is reviewed and published."
+        actions={<><Button outline onClick={() => setProductBuildReviewOpen(false)}>Keep as draft</Button><Button color="indigo" disabled={productBuilderBusy || !latestProductBuild || latestProductBuild.state !== "review" || latestProductBuild.unresolved.some((finding) => finding.level === "error")} onClick={publishImportedAPIs}>{productBuilderBusy ? "Publishing…" : "Publish proposal"}</Button></>}
+      >
+        {latestProductBuild ? <div className="product-build-review">
+          <div className="builder-source-summary">
+            <span><BookOpen /><strong>{latestProductBuild.inputs.length}</strong><small>inputs scanned</small></span>
+            <span><TerminalSquare /><strong>{latestProductBuild.proposal.components.length}</strong><small>APIs proposed</small></span>
+            <span><TriangleAlert /><strong>{latestProductBuild.unresolved.length}</strong><small>exceptions</small></span>
+          </div>
+          <div className="product-build-components">
+            {latestProductBuild.proposal.components.map((component) => <section className="catalog-settings-section" key={component.id}>
+              <div className="catalog-settings-heading"><span><strong>{component.name}</strong><small>{component.releases.length} independently versioned release{component.releases.length === 1 ? "" : "s"}</small></span><Badge color="violet">API</Badge></div>
+              {component.releases.map((release) => <div className="build-release-row" key={release.id}><span><strong>{release.version}</strong><small>{release.bindings.map((binding) => binding.name).join(" · ") || "No bindings"}</small></span><Badge color={release.bindings.every((binding) => binding.verified) ? "green" : "amber"}>{release.bindings.filter((binding) => binding.verified).length}/{release.bindings.length} verified</Badge></div>)}
+            </section>)}
+          </div>
+          {latestProductBuild.unresolved.length > 0 && <section className="catalog-settings-section"><div className="catalog-settings-heading"><span><strong>Resolve before publishing</strong><small>Ambiguous relationships never silently fall back.</small></span></div>{latestProductBuild.unresolved.map((finding, index) => <div className={`publish-validation ${finding.level}`} key={`${finding.code}:${index}`}><span>{finding.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{finding.code}</strong><small>{finding.message}</small></span></div>)}</section>}
+        </div> : <div className="empty-row">No import proposal is ready for review.</div>}
       </Dialog>
 
       <Dialog
@@ -1691,12 +1892,31 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 
       <Dialog
         open={addSourceOpen}
-        onClose={setAddSourceOpen}
+        onClose={closeSourceDialog}
         title="Add knowledge source"
-        description="The source starts private and draft. A crawl produces immutable snapshots for review before publication."
-        actions={<><Button outline onClick={() => setAddSourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={sourceBusy || !sourceName.trim() || !sourceLocation.trim()} onClick={createSource}>{sourceBusy ? "Adding…" : "Add source"}</Button></>}
+        description="Add a URL-backed source or upload one text document. Every source starts private and draft for review before publication."
+        actions={<><Button outline disabled={sourceBusy} onClick={() => closeSourceDialog(false)}>Cancel</Button><Button color="indigo" disabled={sourceBusy || !sourceName.trim() || (sourceKind === "upload" ? !sourceFile || Boolean(sourceFileError) : !sourceLocation.trim())} onClick={createSource}>{sourceBusy ? "Adding…" : sourceKind === "upload" ? "Upload source" : "Add source"}</Button></>}
       >
-        <div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="Developer documentation" /></label><label className="auth-field"><span>Type</span><select value={sourceKind} onChange={(event) => setSourceKind(event.target.value)}><option value="website">Website</option><option value="openapi">OpenAPI</option><option value="git">Git repository</option></select></label><label className="auth-field"><span>Location</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder="https://docs.example.com" /></label><div className="private-default-note"><LockKeyhole />Private by default. Making it public is a separate guarded action.</div></div>
+        <div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="Developer documentation" /></label><label className="auth-field"><span>Type</span><select value={sourceKind} onChange={(event) => selectSourceKind(event.target.value as SourceKind)}><option value="website">Website</option><option value="openapi">OpenAPI</option><option value="git">Git repository</option><option value="upload">Upload a file</option></select></label>{sourceKind === "upload" ? <label className="auth-field"><span>File</span><input ref={sourceFileInput} type="file" accept=".md,.mdx,.txt,.html,.htm,.json,.yaml,.yml,text/plain,text/markdown,text/html,application/json,application/yaml,text/yaml" aria-invalid={Boolean(sourceFileError)} aria-describedby={`source-upload-guidance${sourceFileError ? " source-upload-error" : ""}`} onChange={(event) => selectSourceFile(event.target.files?.[0] ?? null)} /><small id="source-upload-guidance">UTF-8 .md, .mdx, .txt, .html, .htm, .json, .yaml, or .yml; up to 5 MB in this setup. Content is treated as untrusted text, and embedded scripts are never executed.</small>{sourceFileError && <small id="source-upload-error" className="source-upload-error" role="alert">{sourceFileError}</small>}</label> : <label className="auth-field"><span>Location</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder={sourceKind === "git" ? "https://github.com/vendor/docs" : sourceKind === "openapi" ? "https://api.example.com/openapi.yaml" : "https://docs.example.com"} /></label>}<div className="private-default-note"><LockKeyhole />Private and draft by default. Making a reviewed source public is a separate guarded action.</div></div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(sourceReview)}
+        onClose={(open) => { if (!open && !sourceReviewBusy) { setSourceReview(null); setSourceReviewSelection([]); setSourceReviewAcknowledged(false); } }}
+        title={`Review ${sourceReview?.source.name ?? "documentation"}`}
+        description="Approve the exact completed crawl generation and only the immutable pages that should be available to Integrations."
+        actions={<><Button outline disabled={sourceReviewBusy} onClick={() => setSourceReview(null)}>Cancel</Button><Button color="indigo" disabled={sourceReviewBusy || Boolean(sourceReview?.publication) || Boolean(sourceReview?.source.quarantined) || !sourceReviewAcknowledged || sourceReviewSelection.length === 0} onClick={confirmSourcePublication}>{sourceReviewBusy ? "Publishing…" : "Publish reviewed generation"}</Button></>}
+      >
+        {sourceReview && <div className="mcp-import-review">
+          <div className="import-summary"><Badge color={sourceReview.publication ? "green" : "amber"}>{sourceReview.publication ? `Published r${sourceReview.publication.revision}` : "Needs review"}</Badge><code>{sourceReview.crawl_job.id}</code><span>{sourceReview.documents.length} fetched · {sourceReview.crawl_job.changed_count} changed</span></div>
+          <div className="catalog-list">{sourceReview.documents.map((document) => {
+            const safe = (document.state === "validated" || document.state === "published") && document.injection_indicators.length === 0;
+            const selected = sourceReviewSelection.includes(document.id);
+            return <label className="catalog-tool" key={document.id}><input type="checkbox" disabled={!safe || Boolean(sourceReview.publication)} checked={selected} onChange={(event) => setSourceReviewSelection((items) => event.target.checked ? [...items, document.id] : items.filter((id) => id !== document.id))} /><span className="check-box">{selected && <Check />}</span><span><strong>{document.title}</strong><code>{document.canonical_url}</code><small>{document.changed ? "Changed in this generation" : "Unchanged snapshot reused"} · trust {document.trust_level}/100</small>{document.injection_indicators.length > 0 && <small>Classifier indicators: {document.injection_indicators.join(", ")}</small>}</span><Badge color={safe ? "zinc" : "red"}>{safe ? document.state : "quarantined"}</Badge></label>;
+          })}</div>
+          {!sourceReview.publication && <Confirmation checked={sourceReviewAcknowledged} onChange={setSourceReviewAcknowledged}>I reviewed generation {sourceReview.crawl_job.id}, its changed and unchanged pages, and the exact {sourceReviewSelection.length} selected document{sourceReviewSelection.length === 1 ? "" : "s"}.</Confirmation>}
+          <div className="private-default-note"><ShieldCheck />Publishing creates an immutable source-publication ID and content hash. Later crawls require a new review; failed or partial generations cannot replace this one.</div>
+        </div>}
       </Dialog>
 
       <Dialog
@@ -1874,6 +2094,104 @@ function EntityDetailView({ route, detail, onNavigate }: { route: Extract<Consol
         <dl className="entity-detail-grid">{detail.fields.map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl>
       </section>
     </> : <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Item unavailable</h1><p>No {route.entity.replaceAll("-", " ")} with UID <code>{route.uid}</code> is available in this deployment, or it is still loading.</p></div><ConsoleLink path={parentPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to the directory</ConsoleLink></section>}
+  </>;
+}
+
+function resourceSetIntegrations(resource: APIResourceSet, integrations: APIIntegration[]) {
+  return integrations.filter((integration) => resource.integration_ids?.includes(integration.id) || integration.resources?.some((item) => item.resource_set_id === resource.id));
+}
+
+function manifestString(entry: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (typeof entry[key] === "string" && entry[key]) return entry[key] as string;
+  }
+  return "";
+}
+
+function manifestEntryTitle(entry: Record<string, unknown>, index: number) {
+  return manifestString(entry, ["title", "name", "operationId", "operation_id", "path", "url", "location"]) || `Contract entry ${index + 1}`;
+}
+
+function manifestEntrySummary(entry: Record<string, unknown>) {
+  const method = manifestString(entry, ["method", "http_method"]).toUpperCase();
+  const location = manifestString(entry, ["path", "url", "location"]);
+  const description = manifestString(entry, ["description", "summary"]);
+  return [method, location, description].filter(Boolean).join(" · ") || `${Object.keys(entry).length} configured field${Object.keys(entry).length === 1 ? "" : "s"}`;
+}
+
+function ResourceSetDetailView({ resource, integrations, onNavigate }: { resource: APIResourceSet | null; integrations: APIIntegration[]; onNavigate: (path: string) => void }) {
+  if (!resource) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Resource set unavailable</h1><p>This resource set does not exist or is still loading.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
+  const owners = resourceSetIntegrations(resource, integrations);
+  const resourceTab: IntegrationResourceTab = resource.kind === "api" ? "contracts" : "documentation";
+  const backPath = owners.length === 1 ? integrationPath(owners[0].id, "resources", resourceTab) : sectionPath("product");
+  const backLabel = owners.length === 1 ? owners[0].display_name : "APIs";
+  const revision = resource.latest_revision;
+  const entries = revision?.manifest ?? [];
+
+  return <>
+    <div className="entity-breadcrumb"><ConsoleLink path={backPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to {backLabel}</ConsoleLink><Badge color={resource.kind === "api" ? "violet" : "blue"}>{resource.kind === "api" ? "API contract" : "Documentation"}</Badge></div>
+    <PageHeading eyebrow="Reusable resource set" title={resource.name} description={resource.description || "Reusable resource configuration shared explicitly between APIs."} action={<Badge color={resource.state === "active" ? "green" : "zinc"}>{resource.state}</Badge>} />
+    <dl className="compact-metrics resource-detail-metrics">
+      <div className="compact-metric"><dt>Latest revision</dt><dd><strong>r{revision?.revision ?? resource.revision}</strong><small>Immutable snapshot</small></dd></div>
+      <div className="compact-metric"><dt>Contract entries</dt><dd><strong>{entries.length}</strong><small>{resource.kind === "api" ? "API definitions" : "Documentation records"}</small></dd></div>
+      <div className="compact-metric"><dt>Used by APIs</dt><dd><strong>{owners.length}</strong><small>Explicit attachments</small></dd></div>
+      <div className="compact-metric"><dt>Updated</dt><dd><strong>{revision?.created_at ? new Date(revision.created_at).toLocaleDateString() : "—"}</strong><small>{revision?.created_at ? new Date(revision.created_at).toLocaleTimeString() : "No revision date"}</small></dd></div>
+    </dl>
+    <div className="entity-workspace-grid">
+      <section className="panel entity-contract-panel">
+        <PanelHeader title="Contract contents" description="What this reusable revision contributes when attached to an API." action={<Badge color="zinc">r{revision?.revision ?? resource.revision}</Badge>} />
+        <div className="entity-contract-list">{entries.map((entry, index) => <article key={`${manifestEntryTitle(entry, index)}:${index}`}><span className="resource-icon">{resource.kind === "api" ? <TerminalSquare /> : <BookOpen />}</span><span><strong>{manifestEntryTitle(entry, index)}</strong><small>{manifestEntrySummary(entry)}</small></span><Badge color={resource.kind === "api" ? "violet" : "blue"}>{manifestString(entry, ["kind", "type", "method"]) || resource.kind}</Badge></article>)}{entries.length === 0 && <div className="empty-row">This revision contains no contract entries.</div>}</div>
+        <details className="advanced-details inline-advanced"><summary>View revision JSON</summary><pre className="entity-contract-json">{JSON.stringify(entries, null, 2)}</pre></details>
+      </section>
+      <aside className="entity-workspace-rail">
+        <section className="panel entity-related-panel"><PanelHeader title="Used by APIs" description="Open the exact API workspace tab that attaches this set." />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "resources", resourceTab)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><Badge color={integration.lifecycle === "active" ? "green" : "zinc"}>{integration.lifecycle}</Badge><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">This set is not attached to an API.</div>}</section>
+        <section className="panel entity-detail-panel"><PanelHeader title="Revision identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Resource set ID</dt><dd>{resource.id}</dd></div><div><dt>Content hash</dt><dd>{revision?.content_hash || "—"}</dd></div><div><dt>Revision ID</dt><dd>{revision?.id || "—"}</dd></div><div><dt>Attachment policy</dt><dd>Explicit only</dd></div></dl></section>
+      </aside>
+    </div>
+  </>;
+}
+
+function ToolDetailView({ tool, connections, integrations, onPublish, onNavigate }: { tool: APITool | null; connections: APIMCPConnection[]; integrations: APIIntegration[]; onPublish: (tool: APITool) => void; onNavigate: (path: string) => void }) {
+  const [bindingOwners, setBindingOwners] = useState<{ toolID: string; integrationIDs: string[] }>({ toolID: "", integrationIDs: [] });
+  useEffect(() => {
+    if (!tool) return;
+    let cancelled = false;
+    Promise.all(integrations.map(async (integration) => ({ integration, bindings: await api.integrationToolBindings(integration.id).catch(() => []) }))).then((results) => {
+      if (cancelled) return;
+      setBindingOwners({ toolID: tool.id, integrationIDs: results.filter(({ bindings }) => bindings.some((binding) => binding.tool_id === tool.id && binding.tool_revision === tool.revision)).map(({ integration }) => integration.id) });
+    });
+    return () => { cancelled = true; };
+  }, [integrations, tool]);
+  if (!tool) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Tool unavailable</h1><p>This tool does not exist or is still loading.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>;
+  const requiredGrants = Array.isArray(tool.authorization_policy?.required_grants) ? tool.authorization_policy.required_grants.filter((value): value is string => typeof value === "string") : [];
+  const confirmationRequired = tool.authorization_policy?.confirmation_required === true;
+  const connection = tool.mcp_connection_id ? connections.find((item) => item.id === tool.mcp_connection_id) : null;
+  const owners = bindingOwners.toolID === tool.id ? integrations.filter((integration) => bindingOwners.integrationIDs.includes(integration.id)) : [];
+  const backPath = owners.length === 1 ? integrationPath(owners[0].id, "tools") : sectionPath("tools");
+  const backLabel = owners.length === 1 ? owners[0].display_name : "tools";
+
+  return <>
+    <div className="entity-breadcrumb"><ConsoleLink path={backPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to {backLabel}</ConsoleLink><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP backend"}</Badge></div>
+    <PageHeading eyebrow="Deployment tool" title={`${tool.namespace}.${tool.name}`} description={tool.description || "Agent-facing tool definition."} action={tool.state === "draft" && !tool.upstream_drifted ? <Button color="indigo" onClick={() => onPublish(tool)}>Publish tool</Button> : <Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge>} />
+    <div className="notice"><ShieldCheck /><span><strong>Exact Integration binding.</strong> Publishing the tool only makes its revision eligible; Private MCP exposes and executes it through an applicable published Integration that pins this exact revision and authorization point.</span></div>
+    <dl className="compact-metrics tool-detail-metrics">
+      <div className="compact-metric"><dt>Backend</dt><dd><strong>{tool.backend_kind === "mcp" ? "MCP" : "HTTP"}</strong><small>{tool.backend_kind === "mcp" ? tool.upstream_tool_name || "Upstream tool" : `${tool.http_method} request`}</small></dd></div>
+      <div className="compact-metric"><dt>Required grants</dt><dd><strong>{requiredGrants.length}</strong><small>{requiredGrants.join(", ") || "No explicit grants"}</small></dd></div>
+      <div className="compact-metric"><dt>Confirmation</dt><dd><strong>{confirmationRequired ? "Required" : "Not required"}</strong><small>Checked before execution</small></dd></div>
+      <div className="compact-metric"><dt>Timeout</dt><dd><strong>{tool.timeout_ms} ms</strong><small>Fixed execution limit</small></dd></div>
+    </dl>
+    <div className="entity-workspace-grid">
+      <div className="entity-schema-stack">
+        <section className="panel entity-schema-panel"><PanelHeader title="Input schema" description="Arguments are validated against this exact contract before authorization." /><pre className="entity-contract-json">{JSON.stringify(tool.input_schema, null, 2)}</pre></section>
+        <section className="panel entity-schema-panel"><PanelHeader title="Output schema" description="Successful backend output must match this response contract." /><pre className="entity-contract-json">{JSON.stringify(tool.output_schema, null, 2)}</pre></section>
+      </div>
+      <aside className="entity-workspace-rail">
+        <section className="panel entity-related-panel"><PanelHeader title="Used by APIs" description="Open the exact API tool workspace that binds this revision." />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "tools")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">No loaded API binds this exact published revision.</div>}</section>
+        <section className="panel entity-policy-panel"><PanelHeader title="Authorization policy" />{requiredGrants.length > 0 ? <div className="entity-grant-list">{requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div> : <p className="entity-panel-copy">No explicit grants are configured. The authenticated deployment boundary still applies.</p>}<div className="entity-policy-check"><span className={confirmationRequired ? "ready" : "neutral"}>{confirmationRequired ? <Check /> : <ShieldCheck />}</span><span><strong>{confirmationRequired ? "User confirmation required" : "No confirmation prompt"}</strong><small>{confirmationRequired ? "The client must send explicit confirmation metadata." : "The call may proceed after identity, schema, and grant checks."}</small></span></div></section>
+        {connection && <section className="panel entity-related-panel"><PanelHeader title="Upstream connection" /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section>}
+        <section className="panel entity-detail-panel"><PanelHeader title="Tool identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Tool ID</dt><dd>{tool.id}</dd></div><div><dt>Revision</dt><dd>{tool.revision}</dd></div><div><dt>Schema drift</dt><dd>{tool.upstream_drifted ? "Detected" : "None"}</dd></div><div><dt>State</dt><dd>{tool.state}</dd></div></dl></section>
+      </aside>
+    </div>
   </>;
 }
 
@@ -2079,7 +2397,7 @@ function SourcesView({ sources, onAdd, onCrawl, onPublish, onVisibilityChange, o
         <span><CrawlBadge state={source.crawlState} /><small className="cell-note">{source.lastCrawl}</small></span>
         <span><strong className="cell-value">{source.pages}</strong><small className="cell-note">pages</small></span>
         <span className="visibility-control"><Badge color={source.visibility === "public" ? "green" : "zinc"}>{source.visibility === "public" ? <Globe2 /> : <LockKeyhole />}{source.visibility}</Badge><Switch checked={source.visibility === "public"} onChange={() => onVisibilityChange(source.id)} label={`Make ${source.name} ${source.visibility === "public" ? "private" : "public"}`} /></span>
-        <span className="table-actions">{!source.published && source.crawlState === "review" && !source.quarantined && <Button outline onClick={() => onPublish(source)}>Publish</Button>}<button type="button" className="more" aria-label={`Crawl ${source.name}`} title="Queue crawl" onClick={() => onCrawl(source.id)}><RefreshCw /></button></span>
+        <span className="table-actions">{source.crawlState === "review" && <Button outline onClick={() => onPublish(source)}>{source.quarantined ? "Inspect" : "Review"}</Button>}<button type="button" className="more" aria-label={`Crawl ${source.name}`} title="Queue crawl" onClick={() => onCrawl(source.id)}><RefreshCw /></button></span>
       </DataTableRow>)}
     </DataTable>
   </>;
@@ -2089,6 +2407,8 @@ function CrawlBadge({ state }: { state: Source["crawlState"] }) {
   if (state === "queued" || state === "running") return <Badge color="blue"><RefreshCw />{state}</Badge>;
   if (state === "synced") return <Badge color="green"><CheckCircle2 />Synced</Badge>;
   if (state === "review") return <Badge color="amber"><Clock3 />Needs review</Badge>;
+  if (state === "draft") return <Badge color="zinc"><Clock3 />Not crawled</Badge>;
+  if (state === "cancelled") return <Badge color="zinc"><XCircle />Cancelled</Badge>;
   return <Badge color="red"><XCircle />Failed</Badge>;
 }
 
@@ -2127,68 +2447,900 @@ function IntegrationDirectoryView({ integrations, connections, supportRoutes, qu
   </>;
 }
 
-function IntegrationSwitcher({ integrations, integration, activeTab, onNavigate }: { integrations: APIIntegration[]; integration: APIIntegration; activeTab: IntegrationTab; onNavigate: (path: string) => void }) {
+function IntegrationSwitcher({ integrations, integration, activeTab, activeResourceTab, onNavigate }: { integrations: APIIntegration[]; integration: APIIntegration; activeTab: IntegrationTab; activeResourceTab?: IntegrationResourceTab; onNavigate: (path: string) => void }) {
   const optionLabel = (value: APIIntegration) => `${value.display_name} · ${value.version_key} · ${value.family_key}`;
   const [value, setValue] = useState(optionLabel(integration));
 
   function selectIntegration(nextValue: string) {
     setValue(nextValue);
     const selected = integrations.find((candidate) => candidate.id === nextValue || optionLabel(candidate) === nextValue);
-    if (selected && selected.id !== integration.id) onNavigate(integrationPath(selected.id, activeTab));
+    if (selected && selected.id !== integration.id) onNavigate(integrationPath(selected.id, activeTab, activeResourceTab));
   }
 
   if (integrations.length <= 1) return null;
   return <div className="integration-workspace-switcher"><label htmlFor="integration-switcher">Switch API</label><div className="integration-switcher-input"><Search /><input id="integration-switcher" list="integration-switcher-options" value={value} onChange={(event) => selectIntegration(event.target.value)} onBlur={() => { if (!integrations.some((candidate) => optionLabel(candidate) === value)) setValue(optionLabel(integration)); }} /><datalist id="integration-switcher-options">{[...integrations].sort((left, right) => left.family_key.localeCompare(right.family_key) || left.version_key.localeCompare(right.version_key, undefined, { numeric: true })).map((candidate) => <option key={candidate.id} value={optionLabel(candidate)} />)}</datalist></div></div>;
 }
 
-function IntegrationWorkspaceView({ integration, integrations, activeTab, loading, revisions, publishStatus, identity, resourceSets, connections, supportRoutes, tools, mcpConnections, busy, onEdit, onPublish, onAttach, onCreateResource, onAddTool, onEditResource, onDuplicateResource, onDetachResource, onManageAccess, onManageSupport, onInspectRevision, onNavigate }: { integration: APIIntegration | null; integrations: APIIntegration[]; activeTab: IntegrationTab; loading: boolean; revisions: APIIntegrationRevision[]; publishStatus: APIIntegrationPublishStatus | null; identity: APIIdentity | null; resourceSets: APIResourceSet[]; connections: APIAccessConnection[]; supportRoutes: APISupportRoute[]; tools: APITool[]; mcpConnections: APIMCPConnection[]; busy: boolean; onEdit: (integration: APIIntegration) => void; onPublish: (integration: APIIntegration) => void; onAttach: (integration: APIIntegration, kind?: APIResourceSet["kind"]) => void; onCreateResource: () => void; onAddTool: () => void; onEditResource: (resource: APIResourceSet) => void; onDuplicateResource: (resource: APIResourceSet) => void; onDetachResource: (integrationID: string, resourceSetID: string) => void; onManageAccess: (integration: APIIntegration) => void; onManageSupport: (integration: APIIntegration) => void; onInspectRevision: (revision: APIIntegrationRevision) => void; onNavigate: (path: string) => void }) {
+type IntegrationWorkspaceViewProps = {
+  productID: string;
+  integration: APIIntegration | null;
+  integrations: APIIntegration[];
+  activeTab: IntegrationTab;
+  activeResourceTab: IntegrationResourceTab;
+  loading: boolean;
+  revisions: APIIntegrationRevision[];
+  publishStatus: APIIntegrationPublishStatus | null;
+  identity: APIIdentity | null;
+  resourceSets: APIResourceSet[];
+  sources: Source[];
+  connections: APIAccessConnection[];
+  supportRoutes: APISupportRoute[];
+  tools: APITool[];
+  mcpConnections: APIMCPConnection[];
+  analyses: APIIntegrationAnalysis[];
+  recipes: APIRecipe[];
+  distribution: Distribution | null;
+  widgets: APIWidget[];
+  recipeBusy: boolean;
+  busy: boolean;
+  onEdit: (integration: APIIntegration) => void;
+  onPublish: (integration: APIIntegration) => void;
+  onAttach: (integration: APIIntegration, kind?: APIResourceSet["kind"]) => void;
+  onCreateResource: () => void;
+  onAddSource: () => void;
+  onCrawlSource: (sourceID: string) => void;
+  onPublishSource: (source: Source) => void;
+  onAddTool: () => void;
+  onGenerateRecipes: (integrationID?: string) => void;
+  onEditResource: (resource: APIResourceSet) => void;
+  onDuplicateResource: (resource: APIResourceSet) => void;
+  onDetachResource: (integrationID: string, resourceSetID: string) => void;
+  onManageAccess: (integration: APIIntegration) => void;
+  onManageSupport: (integration: APIIntegration) => void;
+  onInspectRevision: (revision: APIIntegrationRevision) => void;
+  onChanged: () => Promise<void>;
+  onMessage: (message: string) => void;
+  onNavigate: (path: string) => void;
+};
+
+function IntegrationWorkspaceView({ productID, integration, integrations, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, connections, supportRoutes, tools, mcpConnections, analyses, recipes, distribution, widgets, recipeBusy, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onAddTool, onGenerateRecipes, onEditResource, onDuplicateResource, onDetachResource, onManageAccess, onManageSupport, onInspectRevision, onChanged, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
   if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">API</p><h1>Loading API…</h1><p>Retrieving its configuration and published history.</p></div></section>;
   if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">API</p><h1>API unavailable</h1><p>This API is not available in the current deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 
   const integrationConnections = connections.filter((connection) => connection.integration_ids?.includes(integration.id) || integration.access_connection_ids?.includes(connection.id));
   const supportRoute = supportRoutes.find((route) => route.id === integration.support_route_id || route.integration_ids?.includes(integration.id)) ?? supportRoutes.find((route) => route.is_default);
   const attachedResources = integration.resources ?? [];
+  const documentationResources = attachedResources.filter((resource) => resource.kind === "documentation");
+  const contractResources = attachedResources.filter((resource) => resource.kind === "api");
   const sortedRevisions = [...revisions].sort((left, right) => right.revision - left.revision);
-  const setupSteps = [
-    { label: "Add resources", detail: "Attach documentation or an API contract.", ready: attachedResources.length > 0, tab: "resources" as IntegrationTab },
-    { label: "Connect access", detail: "Choose which service connections this API may use.", ready: integrationConnections.length > 0, tab: "access" as IntegrationTab },
-  ].filter((step) => !step.ready);
-  const setupValidationCodes = new Set(["resources_missing", "access_missing", "support_inherited"]);
+  const relevantWidgets = widgets.filter((widget) => widget.integration_ids.includes(integration.id));
+  const integrationAnalyses = analyses.filter((analysis) => analysisMatchesIntegration(analysis, integration.id));
+  const integrationRecipes = recipes.filter((recipe) => recipeMatchesIntegration(recipe, integration.id));
+  const publishValidationCodes = new Set(publishStatus?.validations.map((validation) => validation.code) ?? []);
+  const setupSteps: Array<{ label: string; detail: string; ready: boolean; tab: IntegrationTab; resourceTab?: IntegrationResourceTab }> = [
+    { label: "Documentation", detail: "Ingest, review, publish and attach trusted documentation.", ready: documentationResources.length > 0 && sources.some((source) => source.published && !source.quarantined), tab: "resources", resourceTab: "documentation" },
+    { label: "API contracts", detail: "Attach at least one immutable API contract revision.", ready: contractResources.length > 0, tab: "resources", resourceTab: "contracts" },
+    { label: "Authorization", detail: "Activate a declarative point backed by registered grants.", ready: Boolean(publishStatus && !publishValidationCodes.has("authorization_missing")), tab: "authorization" },
+    { label: "Tools", detail: "Bind at least one exact reviewed tool revision to this API.", ready: Boolean(publishStatus && !publishValidationCodes.has("tools_missing")), tab: "tools" },
+    { label: "Recipes", detail: "Publish at least one evidence-grounded developer recipe.", ready: integrationRecipes.some((recipe) => recipe.state === "published"), tab: "recipes" },
+    { label: "Delivery", detail: "Review MCP, widget and support delivery channels.", ready: Boolean(distribution?.private_mcp_endpoint && supportRoute), tab: "delivery" },
+    { label: "Acceptance", detail: "Run the vendor-neutral setup preflight before publication.", ready: Boolean(publishStatus?.ready), tab: "test" },
+  ];
+  const setupValidationCodes = new Set(["resources_missing", "authorization_missing", "tools_missing", "access_missing", "support_inherited"]);
   const actionableValidations = publishStatus?.validations.filter((validation) => !setupValidationCodes.has(validation.code)) ?? [];
   const hasChanges = Boolean(publishStatus?.has_changes);
   const canPublish = Boolean(publishStatus?.ready && hasChanges);
   const resourceLabel = (kind: APIResourceSet["kind"]) => kind === "api" ? "API contract" : "documentation";
+  const setupComplete = setupSteps.filter((step) => step.ready).length;
+
+  const renderResourceRows = (resources: typeof attachedResources) => <>
+    {resources.map((resource) => {
+      const source = resourceSets.find((set) => set.id === resource.resource_set_id);
+      return <div className="integration-resource-row" key={resource.resource_set_id}><span className="settings-icon">{resource.kind === "documentation" ? <BookOpen /> : <TerminalSquare />}</span><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>{resourceLabel(resource.kind)} · {resource.follow_latest ? "follows latest" : `pinned to revision ${resource.resolved_revision?.revision ?? "—"}`}</small></span><Badge color={resource.kind === "documentation" ? "blue" : "violet"}>{resourceLabel(resource.kind)}</Badge><span className="table-actions">{source && <Button outline onClick={() => onEditResource(source)}>New revision</Button>}{source && <Button outline onClick={() => onDuplicateResource(source)}>Duplicate</Button>}<button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => onDetachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span></div>;
+    })}
+    {resources.length === 0 && <div className="empty-row">Nothing is attached here yet.</div>}
+  </>;
 
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All APIs</ConsoleLink></div>
-    <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} onNavigate={onNavigate} />
+    <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} activeResourceTab={activeResourceTab} onNavigate={onNavigate} />
     <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} description={integration.description || undefined} action={<span className="heading-actions"><Button outline onClick={() => onEdit(integration)}>Edit</Button>{!publishStatus ? <span className="published-state checking"><RefreshCw />Checking…</span> : canPublish ? <Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish</Button> : hasChanges && !publishStatus.ready ? <Badge color="amber">Setup required</Badge> : <span className="published-state"><CheckCircle2 />Published</span>}</span>} />
     <PageTabs label={`${integration.display_name} sections`}>{INTEGRATION_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, tab.id)} onNavigate={onNavigate} className={`page-tab ${activeTab === tab.id ? "active" : ""}`} ariaCurrent={activeTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
 
     {activeTab === "overview" && <div className="integration-tab-content">
-      <div className="api-status-bar"><span><span className={`status-dot${publishStatus ? "" : " checking"}`} /><strong>{!publishStatus ? "Checking status" : publishStatus.ready ? hasChanges ? "Ready to publish" : "Published" : "Needs setup"}</strong><small>{!publishStatus ? "Loading the latest publication state…" : hasChanges ? `${publishStatus.changes.length} unpublished change${publishStatus.changes.length === 1 ? "" : "s"}` : `${attachedResources.length} resource set${attachedResources.length === 1 ? "" : "s"} attached`}</small></span><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge></div>
-      {(setupSteps.length > 0 || !supportRoute || actionableValidations.length > 0) && <section className="panel compact-setup-panel"><PanelHeader title="Finish setup" />{setupSteps.map((step) => <ConsoleLink key={step.label} path={integrationPath(integration.id, step.tab)} onNavigate={onNavigate} className="integration-health-check"><span className="health-icon"><AlertCircle /></span><span><strong>{step.label}</strong><small>{step.detail}</small></span><ChevronRight /></ConsoleLink>)}{!supportRoute && <button type="button" className="integration-health-check" onClick={() => onManageSupport(integration)}><span className="health-icon"><AlertCircle /></span><span><strong>Configure bug reports and feedback</strong><small>Choose secure delivery or encrypted local holding.</small></span><ChevronRight /></button>}{actionableValidations.map((validation) => <ConsoleLink key={validation.code} path={integrationPath(integration.id, validation.tab === "resources" || validation.tab === "access" ? validation.tab : "overview")} onNavigate={onNavigate} className={`publish-validation ${validation.level}`}><span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{validation.level === "error" ? "Resolve before publishing" : "Review before publishing"}</strong><small>{validation.message}</small></span><ChevronRight /></ConsoleLink>)}</section>}
+      <div className="api-status-bar"><span><span className={`status-dot${publishStatus ? "" : " checking"}`} /><strong>{!publishStatus ? "Checking status" : publishStatus.ready ? hasChanges ? "Ready to publish" : "Published" : "Needs setup"}</strong><small>{!publishStatus ? "Loading the latest publication state…" : `${setupComplete}/${setupSteps.length} onboarding gates complete${hasChanges ? ` · ${publishStatus.changes.length} unpublished change${publishStatus.changes.length === 1 ? "" : "s"}` : ""}`}</small></span><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge></div>
+      <section className="panel onboarding-checklist"><PanelHeader title="Standard setup" description="Complete each vendor-neutral gate, then publish one immutable API snapshot." action={<Badge color={setupComplete === setupSteps.length ? "green" : "violet"}>{setupComplete}/{setupSteps.length}</Badge>} />{setupSteps.map((step, index) => <ConsoleLink key={step.label} path={integrationPath(integration.id, step.tab, step.resourceTab)} onNavigate={onNavigate} className="integration-health-check"><span className={`health-icon ${step.ready ? "ready" : ""}`}>{step.ready ? <CheckCircle2 /> : <span className="step-number">{index + 1}</span>}</span><span><strong>{step.label}</strong><small>{step.detail}</small></span><Badge color={step.ready ? "green" : "zinc"}>{step.ready ? "Ready" : "Setup"}</Badge><ChevronRight /></ConsoleLink>)}{actionableValidations.map((validation) => <ConsoleLink key={validation.code} path={integrationPath(integration.id, validation.tab === "resources" ? "resources" : validation.tab === "access" || validation.tab === "authorization" ? "authorization" : "overview")} onNavigate={onNavigate} className={`publish-validation ${validation.level}`}><span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{validation.level === "error" ? "Resolve before publishing" : "Review before publishing"}</strong><small>{validation.message}</small></span><ChevronRight /></ConsoleLink>)}</section>
       <section className="panel"><PanelHeader title="Bug reports & feedback" action={<Button outline onClick={() => onManageSupport(integration)}>{supportRoute ? "Change" : "Configure"}</Button>} />{supportRoute ? <div className="support-route-summary"><span className="settings-icon"><Bug /></span><span><strong>{supportRoute.name}</strong><small>{supportRoute.is_default ? "Uses the deployment default" : "Configured for this API"} · {supportRoute.retention_days}-day encrypted retention</small></span><Badge color={supportRoute.state === "active" ? "green" : "zinc"}>{supportRoute.bug_reports_enabled || supportRoute.feedback_enabled ? "Available" : "Off"}</Badge></div> : <div className="empty-row">Not configured. Reports remain unavailable until you choose a policy.</div>}</section>
-      <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "resources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Documentation, API contracts, and tools.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("settings")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Customer access</strong><small>{identity?.state === "active" ? "Delegated identity active" : identity ? "Identity disabled" : "Identity setup optional"}</small></span><ChevronRight /></ConsoleLink></div>
+      <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "resources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Documentation, contracts, SDKs and packages.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={integrationPath(integration.id, "authorization")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Authorization</strong><small>{identity?.state === "active" ? "Delegated identity active" : identity ? "Identity disabled" : "Identity not configured"}</small></span><ChevronRight /></ConsoleLink></div>
       <details className="panel advanced-details"><summary>Advanced details</summary><dl className="entity-detail-grid"><div><dt>API ID</dt><dd>{integration.id}</dd></div><div><dt>Family</dt><dd>{integration.family_key}</dd></div><div><dt>Version</dt><dd>{integration.version_key}</dd></div><div><dt>Draft revision</dt><dd>{integration.revision}</dd></div><div><dt>Replacement</dt><dd>{integration.replacement_integration_id ?? "—"}</dd></div><div><dt>Sunset</dt><dd>{integration.sunset_at ? new Date(integration.sunset_at).toLocaleDateString() : "—"}</dd></div></dl></details>
     </div>}
 
     {activeTab === "resources" && <div className="integration-tab-content">
-      <section className="panel"><PanelHeader title="Resources" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create resource set</Button><Button disabled={resourceSets.every((set) => attachedResources.some((resource) => resource.resource_set_id === set.id))} onClick={() => onAttach(integration)}>Attach existing</Button></span>} />
-        {attachedResources.map((resource) => { const source = resourceSets.find((set) => set.id === resource.resource_set_id); return <div className="integration-resource-row" key={resource.resource_set_id}><span className="settings-icon">{resource.kind === "documentation" ? <BookOpen /> : <TerminalSquare />}</span><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>{resourceLabel(resource.kind)} · {resource.follow_latest ? "follows latest" : "pinned"}</small></span><Badge color={resource.kind === "documentation" ? "blue" : "violet"}>{resourceLabel(resource.kind)}</Badge><span className="table-actions">{source && <Button outline onClick={() => onEditResource(source)}>New revision</Button>}{source && <Button outline onClick={() => onDuplicateResource(source)}>Duplicate</Button>}<button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => onDetachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span></div>; })}
-        {attachedResources.length === 0 && <div className="empty-row">No resources are attached yet.</div>}
-      </section>
-      <section className="panel"><PanelHeader title="Agent tools" action={<Button outline onClick={onAddTool}><Plus data-slot="icon" />Add tool</Button>} />{tools.map((tool) => <div className="provider-row" key={tool.id}><span className="settings-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.backend_kind === "mcp" ? "MCP tool backend" : "HTTPS tool backend"}</small></span><Badge color={tool.state === "published" ? "green" : "amber"}>{tool.state}</Badge></div>)}{tools.length === 0 && <div className="empty-row">No tools are available.</div>}</section>
-      {mcpConnections.length > 0 && <details className="panel advanced-details"><summary>Tool backend connections</summary>{mcpConnections.map((connection) => <div className="lease-row" key={connection.id}><span><EntityLink entity="connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge></div>)}<ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className="entity-back-link">Manage tool backends</ConsoleLink></details>}
+      <PageTabs label="Resource types">{INTEGRATION_RESOURCE_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, "resources", tab.id)} onNavigate={onNavigate} className={`page-tab resource-subtab ${activeResourceTab === tab.id ? "active" : ""}`} ariaCurrent={activeResourceTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
+      {activeResourceTab === "documentation" && <>
+        <div className="notice"><BookOpen /><span><strong>Ingest → crawl → review → publish → attach.</strong> Retrieved pages remain untrusted and quarantined until explicitly published.</span></div>
+        <section className="panel"><PanelHeader title="Documentation ingestion" description="Deployment sources are reusable; attach a reviewed resource revision to this API." action={<span className="heading-actions"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="entity-back-link">All documentation</ConsoleLink><Button onClick={onAddSource}><Plus data-slot="icon" />Add source</Button></span>} />{sources.map((source) => <div className="provider-row documentation-source-row" key={source.id}><span className="settings-icon"><BookOpen /></span><span><EntityLink entity="source" uid={source.id} onNavigate={onNavigate} className="entity-link"><strong>{source.name}</strong></EntityLink><small>{source.kind} · {source.location}</small></span><span className="tool-badges"><Badge color={source.quarantined || source.crawlState === "failed" ? "red" : source.crawlState === "synced" ? "green" : "amber"}>{source.quarantined ? "quarantined" : source.crawlState === "synced" ? `published r${source.latestPublication?.revision ?? 1}` : source.crawlState}</Badge><Badge color={source.visibility === "public" ? "blue" : "zinc"}>{source.visibility}</Badge></span><span className="table-actions">{source.crawlState !== "queued" && source.crawlState !== "running" && <Button outline onClick={() => onCrawlSource(source.id)}>Crawl</Button>}{source.crawlState === "review" && <Button onClick={() => onPublishSource(source)}>{source.quarantined ? "Inspect" : "Review"}</Button>}</span></div>)}{sources.length === 0 && <div className="empty-row">No documentation source has been ingested.</div>}</section>
+        <section className="panel"><PanelHeader title="Attached documentation" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create set</Button><Button onClick={() => onAttach(integration, "documentation")}>Attach reviewed set</Button></span>} />{renderResourceRows(documentationResources)}</section>
+      </>}
+      {activeResourceTab === "contracts" && <>
+        <div className="notice"><TerminalSquare /><span><strong>Immutable API contracts.</strong> Review each manifest, then pin or follow a reusable contract revision.</span></div>
+        <section className="panel"><PanelHeader title="Attached API contracts" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create contract set</Button><Button onClick={() => onAttach(integration, "api")}>Attach existing</Button></span>} />{renderResourceRows(contractResources)}</section>
+      </>}
+      {activeResourceTab === "packages" && <IntegrationPackagesWorkspace integration={integration} onMessage={onMessage} />}
     </div>}
 
-    {activeTab === "access" && <div className="integration-tab-content"><section className="panel"><PanelHeader title="Service connections" action={<span className="heading-actions"><ConsoleLink path={sectionPath("projects")} onNavigate={onNavigate} className="entity-back-link">Manage shared connections</ConsoleLink><Button onClick={() => onManageAccess(integration)}>Choose connections</Button></span>} />{integrationConnections.map((connection) => <div className="provider-row integration-connection-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.definition?.name ?? "Service connection"}{connection.region ? ` · ${connection.region}` : ""}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge></div>)}{integrationConnections.length === 0 && <div className="empty-row">No service connection is attached to this API.</div>}</section></div>}
+    {activeTab === "authorization" && <IntegrationAuthorizationWorkspace integration={integration} identity={identity} connections={integrationConnections} tools={tools} onManageAccess={() => onManageAccess(integration)} onMessage={onMessage} onNavigate={onNavigate} />}
+
+    {activeTab === "tools" && <IntegrationToolsWorkspace productID={productID} integration={integration} tools={tools} mcpConnections={mcpConnections} onAddTool={onAddTool} onChanged={onChanged} onMessage={onMessage} onNavigate={onNavigate} />}
+
+    {activeTab === "recipes" && <IntegrationRecipesWorkspace analyses={integrationAnalyses} recipes={integrationRecipes} busy={recipeBusy} onGenerate={() => onGenerateRecipes(integration.id)} onNavigate={onNavigate} />}
+
+    {activeTab === "delivery" && <IntegrationDeliveryWorkspace integration={integration} identity={identity} distribution={distribution} supportRoute={supportRoute} widgets={relevantWidgets} onManageSupport={() => onManageSupport(integration)} onNavigate={onNavigate} />}
+
+    {activeTab === "test" && <IntegrationTestWorkspace key={`${integration.id}:${publishStatus?.current_manifest_hash ?? ""}`} integration={integration} distribution={distribution} onNavigate={onNavigate} />}
 
     {activeTab === "history" && <div className="integration-tab-content"><div className="notice"><GitBranch /><span><strong>Published history is immutable.</strong> Each entry preserves the exact resources, access, and reporting policy used by agents.</span></div><section className="panel"><PanelHeader title="Published history" />{sortedRevisions.map((revision) => <button type="button" className="integration-revision-row" key={revision.id} onClick={() => onInspectRevision(revision)}><span className="revision-number">r{revision.revision}</span><span><strong>{revision.state}</strong><small>{revision.published_at || revision.created_at ? new Date(revision.published_at ?? revision.created_at).toLocaleString() : "Date unavailable"}</small></span><ChevronRight /></button>)}{sortedRevisions.length === 0 && <div className="empty-row">Nothing has been published yet.</div>}</section></div>}
   </>;
 }
 
-function IntegrationsView({ integrations, resourceSets, supportRoutes, connections, tools, mcpConnections, identity, selectedIntegrationID, activeTab = "overview", onBuild, onAddTool, onChanged, onMessage, onNavigate }: { integrations: APIIntegration[]; resourceSets: APIResourceSet[]; supportRoutes: APISupportRoute[]; connections: APIAccessConnection[]; tools: APITool[]; mcpConnections: APIMCPConnection[]; identity: APIIdentity | null; selectedIntegrationID?: string; activeTab?: IntegrationTab; onBuild: () => void; onAddTool: () => void; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function unavailableConsoleCapability(error: unknown) {
+  return error instanceof APIError && [404, 405, 501].includes(error.status);
+}
+
+const packageEcosystemPattern = /^[a-z][a-z0-9._-]{0,63}$/;
+
+function packageSunsetPassed(value?: string) {
+  if (!value) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function packageArtifactCanPublish(artifact: APIPackageArtifact) {
+  return (artifact.lifecycle === "draft" || artifact.lifecycle === "active") && !packageSunsetPassed(artifact.sunset_at);
+}
+
+function packageArtifactCanBind(artifact: APIPackageArtifact) {
+  return artifact.lifecycle === "active" && !packageSunsetPassed(artifact.sunset_at);
+}
+
+function packageArtifactCanPublishForIntegration(artifact: APIPackageArtifact, integration: APIIntegration) {
+  return packageArtifactCanPublish(artifact) && (integration.visibility !== "public" || artifact.visibility === "public");
+}
+
+function packageLifecycleDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function IntegrationPackagesWorkspace({ integration, onMessage }: { integration: APIIntegration; onMessage: (message: string) => void }) {
+  const [bindings, setBindings] = useState<APIIntegrationPackageBinding[]>([]);
+  const [catalog, setCatalog] = useState<APIPackageArtifact[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [bindingsUnavailable, setBindingsUnavailable] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingArtifact, setEditingArtifact] = useState<APIPackageArtifact | null>(null);
+  const [deprecateOpen, setDeprecateOpen] = useState(false);
+  const [deprecatingArtifact, setDeprecatingArtifact] = useState<APIPackageArtifact | null>(null);
+  const [deprecationMessage, setDeprecationMessage] = useState("");
+  const [replacementArtifactID, setReplacementArtifactID] = useState("");
+  const [sunsetAt, setSunsetAt] = useState("");
+  const [retireOpen, setRetireOpen] = useState(false);
+  const [retiringArtifact, setRetiringArtifact] = useState<APIPackageArtifact | null>(null);
+  const [retirementMessage, setRetirementMessage] = useState("");
+  const [retirementReplacementID, setRetirementReplacementID] = useState("");
+  const [publishReleaseOpen, setPublishReleaseOpen] = useState(false);
+  const [publishingArtifact, setPublishingArtifact] = useState<APIPackageArtifact | null>(null);
+  const [releasePublicAcknowledged, setReleasePublicAcknowledged] = useState(false);
+  const [bindOpen, setBindOpen] = useState(false);
+  const [selectedReleaseID, setSelectedReleaseID] = useState("");
+  const [ecosystem, setEcosystem] = useState("npm");
+  const [packageName, setPackageName] = useState("");
+  const [packageDescription, setPackageDescription] = useState("");
+  const [packageCoordinate, setPackageCoordinate] = useState("");
+  const [artifactPURL, setArtifactPURL] = useState("");
+  const [releasePURL, setReleasePURL] = useState("");
+  const [registryURL, setRegistryURL] = useState("");
+  const [sourceURL, setSourceURL] = useState("");
+  const [packageLanguage, setPackageLanguage] = useState("");
+  const [packagePlatform, setPackagePlatform] = useState("");
+  const [packageVisibility, setPackageVisibility] = useState<APIVisibility>("private");
+  const [packagePublicAcknowledged, setPackagePublicAcknowledged] = useState(false);
+  const [packageVersion, setPackageVersion] = useState("");
+  const [installCommand, setInstallCommand] = useState("");
+  const [integrityDigest, setIntegrityDigest] = useState("");
+  const [sbomURL, setSBOMURL] = useState("");
+  const [provenanceURL, setProvenanceURL] = useState("");
+  const ecosystemOptionsID = `package-ecosystems-${integration.id}`;
+
+  const loadPackages = useCallback(async () => {
+    setLoading(true);
+    const [bindingResult, catalogResult] = await Promise.allSettled([api.integrationPackages(integration.id), api.packageArtifacts()]);
+    if (bindingResult.status === "fulfilled") {
+      setBindings(bindingResult.value);
+      setBindingsUnavailable(false);
+    } else {
+      setBindings([]);
+      setBindingsUnavailable(unavailableConsoleCapability(bindingResult.reason));
+    }
+    if (catalogResult.status === "fulfilled") {
+      const enriched = await Promise.all(catalogResult.value.map(async (artifact) => {
+        try {
+          const releases = await api.packageReleases(artifact.id);
+          return { ...artifact, releases };
+        } catch {
+          return artifact;
+        }
+      }));
+      setCatalog(enriched);
+    } else setCatalog([]);
+    setLoading(false);
+  }, [integration.id]);
+
+  useEffect(() => {
+    const task = window.setTimeout(() => { void loadPackages(); }, 0);
+    return () => window.clearTimeout(task);
+  }, [loadPackages]);
+
+  const publishedReleases = catalog.flatMap((artifact) => {
+    if (!packageArtifactCanBind(artifact)) return [];
+    return (artifact.releases ?? (artifact.latest_release ? [artifact.latest_release] : []))
+      .filter((release) => integration.visibility !== "public" || release.visibility === "public")
+      .map((release) => ({ artifact, release }));
+  });
+  const replacementCandidates = catalog.filter((artifact) => packageArtifactCanBind(artifact) && (artifact.latest_release || (artifact.releases?.length ?? 0) > 0));
+  const ecosystemValid = packageEcosystemPattern.test(ecosystem.trim());
+
+  function resetPackageMetadata() {
+    setEcosystem("npm"); setPackageName(""); setPackageDescription(""); setPackageCoordinate(""); setArtifactPURL(""); setRegistryURL(""); setSourceURL(""); setPackageLanguage(""); setPackagePlatform(""); setPackageVisibility("private"); setPackagePublicAcknowledged(false);
+  }
+
+  function resetReleaseMetadata() {
+    setPackageVersion(""); setReleasePURL(""); setInstallCommand(""); setIntegrityDigest(""); setSBOMURL(""); setProvenanceURL(""); setReleasePublicAcknowledged(false);
+  }
+
+  function packageArtifactInput() {
+    return { ecosystem: ecosystem.trim().toLowerCase(), name: packageName.trim(), description: packageDescription.trim(), coordinate: packageCoordinate.trim(), purl: artifactPURL.trim(), registry_url: registryURL.trim(), source_url: sourceURL.trim() || undefined, language: packageLanguage.trim() || undefined, platform: packagePlatform.trim() || undefined, visibility: packageVisibility, acknowledge_public: packagePublicAcknowledged };
+  }
+
+  function openCreatePackage() {
+    resetPackageMetadata();
+    setPackageVisibility(integration.visibility);
+    resetReleaseMetadata();
+    setCreateOpen(true);
+  }
+
+  function openEditPackage(artifact: APIPackageArtifact) {
+    setEditingArtifact(artifact);
+    setEcosystem(artifact.ecosystem); setPackageName(artifact.name); setPackageDescription(artifact.description); setPackageCoordinate(artifact.coordinate); setArtifactPURL(artifact.purl); setRegistryURL(artifact.registry_url); setSourceURL(artifact.source_url ?? ""); setPackageLanguage(artifact.language ?? ""); setPackagePlatform(artifact.platform ?? ""); setPackageVisibility(artifact.visibility); setPackagePublicAcknowledged(false);
+    setEditOpen(true);
+  }
+
+  function openPublishRelease(artifact: APIPackageArtifact) {
+    resetReleaseMetadata();
+    setPublishingArtifact(artifact);
+    setPublishReleaseOpen(true);
+  }
+
+  function openDeprecatePackage(artifact: APIPackageArtifact) {
+    setDeprecatingArtifact(artifact); setDeprecationMessage(""); setReplacementArtifactID(""); setSunsetAt(""); setDeprecateOpen(true);
+  }
+
+  function openRetirePackage(artifact: APIPackageArtifact) {
+    setRetiringArtifact(artifact); setRetirementMessage(artifact.deprecation_message ?? ""); setRetirementReplacementID(artifact.replacement_package_artifact_id ?? ""); setRetireOpen(true);
+  }
+
+  async function bindSelectedRelease() {
+    if (!selectedReleaseID) return;
+    if (!publishedReleases.some(({ release }) => release.id === selectedReleaseID)) {
+      onMessage("That release is no longer eligible to bind to this Integration.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.bindIntegrationPackage(integration.id, selectedReleaseID);
+      await loadPackages();
+      setBindOpen(false);
+      setSelectedReleaseID("");
+      onMessage("Exact package release bound to this API.");
+    } catch (error) {
+      onMessage(unavailableConsoleCapability(error) ? "Package bindings are not available in this deployment yet." : error instanceof APIError ? error.message : "Package release could not be bound.");
+    } finally { setBusy(false); }
+  }
+
+  function packageFailureMessage(error: unknown, fallback: string) {
+    if (unavailableConsoleCapability(error)) return "The SDK and package catalogue is not available in this deployment yet.";
+    return error instanceof APIError ? error.message : fallback;
+  }
+
+  async function recoverPackageWorkflow(knownArtifact: APIPackageArtifact | null, knownRelease: APIPackageRelease | null, failure: string) {
+    let artifact = knownArtifact;
+    let release = knownRelease;
+    try {
+      const artifacts = await api.packageArtifacts();
+      artifact = (knownArtifact ? artifacts.find((candidate) => candidate.id === knownArtifact.id) : undefined)
+        ?? artifacts.find((candidate) => candidate.ecosystem === ecosystem.trim().toLowerCase() && candidate.coordinate === packageCoordinate.trim())
+        ?? artifact;
+      if (artifact) {
+        const releases = await api.packageReleases(artifact.id);
+        artifact = { ...artifact, releases };
+        release = release ?? releases.find((candidate) => candidate.version === packageVersion.trim() && candidate.purl === releasePURL.trim()) ?? null;
+      }
+    } catch {
+      // A best-effort refresh must not hide the original create, publish, or bind error.
+    }
+    await loadPackages();
+    if (release && integration.visibility === "public" && release.visibility !== "public") {
+      setCreateOpen(false);
+      setPublishReleaseOpen(false);
+      setPublishingArtifact(null);
+      setSelectedReleaseID("");
+      onMessage(`${failure} The private release was saved, but it cannot be bound to a public Integration; publish a public replacement artifact instead.`);
+      return;
+    }
+    if (release) {
+      setCreateOpen(false);
+      setPublishReleaseOpen(false);
+      setPublishingArtifact(null);
+      setSelectedReleaseID(release.id);
+      setBindOpen(true);
+      onMessage(`${failure} The exact release was saved; finish its binding in Bind existing.`);
+      return;
+    }
+    if (artifact) {
+      setCreateOpen(false);
+      if (integration.visibility === "public" && artifact.visibility !== "public") {
+        setPublishReleaseOpen(false);
+        setPublishingArtifact(null);
+        onMessage(`${failure} The private artifact draft was saved, but it must be made public before it can publish and bind to this public Integration.`);
+        return;
+      }
+      setPublishingArtifact(artifact);
+      setReleasePublicAcknowledged(artifact.visibility === "public" && packagePublicAcknowledged);
+      setPublishReleaseOpen(true);
+      onMessage(`${failure} The reusable artifact draft was saved; review and retry its release.`);
+      return;
+    }
+    onMessage(`${failure} Refreshing the catalogue did not find a saved artifact; correct the form or retry.`);
+  }
+
+  async function createPublishAndBindPackage() {
+    if (integration.visibility === "public" && packageVisibility !== "public") {
+      onMessage("A public Integration can only bind a public package release.");
+      return;
+    }
+    let artifact: APIPackageArtifact | null = null;
+    let release: APIPackageRelease | null = null;
+    setBusy(true);
+    try {
+      artifact = await api.createPackageArtifact(packageArtifactInput());
+      const published = await api.publishPackageRelease(artifact.id, { version: packageVersion.trim(), purl: releasePURL.trim(), install_command: installCommand.trim(), digest: integrityDigest.trim(), sbom_url: sbomURL.trim() || undefined, provenance_url: provenanceURL.trim() || undefined, artifact_revision: artifact.revision, acknowledge_public: packageVisibility === "public" && packagePublicAcknowledged });
+      release = published.release;
+      await api.bindIntegrationPackage(integration.id, release.id);
+      await loadPackages();
+      setCreateOpen(false);
+      resetPackageMetadata(); resetReleaseMetadata();
+      onMessage(`${artifact.name}@${release.version} published and bound to ${integration.display_name}.`);
+    } catch (error) {
+      await recoverPackageWorkflow(artifact, release, packageFailureMessage(error, "Package could not be created, published, and bound."));
+    } finally { setBusy(false); }
+  }
+
+  async function publishAndBindExistingArtifact() {
+    if (!publishingArtifact) return;
+    if (!packageArtifactCanPublishForIntegration(publishingArtifact, integration)) {
+      onMessage(integration.visibility === "public" && publishingArtifact.visibility !== "public" ? "A private package artifact cannot publish and bind to a public Integration." : "This package artifact cannot publish another release.");
+      return;
+    }
+    let release: APIPackageRelease | null = null;
+    setBusy(true);
+    try {
+      const published = await api.publishPackageRelease(publishingArtifact.id, { version: packageVersion.trim(), purl: releasePURL.trim(), install_command: installCommand.trim(), digest: integrityDigest.trim(), sbom_url: sbomURL.trim() || undefined, provenance_url: provenanceURL.trim() || undefined, artifact_revision: publishingArtifact.revision, acknowledge_public: publishingArtifact.visibility === "public" && releasePublicAcknowledged });
+      release = published.release;
+      await api.bindIntegrationPackage(integration.id, release.id);
+      await loadPackages();
+      setPublishReleaseOpen(false); setPublishingArtifact(null); resetReleaseMetadata();
+      onMessage(`${published.artifact.name}@${release.version} published and bound to ${integration.display_name}.`);
+    } catch (error) {
+      await recoverPackageWorkflow(publishingArtifact, release, packageFailureMessage(error, "Package release could not be published and bound."));
+    } finally { setBusy(false); }
+  }
+
+  async function savePackageEdits() {
+    if (!editingArtifact) return;
+    setBusy(true);
+    try {
+      const updated = await api.updatePackageArtifact(editingArtifact.id, { ...packageArtifactInput(), revision: editingArtifact.revision });
+      await loadPackages(); setEditOpen(false); setEditingArtifact(null); resetPackageMetadata();
+      onMessage(`${updated.name} catalogue metadata updated.`);
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Package metadata could not be updated."); } finally { setBusy(false); }
+  }
+
+  async function deprecatePackage() {
+    if (!deprecatingArtifact) return;
+    setBusy(true);
+    try {
+      const updated = await api.deprecatePackageArtifact(deprecatingArtifact.id, { replacement_package_artifact_id: replacementArtifactID || undefined, message: deprecationMessage.trim(), sunset_at: sunsetAt ? new Date(sunsetAt).toISOString() : undefined, revision: deprecatingArtifact.revision });
+      await loadPackages(); setDeprecateOpen(false); setDeprecatingArtifact(null);
+      onMessage(`${updated.name} marked deprecated.`);
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Package could not be deprecated."); } finally { setBusy(false); }
+  }
+
+  async function retirePackage() {
+    if (!retiringArtifact) return;
+    setBusy(true);
+    try {
+      const updated = await api.retirePackageArtifact(retiringArtifact.id, { replacement_package_artifact_id: retirementReplacementID || undefined, message: retirementMessage.trim(), revision: retiringArtifact.revision });
+      await loadPackages(); setRetireOpen(false); setRetiringArtifact(null);
+      onMessage(`${updated.name} retired. Existing immutable snapshots retain their exact release.`);
+    } catch (error) {
+      onMessage(unavailableConsoleCapability(error) ? "Package retirement is not available in this deployment yet." : error instanceof APIError ? error.message : "Package could not be retired.");
+    } finally { setBusy(false); }
+  }
+
+  async function unbind(binding: APIIntegrationPackageBinding) {
+    setBusy(true);
+    try {
+      await api.unbindIntegrationPackage(integration.id, binding.package_artifact_id);
+      setBindings((items) => items.filter((item) => item.package_artifact_id !== binding.package_artifact_id));
+      onMessage("Package release removed from this API draft.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Package release could not be removed."); } finally { setBusy(false); }
+  }
+
+  return <>
+    <div className="notice"><Database /><span><strong>Developer artifact catalogue, not a package proxy or verifier.</strong> Registries deliver package bytes; DokoSoko records digest-identified metadata and binds exact releases to compatible API snapshots.</span></div>
+    {bindingsUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Package binding is not enabled on this deployment.</strong><small>The workspace remains usable and will activate automatically when the package endpoints are installed.</small></span></div>}
+    <section className="panel"><PanelHeader title="Bound SDKs & packages" description="Every binding resolves to one exact published release." action={<span className="heading-actions"><Button outline disabled={loading || publishedReleases.length === 0 || bindingsUnavailable} onClick={() => setBindOpen(true)}>Bind existing</Button><Button disabled={bindingsUnavailable} onClick={openCreatePackage}><Plus data-slot="icon" />Add package</Button></span>} />
+      {loading ? <div className="empty-row">Loading package catalogue…</div> : bindings.map((binding) => {
+        const artifact = binding.artifact ?? catalog.find((candidate) => candidate.id === binding.package_artifact_id);
+        const release = binding.release ?? artifact?.releases?.find((candidate) => candidate.id === binding.package_release_id) ?? artifact?.latest_release;
+        const replacement = catalog.find((candidate) => candidate.id === artifact?.replacement_package_artifact_id);
+        return <div className="provider-row package-binding-row" key={binding.id ?? `${binding.package_artifact_id}:${binding.package_release_id}`}><span className="settings-icon"><Database /></span><span><strong>{artifact?.name ?? binding.package_artifact_id}</strong><small>{artifact?.ecosystem ?? "package"} · {release?.coordinate ?? artifact?.coordinate ?? "—"}@{release?.version ?? binding.package_release_id} · compatible with {integration.version_key}</small>{artifact?.deprecation_message && <small>Lifecycle message: {artifact.deprecation_message}</small>}{artifact?.replacement_package_artifact_id && <small>Replacement: {replacement?.name ?? artifact.replacement_package_artifact_id}</small>}{artifact?.sunset_at && <small>Sunset: {packageLifecycleDate(artifact.sunset_at)}{packageSunsetPassed(artifact.sunset_at) ? " · passed" : ""}</small>}</span><span className="tool-badges"><Badge color="green">exact release</Badge>{artifact && artifact.lifecycle !== "active" && <Badge color={artifact.lifecycle === "deprecated" ? "amber" : "zinc"}>{artifact.lifecycle}</Badge>}</span><span className="table-actions">{release?.digest && <code title={release.digest}>{release.digest.slice(0, 18)}…</code>}<button type="button" className="more" disabled={busy} aria-label={`Unbind ${artifact?.name ?? "package"}`} title="Unbind package" onClick={() => unbind(binding)}><XCircle /></button></span></div>;
+      })}
+      {!loading && bindings.length === 0 && <div className="empty-row">No SDK or package release is bound to this API.</div>}
+    </section>
+    <section className="panel"><PanelHeader title="Package catalogue" description="Draft artifact metadata can be edited. Publishing the first release freezes all artifact metadata; later corrections require a replacement artifact. Exact releases are always immutable." />
+      {catalog.map((artifact) => {
+        const replacement = catalog.find((candidate) => candidate.id === artifact.replacement_package_artifact_id);
+        const releases = artifact.releases ?? (artifact.latest_release ? [artifact.latest_release] : []);
+        return <div className="provider-row package-binding-row" key={artifact.id}><span className="settings-icon"><Database /></span><span><strong>{artifact.name}</strong><small>{artifact.ecosystem} · {artifact.coordinate} · {releases.length} published release{releases.length === 1 ? "" : "s"}</small><small>Reusable PURL: {artifact.purl}</small>{artifact.deprecation_message && <small>Lifecycle message: {artifact.deprecation_message}</small>}{artifact.replacement_package_artifact_id && <small>Replacement: {replacement ? `${replacement.name} · ${replacement.coordinate}` : artifact.replacement_package_artifact_id}</small>}{artifact.sunset_at && <small>Sunset: {packageLifecycleDate(artifact.sunset_at)}{packageSunsetPassed(artifact.sunset_at) ? " · passed" : ""}</small>}</span><span className="tool-badges"><Badge color={artifact.lifecycle === "active" ? "green" : artifact.lifecycle === "deprecated" ? "amber" : "zinc"}>{artifact.lifecycle}</Badge><Badge color={artifact.visibility === "public" ? "blue" : "zinc"}>{artifact.visibility}</Badge></span><span className="table-actions">{artifact.lifecycle === "draft" && <Button outline disabled={busy} onClick={() => openEditPackage(artifact)}>Edit draft</Button>}{packageArtifactCanPublishForIntegration(artifact, integration) && <Button outline disabled={busy} onClick={() => openPublishRelease(artifact)}>Publish release</Button>}{artifact.lifecycle === "active" && <Button outline disabled={busy} onClick={() => openDeprecatePackage(artifact)}>Deprecate</Button>}{artifact.lifecycle === "deprecated" && <Button outline disabled={busy} onClick={() => openRetirePackage(artifact)}>Retire</Button>}</span></div>;
+      })}
+      {!loading && catalog.length === 0 && <div className="empty-row">No reusable package artifacts have been created.</div>}
+    </section>
+    <Dialog open={bindOpen} onClose={setBindOpen} title="Bind a published package" description="Choose an exact release from an active, non-sunset artifact. Deprecated, retired, and sunset entries are excluded." actions={<><Button outline onClick={() => setBindOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !selectedReleaseID} onClick={bindSelectedRelease}>{busy ? "Binding…" : "Bind release"}</Button></>}><label className="auth-field"><span>Package release</span><select value={selectedReleaseID} onChange={(event) => setSelectedReleaseID(event.target.value)}><option value="">Select an exact release</option>{publishedReleases.map(({ artifact, release }) => <option key={release.id} value={release.id}>{artifact.ecosystem} · {artifact.name}@{release.version}</option>)}</select></label></Dialog>
+    <Dialog open={createOpen} onClose={setCreateOpen} title="Add SDK or package" description="Create a reusable artifact, publish one exact release, then bind it to this API. A saved draft remains recoverable if a later step fails." actions={<><Button outline onClick={() => setCreateOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !ecosystemValid || !packageName.trim() || !packageCoordinate.trim() || !artifactPURL.trim() || !registryURL.trim() || !packageVersion.trim() || !releasePURL.trim() || !installCommand.trim() || !integrityDigest.trim() || (packageVisibility === "public" && !packagePublicAcknowledged) || (integration.visibility === "public" && packageVisibility !== "public")} onClick={createPublishAndBindPackage}>{busy ? "Publishing…" : "Publish & bind"}</Button></>}>
+      <div className="auth-form compact-form">
+        <div className="two-fields"><label className="auth-field"><span>Ecosystem identifier</span><input list={ecosystemOptionsID} pattern="[a-z][a-z0-9._-]{0,63}" value={ecosystem} onChange={(event) => setEcosystem(event.target.value.toLowerCase())} placeholder="npm or vendor.ecosystem" /><small>Choose a suggestion or enter a lowercase vendor ecosystem identifier.</small></label><label className="auth-field"><span>Display name</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Vendor JavaScript SDK" /></label></div>
+        <label className="auth-field"><span>Description</span><textarea value={packageDescription} onChange={(event) => setPackageDescription(event.target.value)} placeholder="What this developer artifact provides." /></label>
+        <div className="two-fields"><label className="auth-field"><span>Registry coordinate</span><input value={packageCoordinate} onChange={(event) => setPackageCoordinate(event.target.value)} placeholder="@vendor/sdk" /></label><label className="auth-field"><span>Reusable artifact PURL</span><input value={artifactPURL} onChange={(event) => setArtifactPURL(event.target.value)} placeholder="pkg:npm/%40vendor/sdk" /><small>Stable package identity without a version, query, or fragment.</small></label></div>
+        <div className="two-fields"><label className="auth-field"><span>Registry URL</span><input type="url" value={registryURL} onChange={(event) => setRegistryURL(event.target.value)} placeholder="https://registry.npmjs.org/…" /></label><label className="auth-field"><span>Source URL</span><input type="url" value={sourceURL} onChange={(event) => setSourceURL(event.target.value)} placeholder="https://github.com/vendor/sdk" /></label></div>
+        <div className="two-fields"><label className="auth-field"><span>Language</span><input value={packageLanguage} onChange={(event) => setPackageLanguage(event.target.value)} placeholder="TypeScript" /></label><label className="auth-field"><span>Platform</span><input value={packagePlatform} onChange={(event) => setPackagePlatform(event.target.value)} placeholder="Node.js 22+" /></label></div>
+        <div className="two-fields"><label className="auth-field"><span>Exact version</span><input value={packageVersion} onChange={(event) => setPackageVersion(event.target.value)} placeholder="3.2.1" /></label><label className="auth-field"><span>Exact release PURL</span><input value={releasePURL} onChange={(event) => setReleasePURL(event.target.value)} placeholder="pkg:npm/%40vendor/sdk@3.2.1" /><small>Must equal the reusable artifact PURL plus this exact version.</small></label></div>
+        <label className="auth-field"><span>Install command</span><input value={installCommand} onChange={(event) => setInstallCommand(event.target.value)} placeholder="npm install @vendor/sdk@3.2.1" /></label>
+        <label className="auth-field"><span>Integrity digest</span><input value={integrityDigest} onChange={(event) => setIntegrityDigest(event.target.value)} placeholder="sha256:…" /><small>Required and syntax-validated. DokoSoko stores the supplied digest but does not download or verify package bytes.</small></label>
+        <div className="two-fields"><label className="auth-field"><span>SBOM URL</span><input type="url" value={sbomURL} onChange={(event) => setSBOMURL(event.target.value)} /></label><label className="auth-field"><span>Provenance URL</span><input type="url" value={provenanceURL} onChange={(event) => setProvenanceURL(event.target.value)} /></label></div>
+        <label className="auth-field"><span>Discovery visibility</span><select value={packageVisibility} onChange={(event) => { setPackageVisibility(event.target.value as APIVisibility); setPackagePublicAcknowledged(false); }}><option value="private">Private</option><option value="public">Public</option></select><small>Public makes this metadata eligible for public Integration discovery only after an exact public release is bound, the Integration is published, and Public MCP is enabled. It does not create a standalone public package catalogue.</small></label>
+        {integration.visibility === "public" && packageVisibility !== "public" && <div className="capability-unavailable"><TriangleAlert /><span><strong>A public Integration requires a public package release.</strong><small>Choose Public before publishing and binding this package.</small></span></div>}
+        {packageVisibility === "public" && <label className="auth-check"><input type="checkbox" checked={packagePublicAcknowledged} onChange={(event) => setPackagePublicAcknowledged(event.target.checked)} /><span>I understand public package and release metadata becomes discoverable through Public MCP only after public binding and Integration publication.</span></label>}
+      </div>
+    </Dialog>
+    <Dialog open={publishReleaseOpen} onClose={setPublishReleaseOpen} title={`Publish release for ${publishingArtifact?.name ?? "package"}`} description={`Publish and bind a new immutable release of ${publishingArtifact?.purl ?? "this reusable artifact"}. If binding fails, the saved release remains available through Bind existing.`} actions={<><Button outline onClick={() => setPublishReleaseOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !publishingArtifact || !packageArtifactCanPublishForIntegration(publishingArtifact, integration) || !packageVersion.trim() || !releasePURL.trim() || !installCommand.trim() || !integrityDigest.trim() || (publishingArtifact.visibility === "public" && !releasePublicAcknowledged)} onClick={publishAndBindExistingArtifact}>{busy ? "Publishing…" : "Publish & bind"}</Button></>}>
+      <div className="auth-form compact-form">
+        {publishingArtifact && !packageArtifactCanPublish(publishingArtifact) && <div className="capability-unavailable"><TriangleAlert /><span><strong>This artifact cannot publish another release.</strong><small>Deprecated, retired, and sunset artifacts are immutable lifecycle records.</small></span></div>}
+        {publishingArtifact && packageArtifactCanPublish(publishingArtifact) && integration.visibility === "public" && publishingArtifact.visibility !== "public" && <div className="capability-unavailable"><TriangleAlert /><span><strong>This private artifact cannot bind to a public Integration.</strong><small>Create a public replacement artifact instead.</small></span></div>}
+        <div className="two-fields"><label className="auth-field"><span>Exact version</span><input value={packageVersion} onChange={(event) => setPackageVersion(event.target.value)} placeholder="3.2.1" /></label><label className="auth-field"><span>Exact release PURL</span><input value={releasePURL} onChange={(event) => setReleasePURL(event.target.value)} placeholder={`${publishingArtifact?.purl ?? "pkg:npm/%40vendor/sdk"}@3.2.1`} /><small>Must equal the reusable artifact PURL plus this exact version.</small></label></div>
+        <label className="auth-field"><span>Install command</span><input value={installCommand} onChange={(event) => setInstallCommand(event.target.value)} placeholder="npm install @vendor/sdk@3.2.1" /></label>
+        <label className="auth-field"><span>Integrity digest</span><input value={integrityDigest} onChange={(event) => setIntegrityDigest(event.target.value)} placeholder="sha256:…" /><small>DokoSoko records the supplied digest but does not download or verify package bytes.</small></label>
+        <div className="two-fields"><label className="auth-field"><span>SBOM URL</span><input type="url" value={sbomURL} onChange={(event) => setSBOMURL(event.target.value)} /></label><label className="auth-field"><span>Provenance URL</span><input type="url" value={provenanceURL} onChange={(event) => setProvenanceURL(event.target.value)} /></label></div>
+        {publishingArtifact?.visibility === "public" && <><div className="notice"><ShieldCheck /><span><strong>Public discovery remains gated.</strong> This exact release is only eligible for discovery after public binding, Integration publication, and Public MCP enablement.</span></div><label className="auth-check"><input type="checkbox" checked={releasePublicAcknowledged} onChange={(event) => setReleasePublicAcknowledged(event.target.checked)} /><span>I explicitly confirm this exact release may become discoverable through Public MCP after those publication gates are satisfied.</span></label></>}
+      </div>
+    </Dialog>
+    <Dialog open={editOpen} onClose={setEditOpen} title="Edit draft package" description="Draft catalogue metadata may be replaced until the first exact release is published." actions={<><Button outline onClick={() => setEditOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !editingArtifact || !ecosystemValid || !packageName.trim() || !packageCoordinate.trim() || !artifactPURL.trim() || !registryURL.trim() || (packageVisibility === "public" && !packagePublicAcknowledged)} onClick={savePackageEdits}>{busy ? "Saving…" : "Save draft"}</Button></>}>
+      <div className="auth-form compact-form">
+        <div className="two-fields"><label className="auth-field"><span>Ecosystem identifier</span><input list={ecosystemOptionsID} pattern="[a-z][a-z0-9._-]{0,63}" value={ecosystem} onChange={(event) => setEcosystem(event.target.value.toLowerCase())} /></label><label className="auth-field"><span>Display name</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} /></label></div>
+        <label className="auth-field"><span>Description</span><textarea value={packageDescription} onChange={(event) => setPackageDescription(event.target.value)} /></label>
+        <div className="two-fields"><label className="auth-field"><span>Registry coordinate</span><input value={packageCoordinate} onChange={(event) => setPackageCoordinate(event.target.value)} /></label><label className="auth-field"><span>Reusable artifact PURL</span><input value={artifactPURL} onChange={(event) => setArtifactPURL(event.target.value)} /></label></div>
+        <div className="two-fields"><label className="auth-field"><span>Registry URL</span><input type="url" value={registryURL} onChange={(event) => setRegistryURL(event.target.value)} /></label><label className="auth-field"><span>Source URL</span><input type="url" value={sourceURL} onChange={(event) => setSourceURL(event.target.value)} /></label></div>
+        <div className="two-fields"><label className="auth-field"><span>Language</span><input value={packageLanguage} onChange={(event) => setPackageLanguage(event.target.value)} /></label><label className="auth-field"><span>Platform</span><input value={packagePlatform} onChange={(event) => setPackagePlatform(event.target.value)} /></label></div>
+        <label className="auth-field"><span>Discovery visibility</span><select value={packageVisibility} onChange={(event) => { setPackageVisibility(event.target.value as APIVisibility); setPackagePublicAcknowledged(false); }}><option value="private">Private</option><option value="public">Public</option></select><small>Public eligibility still requires an exact public binding, a published public Integration, and Public MCP.</small></label>
+        {packageVisibility === "public" && <label className="auth-check"><input type="checkbox" checked={packagePublicAcknowledged} onChange={(event) => setPackagePublicAcknowledged(event.target.checked)} /><span>I understand public metadata remains gated by public binding, Integration publication, and Public MCP.</span></label>}
+      </div>
+    </Dialog>
+    <Dialog open={deprecateOpen} onClose={setDeprecateOpen} title={`Deprecate ${deprecatingArtifact?.name ?? "package"}`} description="Deprecation immediately blocks new releases, new bindings, and candidate publication. Historical published snapshots remain readable; an optional sunset is migration guidance only." actions={<><Button outline onClick={() => setDeprecateOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !deprecatingArtifact || !deprecationMessage.trim()} onClick={deprecatePackage}>{busy ? "Deprecating…" : "Deprecate"}</Button></>}>
+      <div className="auth-form compact-form"><label className="auth-field"><span>Deprecation message</span><textarea value={deprecationMessage} onChange={(event) => setDeprecationMessage(event.target.value)} placeholder="Explain the migration path." /></label><label className="auth-field"><span>Replacement artifact</span><select value={replacementArtifactID} onChange={(event) => setReplacementArtifactID(event.target.value)}><option value="">No replacement</option>{replacementCandidates.filter((artifact) => artifact.id !== deprecatingArtifact?.id).map((artifact) => <option value={artifact.id} key={artifact.id}>{artifact.name} · {artifact.coordinate}</option>)}</select></label><label className="auth-field"><span>Optional sunset</span><input type="datetime-local" value={sunsetAt} onChange={(event) => setSunsetAt(event.target.value)} /><small>Guidance for migration timing; deprecation enforcement is immediate.</small></label></div>
+    </Dialog>
+    <Dialog open={retireOpen} onClose={setRetireOpen} title={`Retire ${retiringArtifact?.name ?? "package"}`} description="Retirement permanently prevents new releases and bindings. Existing immutable snapshots retain their exact release and lifecycle warning." actions={<><Button outline onClick={() => setRetireOpen(false)}>Cancel</Button><Button color="red" disabled={busy || !retiringArtifact || !retirementMessage.trim()} onClick={retirePackage}>{busy ? "Retiring…" : "Retire package"}</Button></>}>
+      <div className="auth-form compact-form"><label className="auth-field"><span>Retirement message</span><textarea value={retirementMessage} onChange={(event) => setRetirementMessage(event.target.value)} placeholder="Explain why this artifact is retired and where consumers should migrate." /></label><label className="auth-field"><span>Replacement artifact</span><select value={retirementReplacementID} onChange={(event) => setRetirementReplacementID(event.target.value)}><option value="">No replacement</option>{replacementCandidates.filter((artifact) => artifact.id !== retiringArtifact?.id).map((artifact) => <option value={artifact.id} key={artifact.id}>{artifact.name} · {artifact.coordinate}</option>)}</select></label></div>
+    </Dialog>
+    <datalist id={ecosystemOptionsID}><option value="npm" /><option value="pypi" /><option value="maven" /><option value="nuget" /><option value="go" /><option value="docker" /><option value="oci" /></datalist>
+  </>;
+}
+
+function toolPolicy(tool: APITool) {
+  const grants = Array.isArray(tool.authorization_policy?.required_grants) ? tool.authorization_policy.required_grants.filter((value): value is string => typeof value === "string") : [];
+  return {
+    requiredGrants: grants,
+    confirmationRequired: tool.authorization_policy?.confirmation_required === true,
+    risk: typeof tool.authorization_policy?.risk === "string" ? tool.authorization_policy.risk : undefined,
+    idempotencyRequired: tool.authorization_policy?.idempotency_required === true,
+  };
+}
+
+function IntegrationAuthorizationWorkspace({ integration, identity, connections, tools, onManageAccess, onMessage, onNavigate }: { integration: APIIntegration; identity: APIIdentity | null; connections: APIAccessConnection[]; tools: APITool[]; onManageAccess: () => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const [definitions, setDefinitions] = useState<APIGrantDefinition[]>([]);
+  const [points, setPoints] = useState<APIAuthorizationPoint[]>([]);
+  const [catalogUnavailable, setCatalogUnavailable] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [grantOpen, setGrantOpen] = useState(false);
+  const [editingGrant, setEditingGrant] = useState<APIGrantDefinition | null>(null);
+  const [grantKey, setGrantKey] = useState("");
+  const [grantName, setGrantName] = useState("");
+  const [grantDescription, setGrantDescription] = useState("");
+  const [grantRisk, setGrantRisk] = useState<APIGrantDefinition["risk"]>("low");
+  const [grantState, setGrantState] = useState<APIGrantDefinition["state"]>("active");
+  const [pointOpen, setPointOpen] = useState(false);
+  const [editingPoint, setEditingPoint] = useState<APIAuthorizationPoint | null>(null);
+  const [pointKey, setPointKey] = useState("");
+  const [pointName, setPointName] = useState("");
+  const [pointDescription, setPointDescription] = useState("");
+  const [pointAction, setPointAction] = useState<APIAuthorizationPoint["action_type"]>("read");
+  const [pointGrants, setPointGrants] = useState<string[]>([]);
+  const [pointConfirmation, setPointConfirmation] = useState(false);
+  const [pointTTL, setPointTTL] = useState("300");
+  const [pointState, setPointState] = useState<APIAuthorizationPoint["state"]>("draft");
+  const [selectedPointID, setSelectedPointID] = useState("");
+  const [suppliedGrants, setSuppliedGrants] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [simulation, setSimulation] = useState<APIAuthorizationSimulation | null>(null);
+  const [simulationSource, setSimulationSource] = useState<"server" | "configuration-only">("server");
+  const [simulating, setSimulating] = useState(false);
+
+  const loadAuthorization = useCallback(async () => {
+    const [definitionResult, pointResult] = await Promise.allSettled([api.grantDefinitions(), api.authorizationPoints(integration.id)]);
+    if (definitionResult.status === "fulfilled") setDefinitions(definitionResult.value);
+    if (pointResult.status === "fulfilled") {
+      setPoints(pointResult.value);
+      setSelectedPointID((current) => current && pointResult.value.some((point) => point.id === current) ? current : pointResult.value[0]?.id ?? "");
+    }
+    const unavailable = (definitionResult.status === "rejected" && unavailableConsoleCapability(definitionResult.reason)) || (pointResult.status === "rejected" && unavailableConsoleCapability(pointResult.reason));
+    setCatalogUnavailable(unavailable);
+  }, [integration.id]);
+
+  useEffect(() => {
+    const task = window.setTimeout(() => { void loadAuthorization(); }, 0);
+    return () => window.clearTimeout(task);
+  }, [loadAuthorization]);
+
+  const selectedPoint = points.find((point) => point.id === selectedPointID) ?? points[0];
+  const registeredKeys = new Set(definitions.filter((definition) => definition.state === "active").map((definition) => definition.key));
+
+  function openGrant(value?: APIGrantDefinition) {
+    setEditingGrant(value ?? null); setGrantKey(value?.key ?? ""); setGrantName(value?.display_name ?? ""); setGrantDescription(value?.description ?? ""); setGrantRisk(value?.risk ?? "low"); setGrantState(value?.state ?? "active"); setGrantOpen(true);
+  }
+
+  async function saveGrant() {
+    setBusy(true);
+    try {
+      const input = { key: grantKey.trim(), display_name: grantName.trim(), description: grantDescription.trim(), risk: grantRisk, state: grantState };
+      if (editingGrant) await api.updateGrantDefinition(editingGrant.id, { ...input, revision: editingGrant.revision }); else await api.createGrantDefinition(input);
+      await loadAuthorization(); setGrantOpen(false); onMessage(editingGrant ? "Grant definition updated." : "Grant registered for policy use.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Grant definition could not be saved."); } finally { setBusy(false); }
+  }
+
+  function openPoint(value?: APIAuthorizationPoint) {
+    setEditingPoint(value ?? null); setPointKey(value?.key ?? ""); setPointName(value?.name ?? ""); setPointDescription(value?.description ?? ""); setPointAction(value?.action_type ?? "read"); setPointGrants(value?.required_grants ?? []); setPointConfirmation(value?.confirmation_required ?? false); setPointTTL(String(value?.decision_ttl_seconds ?? 300)); setPointState(value?.state ?? "draft"); setPointOpen(true);
+  }
+
+  async function savePoint() {
+    setBusy(true);
+    try {
+      const input = { key: pointKey.trim(), name: pointName.trim(), description: pointDescription.trim(), action_type: pointAction, required_grants: pointGrants, confirmation_required: pointAction === "destructive" ? true : pointConfirmation, decision_ttl_seconds: Number(pointTTL), state: pointState };
+      if (editingPoint) await api.updateAuthorizationPoint(integration.id, editingPoint.id, { ...input, revision: editingPoint.revision }); else await api.createAuthorizationPoint(integration.id, input);
+      await loadAuthorization(); setPointOpen(false); onMessage(editingPoint ? "Authorization point updated." : "Authorization point created.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Authorization point could not be saved."); } finally { setBusy(false); }
+  }
+
+  async function simulate() {
+    if (!selectedPoint) return;
+    setSimulating(true);
+    const granted = suppliedGrants.split(/[\s,]+/).map((value) => value.trim()).filter(Boolean);
+    try {
+      setSimulation(await api.simulateAuthorizationPoint(integration.id, selectedPoint.id, granted, confirmed));
+      setSimulationSource("server");
+    } catch (error) {
+      if (!unavailableConsoleCapability(error)) { onMessage(error instanceof APIError ? error.message : "Authorization policy could not be simulated."); setSimulating(false); return; }
+      const missing = selectedPoint.required_grants.filter((grant) => !granted.includes(grant));
+      const confirmationMissing = selectedPoint.confirmation_required && !confirmed;
+      setSimulation({ authorization_point_id: selectedPoint.id, allowed: selectedPoint.state === "active" && missing.length === 0 && !confirmationMissing, missing_grants: missing, confirmation_required: selectedPoint.confirmation_required, confirmation_missing: confirmationMissing, explanation: "Local comparison only; this does not prove live vendor access.", simulation_only: true });
+      setSimulationSource("configuration-only");
+    } finally { setSimulating(false); }
+  }
+
+  return <div className="integration-tab-content">
+    <div className="notice"><ShieldCheck /><span><strong>One authorization vocabulary: grants.</strong> Declarative points have no URL or secret. Runtime identity resolves live vendor access through the fixed fail-closed evaluation contract.</span></div>
+    {catalogUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Authorization catalogue unavailable.</strong><small>Existing tool policies remain visible, but grant and point changes cannot be saved by this deployment.</small></span></div>}
+    <div className="integration-two-column">
+      <section className="panel"><PanelHeader title="Customer identity" action={<ConsoleLink path={settingsPath("identity")} onNavigate={onNavigate} className="entity-back-link">Configure identity</ConsoleLink>} />{identity ? <div className="provider-row"><span className="settings-icon"><Users /></span><span><strong>{identity.issuer}</strong><small>Resource {identity.oauth_resource || "not set"} · claim {identity.organisation_claim}</small></span><Badge color={identity.state === "active" ? "green" : "amber"}>{identity.state}</Badge></div> : <div className="empty-row">Customer OIDC has not been configured.</div>}</section>
+      <section className="panel"><PanelHeader title="Service connections" description="Reusable environment and credential boundaries for this API." action={<Button onClick={onManageAccess}>Choose connections</Button>} />{connections.map((connection) => <div className="provider-row integration-connection-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.definition?.name ?? "Service connection"}{connection.region ? ` · ${connection.region}` : ""}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge></div>)}{connections.length === 0 && <div className="empty-row">No service connection is attached to this API.</div>}<ConsoleLink path={sectionPath("projects")} onNavigate={onNavigate} className="panel-footer-link">Manage reusable access definitions and connections <ChevronRight /></ConsoleLink></section>
+    </div>
+    <section className="panel"><PanelHeader title="Grant registry" description="Deployment-owned vocabulary that vendor evaluations may return and policies may require. A definition never grants access." action={<span className="heading-actions"><Badge color="violet">{definitions.length} grants</Badge><Button disabled={catalogUnavailable} onClick={() => openGrant()}><Plus data-slot="icon" />Register grant</Button></span>} />{definitions.map((definition) => <div className="provider-row grant-definition-row" key={definition.id}><span className="settings-icon"><KeyRound /></span><span><strong>{definition.display_name}</strong><small><code>{definition.key}</code> · {definition.description || "No description"}</small></span><span className="tool-badges"><Badge color={definition.risk === "critical" || definition.risk === "high" ? "red" : definition.risk === "medium" ? "amber" : "zinc"}>{definition.risk}</Badge><Badge color={definition.state === "active" ? "green" : "zinc"}>{definition.state}</Badge></span><Button outline onClick={() => openGrant(definition)}>Edit</Button></div>)}{definitions.length === 0 && <div className="empty-row">No grant has been registered yet.</div>}</section>
+    <section className="panel"><PanelHeader title="Authorization points" description="Map named API actions to registered grants, risk behavior, confirmation and bounded decision caching." action={<Button disabled={catalogUnavailable || definitions.every((definition) => definition.state !== "active")} onClick={() => openPoint()}><Plus data-slot="icon" />Add point</Button>} />{points.map((point) => <div className="provider-row authorization-point-row" key={point.id}><span className="settings-icon"><ShieldCheck /></span><span><strong>{point.name}</strong><small><code>{point.key}</code> · {point.required_grants.join(", ") || "no grants"} · TTL {point.decision_ttl_seconds}s</small></span><span className="tool-badges"><Badge color={point.action_type === "destructive" ? "red" : point.action_type === "write" ? "amber" : "blue"}>{point.action_type}</Badge>{point.confirmation_required && <Badge color="violet">confirmation</Badge>}<Badge color={point.state === "active" ? "green" : "zinc"}>{point.state}</Badge></span><Button outline onClick={() => openPoint(point)}>Edit</Button></div>)}{points.length === 0 && <div className="empty-row">No authorization point has been configured for this API.</div>}</section>
+    <section className="panel"><PanelHeader title="Policy simulator" description="Server-side configuration preflight only. It never calls the vendor access-evaluation contract or grants runtime access." action={<Badge color="zinc">Simulation only</Badge>} />{points.length > 0 ? <div className="authorization-simulator"><div className="two-fields"><label className="auth-field"><span>Authorization point</span><select value={selectedPoint?.id ?? ""} onChange={(event) => { setSelectedPointID(event.target.value); setSimulation(null); }}>{points.map((point) => <option value={point.id} key={point.id}>{point.name} · {point.key}</option>)}</select></label><label className="auth-field"><span>Hypothetical granted grants</span><input value={suppliedGrants} onChange={(event) => { setSuppliedGrants(event.target.value); setSimulation(null); }} placeholder="customers.read, invoices.write" /></label></div><label className="compact-check"><input type="checkbox" checked={confirmed} onChange={(event) => { setConfirmed(event.target.checked); setSimulation(null); }} /><span>Simulate explicit confirmation for this exact action</span></label><div className="simulator-actions"><Button disabled={simulating || !selectedPoint} onClick={simulate}>{simulating ? "Evaluating…" : "Simulate policy"}</Button>{selectedPoint && <small>Requires {selectedPoint.required_grants.join(", ") || "no grants"}{selectedPoint.confirmation_required ? " and confirmation" : ""}. State must be active.</small>}</div>{simulation && <div className={`simulation-result ${simulation.allowed ? "allowed" : "denied"}`}><span>{simulation.allowed ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{simulation.allowed ? "Would pass configured policy" : "Would be denied"}</strong><small>{simulation.explanation}{simulation.missing_grants.length ? ` Missing: ${simulation.missing_grants.join(", ")}.` : ""}</small></span><Badge color={simulationSource === "server" ? "green" : "zinc"}>{simulationSource === "server" ? "Server simulation" : "Configuration only"}</Badge></div>}</div> : <div className="empty-row">Create an authorization point before simulating policy.</div>}</section>
+    <details className="panel advanced-details"><summary>Tool policy coverage</summary>{tools.map((tool) => { const policy = toolPolicy(tool); const missing = policy.requiredGrants.filter((grant) => !registeredKeys.has(grant)); return <div className="lease-row" key={tool.id}><span><strong>{tool.namespace}.{tool.name}</strong><small>{policy.requiredGrants.join(", ") || "No required grants"}</small></span><Badge color={missing.length ? "red" : "green"}>{missing.length ? `${missing.length} unregistered` : "registered"}</Badge></div>; })}{tools.length === 0 && <div className="empty-row">No tool policies exist yet.</div>}</details>
+    <Dialog open={grantOpen} onClose={setGrantOpen} title={editingGrant ? "Edit grant definition" : "Register grant"} description="Grant keys are stable contract identifiers. Editing never grants a user access." actions={<><Button outline onClick={() => setGrantOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !grantKey.trim() || !grantName.trim()} onClick={saveGrant}>{busy ? "Saving…" : "Save grant"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Grant key</span><input disabled={Boolean(editingGrant)} value={grantKey} onChange={(event) => setGrantKey(event.target.value)} placeholder="customers.read" /></label><label className="auth-field"><span>Display name</span><input value={grantName} onChange={(event) => setGrantName(event.target.value)} placeholder="Read customers" /></label><label className="auth-field"><span>Description</span><textarea value={grantDescription} onChange={(event) => setGrantDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Risk</span><select value={grantRisk} onChange={(event) => setGrantRisk(event.target.value as APIGrantDefinition["risk"])}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label><label className="auth-field"><span>State</span><select value={grantState} onChange={(event) => setGrantState(event.target.value as APIGrantDefinition["state"])}><option value="active">Active</option><option value="deprecated">Deprecated</option></select></label></div></div></Dialog>
+    <Dialog open={pointOpen} onClose={setPointOpen} title={editingPoint ? "Edit authorization point" : "Add authorization point"} description="Configure a declarative action policy. There is deliberately no hook URL or credential field." actions={<><Button outline onClick={() => setPointOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !pointKey.trim() || !pointName.trim() || pointGrants.some((grant) => !registeredKeys.has(grant))} onClick={savePoint}>{busy ? "Saving…" : "Save point"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Point key</span><input disabled={Boolean(editingPoint)} value={pointKey} onChange={(event) => setPointKey(event.target.value)} placeholder="customers.read" /></label><label className="auth-field"><span>Name</span><input value={pointName} onChange={(event) => setPointName(event.target.value)} placeholder="Read customer" /></label></div><label className="auth-field"><span>Description</span><textarea value={pointDescription} onChange={(event) => setPointDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Action type</span><select value={pointAction} onChange={(event) => { const value = event.target.value as APIAuthorizationPoint["action_type"]; setPointAction(value); if (value === "destructive") setPointConfirmation(true); }}><option value="read">Read</option><option value="write">Write</option><option value="destructive">Destructive</option></select></label><label className="auth-field"><span>Decision TTL (seconds)</span><input type="number" min={0} max={3600} value={pointTTL} onChange={(event) => setPointTTL(event.target.value)} /></label></div><fieldset className="catalog-settings-section"><legend>Required registered grants</legend>{definitions.map((definition) => { const selected = pointGrants.includes(definition.key); return <label className="compact-check" key={definition.id}><input type="checkbox" disabled={definition.state !== "active" && !selected} checked={selected} onChange={() => setPointGrants((current) => current.includes(definition.key) ? current.filter((key) => key !== definition.key) : [...current, definition.key])} /><span>{definition.display_name}<small>{definition.key} · {definition.risk}{definition.state === "deprecated" ? " · deprecated (remove before saving)" : ""}</small></span></label>; })}</fieldset><label className="compact-check"><input type="checkbox" disabled={pointAction === "destructive"} checked={pointConfirmation || pointAction === "destructive"} onChange={(event) => setPointConfirmation(event.target.checked)} /><span>Require explicit confirmation for this action</span></label><label className="auth-field"><span>State</span><select value={pointState} onChange={(event) => setPointState(event.target.value as APIAuthorizationPoint["state"])}><option value="draft">Draft</option><option value="active">Active</option><option value="deprecated">Deprecated</option></select></label></div></Dialog>
+  </div>;
+}
+
+function IntegrationToolsWorkspace({ productID, integration, tools, mcpConnections, onAddTool, onChanged, onMessage, onNavigate }: { productID: string; integration: APIIntegration; tools: APITool[]; mcpConnections: APIMCPConnection[]; onAddTool: () => void; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const [bindings, setBindings] = useState<APIIntegrationToolBinding[]>([]);
+  const [authorizationPoints, setAuthorizationPoints] = useState<APIAuthorizationPoint[]>([]);
+  const [bindingSelection, setBindingSelection] = useState<Record<string, { revision: number; authorizationPointID: string; authorizationPointRevision: number }>>({});
+  const [bindingsUnavailable, setBindingsUnavailable] = useState(false);
+  const [bindingBusy, setBindingBusy] = useState(false);
+  const [editorTool, setEditorTool] = useState<APITool | null>(null);
+  const [editorBusy, setEditorBusy] = useState(false);
+  const [description, setDescription] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [inputSchema, setInputSchema] = useState("{}");
+  const [outputSchema, setOutputSchema] = useState("{}");
+  const [grants, setGrants] = useState("");
+  const [confirmationRequired, setConfirmationRequired] = useState(false);
+  const [timeout, setTimeoutValue] = useState("10000");
+  const [testInput, setTestInput] = useState("{}");
+  const [testResult, setTestResult] = useState<APIToolDryRun | null>(null);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneNamespace, setCloneNamespace] = useState("");
+  const [cloneName, setCloneName] = useState("");
+  const cloneIdentityValid = /^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim()) && /^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim());
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([api.integrationToolBindings(integration.id), api.authorizationPoints(integration.id)]).then(([values, points]) => {
+      if (cancelled) return;
+      setBindings(values);
+      setAuthorizationPoints(points);
+      setBindingSelection(Object.fromEntries(values.map((binding) => [binding.tool_id, { revision: binding.tool_revision, authorizationPointID: binding.authorization_point_id, authorizationPointRevision: binding.authorization_point_revision }])));
+      setBindingsUnavailable(false);
+    }).catch((error) => {
+      if (cancelled) return;
+      setBindings([]);
+      setAuthorizationPoints([]);
+      setBindingSelection({});
+      setBindingsUnavailable(unavailableConsoleCapability(error));
+    });
+    return () => { cancelled = true; };
+  }, [integration.id]);
+
+  function populateEditor(tool: APITool) {
+    const policy = toolPolicy(tool);
+    setEditorTool(tool);
+    setDescription(tool.description);
+    setEndpoint(tool.endpoint ?? "");
+    setInputSchema(JSON.stringify(tool.input_schema, null, 2));
+    setOutputSchema(JSON.stringify(tool.output_schema, null, 2));
+    setGrants(policy.requiredGrants.join(", "));
+    setConfirmationRequired(policy.confirmationRequired);
+    setTimeoutValue(String(tool.timeout_ms));
+    setTestInput("{}");
+    setTestResult(null);
+  }
+
+  async function openEditor(tool: APITool) {
+    setEditorBusy(true);
+    try {
+      populateEditor(await api.tool(productID, tool.id));
+    } catch (error) {
+      populateEditor(tool);
+      onMessage(unavailableConsoleCapability(error) ? "The detailed tool editor is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool details could not be loaded.");
+    } finally { setEditorBusy(false); }
+  }
+
+  function toggleBinding(tool: APITool) {
+    const defaultPoint = authorizationPoints.find((point) => point.state === "active");
+    if (!bindingSelection[tool.id] && !defaultPoint) {
+      onMessage("Create and activate an authorization point before binding this tool.");
+      return;
+    }
+    setBindingSelection((current) => {
+      const next = { ...current };
+      if (next[tool.id]) delete next[tool.id];
+      else if (defaultPoint) next[tool.id] = { revision: tool.revision, authorizationPointID: defaultPoint.id, authorizationPointRevision: defaultPoint.revision };
+      return next;
+    });
+  }
+
+  function selectAuthorizationPoint(toolID: string, pointID: string) {
+    const point = authorizationPoints.find((candidate) => candidate.id === pointID && candidate.state === "active");
+    if (!point) return;
+    setBindingSelection((current) => current[toolID] ? { ...current, [toolID]: { ...current[toolID], authorizationPointID: point.id, authorizationPointRevision: point.revision } } : current);
+  }
+
+  async function saveBindings() {
+    setBindingBusy(true);
+    try {
+      const value = await api.setIntegrationToolBindings(integration.id, Object.entries(bindingSelection).map(([tool_id, selection]) => ({ tool_id, revision: selection.revision, authorization_point_id: selection.authorizationPointID, authorization_point_revision: selection.authorizationPointRevision })));
+      setBindings(value.items);
+      onMessage(`${value.items.length} exact tool revision${value.items.length === 1 ? "" : "s"} bound to this API draft.`);
+    } catch (error) {
+      onMessage(unavailableConsoleCapability(error) ? "Exact API tool bindings are not enabled in this deployment yet." : error instanceof APIError ? error.message : "Tool bindings could not be saved.");
+    } finally { setBindingBusy(false); }
+  }
+
+  async function saveToolDraft() {
+    if (!editorTool) return;
+    setEditorBusy(true);
+    try {
+      const updated = await api.updateTool(productID, editorTool.id, { description: description.trim(), endpoint: endpoint.trim(), http_method: editorTool.http_method, input_schema: JSON.parse(inputSchema), output_schema: JSON.parse(outputSchema), authorization_policy: { ...editorTool.authorization_policy, required_grants: grants.split(/[\s,]+/).filter(Boolean), confirmation_required: confirmationRequired }, timeout_ms: Number(timeout), revision: editorTool.revision });
+      setEditorTool(updated);
+      await onChanged();
+      onMessage(`${updated.namespace}.${updated.name} draft updated.`);
+    } catch (error) {
+      onMessage(unavailableConsoleCapability(error) ? "Tool draft editing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Tool draft could not be saved.");
+    } finally { setEditorBusy(false); }
+  }
+
+  function openCloneTool() {
+    if (!editorTool) return;
+    const suffix = "_copy";
+    setCloneNamespace(editorTool.namespace);
+    setCloneName(`${editorTool.name.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`);
+    setCloneOpen(true);
+  }
+
+  async function cloneTool() {
+    if (!editorTool) return;
+    setEditorBusy(true);
+    try {
+      const cloned = await api.cloneTool(productID, editorTool.id, cloneNamespace.trim(), cloneName.trim());
+      await onChanged();
+      setCloneOpen(false);
+      populateEditor(cloned);
+      onMessage(`${cloned.namespace}.${cloned.name} cloned as a draft.`);
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool cloning is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be cloned."); } finally { setEditorBusy(false); }
+  }
+
+  async function dryRunTool() {
+    if (!editorTool) return;
+    setEditorBusy(true);
+    setTestResult(null);
+    try {
+      const result = await api.dryRunTool(productID, editorTool.id, JSON.parse(testInput));
+      setTestResult(result);
+      onMessage(result.valid && !result.network_call_performed ? "Tool dry-run passed without a network call." : "Tool dry-run returned a controlled failure.");
+    } catch (error) {
+      if (unavailableConsoleCapability(error)) onMessage("The bounded tool dry-run endpoint is not enabled by this service version yet.");
+      else onMessage(error instanceof APIError || error instanceof Error ? error.message : "Tool dry-run could not run.");
+    } finally { setEditorBusy(false); }
+  }
+
+  async function publishEditorTool() {
+    if (!editorTool) return;
+    setEditorBusy(true);
+    try {
+      const updated = await api.publishTool(productID, editorTool.id, editorTool.revision);
+      setEditorTool(updated);
+      await onChanged();
+      onMessage(`${updated.namespace}.${updated.name} published.`);
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Tool could not be published."); } finally { setEditorBusy(false); }
+  }
+
+  async function retireEditorTool() {
+    if (!editorTool) return;
+    setEditorBusy(true);
+    try {
+      const retiredToolID = editorTool.id;
+      await api.retireTool(productID, retiredToolID, editorTool.revision);
+      setBindingSelection((current) => {
+        if (!current[retiredToolID]) return current;
+        const next = { ...current };
+        delete next[retiredToolID];
+        return next;
+      });
+      setEditorTool(null);
+      await onChanged();
+      onMessage("Tool retired and removed from discovery. Save exact bindings to remove its revision from this API draft.");
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool retirement is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be retired."); } finally { setEditorBusy(false); }
+  }
+
+  const bindingCount = Object.keys(bindingSelection).length;
+  const currentAuthorizationPoint = (selection: { authorizationPointID: string; authorizationPointRevision: number }) => authorizationPoints.find((point) => point.id === selection.authorizationPointID && point.state === "active" && point.revision === selection.authorizationPointRevision);
+  const staleBindingCount = Object.values(bindingSelection).filter((selection) => !currentAuthorizationPoint(selection)).length;
+  return <div className="integration-tab-content">
+    <div className="notice"><Wrench /><span><strong>Reusable definitions, exact API bindings.</strong> Tools live in the deployment catalogue; this API snapshot binds a reviewed revision and never follows a mutable draft.</span></div>
+    {bindingsUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Exact tool binding is not enabled on this deployment.</strong><small>You can still edit and publish reusable tools. API binding controls will activate when the endpoint is available.</small></span></div>}
+    <section className="panel"><PanelHeader title="MCP Tool Editor" description="Definition → schemas → fixed backend → exact authorization action → dry-run → publish." action={<span className="heading-actions"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Deployment catalogue</ConsoleLink><Button onClick={onAddTool}><Plus data-slot="icon" />Create tool</Button></span>} />{tools.map((tool) => {
+      const selection = bindingSelection[tool.id];
+      const actionCurrent = selection ? currentAuthorizationPoint(selection) : undefined;
+      return <div className={`provider-row integration-tool-editor-row ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><label className="tool-binding-check" title={bindingsUnavailable ? "Tool binding endpoint unavailable" : selection && (tool.state !== "published" || tool.upstream_drifted) ? "Remove obsolete exact-revision binding" : `Bind revision ${tool.revision}`}><input type="checkbox" disabled={bindingsUnavailable || (!selection && (tool.state !== "published" || tool.upstream_drifted))} checked={Boolean(selection)} onChange={() => toggleBinding(tool)} /><span className="sr-only">Bind {tool.namespace}.{tool.name}</span></label><span className="settings-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><strong>{tool.namespace}.{tool.name}</strong><small>revision {tool.revision} · {tool.backend_kind === "mcp" ? `MCP · ${tool.upstream_tool_name}` : `${tool.http_method} · fixed endpoint`} · {toolPolicy(tool).requiredGrants.join(", ") || "no tool grants"}</small></span>{selection ? <select className="tool-action-select" aria-label={`Authorization point for ${tool.namespace}.${tool.name}`} value={actionCurrent ? selection.authorizationPointID : ""} onChange={(event) => selectAuthorizationPoint(tool.id, event.target.value)}>{!actionCurrent && <option value="" disabled>Choose current active action (bound r{selection.authorizationPointRevision} is stale)</option>}{authorizationPoints.filter((point) => point.state === "active").map((point) => <option key={point.id} value={point.id}>{point.name} · r{point.revision}</option>)}</select> : <span />}<span className="tool-badges"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge>{selection && <Badge color={actionCurrent ? "blue" : "red"}>{actionCurrent ? "action bound" : "action stale"}</Badge>}{tool.upstream_drifted && <Badge color="red">drifted</Badge>}</span><Button outline disabled={editorBusy} onClick={() => void openEditor(tool)}>Edit & dry-run</Button></div>;
+    })}{tools.length === 0 && <div className="empty-row">No reusable tools are available.</div>}<div className="panel-footer-actions"><small>{bindingCount} selected · {bindings.length} currently saved{staleBindingCount > 0 ? ` · ${staleBindingCount} stale action${staleBindingCount === 1 ? "" : "s"}` : ""}</small><Button disabled={bindingsUnavailable || bindingBusy || staleBindingCount > 0} onClick={saveBindings}>{bindingBusy ? "Saving…" : "Save exact bindings"}</Button></div></section>
+    {mcpConnections.length > 0 && <details className="panel advanced-details"><summary>Tool proxy connections</summary>{mcpConnections.map((connection) => <div className="lease-row" key={connection.id}><span><EntityLink entity="connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.endpoint} · {connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge></div>)}<ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className="panel-footer-link">Manage MCP tool proxy connections <ChevronRight /></ConsoleLink></details>}
+    <Dialog open={Boolean(editorTool)} onClose={(open) => { if (!open) setEditorTool(null); }} title={editorTool ? `${editorTool.namespace}.${editorTool.name}` : "MCP Tool Editor"} description="Edit a reusable agent-facing contract. Published revisions are immutable; clone before changing a published tool." actions={<><Button outline onClick={() => setEditorTool(null)}>Close</Button>{editorTool?.state === "draft" ? <Button color="indigo" disabled={editorBusy || !description.trim()} onClick={saveToolDraft}>{editorBusy ? "Saving…" : "Save draft"}</Button> : <Button outline disabled={editorBusy} onClick={openCloneTool}><Copy data-slot="icon" />Clone to edit</Button>}</>}>
+      {editorTool && <div className="tool-editor"><div className="tool-editor-status"><span><Badge color={editorTool.state === "published" ? "green" : editorTool.state === "retired" ? "zinc" : "amber"}>{editorTool.state}</Badge><Badge color="zinc">revision {editorTool.revision}</Badge><Badge color={editorTool.backend_kind === "mcp" ? "violet" : "zinc"}>{editorTool.backend_kind ?? "http"}</Badge><Badge color="zinc">{editorTool.http_method}</Badge></span><span className="heading-actions">{editorTool.state === "draft" && <Button outline disabled={editorBusy} onClick={publishEditorTool}>Publish</Button>}{editorTool.state === "published" && <Button outline disabled={editorBusy} onClick={retireEditorTool}>Retire</Button>}</span></div><label className="auth-field"><span>Description</span><textarea disabled={editorTool.state !== "draft"} value={description} onChange={(event) => setDescription(event.target.value)} /></label>{editorTool.backend_kind !== "mcp" && <label className="auth-field"><span>Fixed endpoint</span><input disabled={editorTool.state !== "draft"} type="url" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="Loaded only in this restricted editor" /></label>}<div className="two-fields"><label className="auth-field"><span>Required grants</span><input disabled={editorTool.state !== "draft"} value={grants} onChange={(event) => setGrants(event.target.value)} placeholder="customers.read, invoices.write" /></label><label className="auth-field"><span>Timeout (ms)</span><input disabled={editorTool.state !== "draft"} type="number" min={100} max={60000} value={timeout} onChange={(event) => setTimeoutValue(event.target.value)} /></label></div><label className="compact-check"><input disabled={editorTool.state !== "draft"} type="checkbox" checked={confirmationRequired} onChange={(event) => setConfirmationRequired(event.target.checked)} /><span>Require an explicit confirmation marker for this exact MCP call</span></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea spellCheck={false} disabled={editorTool.state !== "draft"} value={inputSchema} onChange={(event) => setInputSchema(event.target.value)} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea spellCheck={false} disabled={editorTool.state !== "draft"} value={outputSchema} onChange={(event) => setOutputSchema(event.target.value)} /></label></div><section className="catalog-settings-section"><div className="catalog-settings-heading"><span><strong>Bounded dry-run</strong><small>Validates the saved schema, destination and policy. The server guarantees no network call is performed.</small></span><Button outline disabled={editorBusy} onClick={dryRunTool}>{editorBusy ? "Checking…" : "Run dry-run"}</Button></div><label className="auth-field"><span>JSON arguments</span><textarea spellCheck={false} value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label>{testResult && <pre className={`tool-test-result ${testResult.valid && !testResult.network_call_performed ? "passed" : "failed"}`}>{JSON.stringify(testResult, null, 2)}</pre>}</section></div>}
+    </Dialog>
+    <Dialog open={cloneOpen} onClose={setCloneOpen} title="Clone tool to a draft" description="Published tool identity is immutable. Choose a new lower-case namespace and name for the editable copy." actions={<><Button outline onClick={() => setCloneOpen(false)}>Cancel</Button><Button color="indigo" disabled={editorBusy || !cloneIdentityValid} onClick={cloneTool}>{editorBusy ? "Cloning…" : "Clone tool"}</Button></>}><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>Name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div>{!cloneIdentityValid && <small>Use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small>}</Dialog>
+  </div>;
+}
+
+function IntegrationRecipesWorkspace({ analyses, recipes, busy, onGenerate, onNavigate }: { analyses: APIIntegrationAnalysis[]; recipes: APIRecipe[]; busy: boolean; onGenerate: () => void; onNavigate: (path: string) => void }) {
+  const latestAnalysis = [...analyses].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
+  const blockers = latestAnalysis?.unknowns.filter((unknown) => unknown.blocking && !unknown.answer?.trim()) ?? [];
+  return <div className="integration-tab-content">
+    <div className="notice"><Sparkles /><span><strong>Generated only from published evidence.</strong> Recipes cite exact documentation, contract, package and tool revisions; unsupported claims stay visible for review.</span></div>
+    <section className="panel"><PanelHeader title="Evidence analysis" description="Analyse the current deployment evidence, resolve blocking unknowns, then generate editable recipe drafts." action={<Button disabled={busy || blockers.length > 0} onClick={onGenerate}><Sparkles data-slot="icon" />{busy ? "Generating…" : latestAnalysis ? "Generate recipes" : "Analyse & generate"}</Button>} />{latestAnalysis ? <div className="analysis-summary"><span className="settings-icon"><Sparkles /></span><span><strong>{latestAnalysis.plan.summary || "Integration evidence analysed"}</strong><small>{latestAnalysis.evidence.length} evidence item{latestAnalysis.evidence.length === 1 ? "" : "s"} · {latestAnalysis.plan.endpoints.length} endpoint{latestAnalysis.plan.endpoints.length === 1 ? "" : "s"} · revision {latestAnalysis.revision}</small></span><Badge color={latestAnalysis.state === "review" ? "green" : latestAnalysis.state === "failed" ? "red" : "amber"}>{latestAnalysis.state}</Badge></div> : <div className="empty-row">No evidence analysis exists yet.</div>}{blockers.map((unknown) => <div className="publish-validation error" key={unknown.id}><span><XCircle /></span><span><strong>Blocking question</strong><small>{unknown.question} · {unknown.why}</small></span></div>)}</section>
+    <section className="panel"><PanelHeader title="Recipe review queue" description="Recipes are deployment-level reusable guidance and remain human-reviewed before MCP publication." action={<ConsoleLink path={sectionPath("recipes")} onNavigate={onNavigate} className="entity-back-link">Open full editor</ConsoleLink>} />{recipes.map((recipe) => <div className="provider-row" key={recipe.id}><span className="settings-icon"><BookOpen /></span><span><strong>{recipe.title}</strong><small>{recipe.outcome} · revision {recipe.revision}</small></span><span className="tool-badges">{recipe.needs_attention && <Badge color="red">attention</Badge>}<Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : recipe.state === "outdated" ? "red" : "amber"}>{recipe.state}</Badge></span></div>)}{recipes.length === 0 && <div className="empty-row">No recipe has been generated from the current evidence.</div>}<ConsoleLink path={sectionPath("recipes")} onNavigate={onNavigate} className="panel-footer-link">Review, edit, approve and publish recipes <ChevronRight /></ConsoleLink></section>
+  </div>;
+}
+
+function IntegrationDeliveryWorkspace({ integration, identity, distribution, supportRoute, widgets, onManageSupport, onNavigate }: { integration: APIIntegration; identity: APIIdentity | null; distribution: Distribution | null; supportRoute?: APISupportRoute; widgets: APIWidget[]; onManageSupport: () => void; onNavigate: (path: string) => void }) {
+  return <div className="integration-tab-content">
+    <div className="integration-delivery-grid">
+      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><LockKeyhole /></span><div><h2>Private MCP</h2><p>Authenticated discovery and execution with live vendor grants.</p></div><Badge color={identity?.state === "active" && distribution?.private_mcp_endpoint ? "green" : "amber"}>{identity?.state === "active" && distribution?.private_mcp_endpoint ? "Ready" : "Setup"}</Badge>{distribution?.private_mcp_endpoint && <code>{distribution.private_mcp_endpoint}</code>}{distribution?.agent_setup.private.available && <a className="panel-footer-link" href={distribution.agent_setup.private.url} target="_blank" rel="noreferrer">Open agent setup <ExternalLink /></a>}</section>
+      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><Globe2 /></span><div><h2>Public MCP</h2><p>Optional anonymous discovery for explicitly public evidence only.</p></div><Badge color={distribution?.product.public_mcp_enabled ? "green" : "zinc"}>{distribution?.product.public_mcp_enabled ? "Enabled" : "Off"}</Badge>{distribution?.public_mcp_endpoint && <code>{distribution.public_mcp_endpoint}</code>}<ConsoleLink path={sectionPath("distribution")} onNavigate={onNavigate} className="panel-footer-link">Configure agent access <ChevronRight /></ConsoleLink></section>
+      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><MessageSquareText /></span><div><h2>Widget</h2><p>Origin-bound customer assistant with this API explicitly allowlisted.</p></div><Badge color={widgets.some((widget) => widget.state === "active") ? "green" : widgets.length ? "amber" : "zinc"}>{widgets.some((widget) => widget.state === "active") ? "Active" : widgets.length ? "Draft" : "Not configured"}</Badge>{widgets.map((widget) => <ConsoleLink key={widget.id} path={entityPath("widget", widget.id)} onNavigate={onNavigate} className="delivery-linked-item"><strong>{widget.name}</strong><small>{widget.allowed_origins.join(", ")}</small><ChevronRight /></ConsoleLink>)}<ConsoleLink path={sectionPath("widgets")} onNavigate={onNavigate} className="panel-footer-link">Manage widgets <ChevronRight /></ConsoleLink></section>
+      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><Bug /></span><div><h2>Support delivery</h2><p>Consent, redaction, encrypted retention and bounded backend delivery.</p></div><Badge color={supportRoute?.state === "active" ? "green" : "amber"}>{supportRoute?.state === "active" ? "Ready" : "Setup"}</Badge>{supportRoute && <span className="delivery-linked-item"><strong>{supportRoute.name}</strong><small>{supportRoute.retention_days}-day retention · {supportRoute.bug_reports_enabled ? "bugs" : ""}{supportRoute.bug_reports_enabled && supportRoute.feedback_enabled ? " & " : ""}{supportRoute.feedback_enabled ? "feedback" : ""}</small></span>}<button type="button" className="panel-footer-link" onClick={onManageSupport}>{supportRoute ? "Change support policy" : "Configure support policy"} <ChevronRight /></button></section>
+    </div>
+    <section className="panel"><PanelHeader title="Channel scope" description="Every channel consumes the same immutable API snapshot; channels never redefine authorization." /><dl className="entity-detail-grid"><div><dt>API</dt><dd>{integration.display_name} {integration.version_key}</dd></div><div><dt>Visibility</dt><dd>{integration.visibility}</dd></div><div><dt>Private identity</dt><dd>{identity?.state ?? "not configured"}</dd></div><div><dt>Widgets</dt><dd>{widgets.length}</dd></div></dl></section>
+  </div>;
+}
+
+function IntegrationTestWorkspace({ integration, distribution, onNavigate }: { integration: APIIntegration; distribution: Distribution | null; onNavigate: (path: string) => void }) {
+  const [preflight, setPreflight] = useState<APIIntegrationPreflight | null>(null);
+  const [running, setRunning] = useState(false);
+  const [preflightError, setPreflightError] = useState("");
+
+  async function runPreflight() {
+    setRunning(true);
+    setPreflightError("");
+    try {
+      setPreflight(await api.preflightIntegration(integration.id));
+    } catch (error) {
+      setPreflight(null);
+      setPreflightError(error instanceof APIError ? error.message : "Server preflight could not run.");
+    } finally { setRunning(false); }
+  }
+
+  const pathForTab = (tab: string) => tab === "resources" ? integrationPath(integration.id, "resources") : tab === "authorization" || tab === "access" ? integrationPath(integration.id, "authorization") : tab === "tools" ? integrationPath(integration.id, "tools") : tab === "recipes" ? integrationPath(integration.id, "recipes") : integrationPath(integration.id, "delivery");
+  const requiredChecks = preflight?.checks.filter((check) => check.required) ?? [];
+  const passed = requiredChecks.filter((check) => check.status === "pass").length;
+  return <div className="integration-tab-content">
+    <div className="notice"><TerminalSquare /><span><strong>Vendor-neutral acceptance suite.</strong> Use the same OAuth + Stateless MCPv2 client against every integration; never special-case a vendor.</span></div>
+    <section className="panel"><PanelHeader title="Configuration preflight" description="Server-backed checks over the exact candidate manifest and immutable bindings. This does not impersonate a user or call the vendor backend." action={<Button disabled={running} onClick={() => void runPreflight()}><RefreshCw data-slot="icon" />{running ? "Running…" : "Run preflight"}</Button>} />{preflightError && <div className="publish-validation error"><span><XCircle /></span><span><strong>Preflight failed</strong><small>{preflightError}</small></span></div>}{preflight?.checks.map((check) => { const ready = check.status === "pass"; const optional = check.status === "optional"; return <ConsoleLink key={check.code} path={pathForTab(check.tab)} onNavigate={onNavigate} className="integration-health-check"><span className={`health-icon ${ready ? "ready" : ""}`}>{ready ? <CheckCircle2 /> : optional ? <ShieldCheck /> : <XCircle />}</span><span><strong>{check.label}</strong><small>{check.message}</small></span><Badge color={ready ? "green" : optional ? "zinc" : "red"}>{ready ? "Pass" : optional ? "Optional" : "Missing"}</Badge><ChevronRight /></ConsoleLink>; })}{!preflight && !preflightError && <div className="empty-row">Run preflight to ask the server to verify the current candidate.</div>}<div className="preflight-summary"><span><strong>{preflight ? `${passed}/${requiredChecks.length} required checks pass` : "Server result pending"}</strong><small>{preflight ? `Candidate r${preflight.candidate_revision} · ${preflight.candidate_manifest_hash} · ${new Date(preflight.generated_at).toLocaleString()}` : "No browser-only assumptions are used"}</small></span><Badge color={preflight?.ready ? "green" : "amber"}>{preflight?.ready ? preflight.matches_latest_published ? "Published & ready" : "Ready to publish" : "Action required"}</Badge></div></section>
+    <section className="panel"><PanelHeader title="MCP client acceptance" description="Complete these live scenarios with a test tenant before publication." action={<ConsoleLink path={sectionPath("runs")} onNavigate={onNavigate} className="entity-back-link">Open activity</ConsoleLink>} /><ol className="acceptance-scenarios"><li><span>1</span><div><strong>Discover metadata and register a public client</strong><small>RFC 8414, protected-resource metadata, DCR, exact resource and PKCE S256.</small></div></li><li><span>2</span><div><strong>Authorize a real test customer</strong><small>OIDC callback, live vendor access evaluation, one-time code and bound token.</small></div></li><li><span>3</span><div><strong>List resources and tools</strong><small>Only published resources and grant-authorized exact tool revisions appear.</small></div></li><li><span>4</span><div><strong>Exercise positive and negative calls</strong><small>Valid call, missing grant, invalid schema, absent confirmation, revoked access and upstream drift.</small></div></li><li><span>5</span><div><strong>Verify widget and support isolation</strong><small>Origin allowlist, API allowlist, redaction, retention, delivery receipt and audit correlation.</small></div></li></ol>{distribution?.agent_setup.private.available ? <a className="panel-footer-link" href={distribution.agent_setup.private.url} target="_blank" rel="noreferrer">Open private MCP test-client setup <ExternalLink /></a> : <div className="empty-row">Private test-client setup becomes available after customer identity is active.</div>}</section>
+  </div>;
+}
+
+type IntegrationsViewProps = {
+  productID: string;
+  integrations: APIIntegration[];
+  resourceSets: APIResourceSet[];
+  sources: Source[];
+  supportRoutes: APISupportRoute[];
+  connections: APIAccessConnection[];
+  tools: APITool[];
+  mcpConnections: APIMCPConnection[];
+  identity: APIIdentity | null;
+  analyses: APIIntegrationAnalysis[];
+  recipes: APIRecipe[];
+  distribution: Distribution | null;
+  widgets: APIWidget[];
+  selectedIntegrationID?: string;
+  activeTab?: IntegrationTab;
+  activeResourceTab?: IntegrationResourceTab;
+  recipeBusy: boolean;
+  onBuild: () => void;
+  onAddSource: () => void;
+  onCrawlSource: (sourceID: string) => void;
+  onPublishSource: (source: Source) => void;
+  onAddTool: () => void;
+  onGenerateRecipes: (integrationID?: string) => void;
+  onChanged: () => Promise<void>;
+  onMessage: (message: string) => void;
+  onNavigate: (path: string) => void;
+};
+
+function IntegrationsView({ productID, integrations, resourceSets, sources, supportRoutes, connections, tools, mcpConnections, identity, analyses, recipes, distribution, widgets, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", recipeBusy, onBuild, onAddSource, onCrawlSource, onPublishSource, onAddTool, onGenerateRecipes, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
   const [query, setQuery] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
   const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
@@ -2211,6 +3363,7 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
   const [setName, setSetName] = useState("");
   const [resourceDescription, setResourceDescription] = useState("");
   const [setManifest, setSetManifest] = useState("[]");
+  const [selectedSourcePublicationIDs, setSelectedSourcePublicationIDs] = useState<string[]>([]);
   const [duplicateSet, setDuplicateSet] = useState<APIResourceSet | null>(null);
   const [duplicateName, setDuplicateName] = useState("");
   const [attachIntegration, setAttachIntegration] = useState<APIIntegration | null>(null);
@@ -2285,7 +3438,18 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
   async function publishIntegration() {
     if (!publishCandidate) return;
     setBusy(true);
-    try { await api.publishIntegration(publishCandidate.id); await onChanged(); await refreshSelectedIntegration(publishCandidate.id); setPublishCandidate(null); onMessage("API published."); } catch (error) { onMessage(error instanceof APIError ? error.message : "API could not be published."); } finally { setBusy(false); }
+    try {
+      const preflight = await api.preflightIntegration(publishCandidate.id);
+      if (!preflight.ready) {
+        const failed = preflight.checks.find((check) => check.required && check.status !== "pass");
+        throw new Error(failed?.message ?? "The server preflight found a required configuration gap.");
+      }
+      await api.publishIntegration(publishCandidate.id, preflight.candidate_revision, preflight.candidate_manifest_hash);
+      await onChanged();
+      await refreshSelectedIntegration(publishCandidate.id);
+      setPublishCandidate(null);
+      onMessage("API published from the exact preflight candidate.");
+    } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "API could not be published."); } finally { setBusy(false); }
   }
 
   function openAccessDialog(value: APIIntegration) {
@@ -2323,14 +3487,20 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
   }
 
   function openResource(value?: APIResourceSet) {
-    setEditingSet(value ?? null); setSetKind(value?.kind ?? "documentation"); setSetName(value?.name ?? ""); setResourceDescription(value?.description ?? ""); setSetManifest(JSON.stringify(value?.latest_revision?.manifest ?? [], null, 2)); setResourceOpen(true);
+    const manifest = value?.latest_revision?.manifest ?? [];
+    setEditingSet(value ?? null); setSetKind(value?.kind ?? "documentation"); setSetName(value?.name ?? ""); setResourceDescription(value?.description ?? ""); setSetManifest(JSON.stringify(manifest, null, 2)); setSelectedSourcePublicationIDs(manifest.map((entry) => typeof entry.source_publication_id === "string" ? entry.source_publication_id : "").filter(Boolean)); setResourceOpen(true);
   }
 
   async function saveResourceSet() {
     setBusy(true);
     try {
-      const manifest = JSON.parse(setManifest) as Array<Record<string, unknown>>;
-      if (!Array.isArray(manifest)) throw new Error("Manifest must be a JSON array.");
+      const latestPublicationEntries = sources.flatMap((source) => source.latestPublication ? [{ source_publication_id: source.latestPublication.id, source_id: source.id, revision: source.latestPublication.revision, content_hash: source.latestPublication.content_hash, name: source.name }] : []);
+      const parsedManifest = JSON.parse(setManifest) as unknown;
+      if (!Array.isArray(parsedManifest)) throw new Error("Manifest must be a JSON array.");
+      const existingEntries = parsedManifest as Array<Record<string, unknown>>;
+      const options = new Map([...existingEntries, ...latestPublicationEntries].map((entry) => [String(entry.source_publication_id ?? ""), entry]));
+      const manifest = setKind === "documentation" ? selectedSourcePublicationIDs.map((id) => options.get(id)).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : existingEntries;
+      if (setKind === "documentation" && manifest.length !== selectedSourcePublicationIDs.length) throw new Error("Every selected documentation publication must still exist.");
       if (editingSet) await api.updateResourceSet(editingSet.id, { name: setName, description: resourceDescription, state: editingSet.state, manifest, revision: editingSet.revision });
       else await api.createResourceSet({ kind: setKind, name: setName, description: resourceDescription, manifest });
       await onChanged(); setResourceOpen(false); onMessage(editingSet ? "New immutable resource-set revision created." : "Reusable resource set created.");
@@ -2366,8 +3536,20 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
     setPinAttachedSet(false);
   }
 
+  let currentResourceManifest: Array<Record<string, unknown>> = [];
+  try {
+    const parsed = JSON.parse(setManifest) as unknown;
+    if (Array.isArray(parsed)) currentResourceManifest = parsed as Array<Record<string, unknown>>;
+  } catch {
+    currentResourceManifest = [];
+  }
+  const documentationPublicationOptions = Array.from(new Map([
+    ...currentResourceManifest.filter((entry) => typeof entry.source_publication_id === "string"),
+    ...sources.flatMap((source) => source.latestPublication ? [{ source_publication_id: source.latestPublication.id, source_id: source.id, revision: source.latestPublication.revision, content_hash: source.latestPublication.content_hash, name: source.name }] : []),
+  ].map((entry) => [String(entry.source_publication_id), entry])).values());
+
   return <>
-    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} activeTab={activeTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} connections={connections} supportRoutes={supportRoutes} tools={tools} mcpConnections={mcpConnections} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddTool={onAddTool} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
+    {selectedIntegrationID ? <IntegrationWorkspaceView productID={productID} integration={selectedIntegration} integrations={integrations} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} connections={connections} supportRoutes={supportRoutes} tools={tools} mcpConnections={mcpConnections} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} recipeBusy={recipeBusy} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAddTool={onAddTool} onGenerateRecipes={onGenerateRecipes} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onChanged={onChanged} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
 
     <Dialog
       open={integrationOpen}
@@ -2391,7 +3573,7 @@ function IntegrationsView({ integrations, resourceSets, supportRoutes, connectio
         </>}
       </div>
     </Dialog>
-    <Dialog open={resourceOpen} onClose={setResourceOpen} title={editingSet ? `Create revision for ${editingSet.name}` : "Create reusable resource set"} description="Sets are reusable by explicit attachment. Each save creates immutable content." actions={<><Button outline onClick={() => setResourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !setName.trim()} onClick={saveResourceSet}>{busy ? "Saving…" : editingSet ? "Create revision" : "Create set"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Kind</span><select disabled={Boolean(editingSet)} value={setKind} onChange={(event) => setSetKind(event.target.value as APIResourceSet["kind"])}><option value="documentation">Documentation</option><option value="api">API contract</option></select></label><label className="auth-field"><span>Name</span><input value={setName} onChange={(event) => setSetName(event.target.value)} /></label></div><label className="auth-field"><span>Description</span><textarea value={resourceDescription} onChange={(event) => setResourceDescription(event.target.value)} /></label><label className="auth-field"><span>Manifest (JSON array)</span><textarea className="code-input" value={setManifest} onChange={(event) => setSetManifest(event.target.value)} spellCheck={false} /></label></div></Dialog>
+    <Dialog open={resourceOpen} onClose={setResourceOpen} title={editingSet ? `Create revision for ${editingSet.name}` : "Create reusable resource set"} description="Sets are reusable by explicit attachment. Each save creates immutable content." actions={<><Button outline onClick={() => setResourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !setName.trim() || (setKind === "documentation" && selectedSourcePublicationIDs.length === 0)} onClick={saveResourceSet}>{busy ? "Saving…" : editingSet ? "Create revision" : "Create set"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Kind</span><select disabled={Boolean(editingSet)} value={setKind} onChange={(event) => setSetKind(event.target.value as APIResourceSet["kind"])}><option value="documentation">Documentation</option><option value="api">API contract</option></select></label><label className="auth-field"><span>Name</span><input value={setName} onChange={(event) => setSetName(event.target.value)} /></label></div><label className="auth-field"><span>Description</span><textarea value={resourceDescription} onChange={(event) => setResourceDescription(event.target.value)} /></label>{setKind === "documentation" ? <div className="auth-field"><span>Reviewed source publications</span><div className="catalog-list">{documentationPublicationOptions.map((entry) => { const id = String(entry.source_publication_id); const selected = selectedSourcePublicationIDs.includes(id); return <label className="catalog-tool" key={id}><input type="checkbox" checked={selected} onChange={(event) => setSelectedSourcePublicationIDs((items) => event.target.checked ? [...items, id] : items.filter((value) => value !== id))} /><span className="check-box">{selected && <Check />}</span><span><strong>{String(entry.name ?? entry.source_id)}</strong><code>{id}</code><small>Publication r{String(entry.revision)} · {String(entry.content_hash)}</small></span><Badge color="green">reviewed</Badge></label>; })}{documentationPublicationOptions.length === 0 && <div className="empty-row">Publish a reviewed documentation generation before creating this set.</div>}</div><small>Each selection pins one immutable source-publication revision and content hash. Arbitrary JSON is not accepted for documentation.</small></div> : <label className="auth-field"><span>API contract manifest (JSON array)</span><textarea className="code-input" value={setManifest} onChange={(event) => setSetManifest(event.target.value)} spellCheck={false} /></label>}</div></Dialog>
     <Dialog open={Boolean(duplicateSet)} onClose={(open) => { if (!open) setDuplicateSet(null); }} title="Duplicate resource set" description="Creates an independent copy so later edits do not affect APIs using the original." actions={<><Button outline onClick={() => setDuplicateSet(null)}>Cancel</Button><Button color="indigo" disabled={busy || !duplicateName.trim()} onClick={duplicateResource}>Duplicate</Button></>}><label className="auth-field"><span>New set name</span><input value={duplicateName} onChange={(event) => setDuplicateName(event.target.value)} /></label></Dialog>
     <Dialog open={Boolean(attachIntegration)} onClose={(open) => { if (!open) setAttachIntegration(null); }} title={`Attach resources to ${attachIntegration?.display_name ?? "API"}`} description="Follow latest for deliberate sharing, or pin the current immutable revision." actions={<><Button outline onClick={() => setAttachIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy || !attachSetID} onClick={attachResource}>Attach</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Resource set</span><select value={attachSetID} onChange={(event) => setAttachSetID(event.target.value)}><option value="">Select a set</option>{resourceSets.filter((set) => (!attachKind || set.kind === attachKind) && !(attachIntegration?.resources ?? []).some((link) => link.resource_set_id === set.id)).map((set) => <option key={set.id} value={set.id}>{set.kind === "api" ? "API contract" : "documentation"} · {set.name}</option>)}</select></label><label className="compact-check"><input type="checkbox" checked={pinAttachedSet} onChange={(event) => setPinAttachedSet(event.target.checked)} /><span>Pin the current revision instead of following latest</span></label></div></Dialog>
     <Dialog open={Boolean(accessIntegration)} onClose={(open) => { if (!open) setAccessIntegration(null); }} title={`Access for ${accessIntegration?.display_name ?? "API"}`} description="Choose the service connections this API may use. Credentials remain encrypted and are never copied into the API." actions={<><Button outline onClick={() => setAccessIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy} onClick={saveAccessConnections}>{busy ? "Saving…" : "Save connections"}</Button></>}><div className="auth-form compact-form"><fieldset className="catalog-settings-section"><legend>Allowed connections</legend>{connections.map((connection) => <label className="compact-check" key={connection.id}><input type="checkbox" aria-label={`Allow ${connection.name}`} checked={accessSelection.includes(connection.id)} onChange={() => setAccessSelection((values) => values.includes(connection.id) ? values.filter((id) => id !== connection.id) : [...values, connection.id])} /><span><strong>{connection.name}</strong><small>{connection.definition?.name ?? "Service connection"} · {connection.state}</small></span></label>)}{connections.length === 0 && <p className="dialog-empty-copy">No service connections exist yet. Create one in Settings, then return here.</p>}</fieldset></div></Dialog>
@@ -2540,7 +3722,7 @@ function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect, onNavi
 }
 
 function ToolsView({ tools, onAdd, onPublish, onNavigate }: { tools: APITool[]; onAdd: () => void; onPublish: (tool: APITool) => void; onNavigate: (path: string) => void }) {
-  return <><PageHeading eyebrow="Actions" title="Tools" action={<Button onClick={onAdd}><Plus data-slot="icon" />Create API tool</Button>} /><div className="notice"><ShieldCheck /><span><strong>Policy-wrapped execution.</strong> Every call is schema validated, grant-scoped, reauthorized, rate-limited, and audited before a fixed backend is reached.</span></div><div className="tool-grid">{tools.map((tool) => <article className={`panel tool-card ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><span className="tool-icon">{tool.backend_kind === "mcp" ? <Share2 /> : tool.namespace === "credentials" ? <KeyRound /> : <TerminalSquare />}</span><div><span className="tool-badges"><Badge color={tool.state === "published" ? "green" : "amber"}>{tool.state}</Badge><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP"}</Badge>{tool.upstream_drifted && <Badge color="red">Schema drift</Badge>}</span><h2><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link">{tool.namespace}.{tool.name}</EntityLink></h2><code>{tool.backend_kind === "mcp" ? `upstream · ${tool.upstream_tool_name}` : `${tool.http_method} · tool backend`}</code>{tool.state === "draft" && !tool.upstream_drifted && <Button outline className="publish-tool" onClick={() => onPublish(tool)}>Publish</Button>}{tool.upstream_drifted && <small className="drift-warning">Re-inspect and review before republishing.</small>}</div><button className="more" type="button" aria-label={`Actions for ${tool.name}`}><MoreHorizontal /></button></article>)}<button type="button" className="new-tool-card" onClick={onAdd}><Plus /><strong>Add API tool</strong><span>Definition → schema → API action → authz → test → publish</span></button></div></>;
+  return <><PageHeading eyebrow="Actions" title="Tools" action={<Button onClick={onAdd}><Plus data-slot="icon" />Create API tool</Button>} /><div className="notice"><ShieldCheck /><span><strong>Policy-wrapped execution.</strong> Every call is schema validated, grant-scoped, reauthorized, rate-limited, and audited before a fixed backend is reached.</span></div><div className="tool-grid">{tools.map((tool) => <article className={`panel tool-card ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><span className="tool-icon">{tool.backend_kind === "mcp" ? <Share2 /> : tool.namespace === "credentials" ? <KeyRound /> : <TerminalSquare />}</span><div><span className="tool-badges"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP"}</Badge>{tool.upstream_drifted && <Badge color="red">Schema drift</Badge>}</span><h2><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link">{tool.namespace}.{tool.name}</EntityLink></h2><code>{tool.backend_kind === "mcp" ? `upstream · ${tool.upstream_tool_name}` : `${tool.http_method} · tool backend`}</code>{tool.state === "draft" && !tool.upstream_drifted && <Button outline className="publish-tool" onClick={() => onPublish(tool)}>Publish</Button>}{tool.upstream_drifted && <small className="drift-warning">Re-inspect and review before republishing.</small>}</div><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow tool-open-link" ariaLabel={`Open ${tool.namespace}.${tool.name}`}><ChevronRight /></ConsoleLink></article>)}<button type="button" className="new-tool-card" onClick={onAdd}><Plus /><strong>Add API tool</strong><span>Definition → schema → API action → authz → test → publish</span></button></div></>;
 }
 
 
@@ -2652,7 +3834,7 @@ function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onAp
         </section>
         <section className="panel recipe-editor-panel">
           <h2>Evidence</h2>
-          {availableReferences.length > 0 ? <div className="recipe-editor-references">{availableReferences.map((reference) => <label className="compact-check" key={reference.resource_id ?? reference.url}><input type="checkbox" checked={Boolean(reference.resource_id && selectedReferenceIDs.includes(reference.resource_id))} onChange={() => { if (!reference.resource_id) return; setReferenceSelections((values) => ({ ...values, [selected.id]: selectedReferenceIDs.includes(reference.resource_id!) ? selectedReferenceIDs.filter((id) => id !== reference.resource_id) : [...selectedReferenceIDs, reference.resource_id!] })); }} /><span>{reference.label}<small>{reference.kind}</small></span></label>)}</div> : <p className="recipe-editor-muted">No linkable evidence is available for this draft.</p>}
+          {availableReferences.length > 0 ? <div className="recipe-editor-references">{availableReferences.map((reference) => <label className="compact-check" key={reference.resource_id ?? reference.url}><input type="checkbox" checked={Boolean(reference.resource_id && selectedReferenceIDs.includes(reference.resource_id))} onChange={() => { if (!reference.resource_id) return; setReferenceSelections((values) => ({ ...values, [selected.id]: selectedReferenceIDs.includes(reference.resource_id!) ? selectedReferenceIDs.filter((id) => id !== reference.resource_id) : [...selectedReferenceIDs, reference.resource_id!] })); }} /><span>{reference.label}<small>{reference.kind}</small></span></label>)}</div> : <p className="recipe-editor-muted">No external links are available. This private recipe remains grounded in {selected.dependencies.length} immutable catalog dependenc{selected.dependencies.length === 1 ? "y" : "ies"} from its analysis.</p>}
         </section>
         {(revision?.review || (revision?.validation.length ?? 0) > 0) && <section className="panel recipe-editor-panel">
           <h2>Review</h2>

@@ -1,6 +1,7 @@
 export type Section = "product" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "settings";
 
-export type IntegrationTab = "overview" | "resources" | "access" | "history";
+export type IntegrationTab = "overview" | "resources" | "authorization" | "tools" | "recipes" | "delivery" | "test" | "history";
+export type IntegrationResourceTab = "documentation" | "contracts" | "packages";
 export type SettingsTab = "overview" | "identity" | "connections" | "reporting" | "storage" | "ai" | "root";
 
 export type EntityKind =
@@ -22,15 +23,25 @@ export type EntityKind =
 
 export type ConsoleRoute =
   | { kind: "section"; section: Section; path: string; settingsTab?: SettingsTab }
-  | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; path: string }
+  | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; integrationResourceTab?: IntegrationResourceTab; path: string }
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
   | { kind: "not-found"; section: "product"; path: string };
 
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "resources", label: "Resources" },
-  { id: "access", label: "Access" },
+  { id: "authorization", label: "Authorization" },
+  { id: "tools", label: "Tools" },
+  { id: "recipes", label: "Recipes" },
+  { id: "delivery", label: "Delivery" },
+  { id: "test", label: "Test" },
   { id: "history", label: "History" },
+];
+
+export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; label: string }> = [
+  { id: "documentation", label: "Documentation" },
+  { id: "contracts", label: "API contracts" },
+  { id: "packages", label: "SDKs & Packages" },
 ];
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
@@ -96,9 +107,11 @@ export function entityPath(entity: EntityKind, uid: string): string {
   return `/${entity}/${encodeURIComponent(uid)}`;
 }
 
-export function integrationPath(uid: string, tab: IntegrationTab = "overview"): string {
+export function integrationPath(uid: string, tab: IntegrationTab = "overview", resourceTab?: IntegrationResourceTab): string {
   const base = entityPath("integration", uid);
-  return tab === "overview" ? base : `${base}/${tab}`;
+  if (tab === "overview") return base;
+  if (tab === "resources" && resourceTab && resourceTab !== "documentation") return `${base}/resources/${resourceTab}`;
+  return `${base}/${tab}`;
 }
 
 export function routeForSection(section: Section): ConsoleRoute {
@@ -110,8 +123,9 @@ export function routeForEntity(entity: EntityKind, uid: string): ConsoleRoute {
   return { kind: "entity", entity: entity as Exclude<EntityKind, "integration">, uid, section: ENTITY_SECTIONS[entity], path: entityPath(entity, uid) };
 }
 
-export function routeForIntegration(uid: string, integrationTab: IntegrationTab = "overview"): ConsoleRoute {
-  return { kind: "entity", entity: "integration", uid, integrationTab, section: "product", path: integrationPath(uid, integrationTab) };
+export function routeForIntegration(uid: string, integrationTab: IntegrationTab = "overview", integrationResourceTab?: IntegrationResourceTab): ConsoleRoute {
+  const resourceTab = integrationTab === "resources" ? integrationResourceTab ?? "documentation" : undefined;
+  return { kind: "entity", entity: "integration", uid, integrationTab, ...(resourceTab ? { integrationResourceTab: resourceTab } : {}), section: "product", path: integrationPath(uid, integrationTab, resourceTab) };
 }
 
 export function parseConsolePath(pathname: string): ConsoleRoute {
@@ -128,13 +142,17 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (section) return routeForSection(section);
 
-  const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?$/);
+	const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
   if (integrationMatch) {
     const requestedTab = integrationMatch[2] ?? "overview";
     const tab = requestedTab as IntegrationTab;
     if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "product", path };
+    const requestedResourceTab = integrationMatch[3];
+    if (requestedResourceTab && tab !== "resources") return { kind: "not-found", section: "product", path };
+    const resourceTab = requestedResourceTab as IntegrationResourceTab | undefined;
+    if (resourceTab && !INTEGRATION_RESOURCE_TABS.some((candidate) => candidate.id === resourceTab)) return { kind: "not-found", section: "product", path };
     try {
-      return routeForIntegration(decodeURIComponent(integrationMatch[1]), tab);
+      return routeForIntegration(decodeURIComponent(integrationMatch[1]), tab, resourceTab);
     } catch {
       return { kind: "not-found", section: "product", path };
     }

@@ -186,7 +186,7 @@ func (b *Broker) Begin(ctx context.Context, request AuthorizationRequest) (strin
 		return "", ErrInvalidOAuth
 	}
 	metadata, err := b.resolveClient(ctx, request.ProductID, request.ClientID)
-	if err != nil || metadata.ClientID != request.ClientID || !contains(metadata.RedirectURIs, request.RedirectURI) {
+	if err != nil || metadata.ClientID != request.ClientID || !registeredRedirectMatches(metadata.RedirectURIs, request.RedirectURI) {
 		return "", ErrInvalidOAuth
 	}
 	config, err := b.repository.IdentityProvider(ctx, request.ProductID)
@@ -296,6 +296,7 @@ func (b *Broker) Callback(ctx context.Context, rawState, code string) (CallbackR
 	if err != nil {
 		return CallbackResult{}, fmt.Errorf("vendor access evaluation failed closed: %w", err)
 	}
+	accessEvaluatedAt := b.now()
 	secretID, err := b.saveDelegatedToken(ctx, config, upstream.AccessToken)
 	if err != nil {
 		return CallbackResult{}, err
@@ -308,7 +309,7 @@ func (b *Broker) Callback(ctx context.Context, rawState, code string) (CallbackR
 	if err != nil {
 		return CallbackResult{}, err
 	}
-	value := OAuthCode{Digest: digest(rawCode), ProductID: productID, ClientID: state.ClientID, RedirectURI: state.RedirectURI, Resource: state.Resource, Scopes: state.Scopes, DownstreamChallenge: state.DownstreamChallenge, Issuer: upstream.Claims.Issuer, Subject: upstream.Claims.Subject, Email: upstream.Claims.Email, DisplayName: upstream.Claims.DisplayName, CustomerAccountID: account.ID, ExternalCustomerID: account.ExternalID, InstallationID: upstream.Claims.InstallationID, Grants: grantsMap(evaluation.Grants), AccessEvaluationID: evaluation.ID, PolicyVersion: evaluation.PolicyVersion, UpstreamAccessSecretID: secretID, AccessExpiresAt: accessExpiresAt, ExpiresAt: b.now().Add(5 * time.Minute)}
+	value := OAuthCode{Digest: digest(rawCode), ProductID: productID, ClientID: state.ClientID, RedirectURI: state.RedirectURI, Resource: state.Resource, Scopes: state.Scopes, DownstreamChallenge: state.DownstreamChallenge, Issuer: upstream.Claims.Issuer, Subject: upstream.Claims.Subject, Email: upstream.Claims.Email, DisplayName: upstream.Claims.DisplayName, CustomerAccountID: account.ID, ExternalCustomerID: account.ExternalID, InstallationID: upstream.Claims.InstallationID, Grants: grantsMap(evaluation.Grants), AccessEvaluationID: evaluation.ID, AccessEvaluatedAt: accessEvaluatedAt, PolicyVersion: evaluation.PolicyVersion, UpstreamAccessSecretID: secretID, AccessExpiresAt: accessExpiresAt, ExpiresAt: b.now().Add(5 * time.Minute)}
 	if err := b.repository.CreateOAuthCode(ctx, value); err != nil {
 		return CallbackResult{}, err
 	}
@@ -330,11 +331,11 @@ func (b *Broker) Exchange(ctx context.Context, rawCode, verifier, clientID, redi
 		return TokenResult{}, err
 	}
 	now := b.now()
-	record := AccessToken{Digest: digest(rawToken), ProductID: code.ProductID, ClientID: code.ClientID, Resource: code.Resource, Issuer: code.Issuer, Subject: code.Subject, Email: code.Email, DisplayName: code.DisplayName, CustomerAccountID: code.CustomerAccountID, ExternalCustomerID: code.ExternalCustomerID, InstallationID: code.InstallationID, Grants: code.Grants, AccessEvaluationID: code.AccessEvaluationID, PolicyVersion: code.PolicyVersion, UpstreamAccessSecretID: code.UpstreamAccessSecretID, Scopes: code.Scopes, ExpiresAt: code.AccessExpiresAt, CreatedAt: now}
+	record := AccessToken{Digest: digest(rawToken), ProductID: code.ProductID, ClientID: code.ClientID, Resource: code.Resource, Issuer: code.Issuer, Subject: code.Subject, Email: code.Email, DisplayName: code.DisplayName, CustomerAccountID: code.CustomerAccountID, ExternalCustomerID: code.ExternalCustomerID, InstallationID: code.InstallationID, Grants: code.Grants, AccessEvaluationID: code.AccessEvaluationID, AccessEvaluatedAt: code.AccessEvaluatedAt, PolicyVersion: code.PolicyVersion, UpstreamAccessSecretID: code.UpstreamAccessSecretID, Scopes: code.Scopes, ExpiresAt: code.AccessExpiresAt, CreatedAt: now}
 	if err := b.repository.CreateAccessToken(ctx, record); err != nil {
 		return TokenResult{}, err
 	}
-	principal := Principal{ProductID: record.ProductID, ClientID: record.ClientID, Resource: record.Resource, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, CustomerAccountID: record.CustomerAccountID, ExternalCustomerID: record.ExternalCustomerID, InstallationID: record.InstallationID, Grants: record.Grants, AccessEvaluationID: record.AccessEvaluationID, PolicyVersion: record.PolicyVersion, Scopes: record.Scopes}
+	principal := Principal{ProductID: record.ProductID, ClientID: record.ClientID, Resource: record.Resource, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, CustomerAccountID: record.CustomerAccountID, ExternalCustomerID: record.ExternalCustomerID, InstallationID: record.InstallationID, Grants: record.Grants, AccessEvaluationID: record.AccessEvaluationID, AccessEvaluatedAt: record.AccessEvaluatedAt, PolicyVersion: record.PolicyVersion, Scopes: record.Scopes}
 	return TokenResult{AccessToken: "doko_at_" + rawToken, TokenType: "Bearer", ExpiresIn: max(1, int(record.ExpiresAt.Sub(now).Seconds())), Scope: strings.Join(record.Scopes, " "), Principal: principal}, nil
 }
 
@@ -365,7 +366,7 @@ func (b *Broker) Authenticate(ctx context.Context, token string) (Principal, err
 	if err != nil {
 		return Principal{}, ErrInvalidOAuth
 	}
-	return Principal{ProductID: record.ProductID, ClientID: record.ClientID, Resource: record.Resource, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, CustomerAccountID: record.CustomerAccountID, ExternalCustomerID: record.ExternalCustomerID, InstallationID: record.InstallationID, Grants: record.Grants, AccessEvaluationID: record.AccessEvaluationID, PolicyVersion: record.PolicyVersion, DelegatedAPIOrigin: config.DelegatedAPIOrigin, UpstreamAccessToken: string(plaintext), Scopes: record.Scopes}, nil
+	return Principal{ProductID: record.ProductID, ClientID: record.ClientID, Resource: record.Resource, Issuer: record.Issuer, Subject: record.Subject, Email: record.Email, DisplayName: record.DisplayName, CustomerAccountID: record.CustomerAccountID, ExternalCustomerID: record.ExternalCustomerID, InstallationID: record.InstallationID, Grants: record.Grants, AccessEvaluationID: record.AccessEvaluationID, AccessEvaluatedAt: record.AccessEvaluatedAt, PolicyVersion: record.PolicyVersion, DelegatedAPIOrigin: config.DelegatedAPIOrigin, UpstreamAccessToken: string(plaintext), Scopes: record.Scopes}, nil
 }
 
 type OIDCUpstream struct {
@@ -466,9 +467,22 @@ type IPResolver interface {
 	LookupIP(context.Context, string, string) ([]net.IP, error)
 }
 
-func contains(values []string, expected string) bool {
+func registeredRedirectMatches(values []string, requested string) bool {
 	for _, value := range values {
-		if hmac.Equal([]byte(value), []byte(expected)) {
+		if hmac.Equal([]byte(value), []byte(requested)) {
+			return true
+		}
+		registeredURL, registeredErr := url.Parse(value)
+		requestedURL, requestedErr := url.Parse(requested)
+		if registeredErr != nil || requestedErr != nil || registeredURL.Scheme != "http" || requestedURL.Scheme != "http" {
+			continue
+		}
+		registeredIP := net.ParseIP(registeredURL.Hostname())
+		requestedIP := net.ParseIP(requestedURL.Hostname())
+		if registeredIP == nil || requestedIP == nil || !registeredIP.IsLoopback() || !requestedIP.IsLoopback() || !strings.EqualFold(registeredURL.Hostname(), requestedURL.Hostname()) {
+			continue
+		}
+		if registeredURL.EscapedPath() == requestedURL.EscapedPath() && registeredURL.RawQuery == requestedURL.RawQuery && registeredURL.Fragment == requestedURL.Fragment {
 			return true
 		}
 	}
@@ -488,8 +502,20 @@ func unsafeIP(address net.IP) bool {
 	return false
 }
 
+// IsLocalDevelopmentHostname recognizes the RFC-reserved localhost namespace
+// without accepting lookalike public suffixes such as localhost.example.com.
+func IsLocalDevelopmentHostname(hostname string) bool {
+	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+	return hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" || strings.HasSuffix(hostname, ".localhost")
+}
+
+func localDevelopmentIP(address net.IP) bool {
+	return address != nil && (address.IsLoopback() || address.IsPrivate())
+}
+
 func safeClient(ctx context.Context, parsed *url.URL, provided *http.Client, resolver IPResolver) (*http.Client, error) {
-	if parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Port() != "" && parsed.Port() != "443") {
+	localDevelopment := IsLocalDevelopmentHostname(parsed.Hostname())
+	if parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (localDevelopment && parsed.Scheme != "http") || (!localDevelopment && (parsed.Scheme != "https" || (parsed.Port() != "" && parsed.Port() != "443"))) {
 		return nil, errors.New("destination must be credential-free HTTPS on port 443")
 	}
 	if resolver == nil {
@@ -500,7 +526,7 @@ func safeClient(ctx context.Context, parsed *url.URL, provided *http.Client, res
 		return nil, errors.New("destination did not resolve safely")
 	}
 	for _, address := range addresses {
-		if unsafeIP(address) {
+		if (localDevelopment && !localDevelopmentIP(address)) || (!localDevelopment && unsafeIP(address)) {
 			return nil, errors.New("destination resolves to a non-public address")
 		}
 	}
@@ -508,9 +534,19 @@ func safeClient(ctx context.Context, parsed *url.URL, provided *http.Client, res
 		return provided, nil
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	transport := &http.Transport{Proxy: nil, DisableCompression: true, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname()}, ResponseHeaderTimeout: 10 * time.Second, DialContext: func(dialContext context.Context, network, _ string) (net.Conn, error) {
-		return dialer.DialContext(dialContext, network, net.JoinHostPort(addresses[0].String(), "443"))
+	port := parsed.Port()
+	if port == "" {
+		port = "443"
+		if localDevelopment {
+			port = "80"
+		}
+	}
+	transport := &http.Transport{Proxy: nil, DisableCompression: true, ResponseHeaderTimeout: 10 * time.Second, DialContext: func(dialContext context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(dialContext, network, net.JoinHostPort(addresses[0].String(), port))
 	}}
+	if !localDevelopment {
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname()}
+	}
 	return &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 

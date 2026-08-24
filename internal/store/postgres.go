@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/auth"
+	"github.com/dokosoko/dokosoko-service/internal/docreview"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -541,20 +542,213 @@ func (p *Postgres) UpdateSource(ctx context.Context, value model.Source, expecte
 	return updated, tx.Commit(ctx)
 }
 
-func (p *Postgres) PublishSource(ctx context.Context, productID, sourceID string, expected int64) (model.Source, error) {
+func scanSourcePublication(row interface{ Scan(...any) error }) (model.SourcePublication, error) {
+	var value model.SourcePublication
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.SourceID, &value.CrawlJobID, &value.Revision, &value.Visibility, &value.ContentHash, &value.DocumentCount, &value.ReviewedBy, &value.ReviewedAt, &value.PublishedAt)
+	return value, databaseError(err)
+}
+
+const sourcePublicationSelect = `SELECT id::text, organisation_id::text, product_id::text, source_id::text, crawl_job_id::text, revision, visibility::text, content_hash, document_count, reviewed_by, reviewed_at, published_at FROM source_publications`
+
+func (p *Postgres) SourcePublications(ctx context.Context, productID, sourceID string) ([]model.SourcePublication, error) {
+	rows, err := p.pool.Query(ctx, sourcePublicationSelect+` WHERE product_id = $1 AND source_id = $2 ORDER BY revision DESC`, productID, sourceID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.SourcePublication, 0)
+	for rows.Next() {
+		value, scanErr := scanSourcePublication(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) SourcePublication(ctx context.Context, productID, publicationID string) (model.SourcePublication, error) {
+	return scanSourcePublication(p.pool.QueryRow(ctx, sourcePublicationSelect+` WHERE product_id = $1 AND id = $2`, productID, publicationID))
+}
+
+func (p *Postgres) SourceReview(ctx context.Context, productID, sourceID, crawlJobID string) (model.SourceReview, error) {
+	source, err := p.Source(ctx, productID, sourceID)
+	if err != nil {
+		return model.SourceReview{}, err
+	}
+	jobQuery := crawlJobSelect + ` WHERE product_id = $1 AND source_id = $2`
+	args := []any{productID, sourceID}
+	if strings.TrimSpace(crawlJobID) != "" {
+		jobQuery += ` AND id = $3`
+		args = append(args, crawlJobID)
+	}
+	jobQuery += ` ORDER BY queued_at DESC, id DESC LIMIT 1`
+	job, err := scanCrawlJob(p.pool.QueryRow(ctx, jobQuery, args...))
+	if err != nil {
+		return model.SourceReview{}, err
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT kd.id::text, cjd.crawl_job_id::text, kd.snapshot_id::text, kd.title,
+		       kd.canonical_url, cjd.assessment_state::text, cjd.assessment_trust_level,
+		       cjd.assessment_injection_indicators,
+		       'sha256:' || encode(ss.content_sha256, 'hex'), cjd.changed
+		FROM crawl_job_documents cjd
+		JOIN knowledge_documents kd ON kd.id = cjd.knowledge_document_id
+		JOIN source_snapshots ss ON ss.id = kd.snapshot_id
+		WHERE cjd.crawl_job_id = $1 AND kd.product_id = $2 AND kd.source_id = $3
+		ORDER BY kd.canonical_url, kd.id`, job.ID, productID, sourceID)
+	if err != nil {
+		return model.SourceReview{}, databaseError(err)
+	}
+	defer rows.Close()
+	documents := make([]model.CrawlReviewDocument, 0)
+	for rows.Next() {
+		var value model.CrawlReviewDocument
+		if scanErr := rows.Scan(&value.ID, &value.CrawlJobID, &value.SnapshotID, &value.Title, &value.CanonicalURL, &value.State, &value.TrustLevel, &value.InjectionIndicators, &value.ContentHash, &value.Changed); scanErr != nil {
+			return model.SourceReview{}, scanErr
+		}
+		documents = append(documents, value)
+	}
+	if err := rows.Err(); err != nil {
+		return model.SourceReview{}, err
+	}
+	review := model.SourceReview{Source: source, CrawlJob: job, Documents: documents}
+	publication, err := scanSourcePublication(p.pool.QueryRow(ctx, sourcePublicationSelect+` WHERE product_id = $1 AND source_id = $2 AND crawl_job_id = $3`, productID, sourceID, job.ID))
+	if err == nil {
+		review.Publication = &publication
+	} else if !errors.Is(err, ErrNotFound) {
+		return model.SourceReview{}, err
+	}
+	return review, nil
+}
+
+func (p *Postgres) PublishSource(ctx context.Context, productID, sourceID string, expected int64, publication model.SourcePublication, documentIDs []string) (model.Source, model.SourcePublication, error) {
+	if len(documentIDs) == 0 {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return model.Source{}, err
+		return model.Source{}, model.SourcePublication{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	updated, err := scanSource(tx.QueryRow(ctx, `UPDATE sources SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $3 AND state <> 'quarantined' RETURNING id::text, organisation_id::text, product_id::text, name, kind, location, visibility::text, state::text, revision, created_at, updated_at`, productID, sourceID, expected))
+
+	// All crawler paths that can create or reassess evidence take this row
+	// first. Holding it through commit makes the checks below one serial view.
+	lockedSource, err := scanSource(tx.QueryRow(ctx, `
+		SELECT id::text, organisation_id::text, product_id::text, name, kind, location,
+		       visibility::text, state::text, revision, created_at, updated_at
+		FROM sources
+		WHERE product_id = $1 AND id = $2
+		FOR UPDATE`, productID, sourceID))
 	if err != nil {
-		return model.Source{}, err
+		return model.Source{}, model.SourcePublication{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE knowledge_documents SET state = 'published', visibility = $3, revision = revision + 1, updated_at = now() WHERE product_id = $1 AND source_id = $2 AND state = 'validated'`, productID, sourceID, updated.Visibility); err != nil {
-		return model.Source{}, err
+	if lockedSource.Revision != expected || lockedSource.Quarantined {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
 	}
-	return updated, tx.Commit(ctx)
+
+	latestJob, err := scanCrawlJob(tx.QueryRow(ctx, crawlJobSelect+`
+		WHERE product_id = $1 AND source_id = $2
+		ORDER BY queued_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE`, productID, sourceID))
+	if errors.Is(err, ErrNotFound) {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	if latestJob.ID != publication.CrawlJobID || latestJob.FinishedAt == nil ||
+		(latestJob.State != "review" && latestJob.State != "succeeded") ||
+		latestJob.FetchedCount == 0 {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT kd.id::text, cjd.crawl_job_id::text, kd.snapshot_id::text, kd.title,
+		       kd.canonical_url, cjd.assessment_state::text, cjd.assessment_trust_level,
+		       cjd.assessment_injection_indicators,
+		       'sha256:' || encode(ss.content_sha256, 'hex'), cjd.changed,
+		       kd.state::text, kd.injection_indicators
+		FROM crawl_job_documents cjd
+		JOIN knowledge_documents kd ON kd.id = cjd.knowledge_document_id
+		JOIN source_snapshots ss ON ss.id = kd.snapshot_id
+		WHERE cjd.crawl_job_id = $1
+		  AND kd.product_id = $2 AND kd.source_id = $3
+		  AND kd.id = ANY($4::uuid[])
+		ORDER BY kd.id
+		FOR UPDATE OF cjd, kd`, publication.CrawlJobID, productID, sourceID, documentIDs)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, databaseError(err)
+	}
+	lockedDocuments := make([]model.CrawlReviewDocument, 0, len(documentIDs))
+	for rows.Next() {
+		var document model.CrawlReviewDocument
+		var liveState string
+		var liveIndicators json.RawMessage
+		if scanErr := rows.Scan(
+			&document.ID, &document.CrawlJobID, &document.SnapshotID, &document.Title,
+			&document.CanonicalURL, &document.State, &document.TrustLevel,
+			&document.InjectionIndicators, &document.ContentHash, &document.Changed,
+			&liveState, &liveIndicators,
+		); scanErr != nil {
+			rows.Close()
+			return model.Source{}, model.SourcePublication{}, scanErr
+		}
+		if !docreview.SafeAssessment(document.State, document.InjectionIndicators) ||
+			!docreview.SafeAssessment(liveState, liveIndicators) {
+			rows.Close()
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+		lockedDocuments = append(lockedDocuments, document)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return model.Source{}, model.SourcePublication{}, rowsErr
+	}
+	if len(lockedDocuments) != len(documentIDs) {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	lockedHash, err := docreview.PublicationContentHash(lockedDocuments)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	if publication.ContentHash != lockedHash {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+
+	updated, err := scanSource(tx.QueryRow(ctx, `UPDATE sources SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $3 AND state <> 'quarantined' RETURNING id::text, organisation_id::text, product_id::text, name, kind, location, visibility::text, state::text, revision, created_at, updated_at`, productID, sourceID, expected))
+	if errors.Is(err, ErrNotFound) {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	publication, err = scanSourcePublication(tx.QueryRow(ctx, `
+		INSERT INTO source_publications(id, organisation_id, product_id, source_id, crawl_job_id, revision, visibility, content_hash, document_count, reviewed_by, reviewed_at, published_at)
+		SELECT $1, $2, $3, $4, $5, coalesce(max(revision), 0) + 1, $6, $7, $8, $9, $10, $11
+		FROM source_publications WHERE source_id = $4
+		RETURNING id::text, organisation_id::text, product_id::text, source_id::text, crawl_job_id::text, revision, visibility::text, content_hash, document_count, reviewed_by, reviewed_at, published_at`, publication.ID, updated.OrganisationID, productID, sourceID, publication.CrawlJobID, updated.Visibility, publication.ContentHash, len(documentIDs), publication.ReviewedBy, publication.ReviewedAt, publication.PublishedAt))
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	result, err := tx.Exec(ctx, `
+		INSERT INTO source_publication_documents(source_publication_id, knowledge_document_id)
+		SELECT $1, value::uuid FROM unnest($2::text[]) AS selected(value)`, publication.ID, documentIDs)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, databaseError(err)
+	}
+	if result.RowsAffected() != int64(len(documentIDs)) {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `UPDATE knowledge_documents SET state = 'published', visibility = $3, revision = revision + 1, updated_at = now() WHERE product_id = $1 AND source_id = $2 AND id = ANY($4::uuid[]) AND state = 'validated' AND injection_indicators = '[]'::jsonb`, productID, sourceID, updated.Visibility, documentIDs); err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	return updated, publication, nil
 }
 
 func scanCrawlJob(row interface{ Scan(...any) error }) (model.CrawlJob, error) {
@@ -566,7 +760,7 @@ func scanCrawlJob(row interface{ Scan(...any) error }) (model.CrawlJob, error) {
 const crawlJobSelect = `SELECT id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at FROM crawl_jobs`
 
 func (p *Postgres) CrawlJobs(ctx context.Context, productID, sourceID string) ([]model.CrawlJob, error) {
-	rows, err := p.pool.Query(ctx, crawlJobSelect+` WHERE product_id = $1 AND source_id = $2 ORDER BY queued_at DESC LIMIT 50`, productID, sourceID)
+	rows, err := p.pool.Query(ctx, crawlJobSelect+` WHERE product_id = $1 AND source_id = $2 ORDER BY queued_at DESC, id DESC LIMIT 50`, productID, sourceID)
 	if err != nil {
 		return nil, databaseError(err)
 	}
@@ -582,8 +776,36 @@ func (p *Postgres) CrawlJobs(ctx context.Context, productID, sourceID string) ([
 	return result, rows.Err()
 }
 
+type pgxRowQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func createCrawlJobWithSourceLock(ctx context.Context, query pgxRowQuerier, value model.CrawlJob) (model.CrawlJob, error) {
+	var lockedSourceID string
+	err := query.QueryRow(ctx, `
+		SELECT id::text FROM sources
+		WHERE id = $1 AND organisation_id = $2 AND product_id = $3
+		FOR UPDATE`, value.SourceID, value.OrganisationID, value.ProductID).Scan(&lockedSourceID)
+	if err != nil {
+		return model.CrawlJob{}, databaseError(err)
+	}
+	return scanCrawlJob(query.QueryRow(ctx, `INSERT INTO crawl_jobs(id, organisation_id, product_id, source_id, state) VALUES ($1, $2, $3, $4, 'queued') RETURNING id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at`, value.ID, value.OrganisationID, value.ProductID, value.SourceID))
+}
+
 func (p *Postgres) CreateCrawlJob(ctx context.Context, value model.CrawlJob) (model.CrawlJob, error) {
-	return scanCrawlJob(p.pool.QueryRow(ctx, `INSERT INTO crawl_jobs(id, organisation_id, product_id, source_id, state) VALUES ($1, $2, $3, $4, 'queued') RETURNING id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at`, value.ID, value.OrganisationID, value.ProductID, value.SourceID))
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.CrawlJob{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	created, err := createCrawlJobWithSourceLock(ctx, tx, value)
+	if err != nil {
+		return model.CrawlJob{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.CrawlJob{}, err
+	}
+	return created, nil
 }
 
 func scanSecret(row pgx.Row) (model.Secret, error) {
@@ -688,13 +910,13 @@ func (p *Postgres) PublishTool(ctx context.Context, productID, id string, expect
 	var organisationID, backendKind, connectionID, mcpConnectionID, upstreamToolName, upstreamSchemaHash string
 	var outputSchema, authorizationPolicy []byte
 	var timeoutMS int
-	if err := tx.QueryRow(ctx, `SELECT organisation_id::text, backend_kind, coalesce(api_connection_id::text,''), coalesce(mcp_connection_id::text,''), upstream_tool_name, upstream_schema_hash, output_schema, authorization_policy, timeout_ms FROM tool_definitions WHERE product_id = $1 AND id = $2 AND revision = $3 FOR UPDATE`, productID, id, expected).Scan(&organisationID, &backendKind, &connectionID, &mcpConnectionID, &upstreamToolName, &upstreamSchemaHash, &outputSchema, &authorizationPolicy, &timeoutMS); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT organisation_id::text, backend_kind, coalesce(api_connection_id::text,''), coalesce(mcp_connection_id::text,''), upstream_tool_name, upstream_schema_hash, output_schema, authorization_policy, timeout_ms FROM tool_definitions WHERE product_id = $1 AND id = $2 AND revision = $3 AND state='draft' FOR UPDATE`, productID, id, expected).Scan(&organisationID, &backendKind, &connectionID, &mcpConnectionID, &upstreamToolName, &upstreamSchemaHash, &outputSchema, &authorizationPolicy, &timeoutMS); err != nil {
 		return model.Tool{}, databaseError(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO tool_releases(organisation_id, product_id, tool_definition_id, api_connection_id, version, request_mapping, output_schema, response_mapping, authorization_policy, timeout_ms, rate_limit, published_by, published_at, backend_kind, mcp_connection_id, upstream_tool_name, upstream_schema_hash) VALUES ($1,$2,$3,nullif($4,'')::uuid,1,'{}',$5,'{}',$6,$7,'{"requests":60,"window_seconds":60}',nullif($8,'')::uuid,now(),$9,nullif($10,'')::uuid,$11,$12) ON CONFLICT (tool_definition_id, version) DO UPDATE SET output_schema = excluded.output_schema, authorization_policy = excluded.authorization_policy, timeout_ms = excluded.timeout_ms, published_by = excluded.published_by, published_at = now(), backend_kind=excluded.backend_kind, mcp_connection_id=excluded.mcp_connection_id, upstream_tool_name=excluded.upstream_tool_name, upstream_schema_hash=excluded.upstream_schema_hash`, organisationID, productID, id, connectionID, outputSchema, authorizationPolicy, timeoutMS, actorID, backendKind, mcpConnectionID, upstreamToolName, upstreamSchemaHash); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO tool_releases(organisation_id, product_id, tool_definition_id, api_connection_id, version, request_mapping, output_schema, response_mapping, authorization_policy, timeout_ms, rate_limit, published_by, published_at, backend_kind, mcp_connection_id, upstream_tool_name, upstream_schema_hash) VALUES ($1,$2,$3,nullif($4,'')::uuid,$13,'{}',$5,'{}',$6,$7,'{"requests":60,"window_seconds":60}',nullif($8,'')::uuid,now(),$9,nullif($10,'')::uuid,$11,$12)`, organisationID, productID, id, connectionID, outputSchema, authorizationPolicy, timeoutMS, actorID, backendKind, mcpConnectionID, upstreamToolName, upstreamSchemaHash, expected+1); err != nil {
 		return model.Tool{}, databaseError(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE tool_definitions SET state = 'published', revision = revision + 1, updated_at = now() WHERE id = $1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE tool_definitions SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id=$1 AND id=$2 AND revision=$3 AND state='draft'`, productID, id, expected); err != nil {
 		return model.Tool{}, err
 	}
 	updated, err := scanTool(tx.QueryRow(ctx, toolSelect+` WHERE t.id = $1`, id))
@@ -1194,14 +1416,14 @@ func (p *Postgres) ConsumeOAuthState(ctx context.Context, digest []byte) (identi
 
 func (p *Postgres) CreateOAuthCode(ctx context.Context, value identity.OAuthCode) error {
 	grants, _ := json.Marshal(value.Grants)
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_authorization_codes(code_digest,product_id,client_id,redirect_uri,resource,scopes,downstream_challenge,issuer,subject,email,display_name,customer_account_id,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id,access_expires_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.Resource, value.Scopes, value.DownstreamChallenge, value.Issuer, value.Subject, value.Email, value.DisplayName, value.CustomerAccountID, value.ExternalCustomerID, value.InstallationID, grants, value.AccessEvaluationID, value.PolicyVersion, value.UpstreamAccessSecretID, value.AccessExpiresAt, value.ExpiresAt)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_authorization_codes(code_digest,product_id,client_id,redirect_uri,resource,scopes,downstream_challenge,issuer,subject,email,display_name,customer_account_id,external_customer_id,installation_id,grants,access_evaluation_id,access_evaluated_at,policy_version,upstream_access_secret_id,access_expires_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, value.Digest, value.ProductID, value.ClientID, value.RedirectURI, value.Resource, value.Scopes, value.DownstreamChallenge, value.Issuer, value.Subject, value.Email, value.DisplayName, value.CustomerAccountID, value.ExternalCustomerID, value.InstallationID, grants, value.AccessEvaluationID, value.AccessEvaluatedAt, value.PolicyVersion, value.UpstreamAccessSecretID, value.AccessExpiresAt, value.ExpiresAt)
 	return databaseError(err)
 }
 
 func scanOAuthCode(row pgx.Row) (identity.OAuthCode, error) {
 	var value identity.OAuthCode
 	var grants []byte
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.Resource, &value.Scopes, &value.DownstreamChallenge, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.CustomerAccountID, &value.ExternalCustomerID, &value.InstallationID, &grants, &value.AccessEvaluationID, &value.PolicyVersion, &value.UpstreamAccessSecretID, &value.AccessExpiresAt, &value.ExpiresAt)
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.RedirectURI, &value.Resource, &value.Scopes, &value.DownstreamChallenge, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.CustomerAccountID, &value.ExternalCustomerID, &value.InstallationID, &grants, &value.AccessEvaluationID, &value.AccessEvaluatedAt, &value.PolicyVersion, &value.UpstreamAccessSecretID, &value.AccessExpiresAt, &value.ExpiresAt)
 	if err == nil {
 		err = json.Unmarshal(grants, &value.Grants)
 	}
@@ -1209,19 +1431,19 @@ func scanOAuthCode(row pgx.Row) (identity.OAuthCode, error) {
 }
 
 func (p *Postgres) ConsumeOAuthCode(ctx context.Context, digest []byte) (identity.OAuthCode, error) {
-	return scanOAuthCode(p.pool.QueryRow(ctx, `DELETE FROM oauth_authorization_codes WHERE code_digest = $1 RETURNING code_digest,product_id::text,client_id,redirect_uri,resource,scopes,downstream_challenge,issuer,subject,email,display_name,customer_account_id::text,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id::text,access_expires_at,expires_at`, digest))
+	return scanOAuthCode(p.pool.QueryRow(ctx, `DELETE FROM oauth_authorization_codes WHERE code_digest = $1 RETURNING code_digest,product_id::text,client_id,redirect_uri,resource,scopes,downstream_challenge,issuer,subject,email,display_name,customer_account_id::text,external_customer_id,installation_id,grants,access_evaluation_id,access_evaluated_at,policy_version,upstream_access_secret_id::text,access_expires_at,expires_at`, digest))
 }
 
 func (p *Postgres) CreateAccessToken(ctx context.Context, value identity.AccessToken) error {
 	grants, _ := json.Marshal(value.Grants)
-	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_access_tokens(token_digest,product_id,client_id,resource,issuer,subject,email,display_name,customer_account_id,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id,scopes,expires_at,created_at,revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, value.Digest, value.ProductID, value.ClientID, value.Resource, value.Issuer, value.Subject, value.Email, value.DisplayName, value.CustomerAccountID, value.ExternalCustomerID, value.InstallationID, grants, value.AccessEvaluationID, value.PolicyVersion, value.UpstreamAccessSecretID, value.Scopes, value.ExpiresAt, value.CreatedAt, value.RevokedAt)
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_access_tokens(token_digest,product_id,client_id,resource,issuer,subject,email,display_name,customer_account_id,external_customer_id,installation_id,grants,access_evaluation_id,access_evaluated_at,policy_version,upstream_access_secret_id,scopes,expires_at,created_at,revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, value.Digest, value.ProductID, value.ClientID, value.Resource, value.Issuer, value.Subject, value.Email, value.DisplayName, value.CustomerAccountID, value.ExternalCustomerID, value.InstallationID, grants, value.AccessEvaluationID, value.AccessEvaluatedAt, value.PolicyVersion, value.UpstreamAccessSecretID, value.Scopes, value.ExpiresAt, value.CreatedAt, value.RevokedAt)
 	return databaseError(err)
 }
 
 func scanAccessToken(row pgx.Row) (identity.AccessToken, error) {
 	var value identity.AccessToken
 	var grants []byte
-	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.Resource, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.CustomerAccountID, &value.ExternalCustomerID, &value.InstallationID, &grants, &value.AccessEvaluationID, &value.PolicyVersion, &value.UpstreamAccessSecretID, &value.Scopes, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
+	err := row.Scan(&value.Digest, &value.ProductID, &value.ClientID, &value.Resource, &value.Issuer, &value.Subject, &value.Email, &value.DisplayName, &value.CustomerAccountID, &value.ExternalCustomerID, &value.InstallationID, &grants, &value.AccessEvaluationID, &value.AccessEvaluatedAt, &value.PolicyVersion, &value.UpstreamAccessSecretID, &value.Scopes, &value.ExpiresAt, &value.CreatedAt, &value.RevokedAt)
 	if err == nil {
 		err = json.Unmarshal(grants, &value.Grants)
 	}
@@ -1229,12 +1451,23 @@ func scanAccessToken(row pgx.Row) (identity.AccessToken, error) {
 }
 
 func (p *Postgres) AccessTokenByDigest(ctx context.Context, digest []byte) (identity.AccessToken, error) {
-	return scanAccessToken(p.pool.QueryRow(ctx, `SELECT token_digest,product_id::text,client_id,resource,issuer,subject,email,display_name,customer_account_id::text,external_customer_id,installation_id,grants,access_evaluation_id,policy_version,upstream_access_secret_id::text,scopes,expires_at,created_at,revoked_at FROM oauth_access_tokens WHERE token_digest = $1`, digest))
+	return scanAccessToken(p.pool.QueryRow(ctx, `SELECT token_digest,product_id::text,client_id,resource,issuer,subject,email,display_name,customer_account_id::text,external_customer_id,installation_id,grants,access_evaluation_id,access_evaluated_at,policy_version,upstream_access_secret_id::text,scopes,expires_at,created_at,revoked_at FROM oauth_access_tokens WHERE token_digest = $1`, digest))
 }
 
-func (p *Postgres) PublicKnowledge(ctx context.Context, productID, query string) ([]model.KnowledgeRecord, error) {
+func (p *Postgres) PublicKnowledge(ctx context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
 	pattern := "%" + strings.TrimSpace(query) + "%"
-	rows, err := p.pool.Query(ctx, `SELECT id::text, product_id::text, source_id::text, title, body, canonical_url, visibility::text FROM knowledge_documents WHERE product_id = $1 AND visibility = 'public' AND state = 'published' AND ($2 = '%%' OR title ILIKE $2 OR body ILIKE $2) ORDER BY updated_at DESC LIMIT 20`, productID, pattern)
+	rows, err := p.pool.Query(ctx, `
+		SELECT DISTINCT kd.id::text, kd.product_id::text, kd.source_id::text, kd.title, kd.body, kd.canonical_url, s.visibility::text
+		FROM source_publications sp
+		JOIN source_publication_documents spd ON spd.source_publication_id = sp.id
+		JOIN knowledge_documents kd ON kd.id = spd.knowledge_document_id
+		JOIN sources s ON s.id = sp.source_id AND s.product_id = sp.product_id
+		WHERE sp.product_id = $1 AND sp.id = ANY($2::uuid[])
+		  AND sp.visibility = 'public' AND s.visibility = 'public'
+		  AND s.state = 'published' AND kd.state = 'published'
+		  AND kd.injection_indicators = '[]'::jsonb
+		  AND ($3 = '%%' OR kd.title ILIKE $3 OR kd.body ILIKE $3)
+		ORDER BY kd.id::text LIMIT 20`, productID, publicationIDs, pattern)
 	if err != nil {
 		return nil, databaseError(err)
 	}
@@ -1251,9 +1484,19 @@ func (p *Postgres) PublicKnowledge(ctx context.Context, productID, query string)
 	return result, rows.Err()
 }
 
-func (p *Postgres) PrivateKnowledge(ctx context.Context, productID, query string) ([]model.KnowledgeRecord, error) {
+func (p *Postgres) PrivateKnowledge(ctx context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
 	pattern := "%" + strings.TrimSpace(query) + "%"
-	rows, err := p.pool.Query(ctx, `SELECT id::text, product_id::text, source_id::text, title, body, canonical_url, visibility::text FROM knowledge_documents WHERE product_id = $1 AND state = 'published' AND ($2 = '%%' OR title ILIKE $2 OR body ILIKE $2) ORDER BY updated_at DESC LIMIT 20`, productID, pattern)
+	rows, err := p.pool.Query(ctx, `
+		SELECT DISTINCT kd.id::text, kd.product_id::text, kd.source_id::text, kd.title, kd.body, kd.canonical_url, s.visibility::text
+		FROM source_publications sp
+		JOIN source_publication_documents spd ON spd.source_publication_id = sp.id
+		JOIN knowledge_documents kd ON kd.id = spd.knowledge_document_id
+		JOIN sources s ON s.id = sp.source_id AND s.product_id = sp.product_id
+		WHERE sp.product_id = $1 AND sp.id = ANY($2::uuid[])
+		  AND s.state = 'published' AND kd.state = 'published'
+		  AND kd.injection_indicators = '[]'::jsonb
+		  AND ($3 = '%%' OR kd.title ILIKE $3 OR kd.body ILIKE $3)
+		ORDER BY kd.id::text LIMIT 20`, productID, publicationIDs, pattern)
 	if err != nil {
 		return nil, databaseError(err)
 	}

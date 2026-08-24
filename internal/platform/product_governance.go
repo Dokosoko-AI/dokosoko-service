@@ -405,7 +405,7 @@ func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID str
 		return model.ProductVersionPin{}, ErrProductVersionDeprecated
 	}
 	if input.Scope == "customer" {
-		input.CustomerAccountID, input.ScopeID = input.ScopeID, input.ScopeID
+		input.CustomerAccountID = input.ScopeID
 		if _, accountErr := s.store.CustomerAccount(ctx, productID, input.CustomerAccountID); accountErr != nil {
 			return model.ProductVersionPin{}, errors.New("pin customer account does not belong to this product")
 		}

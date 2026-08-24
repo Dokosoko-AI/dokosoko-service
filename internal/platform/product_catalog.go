@@ -333,6 +333,34 @@ func selectedCapabilities(version model.ProductVersion) []model.ProductManifestC
 	return capabilities
 }
 
+func selectedIntegrations(version model.ProductVersion, integrations []model.IntegrationManifest) []model.IntegrationManifest {
+	applicable := make(map[string]bool)
+	for _, profile := range version.Manifest.Profiles {
+		if profile.ID != version.ProfileID {
+			continue
+		}
+		for _, selection := range profile.Selections {
+			for _, component := range version.Manifest.Components {
+				if component.ID != selection.ComponentID {
+					continue
+				}
+				for _, release := range component.Releases {
+					if release.ID == selection.ReleaseID {
+						applicable[component.Slug+"\x00"+release.Version] = true
+					}
+				}
+			}
+		}
+	}
+	result := make([]model.IntegrationManifest, 0, len(integrations))
+	for _, integration := range integrations {
+		if applicable[integration.FamilyKey+"\x00"+integration.VersionKey] {
+			result = append(result, integration)
+		}
+	}
+	return result
+}
+
 func selectedProductArtifacts(version model.ProductVersion) []model.ProductManifestArtifact {
 	artifacts := make([]model.ProductManifestArtifact, 0)
 	for _, binding := range version.Manifest.ProductBindings {
@@ -396,6 +424,13 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		if snapshot.Visibility == "" {
 			snapshot.Visibility = model.VisibilityPrivate
 		}
+		if snapshot.Tools != nil {
+			// Retain this deployment-level fact even when the effective Product
+			// Version later filters every managed Integration out of scope. A
+			// missing applicability match must fail closed, never fall back to
+			// product-wide legacy tool execution.
+			manifest.ManagedIntegrationTools = true
+		}
 		// Current state is an immediate kill switch. A transition into public,
 		// however, is visible only after a public snapshot is explicitly published.
 		if selection.Public && (integration.Visibility != model.VisibilityPublic || snapshot.Visibility != model.VisibilityPublic) {
@@ -407,7 +442,11 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 			if name == "" {
 				name = resource.SetID
 			}
-			entry.Resources = append(entry.Resources, model.IntegrationManifestResource{ResourceSetID: resource.SetID, Kind: resource.Kind, Name: name, Revision: resource.Revision, ContentHash: resource.ContentHash})
+			manifestResource := model.IntegrationManifestResource{ResourceSetID: resource.SetID, Kind: resource.Kind, Name: name, Revision: resource.Revision, ContentHash: resource.ContentHash}
+			for _, publication := range resource.SourcePublications {
+				manifestResource.SourcePublications = append(manifestResource.SourcePublications, model.IntegrationManifestSourcePublication{ID: publication.SourcePublicationID, SourceID: publication.SourceID, Revision: publication.Revision, ContentHash: publication.ContentHash})
+			}
+			entry.Resources = append(entry.Resources, manifestResource)
 		}
 		sort.SliceStable(entry.Resources, func(i, j int) bool {
 			if entry.Resources[i].Kind == entry.Resources[j].Kind {
@@ -415,6 +454,30 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 			}
 			return entry.Resources[i].Kind < entry.Resources[j].Kind
 		})
+		if snapshot.Packages != nil {
+			entry.Packages = make([]model.IntegrationManifestPackage, 0, len(snapshot.Packages))
+			for _, packageRelease := range snapshot.Packages {
+				entry.Packages = append(entry.Packages, model.IntegrationManifestPackage{PackageArtifactID: packageRelease.PackageArtifactID, PackageReleaseID: packageRelease.PackageReleaseID, Name: packageRelease.Name, Ecosystem: packageRelease.Ecosystem, Coordinate: packageRelease.Coordinate, Version: packageRelease.Version, PURL: packageRelease.PURL, RegistryURL: packageRelease.RegistryURL, SourceURL: packageRelease.SourceURL, Language: packageRelease.Language, Platform: packageRelease.Platform, InstallCommand: packageRelease.InstallCommand, Digest: packageRelease.Digest, ProvenanceURL: packageRelease.ProvenanceURL, SBOMURL: packageRelease.SBOMURL, Visibility: packageRelease.Visibility, Lifecycle: packageRelease.Lifecycle, ReplacementPackageArtifactID: packageRelease.ReplacementPackageArtifactID, DeprecationMessage: packageRelease.DeprecationMessage, SunsetAt: packageRelease.SunsetAt, ContentHash: packageRelease.ContentHash})
+			}
+		}
+		if snapshot.AuthorizationPoints != nil {
+			entry.AuthorizationPoints = make([]model.IntegrationManifestAuthorizationPoint, 0, len(snapshot.AuthorizationPoints))
+			for _, point := range snapshot.AuthorizationPoints {
+				entry.AuthorizationPoints = append(entry.AuthorizationPoints, model.IntegrationManifestAuthorizationPoint{ID: point.ID, Key: point.Key, Name: point.Name, ActionType: point.ActionType, RequiredGrants: append([]string(nil), point.RequiredGrants...), ConfirmationRequired: point.ConfirmationRequired, DecisionTTLSeconds: point.DecisionTTLSeconds, Revision: point.Revision})
+			}
+		}
+		if snapshot.Tools != nil {
+			entry.Tools = make([]model.IntegrationManifestTool, 0, len(snapshot.Tools))
+			for _, tool := range snapshot.Tools {
+				entry.Tools = append(entry.Tools, model.IntegrationManifestTool{ToolID: tool.ToolID, ToolRevision: tool.ToolRevision, AuthorizationPointID: tool.AuthorizationPointID, AuthorizationPointRevision: tool.AuthorizationPointRevision, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: tool.ContentHash, UpstreamSchemaHash: tool.UpstreamSchemaHash})
+			}
+		}
+		if snapshot.AccessConnections != nil {
+			entry.AccessConnections = make([]model.IntegrationManifestAccessConnection, 0, len(snapshot.AccessConnections))
+			for _, connection := range snapshot.AccessConnections {
+				entry.AccessConnections = append(entry.AccessConnections, model.IntegrationManifestAccessConnection{ConnectionID: connection.ConnectionID, ConnectionRevision: connection.ConnectionRevision, AccessDefinitionID: connection.AccessDefinitionID, AccessDefinitionRevision: connection.AccessDefinitionRevision, EnvironmentID: connection.EnvironmentID, State: connection.State, ContentHash: connection.ContentHash})
+			}
+		}
 		manifest.Integrations = append(manifest.Integrations, entry)
 	}
 	sort.SliceStable(manifest.Integrations, func(i, j int) bool {
@@ -524,6 +587,7 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		manifest.EffectiveVersion, manifest.DefinitionRevision, manifest.ManifestHash = &summary, selected.DefinitionRevision, selected.ManifestHash
 		manifest.Artifacts = selectedProductArtifacts(selected)
 		manifest.Capabilities = selectedCapabilities(selected)
+		manifest.Integrations = selectedIntegrations(selected, manifest.Integrations)
 		if selected.DeprecatedAt != nil {
 			manifest.OperationalWarnings = append(manifest.OperationalWarnings, selected.DeprecationMessage)
 		}

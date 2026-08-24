@@ -125,9 +125,20 @@ paths:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
     post:
       operationId: publishIntegration
+      description: Publishes only the exact server-preflight candidate identified by its optimistic Integration revision and manifest hash. A changed candidate is rejected and must be preflighted again.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PublishIntegrationRequest" } } } }
       responses:
         "201": { description: Immutable Integration revision., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationRevision" } } } }
         "422": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/preflight:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: preflightIntegration
+      description: Rebuilds and validates the exact candidate manifest on the server. Required private documentation, API, identity, authorization, tool, and service-connection gates fail closed. Selecting packages is optional, but every selected package must resolve to an available exact release.
+      responses:
+        "200": { description: Server-backed candidate preflight., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationPreflight" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/integrations/{integration_id}/access-connections:
     parameters:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
@@ -162,6 +173,67 @@ paths:
               required: [support_route_id]
       responses:
         "200": { description: Integration with its explicit support-route assignment., content: { application/json: { schema: { $ref: "#/components/schemas/Integration" } } } }
+  /api/v1/integrations/{integration_id}/authorization-points:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listIntegrationAuthorizationPoints
+      description: Lists declarative authorization points for one Integration. Authorization points contain no arbitrary callback URL or credential.
+      responses:
+        "200": { description: Integration authorization points., content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationPointList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createIntegrationAuthorizationPoint
+      description: Creates a declarative action-to-grants policy. Every required grant must already be active in the deployment grant registry, and destructive actions require confirmation.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateAuthorizationPointRequest" } } } }
+      responses:
+        "201": { description: Authorization point created., content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationPoint" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/authorization-points/{authorization_point_id}:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+      - { name: authorization_point_id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateIntegrationAuthorizationPoint
+      description: Replaces mutable policy fields using optimistic revision control. The stable authorization-point key cannot be changed.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateAuthorizationPointRequest" } } } }
+      responses:
+        "200": { description: Authorization point updated., content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationPoint" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/authorization-points/{authorization_point_id}/simulate:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+      - { name: authorization_point_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: simulateIntegrationAuthorizationPoint
+      description: Evaluates configured grants, state, and confirmation without granting access or calling a vendor system. The result is explicitly simulation-only.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationSimulationRequest" } } } }
+      responses:
+        "200": { description: Non-authoritative policy simulation., content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationSimulation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/tools:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listIntegrationToolBindings
+      description: Lists reusable tools bound to this Integration at exact published tool and authorization-point revisions.
+      responses:
+        "200": { description: Exact Integration tool bindings., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationToolBindingList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setIntegrationToolBindings
+      description: Atomically replaces the complete tool-binding set. Every selection must name the tool's current exact published revision and one exact active authorization-point revision owned by the same Integration; an empty array clears all bindings.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SetIntegrationToolBindingsRequest" } } } }
+      responses:
+        "200": { description: Exact Integration tool bindings., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationToolBindingList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/integrations/{integration_id}/resource-sets:
     parameters:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
@@ -188,6 +260,118 @@ paths:
       operationId: detachIntegrationResourceSet
       responses:
         "204": { description: Resource set detached. }
+  /api/v1/integrations/{integration_id}/packages:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listIntegrationPackages
+      description: Lists exact package-release bindings. Bindings never follow a latest release.
+      responses:
+        "200": { description: Exact package compatibility bindings., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationPackageBindingList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: bindIntegrationPackageRelease
+      description: Binds one exact immutable release only when its package artifact is active and available. External byte, digest, provenance, SBOM, and installation verification is operator-controlled and is not evidenced or enforced by this operation.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PackageBindingRequest" } } } }
+      responses:
+        "201": { description: Exact release bound to the Integration., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationPackageBinding" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/packages/{package_artifact_id}:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+      - { name: package_artifact_id, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: replaceIntegrationPackageRelease
+      description: Replaces this artifact's binding with another exact immutable release of the same active, available artifact. Deprecated, retired, and sunset artifacts cannot receive a new or replacement binding.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PackageBindingRequest" } } } }
+      responses:
+        "200": { description: Exact release binding replaced., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationPackageBinding" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: unbindIntegrationPackageArtifact
+      responses:
+        "204": { description: Package artifact unbound. }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/package-artifacts:
+    get:
+      operationId: listPackageArtifacts
+      description: Lists registry-delivered SDK/package metadata. DokoSoko never proxies package bytes on this surface.
+      responses:
+        "200": { description: Package artifact catalogue., content: { application/json: { schema: { $ref: "#/components/schemas/PackageArtifactList" } } } }
+    post:
+      operationId: createPackageArtifact
+      description: Creates draft package catalogue metadata. When visibility is public, acknowledge_public must be true. Package free-text fields are bounded but are not comprehensive secret-scanning boundaries.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreatePackageArtifactRequest" } } } }
+      responses:
+        "201": { description: Draft package artifact created., content: { application/json: { schema: { $ref: "#/components/schemas/PackageArtifact" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/package-artifacts/{package_artifact_id}:
+    parameters:
+      - { name: package_artifact_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getPackageArtifact
+      responses:
+        "200": { description: Package artifact and latest exact release., content: { application/json: { schema: { $ref: "#/components/schemas/PackageArtifact" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: replacePackageArtifact
+      description: Replaces all draft catalogue metadata using optimistic revision control. Every catalogue field becomes immutable with the first published release; later corrections use a replacement artifact. A private-to-public draft transition requires acknowledge_public=true. Previously published PackageRelease records are always immutable.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReplacePackageArtifactRequest" } } } }
+      responses:
+        "200": { description: Package artifact updated., content: { application/json: { schema: { $ref: "#/components/schemas/PackageArtifact" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/package-artifacts/{package_artifact_id}/releases:
+    parameters:
+      - { name: package_artifact_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listPackageReleases
+      responses:
+        "200": { description: Immutable exact registry releases., content: { application/json: { schema: { $ref: "#/components/schemas/PackageReleaseList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/package-artifacts/{package_artifact_id}/publish:
+    parameters:
+      - { name: package_artifact_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: publishPackageArtifactRelease
+      description: Publishes immutable metadata for one exact registry release on a draft or active, non-sunset artifact. Deprecated and retired artifacts are unavailable. Publishing a public release requires acknowledge_public=true. The digest is operator-declared; DokoSoko syntax-checks it but never fetches, verifies, uploads, or proxies package bytes, and does not enforce external verifier evidence.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PublishPackageReleaseRequest" } } } }
+      responses:
+        "201": { description: Exact package release published., content: { application/json: { schema: { $ref: "#/components/schemas/PublishPackageReleaseResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/package-artifacts/{package_artifact_id}/deprecate:
+    parameters:
+      - { name: package_artifact_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: deprecatePackageArtifact
+      description: Applies to any non-retired artifact using its exact current revision. Guidance is required; an optional replacement must be active with a published release. An optional sunset must be in the future but is guidance only—deprecation immediately blocks releases, new bindings, and candidate publication. Existing bindings remain readable and historical published Integration snapshots are unchanged.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeprecatePackageArtifactRequest" } } } }
+      responses:
+        "200": { description: Package artifact deprecated without mutating its published releases., content: { application/json: { schema: { $ref: "#/components/schemas/PackageArtifact" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/package-artifacts/{package_artifact_id}/retire:
+    parameters:
+      - { name: package_artifact_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: retirePackageArtifact
+      description: Retires any non-retired package artifact immediately using its exact current revision. Guidance is required; an optional replacement must be active with a published release. Retirement blocks releases, new bindings, and candidate publication, preserves any existing sunset, and does not mutate immutable releases, readable existing bindings, or historical published Integration snapshots.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RetirePackageArtifactRequest" } } } }
+      responses:
+        "200": { description: Package artifact retired., content: { application/json: { schema: { $ref: "#/components/schemas/PackageArtifact" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/resource-sets:
     get:
       operationId: listResourceSets
@@ -200,6 +384,31 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSetInput" } } } }
       responses:
         "201": { description: Resource set and first revision., content: { application/json: { schema: { $ref: "#/components/schemas/ResourceSet" } } } }
+  /api/v1/grant-definitions:
+    get:
+      operationId: listGrantDefinitions
+      description: Lists the deployment-owned authorization vocabulary. A grant definition describes a key and never grants access by itself.
+      responses:
+        "200": { description: Registered grant definitions., content: { application/json: { schema: { $ref: "#/components/schemas/GrantDefinitionList" } } } }
+    post:
+      operationId: createGrantDefinition
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateGrantDefinitionRequest" } } } }
+      responses:
+        "201": { description: Grant definition registered., content: { application/json: { schema: { $ref: "#/components/schemas/GrantDefinition" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/grant-definitions/{grant_id}:
+    parameters:
+      - { name: grant_id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateGrantDefinition
+      description: Replaces mutable grant metadata using optimistic revision control. The stable grant key cannot be changed.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateGrantDefinitionRequest" } } } }
+      responses:
+        "200": { description: Grant definition updated., content: { application/json: { schema: { $ref: "#/components/schemas/GrantDefinition" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/resource-sets/{resource_set_id}:
     parameters:
       - { name: resource_set_id, in: path, required: true, schema: { type: string } }
@@ -268,7 +477,6 @@ paths:
       responses:
         "201": { description: Backend connection created., content: { application/json: { schema: { $ref: "#/components/schemas/BackendConnection" } } } }
         "400": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/backend-connections/{connection_id}:
     parameters:
@@ -974,7 +1182,7 @@ paths:
                 required: [items]
     post:
       operationId: createSource
-      description: Creates a private, unpublished source.
+      description: Creates a private, unpublished website, OpenAPI, or Git source. File uploads must use the reviewed multipart upload endpoint instead of supplying a client-selected storage location here.
       requestBody:
         required: true
         content:
@@ -987,6 +1195,44 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Source" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/sources/upload:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    post:
+      operationId: uploadSource
+      description: >-
+        Creates a private, unpublished upload source from one non-empty,
+        valid UTF-8 documentation file. Accepted filename extensions are .md,
+        .mdx, .txt, .html, .htm, .json, .yaml, and .yml. The configured
+        DOKOSOKO_UPLOAD_MAX_BYTES limit is enforced while streaming. The file
+        is stored under an opaque server-selected name and is never interpreted
+        as a client-supplied filesystem path. Uploading does not automatically
+        queue a crawl; an administrator must review the source and explicitly
+        request ingestion.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                organisation_id: { type: string }
+                name: { type: string, minLength: 1, maxLength: 120 }
+                file: { type: string, format: binary, description: Non-empty valid UTF-8 documentation file using one of the accepted extensions documented on this operation. }
+              required: [organisation_id, name, file]
+      responses:
+        "201":
+          description: Upload source created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Source" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/sources/{source_id}/crawl:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1012,20 +1258,46 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CrawlJobList" }
+  /api/v1/products/{product_id}/sources/{source_id}/review:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/SourceID"
+      - name: crawl_job_id
+        in: query
+        required: false
+        schema: { type: string }
+        description: Exact generation to inspect; defaults to the latest generation.
+    get:
+      operationId: reviewSourceGeneration
+      description: Returns one exact crawl generation, including changed and reused immutable documents, injection findings, and any publication already created from it.
+      responses:
+        "200": { description: Exact source review., content: { application/json: { schema: { $ref: "#/components/schemas/SourceReview" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/sources/{source_id}/publications:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - $ref: "#/components/parameters/SourceID"
+    get:
+      operationId: listSourcePublications
+      description: Lists immutable reviewed source publications, newest revision first.
+      responses:
+        "200": { description: Reviewed source publications., content: { application/json: { schema: { $ref: "#/components/schemas/SourcePublicationList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/sources/{source_id}/publish:
     parameters:
       - $ref: "#/components/parameters/ProductID"
       - $ref: "#/components/parameters/SourceID"
     post:
       operationId: publishSource
-      description: Atomically publishes the validated revision. Quarantined sources are rejected.
-      requestBody: { $ref: "#/components/requestBodies/Revision" }
+      description: Atomically publishes an explicitly acknowledged selection from the exact latest completed crawl generation. Failed, partial, stale, or quarantined generations are rejected.
+      requestBody: { $ref: "#/components/requestBodies/SourcePublication" }
       responses:
         "200":
-          description: Source published.
+          description: Exact reviewed generation published.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Source" }
+              schema: { $ref: "#/components/schemas/SourcePublishResult" }
+        "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/sources/{source_id}/visibility:
@@ -1078,6 +1350,63 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Tool" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getToolEditorResource
+      description: Returns the complete administrative tool contract. HTTP tools include their fixed credential-free endpoint; no credential material is returned.
+      responses:
+        "200": { description: Administrative tool editor representation., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: replaceToolDraft
+      description: Replaces a draft tool contract using optimistic revision control. Published tools and their identity are immutable; clone a published tool to create a new editable draft.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReplaceToolDraftRequest" } } } }
+      responses:
+        "200": { description: Updated draft tool., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/clone:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: cloneToolDraft
+      description: Copies a draft or published tool into a new editable draft with a new immutable namespace/name identity.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CloneToolRequest" } } } }
+      responses:
+        "201": { description: Independent draft tool clone., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/dry-run:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: dryRunTool
+      description: Validates arguments, resolves the fixed destination and authorization policy, and reports readiness warnings without performing any network call.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ToolDryRunRequest" } } } }
+      responses:
+        "200": { description: Network-free tool validation result., content: { application/json: { schema: { $ref: "#/components/schemas/ToolDryRun" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/retire:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: retireTool
+      description: Retires a tool at its exact current revision so it cannot be selected for new Integration bindings.
+      requestBody: { $ref: "#/components/requestBodies/Revision" }
+      responses:
+        "200": { description: Retired tool., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/tools/{tool_id}/publish:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1087,6 +1416,7 @@ paths:
         schema: { type: string }
     post:
       operationId: publishTool
+      description: Publishes the exact reviewed draft revision after verifying that every required grant is active in the deployment registry. Imported upstream tools with unresolved schema drift fail closed.
       requestBody: { $ref: "#/components/requestBodies/Revision" }
       responses:
         "200":
@@ -1094,6 +1424,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Tool" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/mcp-connections:
     parameters:
@@ -1383,9 +1715,19 @@ paths:
         "200": { description: Newest evidence-backed analyses first., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationAnalysisList" } } } }
     post:
       operationId: analyseIntegration
-      description: Builds a versioned plan from known DokoSoko evidence. AI extraction may enrich the plan but cannot invent references or hide unknowns.
+      description: Builds a versioned plan from known DokoSoko evidence. Supply integration_id to scope evidence to one API's exact resource, package, authorization, identity, and tool bindings; omit it for product-wide analysis. AI extraction may enrich the plan but cannot invent references or hide unknowns.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                integration_id: { type: string, minLength: 1 }
       responses:
         "201": { description: Analysis ready for human review., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationAnalysis" } } } }
+        "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/analyses/{analysis_id}:
     parameters:
@@ -1422,9 +1764,19 @@ paths:
         schema: { type: string }
     post:
       operationId: generateRecipes
-      description: Creates review-state Markdown recipes and durable job records. Blocking unknowns prevent generation.
+      description: Creates review-state Markdown recipes and durable job records. Supply the same integration_id used to create a scoped analysis; cross-integration generation is rejected. Blocking unknowns prevent generation.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                integration_id: { type: string, minLength: 1 }
       responses:
         "201": { description: Generated recipes., content: { application/json: { schema: { $ref: "#/components/schemas/RecipeList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/recipes:
     parameters:
@@ -1977,6 +2329,23 @@ components:
             properties:
               revision: { type: integer, format: int64, minimum: 1 }
             required: [revision]
+    SourcePublication:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              revision: { type: integer, format: int64, minimum: 1 }
+              crawl_job_id: { type: string, minLength: 1 }
+              document_ids:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items: { type: string, minLength: 1 }
+              acknowledge_reviewed: { type: boolean, const: true }
+            required: [revision, crawl_job_id, document_ids, acknowledge_reviewed]
     VisibilityChange:
       required: true
       content:
@@ -2135,6 +2504,337 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       required: [id, integration_id, resource_set_id, kind, name, follow_latest, created_at, updated_at]
+    GrantDefinition:
+      type: object
+      additionalProperties: false
+      description: Deployment-owned authorization vocabulary. A definition may be referenced by policy but never grants access by itself.
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        risk: { type: string, enum: [low, medium, high, critical] }
+        state: { type: string, enum: [active, deprecated] }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, key, display_name, description, risk, state, revision, created_at, updated_at]
+    GrantDefinitionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/GrantDefinition" } }
+      required: [items]
+    CreateGrantDefinitionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160, description: Stable dotted lower-case key; immutable after creation. }
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000, default: "" }
+        risk: { type: string, enum: [low, medium, high, critical], default: low }
+        state: { type: string, enum: [active, deprecated], default: active }
+      required: [key, display_name]
+    UpdateGrantDefinitionRequest:
+      type: object
+      additionalProperties: false
+      description: Complete replacement of mutable grant metadata. The key is required for identity verification and cannot change.
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        display_name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        risk: { type: string, enum: [low, medium, high, critical] }
+        state: { type: string, enum: [active, deprecated] }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [key, display_name, description, risk, state, revision]
+    AuthorizationPoint:
+      type: object
+      additionalProperties: false
+      description: Declarative mapping from one Integration action to registered grant requirements. It contains no callback URL or credential.
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        integration_id: { type: string }
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        action_type: { type: string, enum: [read, write, destructive] }
+        required_grants:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        confirmation_required: { type: boolean }
+        decision_ttl_seconds: { type: integer, minimum: 0, maximum: 3600 }
+        state: { type: string, enum: [draft, active, deprecated] }
+        revision: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, integration_id, key, name, description, action_type, required_grants, confirmation_required, decision_ttl_seconds, state, revision, created_at, updated_at]
+    AuthorizationPointList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AuthorizationPoint" } }
+      required: [items]
+    CreateAuthorizationPointRequest:
+      type: object
+      additionalProperties: false
+      description: Canonical authorization-point input. Destructive actions require confirmation_required=true, and every required grant must be active in the deployment registry.
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160, description: Stable dotted lower-case key; immutable after creation. }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        action_type: { type: string, enum: [read, write, destructive] }
+        required_grants:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        confirmation_required: { type: boolean }
+        decision_ttl_seconds: { type: integer, minimum: 0, maximum: 3600, default: 300, description: Zero is normalized to the 300-second default. }
+        state: { type: string, enum: [draft, active, deprecated], default: draft }
+      required: [key, name, description, action_type, required_grants, confirmation_required, decision_ttl_seconds, state]
+    UpdateAuthorizationPointRequest:
+      type: object
+      additionalProperties: false
+      description: Complete replacement of mutable policy fields. The key is required for identity verification and cannot change.
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        action_type: { type: string, enum: [read, write, destructive] }
+        required_grants:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        confirmation_required: { type: boolean }
+        decision_ttl_seconds: { type: integer, minimum: 0, maximum: 3600, description: Zero is normalized to the 300-second default. }
+        state: { type: string, enum: [draft, active, deprecated] }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [key, name, description, action_type, required_grants, confirmation_required, decision_ttl_seconds, state, revision]
+    AuthorizationSimulationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        granted_grants:
+          type: array
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
+        confirmed: { type: boolean }
+      required: [granted_grants, confirmed]
+    AuthorizationSimulation:
+      type: object
+      additionalProperties: false
+      description: Explanatory local policy evaluation that neither grants access nor calls an external system.
+      properties:
+        authorization_point_id: { type: string }
+        allowed: { type: boolean }
+        missing_grants: { type: array, items: { type: string } }
+        confirmation_required: { type: boolean }
+        confirmation_missing: { type: boolean }
+        explanation: { type: string }
+        simulation_only: { type: boolean, const: true }
+      required: [authorization_point_id, allowed, missing_grants, confirmation_required, confirmation_missing, explanation, simulation_only]
+    ToolRevisionSelection:
+      type: object
+      additionalProperties: false
+      properties:
+        tool_id: { type: string }
+        revision: { type: integer, format: int64, minimum: 1, description: Exact current published revision; latest/floating selection is unsupported. }
+        authorization_point_id: { type: string, description: Active authorization point owned by the same Integration. }
+        authorization_point_revision: { type: integer, format: int64, minimum: 1, description: Exact current authorization-point revision; latest/floating selection is unsupported. }
+      required: [tool_id, revision, authorization_point_id, authorization_point_revision]
+    SetIntegrationToolBindingsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        tools:
+          type: array
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/ToolRevisionSelection" }
+      required: [tools]
+    IntegrationToolBinding:
+      type: object
+      additionalProperties: false
+      description: Compatibility and authorization claim for one exact immutable published tool revision and one exact active authorization-point revision. Neither reference follows latest.
+      properties:
+        integration_id: { type: string }
+        tool_id: { type: string }
+        tool_revision: { type: integer, format: int64, minimum: 1 }
+        authorization_point_id: { type: string }
+        authorization_point_revision: { type: integer, format: int64, minimum: 1 }
+        tool: { $ref: "#/components/schemas/Tool" }
+        authorization_point: { $ref: "#/components/schemas/AuthorizationPoint" }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [integration_id, tool_id, tool_revision, authorization_point_id, authorization_point_revision, created_at]
+    IntegrationToolBindingList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/IntegrationToolBinding" } }
+      required: [items]
+    CredentialFreeHTTPSOrLocalhostHTTPURI:
+      type: string
+      format: uri
+      maxLength: 2048
+      pattern: '^(?:https://[^/?#@]+|http://(?:(?:[A-Za-z0-9-]+\.)*[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?)(?:/[^?#]*)?$'
+      description: HTTPS URI without userinfo, a query, or a fragment. HTTP is accepted only for localhost, localhost subdomains, 127.0.0.1, or ::1 local-development hosts. These common credential channels are rejected, but the path is not secret-scanned and must not contain credentials.
+    PackageArtifactFields:
+      type: object
+      description: Bounded package catalogue fields. URL userinfo, query, fragment, and PURL qualifier channels are rejected, but URL paths and free-text fields are not comprehensive secret scans and must not contain credentials.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        ecosystem: { type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$', description: Registry ecosystem identifier such as npm, pypi, maven, nuget, or a future vendor-neutral identifier. }
+        coordinate: { type: string, minLength: 1, maxLength: 500, description: Canonical registry coordinate without an implicit latest version. }
+        purl: { type: string, pattern: '^pkg:[a-z][a-z0-9.+-]{0,63}/(?![^@?#\s]*//)[^@?#\s]+$', maxLength: 1000, description: Canonical unversioned, query-free, fragment-free Package URL identity whose type matches ecosystem. Empty path segments and embedded URI markers are rejected. }
+        registry_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        source_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        language: { type: string, maxLength: 120 }
+        platform: { type: string, maxLength: 200 }
+        visibility: { type: string, enum: [private, public], default: private }
+      required: [name, ecosystem, coordinate, purl, registry_url, visibility]
+    CreatePackageArtifactRequest:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/PackageArtifactFields"
+        - type: object
+          properties:
+            acknowledge_public: { type: boolean, default: false, description: Must be true when creating an artifact with public visibility. }
+    ReplacePackageArtifactRequest:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/PackageArtifactFields"
+        - type: object
+          properties:
+            acknowledge_public: { type: boolean, default: false, description: Must be true when changing a private draft artifact to public visibility. }
+            revision: { type: integer, format: int64, minimum: 1 }
+          required: [revision]
+    PackageRelease:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        package_artifact_id: { type: string }
+        artifact_name: { type: string }
+        ecosystem: { type: string }
+        coordinate: { type: string }
+        version: { type: string }
+        purl: { type: string, pattern: '^pkg:[a-z][a-z0-9.+-]{0,63}/(?![^?#\s]*//)[^@?#\s]+@[^/?#\s]+$', maxLength: 1000, description: Canonical query-free and fragment-free Package URL without empty path segments or embedded URI markers. Its type and unversioned identity must match the artifact, and its decoded literal @version must exactly equal the sibling version. }
+        registry_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        source_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        language: { type: string }
+        platform: { type: string }
+        install_command: { type: string, description: Operator-supplied display/copy metadata only; DokoSoko does not execute it and rejects obvious credential-bearing forms, but does not certify the command as safe. }
+        digest: { type: string, pattern: '^(?:sha256:[0-9a-f]{64}|sha384:[0-9a-f]{96}|sha512:[0-9a-f]{128})$', description: Declared lowercase SHA-256, SHA-384, or SHA-512 digest of the externally hosted release bytes. DokoSoko validates the syntax but does not fetch or verify package bytes. }
+        provenance_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        sbom_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        visibility: { type: string, enum: [private, public] }
+        content_hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        published_by: { type: string }
+        published_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, package_artifact_id, artifact_name, ecosystem, coordinate, version, purl, registry_url, install_command, digest, visibility, content_hash, published_at, created_at]
+    PackageArtifact:
+      allOf:
+        - $ref: "#/components/schemas/PackageArtifactFields"
+        - type: object
+          properties:
+            id: { type: string }
+            deployment_id: { type: string }
+            organisation_id: { type: string }
+            lifecycle: { type: string, enum: [draft, active, deprecated, retired], description: The first release changes draft to active. Deprecated and retired artifacts are immediately unavailable for releases, new bindings, and candidate publication. }
+            replacement_package_artifact_id: { type: string }
+            deprecation_message: { type: string }
+            sunset_at: { type: [string, "null"], format: date-time }
+            revision: { type: integer, format: int64, minimum: 1 }
+            latest_release: { $ref: "#/components/schemas/PackageRelease" }
+            integration_ids: { type: array, items: { type: string } }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+          required: [id, deployment_id, organisation_id, lifecycle, revision, created_at, updated_at]
+    PackageArtifactList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/PackageArtifact" } }
+        delivery: { type: string, const: external_registry }
+      required: [items, delivery]
+    PackageReleaseList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/PackageRelease" } } }
+      required: [items]
+    PublishPackageReleaseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        version: { type: string, minLength: 1, maxLength: 200 }
+        purl: { type: string, pattern: '^pkg:[a-z][a-z0-9.+-]{0,63}/(?![^?#\s]*//)[^@?#\s]+@[^/?#\s]+$', maxLength: 1000, description: Canonical query-free and fragment-free Package URL without empty path segments or embedded URI markers. Its type and unversioned identity must match the artifact, and its decoded literal @version must exactly equal the sibling version. }
+        install_command: { type: string, minLength: 1, maxLength: 2000, description: Operator-supplied display/copy metadata. Obvious embedded credential assignments, credential flags, and URL userinfo are rejected. }
+        digest: { type: string, pattern: '^(?:sha256:[0-9a-f]{64}|sha384:[0-9a-f]{96}|sha512:[0-9a-f]{128})$', description: Declared lowercase SHA-256, SHA-384, or SHA-512 digest of the externally hosted release bytes. DokoSoko validates the syntax but does not fetch or verify package bytes. }
+        provenance_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        sbom_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        artifact_revision: { type: integer, format: int64, minimum: 1 }
+        acknowledge_public: { type: boolean, default: false, description: Must be true for every release published from a public artifact. }
+      required: [version, purl, install_command, digest, artifact_revision]
+    PublishPackageReleaseResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        artifact: { $ref: "#/components/schemas/PackageArtifact" }
+        release: { $ref: "#/components/schemas/PackageRelease" }
+      required: [artifact, release]
+    DeprecatePackageArtifactRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        replacement_package_artifact_id: { type: string, description: Optional replacement. When supplied, it must be active and have at least one published release. }
+        message: { type: string, minLength: 1, maxLength: 1000, description: Required operator guidance surfaced in candidate lifecycle validation. }
+        sunset_at: { type: [string, "null"], format: date-time, description: Optional future guidance date. It does not delay the immediate unavailability caused by deprecation. }
+        revision: { type: integer, format: int64, minimum: 1, description: Exact current optimistic package-artifact revision. }
+      required: [message, revision]
+    RetirePackageArtifactRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        replacement_package_artifact_id: { type: string, description: Optional replacement. When supplied, it must be active and have at least one published release. }
+        message: { type: string, minLength: 1, maxLength: 1000, description: Required operator guidance surfaced in candidate lifecycle validation. }
+        revision: { type: integer, format: int64, minimum: 1, description: Exact current optimistic package-artifact revision. }
+      required: [message, revision]
+    PackageBindingRequest:
+      type: object
+      additionalProperties: false
+      description: Selects one exact immutable release. The owning artifact must be active and available; latest/floating selection is unsupported.
+      properties:
+        package_release_id: { type: string }
+      required: [package_release_id]
+    IntegrationPackageBinding:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        integration_id: { type: string }
+        package_artifact_id: { type: string }
+        package_release_id: { type: string }
+        artifact: { $ref: "#/components/schemas/PackageArtifact" }
+        release: { $ref: "#/components/schemas/PackageRelease" }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, integration_id, package_artifact_id, package_release_id, artifact, release, created_by, created_at, updated_at]
+    IntegrationPackageBindingList:
+      type: object
+      additionalProperties: false
+      properties: { items: { type: array, items: { $ref: "#/components/schemas/IntegrationPackageBinding" } } }
+      required: [items]
     Integration:
       type: object
       additionalProperties: false
@@ -2151,6 +2851,7 @@ components:
         replacement_integration_id: { type: string }
         sunset_at: { type: [string, "null"], format: date-time }
         resources: { type: array, items: { $ref: "#/components/schemas/IntegrationResourceLink" } }
+        packages: { type: array, items: { $ref: "#/components/schemas/IntegrationPackageBinding" } }
         access_connection_ids: { type: array, items: { type: string } }
         support_route_id: { type: string }
         revision: { type: integer, format: int64, minimum: 1 }
@@ -2176,6 +2877,13 @@ components:
         published_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
       required: [id, integration_id, revision, state, snapshot, manifest_hash, created_at]
+    PublishIntegrationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        candidate_revision: { type: integer, format: int64, minimum: 1 }
+        candidate_manifest_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+      required: [candidate_revision, candidate_manifest_hash]
     IntegrationPublishChange:
       type: object
       additionalProperties: false
@@ -2191,7 +2899,7 @@ components:
         level: { type: string, enum: [warning, error] }
         code: { type: string }
         message: { type: string }
-        tab: { type: string, enum: [overview, resources, tools, access, support, revisions] }
+        tab: { type: string, enum: [overview, resources, authorization, tools, access, support, revisions] }
       required: [level, code, message, tab]
     IntegrationPublishStatus:
       type: object
@@ -2205,6 +2913,32 @@ components:
         changes: { type: array, items: { $ref: "#/components/schemas/IntegrationPublishChange" } }
         validations: { type: array, items: { $ref: "#/components/schemas/IntegrationPublishValidation" } }
       required: [ready, has_changes, current_manifest_hash, current_snapshot, changes, validations]
+    IntegrationPreflightCheck:
+      type: object
+      additionalProperties: false
+      properties:
+        code: { type: string }
+        label: { type: string }
+        message: { type: string }
+        status: { type: string, enum: [pass, fail, optional] }
+        tab: { type: string }
+        required: { type: boolean }
+      required: [code, label, message, status, tab, required]
+    IntegrationPreflight:
+      type: object
+      additionalProperties: false
+      properties:
+        integration_id: { type: string }
+        candidate_revision: { type: integer, format: int64, minimum: 1 }
+        candidate_manifest_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        latest_published_id: { type: string }
+        latest_published_revision: { type: integer, format: int64, minimum: 1 }
+        latest_published_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        matches_latest_published: { type: boolean }
+        ready: { type: boolean }
+        checks: { type: array, items: { $ref: "#/components/schemas/IntegrationPreflightCheck" } }
+        generated_at: { type: string, format: date-time }
+      required: [integration_id, candidate_revision, candidate_manifest_hash, matches_latest_published, ready, checks, generated_at]
     ResourceSetInput:
       type: object
       properties:
@@ -2533,7 +3267,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 120 }
         kind:
           type: string
-          enum: [website, openapi, git, upload]
+          enum: [website, openapi, git]
         location:
           type: string
           minLength: 1
@@ -2569,6 +3303,60 @@ components:
           type: array
           items: { $ref: "#/components/schemas/CrawlJob" }
       required: [items]
+    CrawlReviewDocument:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        crawl_job_id: { type: string }
+        snapshot_id: { type: string }
+        title: { type: string }
+        canonical_url: { type: string, format: uri }
+        state: { type: string, enum: [validated, published, quarantined] }
+        trust_level: { type: integer, minimum: 0, maximum: 100 }
+        injection_indicators: { type: array, items: { type: string } }
+        content_hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        changed: { type: boolean }
+      required: [id, crawl_job_id, snapshot_id, title, canonical_url, state, trust_level, injection_indicators, content_hash, changed]
+    SourcePublication:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        source_id: { type: string }
+        crawl_job_id: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        content_hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        document_count: { type: integer, minimum: 1 }
+        reviewed_by: { type: string }
+        reviewed_at: { type: string, format: date-time }
+        published_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, source_id, crawl_job_id, revision, visibility, content_hash, document_count, reviewed_by, reviewed_at, published_at]
+    SourcePublicationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/SourcePublication" } }
+      required: [items]
+    SourceReview:
+      type: object
+      additionalProperties: false
+      properties:
+        source: { $ref: "#/components/schemas/Source" }
+        crawl_job: { $ref: "#/components/schemas/CrawlJob" }
+        documents: { type: array, items: { $ref: "#/components/schemas/CrawlReviewDocument" } }
+        publication: { $ref: "#/components/schemas/SourcePublication" }
+      required: [source, crawl_job, documents]
+    SourcePublishResult:
+      type: object
+      additionalProperties: false
+      properties:
+        source: { $ref: "#/components/schemas/Source" }
+        publication: { $ref: "#/components/schemas/SourcePublication" }
+      required: [source, publication]
     JSONSchema:
       type: object
       additionalProperties: true
@@ -2579,8 +3367,12 @@ components:
       properties:
         required_grants:
           type: array
-          items: { type: string }
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
         confirmation_required: { type: boolean, default: false }
+        risk: { type: string, enum: [low, medium, high, critical], description: Defaults by method when omitted; critical tools require confirmation. }
+        idempotency_required: { type: boolean, default: false }
     CreateToolRequest:
       type: object
       additionalProperties: false
@@ -2608,8 +3400,9 @@ components:
         description: { type: string }
         input_schema: { $ref: "#/components/schemas/JSONSchema" }
         output_schema: { $ref: "#/components/schemas/JSONSchema" }
-        state: { type: string, enum: [draft, published] }
+        state: { type: string, enum: [draft, published, retired] }
         revision: { type: integer, format: int64, minimum: 1 }
+        endpoint: { type: string, format: uri, description: Included only on the administrative editor representation of HTTP tools; never contains credentials. }
         http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE, MCP] }
         authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
         timeout_ms: { type: integer, minimum: 100, maximum: 60000 }
@@ -2621,7 +3414,7 @@ components:
         upstream_drifted: { type: boolean, description: When true the tool is removed from discovery and execution fails closed. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, product_id, namespace, name, description, input_schema, output_schema, state, revision, http_method, authorization_policy, timeout_ms, created_at, updated_at]
+      required: [id, organisation_id, product_id, namespace, name, description, input_schema, output_schema, state, revision, http_method, authorization_policy, timeout_ms, backend_kind, upstream_drifted, created_at, updated_at]
     ToolList:
       type: object
       additionalProperties: false
@@ -2630,6 +3423,54 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Tool" }
       required: [items]
+    AdminTool:
+      $ref: "#/components/schemas/Tool"
+    ReplaceToolDraftRequest:
+      type: object
+      additionalProperties: false
+      description: Full replacement contract for a draft. The common fields are required for both HTTP-backed and managed MCP-backed tools. Endpoint and HTTP method are additionally required and validated by the service for HTTP-backed tools; for managed MCP-backed tools their stored upstream values are preserved and request values are ignored.
+      properties:
+        description: { type: string, minLength: 1, maxLength: 500 }
+        input_schema: { $ref: "#/components/schemas/JSONSchema" }
+        output_schema: { $ref: "#/components/schemas/JSONSchema" }
+        endpoint: { type: string, format: uri, description: Required for an HTTP-backed tool. Fixed credential-free HTTPS URL on the default port, or HTTP only for a localhost local-development host; it must use the exact configured delegated vendor API origin and must not contain a fragment. Ignored for managed MCP-backed tools. }
+        http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE], description: Required for an HTTP-backed tool and restricted to these five methods. Managed MCP-backed tools retain their MCP method and ignore this request value. }
+        authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 10000 }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [description, input_schema, output_schema, authorization_policy, timeout_ms, revision]
+    CloneToolRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        namespace: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', description: New immutable namespace identity. }
+        name: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', description: New immutable tool-name identity. }
+      required: [namespace, name]
+    ToolDryRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        arguments: { type: object, additionalProperties: true, default: {}, description: Validated against input_schema. Missing arguments normalize to an empty object. }
+    ToolDryRun:
+      type: object
+      additionalProperties: false
+      description: Network-free validation and resolved policy preview. A successful response never means that live authorization has been granted.
+      properties:
+        tool_id: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        valid: { type: boolean, const: true }
+        network_call_performed: { type: boolean, const: false }
+        method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE, MCP] }
+        destination_origin: { type: string, format: uri, description: Origin only; present for HTTP-backed tools. }
+        destination_path: { type: string, description: Escaped fixed path; present for HTTP-backed tools. }
+        backend_kind: { type: string, enum: [http, mcp] }
+        required_grants: { type: array, items: { type: string } }
+        confirmation_required: { type: boolean }
+        risk: { type: string, enum: [low, medium, high, critical] }
+        idempotency_required: { type: boolean }
+        normalized_arguments: { type: object, additionalProperties: true }
+        warnings: { type: array, items: { type: string } }
+      required: [tool_id, revision, valid, network_call_performed, method, backend_kind, required_grants, confirmation_required, risk, idempotency_required, normalized_arguments, warnings]
     CreateMCPConnectionRequest:
       type: object
       additionalProperties: false
@@ -3907,7 +4748,7 @@ components:
         organisation_id: { type: string }
         product_id: { type: string }
         name: { type: string }
-        kind: { type: string }
+        kind: { type: string, enum: [website, openapi, git, upload] }
         location: { type: string }
         visibility: { $ref: "#/components/schemas/Visibility" }
         published: { type: boolean }
@@ -3968,6 +4809,18 @@ components:
         launcherPosition: { type: string, enum: [left, right] }
         greeting: { type: string, maxLength: 160 }
       required: [theme, launcherPosition]
+    WidgetIntegrationBinding:
+      type: object
+      additionalProperties: false
+      description: Activation-time pin to one exact immutable published Integration manifest. Widgets never follow a later revision implicitly.
+      properties:
+        integration_id: { type: string }
+        integration_revision_id: { type: string }
+        integration_revision: { type: integer, format: int64, minimum: 1 }
+        manifest_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        snapshot: { type: object, additionalProperties: true }
+        bound_at: { type: string, format: date-time }
+      required: [integration_id, integration_revision_id, integration_revision, manifest_hash, snapshot, bound_at]
     Widget:
       type: object
       additionalProperties: false
@@ -3979,12 +4832,13 @@ components:
         state: { type: string, enum: [draft, active, disabled] }
         allowed_origins: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uri } }
         integration_ids: { type: array, uniqueItems: true, items: { type: string } }
+        integration_bindings: { type: array, items: { $ref: "#/components/schemas/WidgetIntegrationBinding" } }
         appearance: { $ref: "#/components/schemas/WidgetAppearance" }
         revision: { type: integer, minimum: 1 }
         activated_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, deployment_id, organisation_id, name, state, allowed_origins, integration_ids, appearance, revision, created_at, updated_at]
+      required: [id, deployment_id, organisation_id, name, state, allowed_origins, integration_ids, integration_bindings, appearance, revision, created_at, updated_at]
     WidgetList:
       type: object
       additionalProperties: false

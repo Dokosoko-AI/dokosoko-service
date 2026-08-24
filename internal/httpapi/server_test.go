@@ -184,6 +184,91 @@ func request(t *testing.T, handler http.Handler, method, path, token, body strin
 	return w
 }
 
+func preflightAndPublishIntegration(t *testing.T, handler http.Handler, integrationID string) *httptest.ResponseRecorder {
+	t.Helper()
+	preflight := request(t, handler, http.MethodPost, "/api/v1/integrations/"+integrationID+"/preflight", "doko_admin_demo", `{}`)
+	if preflight.Code != http.StatusOK {
+		t.Fatalf("integration preflight = %d: %s", preflight.Code, preflight.Body.String())
+	}
+	var candidate struct {
+		CandidateRevision     int64  `json:"candidate_revision"`
+		CandidateManifestHash string `json:"candidate_manifest_hash"`
+		Ready                 bool   `json:"ready"`
+	}
+	if err := json.Unmarshal(preflight.Body.Bytes(), &candidate); err != nil {
+		t.Fatal(err)
+	}
+	if !candidate.Ready || candidate.CandidateRevision < 1 || candidate.CandidateManifestHash == "" {
+		t.Fatalf("integration preflight did not return a publishable candidate: %s", preflight.Body.String())
+	}
+	body, err := json.Marshal(map[string]any{"candidate_revision": candidate.CandidateRevision, "candidate_manifest_hash": candidate.CandidateManifestHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request(t, handler, http.MethodPost, "/api/v1/integrations/"+integrationID+"/publish", "doko_admin_demo", string(body))
+}
+
+func prepareHTTPPrivateIntegrationFoundations(t *testing.T, handler http.Handler, integrationID string) {
+	t.Helper()
+	documentationManifest, err := json.Marshal([]map[string]any{{
+		"source_publication_id": "pub_docs_seed",
+		"source_id":             "src_docs",
+		"revision":              1,
+		"content_hash":          "sha256:" + strings.Repeat("1", 64),
+		"name":                  "Reviewed developer documentation",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := []struct {
+		kind     string
+		name     string
+		manifest string
+	}{
+		{kind: "documentation", name: "Reviewed documentation", manifest: string(documentationManifest)},
+		{kind: "api", name: "Reviewed API contract", manifest: `[{"name":"health.read","path":"/health"}]`},
+	}
+	for _, resource := range resources {
+		body, marshalErr := json.Marshal(map[string]any{"kind": resource.kind, "name": resource.name, "description": resource.name, "manifest": json.RawMessage(resource.manifest)})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		created := request(t, handler, http.MethodPost, "/api/v1/resource-sets", "doko_admin_demo", string(body))
+		if created.Code != http.StatusCreated {
+			t.Fatalf("create %s resource = %d: %s", resource.kind, created.Code, created.Body.String())
+		}
+		var resourceSet model.ResourceSet
+		if unmarshalErr := json.Unmarshal(created.Body.Bytes(), &resourceSet); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		attached := request(t, handler, http.MethodPost, "/api/v1/integrations/"+integrationID+"/resource-sets", "doko_admin_demo", `{"resource_set_id":"`+resourceSet.ID+`","pinned_revision_id":"`+resourceSet.Latest.ID+`"}`)
+		if attached.Code != http.StatusOK {
+			t.Fatalf("attach %s resource = %d: %s", resource.kind, attached.Code, attached.Body.String())
+		}
+	}
+
+	createdDefinition := request(t, handler, http.MethodPost, "/api/v1/access-definitions", "doko_admin_demo", `{"service_key":"private-ready-access","name":"Private ready access","instance_cardinality":"one","instance_label_singular":"account","instance_label_plural":"accounts","credential_scope":"connection","management_auth_type":"none","operations":{}}`)
+	if createdDefinition.Code != http.StatusCreated {
+		t.Fatalf("create access definition = %d: %s", createdDefinition.Code, createdDefinition.Body.String())
+	}
+	var definition model.AccessDefinition
+	if err = json.Unmarshal(createdDefinition.Body.Bytes(), &definition); err != nil {
+		t.Fatal(err)
+	}
+	createdConnection := request(t, handler, http.MethodPost, "/api/v1/access-connections", "doko_admin_demo", `{"access_definition_id":"`+definition.ID+`","environment_id":"env_prod","name":"Private ready connection","base_url":"https://api.vendor.example","config":{},"integration_ids":["`+integrationID+`"]}`)
+	if createdConnection.Code != http.StatusCreated {
+		t.Fatalf("create access connection = %d: %s", createdConnection.Code, createdConnection.Body.String())
+	}
+	var connection model.AccessConnection
+	if err = json.Unmarshal(createdConnection.Body.Bytes(), &connection); err != nil {
+		t.Fatal(err)
+	}
+	assigned := request(t, handler, http.MethodPut, "/api/v1/integrations/"+integrationID+"/access-connections", "doko_admin_demo", `{"access_connection_ids":["`+connection.ID+`"]}`)
+	if assigned.Code != http.StatusOK {
+		t.Fatalf("assign access connection = %d: %s", assigned.Code, assigned.Body.String())
+	}
+}
+
 func TestMCPRejectsPreV2Requests(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
@@ -219,7 +304,7 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 	t.Parallel()
 	handler := newCatalogServer(t)
 
-	w := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"voice-api","version_key":"v2","display_name":"Voice API v2","description":"Voice calls","lifecycle":"active"}`)
+	w := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"voice-api","version_key":"v2","display_name":"Voice API v2","description":"Voice calls","visibility":"public","acknowledge_public":true,"lifecycle":"active"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create integration status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -241,7 +326,7 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("attach resource set status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/publish", "doko_admin_demo", `{}`)
+	w = preflightAndPublishIntegration(t, handler, integration.ID)
 	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"manifest_hash":"sha256:`) {
 		t.Fatalf("publish integration status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -308,7 +393,7 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"publish_status"`) || !strings.Contains(w.Body.String(), `"has_changes":true`) || !strings.Contains(w.Body.String(), `"access_connection_ids"`) {
 		t.Fatalf("Integration publish status = %d, body = %s", w.Code, w.Body.String())
 	}
-	w = request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/publish", "doko_admin_demo", `{}`)
+	w = preflightAndPublishIntegration(t, handler, integration.ID)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("publish updated Integration status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -549,7 +634,7 @@ func TestPublicTransitionWarningsAreEnforcedByAPI(t *testing.T) {
 
 }
 
-func TestPublicMCPOnlyReturnsExplicitlyPublicRecordsAndReadOnlyTools(t *testing.T) {
+func TestPublicMCPRequiresAnExplicitlyPublicPublicationAndReadOnlyTools(t *testing.T) {
 	t.Parallel()
 	handler := newServer()
 	w := request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/sources/src_docs/visibility", "doko_admin_demo", `{"visibility":"public","acknowledge_public":true,"revision":1}`)
@@ -575,11 +660,8 @@ func TestPublicMCPOnlyReturnsExplicitlyPublicRecordsAndReadOnlyTools(t *testing.
 	}
 
 	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"API key"}}}`)
-	if !strings.Contains(w.Body.String(), "Create an API key") {
-		t.Fatalf("public record missing: %s", w.Body.String())
-	}
-	if strings.Contains(w.Body.String(), "operator-only") {
-		t.Fatalf("private record leaked: %s", w.Body.String())
+	if strings.Contains(w.Body.String(), "Create an API key") || strings.Contains(w.Body.String(), "operator-only") {
+		t.Fatalf("changing current source visibility exposed an immutable private publication: %s", w.Body.String())
 	}
 
 	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"provision_resource","arguments":{}}}`)
@@ -824,13 +906,17 @@ func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
 func TestAuthenticatedWidgetSessionIsOriginBoundSingleUseAndSecretSafe(t *testing.T) {
 	t.Parallel()
 	handler := newWidgetServer(t)
-	w := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"widget-api","version_key":"v1","display_name":"Widget API","description":"Widget test API","lifecycle":"active"}`)
+	w := request(t, handler, http.MethodPost, "/api/v1/integrations", "doko_admin_demo", `{"family_key":"widget-api","version_key":"v1","display_name":"Widget API","description":"Widget test API","visibility":"public","acknowledge_public":true,"lifecycle":"active"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("integration status = %d, body = %s", w.Code, w.Body.String())
 	}
 	var integration model.Integration
 	if err := json.Unmarshal(w.Body.Bytes(), &integration); err != nil {
 		t.Fatal(err)
+	}
+	w = preflightAndPublishIntegration(t, handler, integration.ID)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("publish widget integration = %d, body = %s", w.Code, w.Body.String())
 	}
 
 	w = request(t, handler, http.MethodPost, "/api/v1/widgets", "doko_admin_demo", `{"name":"Customer assistant","allowed_origins":["https://app.customer.example"],"integration_ids":["`+integration.ID+`"],"appearance":{"theme":"auto","launcher_position":"right"}}`)

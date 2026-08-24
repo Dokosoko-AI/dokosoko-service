@@ -657,8 +657,12 @@ func TestWidgetActivationRequiresAHardenedAssistantAndAnswersWithoutIdentityOrCr
 	doer := &productBuilderDoer{response: `{"choices":[{"message":{"content":"The Voice API supports calls."}}],"usage":{"total_tokens":20}}`}
 	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, doer)
 	actor := platform.Actor{ID: "root_widget", RequestID: "req_widget"}
-	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "voice", VersionKey: "v1", DisplayName: "Voice API", Description: "Create and manage calls.", Lifecycle: "active"}, actor)
+	integration := configureReadyPrivateIntegration(t, service, memory, actor)
+	preflight, err := service.IntegrationPreflight(ctx, integration.ID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.PublishIntegrationCandidate(ctx, integration.ID, preflight.CandidateRevision, preflight.CandidateManifestHash, actor); err != nil {
 		t.Fatal(err)
 	}
 	provisioning, err := service.CreateWidget(ctx, platform.WidgetInput{Name: "Customer assistant", AllowedOrigins: []string{"https://app.customer.example"}, IntegrationIDs: []string{integration.ID}, Appearance: platform.WidgetAppearance{Theme: "auto", LauncherPosition: "right"}}, actor)
@@ -675,11 +679,11 @@ func TestWidgetActivationRequiresAHardenedAssistantAndAnswersWithoutIdentityOrCr
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply, err := service.AnswerWidgetMessage(ctx, platform.WidgetPrincipal{Widget: active, Session: model.WidgetSession{ID: "session-1", UserID: "private-user-123", CustomerOrganisationID: "private-org-456"}}, "How do calls work?", []model.Integration{integration})
+	reply, err := service.AnswerWidgetMessage(ctx, platform.WidgetPrincipal{Widget: active, Session: model.WidgetSession{ID: "session-1", UserID: "private-user-123", CustomerOrganisationID: "private-org-456"}}, "How do calls work?")
 	if err != nil || reply != "The Voice API supports calls." {
 		t.Fatalf("widget reply = %q err=%v", reply, err)
 	}
-	if doer.authorization != "Bearer provider-secret" || bytes.Contains(doer.requestBody, []byte("provider-secret")) || bytes.Contains(doer.requestBody, []byte("private-user-123")) || bytes.Contains(doer.requestBody, []byte("private-org-456")) || !bytes.Contains(doer.requestBody, []byte("Never claim to have read customer data")) {
+	if doer.authorization != "Bearer provider-secret" || bytes.Contains(doer.requestBody, []byte("provider-secret")) || bytes.Contains(doer.requestBody, []byte("private-user-123")) || bytes.Contains(doer.requestBody, []byte("private-org-456")) || bytes.Contains(doer.requestBody, []byte(`"temperature":0.2`)) || !bytes.Contains(doer.requestBody, []byte("Never claim to have read customer data")) {
 		t.Fatalf("widget assistant request was not hardened: auth=%q body=%s", doer.authorization, doer.requestBody)
 	}
 }
@@ -695,6 +699,8 @@ func TestPublicManifestContainsOnlyAcknowledgedPublicIntegrations(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	configurePrivateIntegrationFoundations(t, service, memory, privateIntegration, actor)
+	configurePrivateIntegrationPolicyTool(t, service, memory, privateIntegration, actor)
 	if _, err := service.PublishIntegration(ctx, privateIntegration.ID, actor); err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   INTEGRATION_TABS,
+  INTEGRATION_RESOURCE_TABS,
   SETTINGS_TABS,
   SECTION_PATHS,
   entityPath,
@@ -45,13 +46,23 @@ test("entity URLs encode UIDs and resolve to their owning section", () => {
   assert.equal(routeForEntity("audit-event", "event_123").section, "runs");
 });
 
-test("API workspaces have four stable, round-trippable tab URLs", () => {
+test("API workspaces have eight stable, round-trippable tab URLs", () => {
   const uid = "voice api/v3";
   for (const tab of INTEGRATION_TABS) {
     const path = integrationPath(uid, tab.id);
     assert.equal(path, tab.id === "overview" ? "/integration/voice%20api%2Fv3" : `/integration/voice%20api%2Fv3/${tab.id}`);
     assert.deepEqual(parseConsolePath(path), routeForIntegration(uid, tab.id));
     assert.deepEqual(parseConsolePath(`${path}/`), routeForIntegration(uid, tab.id));
+  }
+});
+
+test("API resource workspaces have stable nested sub-tab URLs", () => {
+  const uid = "voice api/v3";
+  for (const tab of INTEGRATION_RESOURCE_TABS) {
+    const path = integrationPath(uid, "resources", tab.id);
+    assert.equal(path, tab.id === "documentation" ? "/integration/voice%20api%2Fv3/resources" : `/integration/voice%20api%2Fv3/resources/${tab.id}`);
+    assert.deepEqual(parseConsolePath(path), routeForIntegration(uid, "resources", tab.id));
+    assert.deepEqual(parseConsolePath(`${path}/`), routeForIntegration(uid, "resources", tab.id));
   }
 });
 
@@ -87,9 +98,11 @@ test("recipes have one stable product-level workspace", () => {
 
 test("unknown API tabs do not create compatibility aliases", () => {
   const uid = "voice-api";
-  for (const tab of ["tools", "usage", "support", "revisions"]) {
+  for (const tab of ["access", "usage", "support", "revisions"]) {
     assert.equal(parseConsolePath(`/integration/${uid}/${tab}`).kind, "not-found");
   }
+  assert.equal(parseConsolePath(`/integration/${uid}/tools/packages`).kind, "not-found");
+  assert.equal(parseConsolePath(`/integration/${uid}/resources/not-a-resource-tab`).kind, "not-found");
 });
 
 test("unknown and malformed paths render the console not-found route", () => {

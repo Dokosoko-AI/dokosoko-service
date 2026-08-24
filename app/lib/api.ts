@@ -100,6 +100,28 @@ export type APIIntegrationPublishStatus = {
   validations: APIIntegrationPublishValidation[];
 };
 
+export type APIIntegrationPreflightCheck = {
+  code: string;
+  label: string;
+  message: string;
+  status: "pass" | "fail" | "optional";
+  tab: string;
+  required: boolean;
+};
+
+export type APIIntegrationPreflight = {
+  integration_id: string;
+  candidate_revision: number;
+  candidate_manifest_hash: string;
+  latest_published_id?: string;
+  latest_published_revision?: number;
+  latest_published_hash?: string;
+  matches_latest_published: boolean;
+  ready: boolean;
+  checks: APIIntegrationPreflightCheck[];
+  generated_at: string;
+};
+
 export type APIIntegrationDetail = {
   integration: APIIntegration;
   revisions: APIIntegrationRevision[];
@@ -121,6 +143,14 @@ export type APIWidget = {
   state: "draft" | "active" | "disabled";
   allowed_origins: string[];
   integration_ids: string[];
+  integration_bindings: Array<{
+    integration_id: string;
+    integration_revision_id: string;
+    integration_revision: number;
+    manifest_hash: string;
+    snapshot: Record<string, unknown>;
+    bound_at: string;
+  }>;
   appearance: APIWidgetAppearance;
   revision: number;
   activated_at?: string;
@@ -494,6 +524,46 @@ export type APICrawlJob = {
   finished_at?: string;
 };
 
+export type APICrawlReviewDocument = {
+  id: string;
+  crawl_job_id: string;
+  snapshot_id: string;
+  title: string;
+  canonical_url: string;
+  state: "validated" | "published" | "quarantined";
+  trust_level: number;
+  injection_indicators: string[];
+  content_hash: string;
+  changed: boolean;
+};
+
+export type APISourcePublication = {
+  id: string;
+  organisation_id: string;
+  product_id: string;
+  source_id: string;
+  crawl_job_id: string;
+  revision: number;
+  visibility: APIVisibility;
+  content_hash: string;
+  document_count: number;
+  reviewed_by: string;
+  reviewed_at: string;
+  published_at: string;
+};
+
+export type APISourceReview = {
+  source: APISource;
+  crawl_job: APICrawlJob;
+  documents: APICrawlReviewDocument[];
+  publication?: APISourcePublication;
+};
+
+export type APISourcePublishResult = {
+  source: APISource;
+  publication: APISourcePublication;
+};
+
 export type APITool = {
   id: string;
   organisation_id: string;
@@ -503,16 +573,158 @@ export type APITool = {
   description: string;
   input_schema: Record<string, unknown>;
   output_schema: Record<string, unknown>;
-  state: "draft" | "published";
+  state: "draft" | "published" | "retired";
   revision: number;
   http_method: string;
   authorization_policy: Record<string, unknown>;
   timeout_ms: number;
+  endpoint?: string;
   backend_kind?: "http" | "mcp";
   mcp_connection_id?: string;
   upstream_tool_name?: string;
   upstream_schema_hash?: string;
   upstream_drifted?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type APIToolDryRun = {
+  tool_id: string;
+  revision: number;
+  valid: boolean;
+  network_call_performed: false;
+  method: string;
+  destination_origin?: string;
+  destination_path?: string;
+  backend_kind: string;
+  required_grants: string[];
+  confirmation_required: boolean;
+  risk: "low" | "medium" | "high" | "critical";
+  idempotency_required: boolean;
+  normalized_arguments: Record<string, unknown>;
+  warnings: string[];
+};
+
+export type APIIntegrationToolBinding = {
+  integration_id: string;
+  tool_id: string;
+  tool_revision: number;
+  authorization_point_id: string;
+  authorization_point_revision: number;
+  tool?: APITool;
+  authorization_point?: APIAuthorizationPoint;
+  created_by?: string;
+  created_at: string;
+};
+
+export type APIGrantDefinition = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  key: string;
+  display_name: string;
+  description: string;
+  risk: "low" | "medium" | "high" | "critical";
+  state: "active" | "deprecated";
+  revision: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIAuthorizationPoint = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  integration_id: string;
+  key: string;
+  name: string;
+  description: string;
+  action_type: "read" | "write" | "destructive";
+  required_grants: string[];
+  confirmation_required: boolean;
+  decision_ttl_seconds: number;
+  state: "draft" | "active" | "deprecated";
+  revision: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIPackageRelease = {
+  id: string;
+  package_artifact_id: string;
+  artifact_name: string;
+  ecosystem: string;
+  coordinate: string;
+  version: string;
+  purl: string;
+  registry_url: string;
+  source_url?: string;
+  language?: string;
+  platform?: string;
+  install_command: string;
+  digest: string;
+  sbom_url?: string;
+  provenance_url?: string;
+  visibility: APIVisibility;
+  content_hash: string;
+  published_by?: string;
+  published_at: string;
+  created_at: string;
+};
+
+export type APIPackageArtifact = {
+  id: string;
+  organisation_id?: string;
+  deployment_id?: string;
+  ecosystem: string;
+  name: string;
+  description: string;
+  coordinate: string;
+  registry_url: string;
+  source_url?: string;
+  purl: string;
+  language?: string;
+  platform?: string;
+  visibility: APIVisibility;
+  lifecycle: "draft" | "active" | "deprecated" | "retired";
+  replacement_package_artifact_id?: string;
+  deprecation_message?: string;
+  sunset_at?: string;
+  revision: number;
+  latest_release?: APIPackageRelease;
+  integration_ids?: string[];
+  releases?: APIPackageRelease[]; // Client-side enrichment from the releases endpoint.
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIPackageArtifactInput = Pick<APIPackageArtifact, "name" | "description" | "ecosystem" | "coordinate" | "purl" | "registry_url" | "visibility"> & {
+  source_url?: string;
+  language?: string;
+  platform?: string;
+  acknowledge_public: boolean;
+};
+
+export type APIIntegrationPackageBinding = {
+  id?: string;
+  integration_id: string;
+  package_artifact_id: string;
+  package_release_id: string;
+  artifact?: APIPackageArtifact;
+  release?: APIPackageRelease;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIAuthorizationSimulation = {
+  authorization_point_id: string;
+  allowed: boolean;
+  missing_grants: string[];
+  confirmation_required: boolean;
+  confirmation_missing: boolean;
+  explanation: string;
+  simulation_only: true;
 };
 
 export type APIMCPConnection = {
@@ -863,13 +1075,14 @@ function cookie(name: string): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const csrfToken = !["GET", "HEAD", "OPTIONS"].includes(method) ? cookie("dokosoko_csrf") : "";
+  const multipartBody = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
     cache: "no-store",
     headers: {
       Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !multipartBody ? { "Content-Type": "application/json" } : {}),
       ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
       ...init?.headers,
     },
@@ -928,9 +1141,23 @@ export const api = {
   integration: (integrationID: string) => request<APIIntegrationDetail>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; visibility?: APIVisibility; acknowledge_public?: boolean; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "visibility" | "lifecycle" | "revision"> & { acknowledge_public?: boolean; replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PUT", body: JSON.stringify(input) }),
-  publishIntegration: (integrationID: string) => request<APIIntegrationRevision>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({}) }),
+  preflightIntegration: (integrationID: string) => request<APIIntegrationPreflight>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/preflight`, { method: "POST", body: JSON.stringify({}) }),
+  publishIntegration: (integrationID: string, candidateRevision: number, candidateManifestHash: string) => request<APIIntegrationRevision>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({ candidate_revision: candidateRevision, candidate_manifest_hash: candidateManifestHash }) }),
   setIntegrationAccessConnections: (integrationID: string, accessConnectionIDs: string[]) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/access-connections`, { method: "PUT", body: JSON.stringify({ access_connection_ids: accessConnectionIDs }) }),
   setIntegrationSupportRoute: (integrationID: string, supportRouteID: string) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/support-route`, { method: "PUT", body: JSON.stringify({ support_route_id: supportRouteID }) }),
+  integrationToolBindings: async (integrationID: string) => (await request<{ items: APIIntegrationToolBinding[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/tools`)).items,
+  setIntegrationToolBindings: (integrationID: string, tools: Array<{ tool_id: string; revision: number; authorization_point_id: string; authorization_point_revision: number }>) => request<{ items: APIIntegrationToolBinding[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/tools`, { method: "PUT", body: JSON.stringify({ tools }) }),
+  grantDefinitions: async () => (await request<{ items: APIGrantDefinition[] }>("/api/v1/grant-definitions")).items,
+  createGrantDefinition: (input: { key: string; display_name: string; description: string; risk: APIGrantDefinition["risk"]; state: APIGrantDefinition["state"] }) => request<APIGrantDefinition>("/api/v1/grant-definitions", { method: "POST", body: JSON.stringify(input) }),
+  updateGrantDefinition: (grantID: string, input: { key: string; display_name: string; description: string; risk: APIGrantDefinition["risk"]; state: APIGrantDefinition["state"]; revision: number }) => request<APIGrantDefinition>(`/api/v1/grant-definitions/${encodeURIComponent(grantID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  authorizationPoints: async (integrationID: string) => (await request<{ items: APIAuthorizationPoint[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points`)).items,
+  createAuthorizationPoint: (integrationID: string, input: { key: string; name: string; description: string; action_type: APIAuthorizationPoint["action_type"]; required_grants: string[]; confirmation_required: boolean; decision_ttl_seconds: number; state: APIAuthorizationPoint["state"] }) => request<APIAuthorizationPoint>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points`, { method: "POST", body: JSON.stringify(input) }),
+  updateAuthorizationPoint: (integrationID: string, pointID: string, input: { key: string; name: string; description: string; action_type: APIAuthorizationPoint["action_type"]; required_grants: string[]; confirmation_required: boolean; decision_ttl_seconds: number; state: APIAuthorizationPoint["state"]; revision: number }) => request<APIAuthorizationPoint>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points/${encodeURIComponent(pointID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  simulateAuthorizationPoint: (integrationID: string, pointID: string, grantedGrants: string[], confirmed: boolean) => request<APIAuthorizationSimulation>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points/${encodeURIComponent(pointID)}/simulate`, { method: "POST", body: JSON.stringify({ granted_grants: grantedGrants, confirmed }) }),
+  integrationPackages: async (integrationID: string) => (await request<{ items: APIIntegrationPackageBinding[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages`)).items,
+  bindIntegrationPackage: (integrationID: string, packageReleaseID: string) => request<APIIntegrationPackageBinding>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages`, { method: "POST", body: JSON.stringify({ package_release_id: packageReleaseID }) }),
+  replaceIntegrationPackage: (integrationID: string, artifactID: string, packageReleaseID: string) => request<APIIntegrationPackageBinding>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages/${encodeURIComponent(artifactID)}`, { method: "PUT", body: JSON.stringify({ package_release_id: packageReleaseID }) }),
+  unbindIntegrationPackage: (integrationID: string, artifactID: string) => request<void>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages/${encodeURIComponent(artifactID)}`, { method: "DELETE" }),
   resourceSets: async (kind = "") => (await request<{ items: APIResourceSet[] }>(`/api/v1/resource-sets${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`)).items,
   createResourceSet: (input: { kind: APIResourceSet["kind"]; name: string; description: string; manifest: Array<Record<string, unknown>> }) => request<APIResourceSet>("/api/v1/resource-sets", { method: "POST", body: JSON.stringify(input) }),
   updateResourceSet: (setID: string, input: { name: string; description: string; state: APIResourceSet["state"]; manifest: Array<Record<string, unknown>>; revision: number }) => request<APIResourceSet>(`/api/v1/resource-sets/${encodeURIComponent(setID)}`, { method: "PATCH", body: JSON.stringify(input) }),
@@ -994,9 +1221,9 @@ export const api = {
   aiProfiles: async (productID: string) => (await request<{ items: APIAIWorkloadProfile[] }>(`${productPath(productID)}/ai-profiles`)).items,
   saveAIProfile: (productID: string, workload: APIAIWorkloadProfile["workload"], input: { organisation_id: string; provider_connection_id: string; model: string; max_input_tokens: number; max_output_tokens: number; daily_token_budget: number; enabled: boolean; revision: number }) => request<APIAIWorkloadProfile>(`${productPath(productID)}/ai-profiles/${encodeURIComponent(workload)}`, { method: "PUT", body: JSON.stringify(input) }),
   analyses: async (productID: string) => (await request<{ items: APIIntegrationAnalysis[] }>(`${productPath(productID)}/analyses`)).items,
-  analyseIntegration: (productID: string) => request<APIIntegrationAnalysis>(`${productPath(productID)}/analyses`, { method: "POST", body: JSON.stringify({}) }),
+  analyseIntegration: (productID: string, integrationID?: string) => request<APIIntegrationAnalysis>(`${productPath(productID)}/analyses`, { method: "POST", body: JSON.stringify(integrationID ? { integration_id: integrationID } : {}) }),
   answerAnalysis: (productID: string, analysisID: string, answers: Record<string, string>) => request<APIIntegrationAnalysis>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}`, { method: "PATCH", body: JSON.stringify({ answers }) }),
-  generateRecipes: async (productID: string, analysisID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}/recipes`, { method: "POST", body: JSON.stringify({}) })).items,
+  generateRecipes: async (productID: string, analysisID: string, integrationID?: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}/recipes`, { method: "POST", body: JSON.stringify(integrationID ? { integration_id: integrationID } : {}) })).items,
   recipes: async (productID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/recipes`)).items,
   createRecipe: (productID: string, prompt: string) => request<APIRecipe>(`${productPath(productID)}/recipes`, { method: "POST", body: JSON.stringify({ prompt }) }),
   recipe: (productID: string, recipeID: string) => request<{ recipe: APIRecipe; revisions: APIRecipeRevision[] }>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`),
@@ -1008,12 +1235,34 @@ export const api = {
   aiUsage: (productID: string, days = 30) => request<{ workloads: APIAIWorkloadUsage[]; providers: APIAIProviderUsage[] }>(`${productPath(productID)}/ai-usage?days=${days}`),
   sources: async (productID: string) => (await request<{ items: APISource[] }>(`${productPath(productID)}/sources`)).items,
   createSource: (productID: string, organisationID: string, name: string, kind: string, location: string) => request<APISource>(`${productPath(productID)}/sources`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, kind, location }) }),
+  uploadSource: (productID: string, organisationID: string, name: string, file: File) => {
+    const body = new FormData();
+    body.append("organisation_id", organisationID);
+    body.append("name", name);
+    body.append("file", file, file.name);
+    return request<APISource>(`${productPath(productID)}/sources/upload`, { method: "POST", body });
+  },
   queueCrawl: (productID: string, sourceID: string) => request<APICrawlJob>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/crawl`, { method: "POST" }),
   crawlJobs: async (productID: string, sourceID: string) => (await request<{ items: APICrawlJob[] }>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/crawls`)).items,
-  publishSource: (productID: string, sourceID: string, revision: number) => request<APISource>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/publish`, { method: "POST", body: JSON.stringify({ revision }) }),
+  sourceReview: (productID: string, sourceID: string, crawlJobID = "") => request<APISourceReview>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/review${crawlJobID ? `?crawl_job_id=${encodeURIComponent(crawlJobID)}` : ""}`),
+  sourcePublications: async (productID: string, sourceID: string) => (await request<{ items: APISourcePublication[] }>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/publications`)).items,
+  publishSource: (productID: string, sourceID: string, input: { revision: number; crawl_job_id: string; document_ids: string[]; acknowledge_reviewed: boolean }) => request<APISourcePublishResult>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/publish`, { method: "POST", body: JSON.stringify(input) }),
   tools: async (productID: string) => (await request<{ items: APITool[] }>(`${productPath(productID)}/tools`)).items,
+  tool: (productID: string, toolID: string) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}`),
   createTool: (productID: string, input: Record<string, unknown>) => request<APITool>(`${productPath(productID)}/tools`, { method: "POST", body: JSON.stringify(input) }),
+  updateTool: (productID: string, toolID: string, input: Record<string, unknown>) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}`, { method: "PUT", body: JSON.stringify(input) }),
+  cloneTool: (productID: string, toolID: string, namespace: string, name: string) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/clone`, { method: "POST", body: JSON.stringify({ namespace, name }) }),
+  dryRunTool: (productID: string, toolID: string, args: Record<string, unknown>) => request<APIToolDryRun>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/dry-run`, { method: "POST", body: JSON.stringify({ arguments: args }) }),
+  retireTool: (productID: string, toolID: string, revision: number) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/retire`, { method: "POST", body: JSON.stringify({ revision }) }),
   publishTool: (productID: string, toolID: string, revision: number) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/publish`, { method: "POST", body: JSON.stringify({ revision }) }),
+  packageArtifacts: async () => (await request<{ items: APIPackageArtifact[] }>("/api/v1/package-artifacts")).items,
+  packageArtifact: (artifactID: string) => request<APIPackageArtifact>(`/api/v1/package-artifacts/${encodeURIComponent(artifactID)}`),
+  createPackageArtifact: (input: APIPackageArtifactInput) => request<APIPackageArtifact>("/api/v1/package-artifacts", { method: "POST", body: JSON.stringify(input) }),
+  updatePackageArtifact: (artifactID: string, input: APIPackageArtifactInput & { revision: number }) => request<APIPackageArtifact>(`/api/v1/package-artifacts/${encodeURIComponent(artifactID)}`, { method: "PUT", body: JSON.stringify(input) }),
+  packageReleases: async (artifactID: string) => (await request<{ items: APIPackageRelease[] }>(`/api/v1/package-artifacts/${encodeURIComponent(artifactID)}/releases`)).items,
+  publishPackageRelease: (artifactID: string, input: { version: string; purl: string; install_command: string; digest: string; provenance_url?: string; sbom_url?: string; artifact_revision: number; acknowledge_public: boolean }) => request<{ artifact: APIPackageArtifact; release: APIPackageRelease }>(`/api/v1/package-artifacts/${encodeURIComponent(artifactID)}/publish`, { method: "POST", body: JSON.stringify(input) }),
+  deprecatePackageArtifact: (artifactID: string, input: { replacement_package_artifact_id?: string; message: string; sunset_at?: string; revision: number }) => request<APIPackageArtifact>(`/api/v1/package-artifacts/${encodeURIComponent(artifactID)}/deprecate`, { method: "POST", body: JSON.stringify(input) }),
+  retirePackageArtifact: (artifactID: string, input: { replacement_package_artifact_id?: string; message: string; revision: number }) => request<APIPackageArtifact>(`/api/v1/package-artifacts/${encodeURIComponent(artifactID)}/retire`, { method: "POST", body: JSON.stringify(input) }),
   mcpConnections: async (productID: string) => (await request<{ items: APIMCPConnection[] }>(`${productPath(productID)}/mcp-connections`)).items,
   createMCPConnection: (productID: string, input: { organisation_id: string; name: string; namespace: string; endpoint: string; auth_mode: APIMCPConnection["auth_mode"]; credential: string; oauth_client_id: string; oauth_client_secret: string; oauth_issuer: string; authorization_url: string; token_url: string; scopes: string[] }) => request<APIMCPConnection>(`${productPath(productID)}/mcp-connections`, { method: "POST", body: JSON.stringify(input) }),
   inspectMCPConnection: (productID: string, connectionID: string) => request<APIMCPCatalog>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/inspect`, { method: "POST" }),

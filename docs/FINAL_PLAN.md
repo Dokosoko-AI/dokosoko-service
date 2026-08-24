@@ -13,6 +13,10 @@ One DokoSoko installation is one vendor deployment. Its integration surface cons
 - `customer_account` — DokoSoko's durable account resource resolved from a trusted external identity;
 - `installation` — a registered customer/environment integration instance;
 - `tool` — a published operation with fixed destination, schemas, and authorization policy;
+- optional `package_artifact` and immutable `package_release` records —
+  bounded metadata for externally delivered developer artifacts;
+- `integration_package_binding` — compatibility between one Integration draft
+  and one exact immutable package release;
 - `support_submission` — one consented, encrypted bug report or feedback item;
 - `support_route` — reporting policy that references, but never owns, a backend connection;
 - optional `ai_provider_connection` and four `ai_workload_profile` records for extraction, authoring, review, and support;
@@ -20,7 +24,7 @@ One DokoSoko installation is one vendor deployment. Its integration surface cons
 - `recipe` and immutable `recipe_revision` — reviewed Markdown implementation guidance published as an MCP resource;
 - optional `access_definition`, `access_connection`, `access_instance`, and `access_credential` resources for provider-owned lifecycle management.
 
-Package ecosystems are not a DokoSoko resource. An HTTP capability belongs in an API or tool contract. Generated SDKs may be published separately, but they are not needed to expose an endpoint and do not shape runtime authorization.
+Package metadata is an optional DokoSoko catalogue resource; package delivery is not. An HTTP capability still belongs in an API or tool contract. A generated SDK or other package may be identified by an exact metadata release in an Integration manifest, but it is never required to expose an endpoint and does not shape runtime authorization.
 
 ## 2. Optional identity and customer accounts
 
@@ -121,7 +125,19 @@ It must not become a generic action bag. Operations that do not fit this lifecyc
 
 Every mutation is authorized independently. Create and issue operations require idempotency keys. One-time credentials are returned once; replay returns metadata, never plaintext. DokoSoko persists only encrypted material or fingerprints according to the declared storage mode.
 
-## 7. HTTP and evolution rules
+## 7. Package metadata and external verification
+
+A `package_artifact` is the stable metadata identity for one ecosystem and canonical coordinate. It contains a canonical unversioned Package URL whose type matches the ecosystem, a registry URL, an optional source URL, visibility, and lifecycle. Package-specific URLs must use HTTPS, except for loopback HTTP during local development, and cannot contain userinfo, a query, or a fragment. This rejects those common credential and signature channels, but URL paths and other free-text fields are not comprehensive secret scans, so operators must not enter credentials, signatures, package bytes, or executable payloads into them.
+
+A `package_release` is immutable metadata for one exact externally hosted version. It includes a query-free and fragment-free versioned Package URL with the exact artifact identity and a decoded version matching the release version, an operator-supplied display-only install command, a declared SHA-256, SHA-384, or SHA-512 digest, and optional provenance and SBOM URLs using the same strict URL policy. DokoSoko validates field shape, PURL identity, URL policy, obvious credential-bearing install-command forms, exact-version consistency, and digest syntax, then computes a deterministic hash of the metadata. That hash proves metadata identity only; it does not prove anything about external bytes or certify free-text as safe.
+
+An Integration package binding names one exact release. Publishing the Integration embeds the resolved release metadata, lifecycle guidance, and metadata content hash in its immutable manifest. Package bindings never follow latest. A public Integration may embed only public package metadata. Creating a public artifact, changing a private draft to public, and publishing each public release require explicit public acknowledgement.
+
+The external registry delivers bytes and enforces registry authentication and authorization. DokoSoko does not fetch, host, execute, sign, cryptographically verify, or proxy a package, provenance statement, SBOM, or installation. Before operational use, an operator should run a separately operated external verifier to check the registry bytes against the declared digest, validate any declared provenance or SBOM, and exercise the documented installation procedure. DokoSoko neither records this evidence nor enforces that verification occurred. Verifier credentials and results are separate operational evidence and must not be copied into package metadata.
+
+All artifact catalogue fields are editable only in `draft`; the first immutable release activates the artifact, and later releases remain independently immutable. Deprecation can be applied to any non-retired artifact and requires guidance plus the exact current revision. Its optional replacement must be active with a published release. Its optional future sunset is guidance only: the deprecated artifact becomes immediately unavailable for releases, new bindings, and candidate publication. Retirement can likewise be applied to any non-retired artifact, is immediate, requires guidance and the exact revision, and applies the same replacement rule while preserving any existing sunset. Existing bindings remain readable. Neither transition rewrites historical published Integration manifests; a future candidate must remove the unavailable package or bind an available replacement explicitly.
+
+## 8. HTTP and evolution rules
 
 - Resource creation uses `POST` and returns `201`; accepted asynchronous work returns `202`.
 - Retrieval uses `GET`; partial state change uses `PATCH`; replacement configuration uses `PUT`; deletion uses `DELETE` and returns `204` when no representation is needed.
@@ -131,7 +147,7 @@ Every mutation is authorized independently. Create and issue operations require 
 - Servers ignore unknown additive response fields from vendor APIs. Vendors must tolerate additive request headers but may reject unknown body fields according to the published schema.
 - Breaking changes require a new versioned path or explicit API version. Implementation details and database identifiers are not promoted into the public contract accidentally.
 
-## 8. AI analysis and recipes
+## 9. AI analysis and recipes
 
 DokoSoko uses a small provider-neutral interface implemented directly with the official OpenAI, Google, and Anthropic SDKs plus one OpenAI-compatible adapter. There is no agent framework, model-owned tool loop, hidden cross-provider fallback, or second workflow engine. The boundary is intentionally replaceable if a framework later solves a measured problem.
 
@@ -145,7 +161,7 @@ References may select only analysed HTTPS sources or exact canonical documentati
 
 The in-product attention inbox contains unanswered questions and drifted recipes. Recipe views and explicit plan selections are distinct analytics events; popularity does not imply correctness or approval.
 
-## 9. Acceptance invariants
+## 10. Acceptance invariants
 
 The integration is acceptable only while all of these remain true:
 
@@ -158,10 +174,12 @@ The integration is acceptable only while all of these remain true:
 7. DokoSoko tokens are never forwarded.
 8. Vendor calls use fixed origins and fixed versioned paths.
 9. Support delivery is consented, encrypted, durable, idempotent, and retry-safe.
-10. No package gateway, package resource, entitlement hook, usage hook, or arbitrary hook URL remains in the product contract.
-11. Identity, backend connectivity, and public visibility are independent axes.
-12. Integrations default private; public transition requires acknowledgement and the global Public MCP switch remains a master kill switch.
-13. Support routes contain backend-connection references, never plaintext credentials or copied secret identifiers.
-14. AI provider credentials exist once per provider connection and are never returned or copied into workload profiles.
-15. Model output cannot authorize, publish, add an arbitrary reference, or silently select another provider.
-16. Every published recipe has an explicitly approved immutable revision and is removed from discovery when its evidence drifts.
+10. Optional package metadata binds an exact immutable release into an Integration manifest; no package gateway, byte store, download proxy, entitlement hook, usage hook, or arbitrary hook URL exists.
+11. Package URL fields reject userinfo, queries, and fragments, obvious credential-bearing install commands are rejected, and operators keep credentials out of URL paths and all other package metadata. Registries deliver bytes; external verification of bytes, digest, optional provenance or SBOM, and installation is operator-controlled and is neither performed nor evidenced by DokoSoko.
+12. Package deprecation and retirement immediately block releases, new bindings, and candidate publication without mutating readable existing bindings or historical Integration manifests; replacements are explicit in later candidates.
+13. Identity, backend connectivity, package metadata, and public visibility are independent axes.
+14. Integrations default private; public transition requires acknowledgement and the global Public MCP switch remains a master kill switch.
+15. Support routes contain backend-connection references, never plaintext credentials or copied secret identifiers.
+16. AI provider credentials exist once per provider connection and are never returned or copied into workload profiles.
+17. Model output cannot authorize, publish, add an arbitrary reference, or silently select another provider.
+18. Every published recipe has an explicitly approved immutable revision and is removed from discovery when its evidence drifts.

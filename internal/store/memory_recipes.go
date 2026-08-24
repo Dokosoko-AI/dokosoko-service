@@ -152,37 +152,54 @@ func (m *Memory) RecipeRevisions(_ context.Context, recipeID string) ([]model.Re
 	return result, nil
 }
 
-func (m *Memory) CreateRecipeRevision(_ context.Context, value model.RecipeRevision) (model.RecipeRevision, error) {
+func (m *Memory) SaveRecipeRevision(_ context.Context, recipe model.Recipe, value model.RecipeRevision, expected int64) (model.Recipe, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	found := false
-	for _, recipes := range m.recipes {
-		if _, found = recipes[value.RecipeID]; found {
-			break
+	if value.RecipeID != recipe.ID {
+		return model.Recipe{}, ErrConflict
+	}
+	current, exists := m.recipes[recipe.ProductID][recipe.ID]
+	if !exists {
+		return model.Recipe{}, ErrNotFound
+	}
+	if current.Revision != expected {
+		return model.Recipe{}, ErrConflict
+	}
+	for id, candidate := range m.recipes[recipe.ProductID] {
+		if id != recipe.ID && candidate.Slug == recipe.Slug {
+			return model.Recipe{}, ErrConflict
 		}
 	}
-	if !found {
-		return model.RecipeRevision{}, ErrNotFound
+	if m.recipeRevisions[recipe.ID] == nil {
+		m.recipeRevisions[recipe.ID] = make(map[string]model.RecipeRevision)
 	}
-	if m.recipeRevisions[value.RecipeID] == nil {
-		m.recipeRevisions[value.RecipeID] = make(map[string]model.RecipeRevision)
-	}
-	if _, exists := m.recipeRevisions[value.RecipeID][value.ID]; exists {
-		return model.RecipeRevision{}, ErrConflict
+	if _, exists := m.recipeRevisions[recipe.ID][value.ID]; exists {
+		return model.Recipe{}, ErrConflict
 	}
 	if value.Revision == 0 {
-		value.Revision = len(m.recipeRevisions[value.RecipeID]) + 1
+		value.Revision = 1
+		for _, revision := range m.recipeRevisions[recipe.ID] {
+			if revision.Revision >= value.Revision {
+				value.Revision = revision.Revision + 1
+			}
+		}
 	}
-	for _, current := range m.recipeRevisions[value.RecipeID] {
-		if current.Revision == value.Revision {
-			return model.RecipeRevision{}, ErrConflict
+	for _, revision := range m.recipeRevisions[recipe.ID] {
+		if revision.Revision == value.Revision {
+			return model.Recipe{}, ErrConflict
 		}
 	}
 	if value.CreatedAt.IsZero() {
 		value.CreatedAt = time.Now().UTC()
 	}
-	m.recipeRevisions[value.RecipeID][value.ID] = memoryClone(value)
-	return memoryClone(value), nil
+	now := time.Now().UTC()
+	recipe.CurrentRevisionID, recipe.CurrentRevision = value.ID, nil
+	recipe.CreatedAt = current.CreatedAt
+	recipe.Revision = current.Revision + 1
+	recipe.UpdatedAt = now
+	m.recipeRevisions[recipe.ID][value.ID] = memoryClone(value)
+	m.recipes[recipe.ProductID][recipe.ID] = memoryClone(recipe)
+	return m.hydrateRecipeLocked(recipe), nil
 }
 
 func (m *Memory) AIJobs(_ context.Context, productID string) ([]model.AIJob, error) {

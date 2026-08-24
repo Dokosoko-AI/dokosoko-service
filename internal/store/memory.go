@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/auth"
+	"github.com/dokosoko/dokosoko-service/internal/docreview"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
@@ -25,6 +26,12 @@ type Memory struct {
 	resourceSets             map[string]model.ResourceSet
 	resourceSetRevisions     map[string]map[string]model.ResourceSetRevision
 	integrationResourceLinks map[string]map[string]model.IntegrationResourceLink
+	packageArtifacts         map[string]model.PackageArtifact
+	packageReleases          map[string]map[string]model.PackageRelease
+	integrationPackageLinks  map[string]map[string]model.IntegrationPackageBinding
+	grantDefinitions         map[string]model.GrantDefinition
+	authorizationPoints      map[string]map[string]model.AuthorizationPoint
+	integrationToolLinks     map[string]map[string]model.IntegrationToolBinding
 	accessDefinitions        map[string]model.AccessDefinition
 	accessConnections        map[string]model.AccessConnection
 	integrationAccessLinks   map[string]map[string]bool
@@ -43,6 +50,9 @@ type Memory struct {
 	productBuilds            map[string]map[string]model.ProductBuild
 	envs                     map[string]map[string]model.Environment
 	sources                  map[string]map[string]model.Source
+	sourcePublications       map[string]map[string]model.SourcePublication
+	publicationDocuments     map[string]map[string]bool
+	crawlReviewDocuments     map[string][]model.CrawlReviewDocument
 	secrets                  map[string]model.Secret
 	tools                    map[string]map[string]model.Tool
 	mcpConnections           map[string]map[string]model.MCPConnection
@@ -94,6 +104,10 @@ func NewMemory() *Memory {
 		"src_docs": {ID: "src_docs", OrganisationID: "org_acme", ProductID: product.ID, Name: "Developer documentation", Kind: "website", Location: "https://docs.acme.dev", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
 		"src_api":  {ID: "src_api", OrganisationID: "org_acme", ProductID: product.ID, Name: "Platform API", Kind: "openapi", Location: "git://api/openapi.yaml", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
 	}
+	docsCrawl := model.CrawlJob{ID: "crawl_docs_seed", OrganisationID: organisation.ID, ProductID: product.ID, SourceID: "src_docs", State: "succeeded", DiscoveredCount: 1, FetchedCount: 1, ChangedCount: 1, QueuedAt: now, FinishedAt: &now}
+	apiCrawl := model.CrawlJob{ID: "crawl_api_seed", OrganisationID: organisation.ID, ProductID: product.ID, SourceID: "src_api", State: "succeeded", DiscoveredCount: 1, FetchedCount: 1, ChangedCount: 1, QueuedAt: now.Add(-time.Second), FinishedAt: &now}
+	docsPublication := model.SourcePublication{ID: "pub_docs_seed", OrganisationID: organisation.ID, ProductID: product.ID, SourceID: "src_docs", CrawlJobID: docsCrawl.ID, Revision: 1, Visibility: model.VisibilityPrivate, ContentHash: "sha256:" + strings.Repeat("1", 64), DocumentCount: 1, ReviewedBy: "seed", ReviewedAt: now, PublishedAt: now}
+	apiPublication := model.SourcePublication{ID: "pub_api_seed", OrganisationID: organisation.ID, ProductID: product.ID, SourceID: "src_api", CrawlJobID: apiCrawl.ID, Revision: 1, Visibility: model.VisibilityPrivate, ContentHash: "sha256:" + strings.Repeat("2", 64), DocumentCount: 1, ReviewedBy: "seed", ReviewedAt: now, PublishedAt: now}
 	return &Memory{
 		orgs:                     map[string]model.Organisation{organisation.ID: organisation},
 		deployment:               deployment,
@@ -103,6 +117,12 @@ func NewMemory() *Memory {
 		resourceSets:             make(map[string]model.ResourceSet),
 		resourceSetRevisions:     make(map[string]map[string]model.ResourceSetRevision),
 		integrationResourceLinks: make(map[string]map[string]model.IntegrationResourceLink),
+		packageArtifacts:         make(map[string]model.PackageArtifact),
+		packageReleases:          make(map[string]map[string]model.PackageRelease),
+		integrationPackageLinks:  make(map[string]map[string]model.IntegrationPackageBinding),
+		grantDefinitions:         make(map[string]model.GrantDefinition),
+		authorizationPoints:      make(map[string]map[string]model.AuthorizationPoint),
+		integrationToolLinks:     make(map[string]map[string]model.IntegrationToolBinding),
 		accessDefinitions:        make(map[string]model.AccessDefinition),
 		accessConnections:        make(map[string]model.AccessConnection),
 		integrationAccessLinks:   make(map[string]map[string]bool),
@@ -121,35 +141,50 @@ func NewMemory() *Memory {
 		productBuilds:            map[string]map[string]model.ProductBuild{product.ID: {}},
 		envs:                     map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
 		sources:                  map[string]map[string]model.Source{product.ID: sources},
-		secrets:                  make(map[string]model.Secret),
-		tools:                    map[string]map[string]model.Tool{product.ID: {}},
-		mcpConnections:           map[string]map[string]model.MCPConnection{product.ID: {}},
-		mcpGrants:                make(map[string]map[string]model.MCPUserGrant),
-		mcpAuthStates:            make(map[string]model.MCPAuthorizationState),
-		providers:                map[string]map[string]model.Provider{product.ID: {}},
-		projects:                 map[string]map[string]model.Project{product.ID: {}},
-		leases:                   map[string]map[string]model.CredentialLease{product.ID: {}},
-		integrationRuns:          map[string]map[string]model.IntegrationRun{product.ID: {}},
-		reportSubmissions:        map[string]map[string]model.ReportSubmission{product.ID: {}},
-		llmProfiles:              map[string]map[string]model.LLMProfile{product.ID: {}},
-		aiProviderConnections:    map[string]map[string]model.AIProviderConnection{product.ID: {}},
-		aiWorkloadProfiles:       map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
-		aiBudgetReservations:     make(map[string]model.AIBudgetReservation),
-		aiBudgetUsed:             make(map[string]int64),
-		integrationAnalyses:      map[string]map[string]model.IntegrationAnalysis{product.ID: {}},
-		recipes:                  map[string]map[string]model.Recipe{product.ID: {}},
-		recipeRevisions:          make(map[string]map[string]model.RecipeRevision),
-		aiJobs:                   map[string]map[string]model.AIJob{product.ID: {}},
-		widgets:                  make(map[string]model.Widget),
-		widgetSecrets:            make(map[string]model.WidgetSecret),
-		widgetSecretDigests:      make(map[string]string),
-		widgetBootstraps:         make(map[string]model.WidgetBootstrap),
-		widgetSessions:           make(map[string]model.WidgetSession),
+		sourcePublications: map[string]map[string]model.SourcePublication{product.ID: {
+			docsPublication.ID: docsPublication,
+			apiPublication.ID:  apiPublication,
+		}},
+		publicationDocuments: map[string]map[string]bool{
+			docsPublication.ID: {"doc_api_keys": true},
+			apiPublication.ID:  {"doc_internal": true},
+		},
+		crawlReviewDocuments: map[string][]model.CrawlReviewDocument{
+			docsCrawl.ID: {{ID: "doc_api_keys", CrawlJobID: docsCrawl.ID, SnapshotID: "snapshot_docs_seed", Title: "Create an API key", CanonicalURL: "https://docs.acme.dev/api-keys", State: "published", TrustLevel: 70, InjectionIndicators: json.RawMessage(`[]`), ContentHash: "sha256:" + strings.Repeat("1", 64), Changed: true}},
+			apiCrawl.ID:  {{ID: "doc_internal", CrawlJobID: apiCrawl.ID, SnapshotID: "snapshot_api_seed", Title: "Internal administration", CanonicalURL: "https://docs.acme.dev/internal", State: "published", TrustLevel: 70, InjectionIndicators: json.RawMessage(`[]`), ContentHash: "sha256:" + strings.Repeat("2", 64), Changed: true}},
+		},
+		secrets:               make(map[string]model.Secret),
+		tools:                 map[string]map[string]model.Tool{product.ID: {}},
+		mcpConnections:        map[string]map[string]model.MCPConnection{product.ID: {}},
+		mcpGrants:             make(map[string]map[string]model.MCPUserGrant),
+		mcpAuthStates:         make(map[string]model.MCPAuthorizationState),
+		providers:             map[string]map[string]model.Provider{product.ID: {}},
+		projects:              map[string]map[string]model.Project{product.ID: {}},
+		leases:                map[string]map[string]model.CredentialLease{product.ID: {}},
+		integrationRuns:       map[string]map[string]model.IntegrationRun{product.ID: {}},
+		reportSubmissions:     map[string]map[string]model.ReportSubmission{product.ID: {}},
+		llmProfiles:           map[string]map[string]model.LLMProfile{product.ID: {}},
+		aiProviderConnections: map[string]map[string]model.AIProviderConnection{product.ID: {}},
+		aiWorkloadProfiles:    map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
+		aiBudgetReservations:  make(map[string]model.AIBudgetReservation),
+		aiBudgetUsed:          make(map[string]int64),
+		integrationAnalyses:   map[string]map[string]model.IntegrationAnalysis{product.ID: {}},
+		recipes:               map[string]map[string]model.Recipe{product.ID: {}},
+		recipeRevisions:       make(map[string]map[string]model.RecipeRevision),
+		aiJobs:                map[string]map[string]model.AIJob{product.ID: {}},
+		widgets:               make(map[string]model.Widget),
+		widgetSecrets:         make(map[string]model.WidgetSecret),
+		widgetSecretDigests:   make(map[string]string),
+		widgetBootstraps:      make(map[string]model.WidgetBootstrap),
+		widgetSessions:        make(map[string]model.WidgetSession),
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},
 		}},
-		crawls:           make(map[string][]model.CrawlJob),
+		crawls: map[string][]model.CrawlJob{
+			docsCrawl.SourceID: {docsCrawl},
+			apiCrawl.SourceID:  {apiCrawl},
+		},
 		roots:            make(map[string]auth.RootAccount),
 		rootEmail:        make(map[string]string),
 		sessions:         make(map[string]auth.SessionRecord),
@@ -743,30 +778,140 @@ func (m *Memory) UpdateSource(_ context.Context, value model.Source, expected in
 	return value, nil
 }
 
-func (m *Memory) PublishSource(_ context.Context, productID, sourceID string, expected int64) (model.Source, error) {
+func (m *Memory) SourceReview(_ context.Context, productID, sourceID, crawlJobID string) (model.SourceReview, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	source, ok := m.sources[productID][sourceID]
+	if !ok {
+		return model.SourceReview{}, ErrNotFound
+	}
+	jobs := append([]model.CrawlJob(nil), m.crawls[sourceID]...)
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].QueuedAt.After(jobs[j].QueuedAt) || (jobs[i].QueuedAt.Equal(jobs[j].QueuedAt) && jobs[i].ID > jobs[j].ID)
+	})
+	var job model.CrawlJob
+	for _, candidate := range jobs {
+		if crawlJobID == "" || candidate.ID == crawlJobID {
+			job = candidate
+			break
+		}
+	}
+	if job.ID == "" {
+		return model.SourceReview{}, ErrNotFound
+	}
+	review := model.SourceReview{Source: source, CrawlJob: job, Documents: append([]model.CrawlReviewDocument(nil), m.crawlReviewDocuments[job.ID]...)}
+	for _, publication := range m.sourcePublications[productID] {
+		if publication.SourceID == sourceID && publication.CrawlJobID == job.ID {
+			copy := publication
+			review.Publication = &copy
+			break
+		}
+	}
+	return review, nil
+}
+
+func (m *Memory) SourcePublications(_ context.Context, productID, sourceID string) ([]model.SourcePublication, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.sources[productID][sourceID]; !ok {
+		return nil, ErrNotFound
+	}
+	values := make([]model.SourcePublication, 0)
+	for _, value := range m.sourcePublications[productID] {
+		if value.SourceID == sourceID {
+			values = append(values, value)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].Revision > values[j].Revision })
+	return values, nil
+}
+
+func (m *Memory) SourcePublication(_ context.Context, productID, publicationID string) (model.SourcePublication, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.sourcePublications[productID][publicationID]
+	if !ok {
+		return model.SourcePublication{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (m *Memory) PublishSource(_ context.Context, productID, sourceID string, expected int64, publication model.SourcePublication, documentIDs []string) (model.Source, model.SourcePublication, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	value, ok := m.sources[productID][sourceID]
 	if !ok {
-		return model.Source{}, ErrNotFound
+		return model.Source{}, model.SourcePublication{}, ErrNotFound
 	}
 	if value.Revision != expected {
-		return model.Source{}, ErrConflict
+		return model.Source{}, model.SourcePublication{}, ErrConflict
 	}
 	if value.Quarantined {
-		return model.Source{}, ErrConflict
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	jobs := append([]model.CrawlJob(nil), m.crawls[sourceID]...)
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].QueuedAt.After(jobs[j].QueuedAt) || (jobs[i].QueuedAt.Equal(jobs[j].QueuedAt) && jobs[i].ID > jobs[j].ID)
+	})
+	if len(jobs) == 0 || jobs[0].ID != publication.CrawlJobID || jobs[0].FinishedAt == nil || (jobs[0].State != "review" && jobs[0].State != "succeeded") || jobs[0].FetchedCount == 0 {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	reviewDocs := make(map[string]model.CrawlReviewDocument, len(m.crawlReviewDocuments[publication.CrawlJobID]))
+	for _, document := range m.crawlReviewDocuments[publication.CrawlJobID] {
+		reviewDocs[document.ID] = document
+	}
+	selected := make([]model.CrawlReviewDocument, 0, len(documentIDs))
+	seen := make(map[string]bool, len(documentIDs))
+	for _, documentID := range documentIDs {
+		document, exists := reviewDocs[documentID]
+		if seen[documentID] || !exists || !docreview.SafeAssessment(document.State, document.InjectionIndicators) {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+		seen[documentID] = true
+		selected = append(selected, document)
+	}
+	if len(documentIDs) == 0 {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	lockedHash, err := docreview.PublicationContentHash(selected)
+	if err != nil || publication.ContentHash != lockedHash {
+		return model.Source{}, model.SourcePublication{}, ErrConflict
+	}
+	for _, existing := range m.sourcePublications[productID] {
+		if existing.SourceID == sourceID && existing.CrawlJobID == publication.CrawlJobID {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
 	}
 	value.Published = true
 	value.Revision++
 	value.UpdatedAt = time.Now().UTC()
 	m.sources[productID][sourceID] = value
+	publication.OrganisationID = value.OrganisationID
+	publication.ProductID = productID
+	publication.SourceID = sourceID
+	publication.Visibility = value.Visibility
+	publication.DocumentCount = len(documentIDs)
+	publication.Revision = 1
+	for _, existing := range m.sourcePublications[productID] {
+		if existing.SourceID == sourceID && existing.Revision >= publication.Revision {
+			publication.Revision = existing.Revision + 1
+		}
+	}
+	if m.sourcePublications[productID] == nil {
+		m.sourcePublications[productID] = make(map[string]model.SourcePublication)
+	}
+	m.sourcePublications[productID][publication.ID] = publication
+	m.publicationDocuments[publication.ID] = make(map[string]bool, len(documentIDs))
+	for _, documentID := range documentIDs {
+		m.publicationDocuments[publication.ID][documentID] = true
+	}
 	for index := range m.knowledge[productID] {
-		if m.knowledge[productID][index].SourceID == sourceID {
+		if m.knowledge[productID][index].SourceID == sourceID && m.publicationDocuments[publication.ID][m.knowledge[productID][index].ID] {
 			m.knowledge[productID][index].Published = true
 			m.knowledge[productID][index].Visibility = value.Visibility
 		}
 	}
-	return value, nil
+	return value, publication, nil
 }
 
 func (m *Memory) CrawlJobs(_ context.Context, productID, sourceID string) ([]model.CrawlJob, error) {
@@ -778,7 +923,9 @@ func (m *Memory) CrawlJobs(_ context.Context, productID, sourceID string) ([]mod
 	values := m.crawls[sourceID]
 	result := make([]model.CrawlJob, len(values))
 	copy(result, values)
-	sort.Slice(result, func(i, j int) bool { return result[i].QueuedAt.After(result[j].QueuedAt) })
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].QueuedAt.After(result[j].QueuedAt) || (result[i].QueuedAt.Equal(result[j].QueuedAt) && result[i].ID > result[j].ID)
+	})
 	return result, nil
 }
 
@@ -908,7 +1055,7 @@ func (m *Memory) PublishTool(_ context.Context, productID, id string, expected i
 	if !ok {
 		return model.Tool{}, ErrNotFound
 	}
-	if value.Revision != expected {
+	if value.Revision != expected || value.State != "draft" {
 		return model.Tool{}, ErrConflict
 	}
 	value.State = "published"
@@ -1405,13 +1552,24 @@ func (m *Memory) SaveLLMProfile(_ context.Context, value model.LLMProfile) (mode
 	return value, nil
 }
 
-func (m *Memory) PublicKnowledge(_ context.Context, productID, query string) ([]model.KnowledgeRecord, error) {
+func (m *Memory) PublicKnowledge(_ context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	query = strings.ToLower(strings.TrimSpace(query))
+	allowed := make(map[string]bool)
+	for _, publicationID := range publicationIDs {
+		publication, ok := m.sourcePublications[productID][publicationID]
+		source, sourceOK := m.sources[productID][publication.SourceID]
+		if !ok || !sourceOK || publication.Visibility != model.VisibilityPublic || source.Visibility != model.VisibilityPublic || !source.Published || source.Quarantined {
+			continue
+		}
+		for documentID := range m.publicationDocuments[publicationID] {
+			allowed[documentID] = true
+		}
+	}
 	result := make([]model.KnowledgeRecord, 0)
 	for _, record := range m.knowledge[productID] {
-		if !record.Published || record.Visibility != model.VisibilityPublic {
+		if !record.Published || record.Visibility != model.VisibilityPublic || !allowed[record.ID] {
 			continue
 		}
 		if query == "" || strings.Contains(strings.ToLower(record.Title+" "+record.Text), query) {
@@ -1421,13 +1579,22 @@ func (m *Memory) PublicKnowledge(_ context.Context, productID, query string) ([]
 	return result, nil
 }
 
-func (m *Memory) PrivateKnowledge(_ context.Context, productID, query string) ([]model.KnowledgeRecord, error) {
+func (m *Memory) PrivateKnowledge(_ context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	query = strings.ToLower(strings.TrimSpace(query))
+	allowed := make(map[string]bool)
+	for _, publicationID := range publicationIDs {
+		if _, ok := m.sourcePublications[productID][publicationID]; !ok {
+			continue
+		}
+		for documentID := range m.publicationDocuments[publicationID] {
+			allowed[documentID] = true
+		}
+	}
 	result := make([]model.KnowledgeRecord, 0)
 	for _, record := range m.knowledge[productID] {
-		if !record.Published {
+		if !record.Published || !allowed[record.ID] {
 			continue
 		}
 		if query == "" || strings.Contains(strings.ToLower(record.Title+" "+record.Text), query) {

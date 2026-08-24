@@ -127,6 +127,9 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 		t.Fatalf("import result = %#v", imported)
 	}
 	service := platform.NewWithVault(memory, vault)
+	if _, err := service.SaveGrantDefinition(context.Background(), "", platform.GrantDefinitionInput{Key: "support.write", DisplayName: "Write support data", Risk: "high", State: "active"}, platform.Actor{ID: "root"}); err != nil {
+		t.Fatal(err)
+	}
 	published, err := service.PublishTool(context.Background(), "prod_acme", imported.Created[0].ID, imported.Created[0].Revision, platform.Actor{ID: "root", RequestID: "publish"})
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +227,9 @@ func TestDelegatedOAuthBindsSeparateUpstreamGrantToDokoSubject(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := platform.NewWithVault(memory, vault)
+	if _, err := service.SaveGrantDefinition(context.Background(), "", platform.GrantDefinitionInput{Key: "support.write", DisplayName: "Write support data", Risk: "high", State: "active"}, platform.Actor{ID: "root"}); err != nil {
+		t.Fatal(err)
+	}
 	published, err := service.PublishTool(context.Background(), "prod_acme", imported.Created[0].ID, imported.Created[0].Revision, platform.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)

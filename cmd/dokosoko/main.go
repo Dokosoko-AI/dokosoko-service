@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +39,10 @@ func run() error {
 	address := env("DOKOSOKO_LISTEN", ":8080")
 	baseURL := env("DOKOSOKO_PUBLIC_URL", "http://localhost:8080")
 	uiDirectory := env("DOKOSOKO_UI_DIR", "./dist/client")
+	uploadDirectory, uploadMaxBytes, err := sourceUploadConfig()
+	if err != nil {
+		return err
+	}
 	if err := validatePublicURL(baseURL); err != nil {
 		return err
 	}
@@ -106,6 +112,7 @@ func run() error {
 	}
 	handler := httpapi.NewWithOptions(platformService, httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
+		UploadDirectory: uploadDirectory, UploadMaxBytes: uploadMaxBytes,
 		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
 	})
 	workerCtx, stopReporting := context.WithCancel(context.Background())
@@ -135,6 +142,37 @@ func boolEnv(key string) bool {
 	}
 }
 
+func sourceUploadConfig() (string, int64, error) {
+	const defaultMaxBytes = int64(5_000_000)
+	directory := strings.TrimSpace(os.Getenv("DOKOSOKO_UPLOAD_DIR"))
+	maxBytes := defaultMaxBytes
+	if configured := strings.TrimSpace(os.Getenv("DOKOSOKO_UPLOAD_MAX_BYTES")); configured != "" {
+		value, err := strconv.ParseInt(configured, 10, 64)
+		if err != nil || value < 1 {
+			return "", 0, errors.New("DOKOSOKO_UPLOAD_MAX_BYTES must be a positive integer")
+		}
+		maxBytes = value
+	}
+	if directory == "" {
+		return "", maxBytes, nil
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return "", 0, fmt.Errorf("resolve DOKOSOKO_UPLOAD_DIR: %w", err)
+	}
+	if err := os.MkdirAll(absolute, 0o700); err != nil {
+		return "", 0, fmt.Errorf("create DOKOSOKO_UPLOAD_DIR: %w", err)
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", 0, errors.New("DOKOSOKO_UPLOAD_DIR must be a real directory, not a file or symlink")
+	}
+	if err := os.Chmod(absolute, 0o700); err != nil {
+		return "", 0, fmt.Errorf("secure DOKOSOKO_UPLOAD_DIR: %w", err)
+	}
+	return absolute, maxBytes, nil
+}
+
 func decodeMasterKey(value string) ([]byte, error) {
 	value = strings.TrimSpace(value)
 	decoded, err := base64.StdEncoding.DecodeString(value)
@@ -152,7 +190,7 @@ func validatePublicURL(value string) error {
 	if parsed.Path != "" && parsed.Path != "/" {
 		return errors.New("DOKOSOKO_PUBLIC_URL must not contain a path")
 	}
-	if parsed.Scheme != "https" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && !boolEnv("DOKOSOKO_ALLOW_INSECURE_HTTP") {
+	if parsed.Scheme != "https" && !identity.IsLocalDevelopmentHostname(parsed.Hostname()) && !boolEnv("DOKOSOKO_ALLOW_INSECURE_HTTP") {
 		return errors.New("DOKOSOKO_PUBLIC_URL must use HTTPS outside localhost")
 	}
 	return nil

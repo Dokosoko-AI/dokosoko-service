@@ -650,6 +650,43 @@ func boundedCatalogName(value string) string {
 	return strings.TrimSpace(value[:120])
 }
 
+func (s *Service) reviewedDocumentationManifest(ctx context.Context, productID string, bindings []model.ProductBinding) (json.RawMessage, error) {
+	sources, err := s.store.Sources(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]model.Source, len(sources))
+	for _, source := range sources {
+		byID[source.ID] = source
+	}
+	entries := make([]documentationManifestEntry, 0, len(bindings))
+	seen := make(map[string]bool)
+	for _, binding := range bindings {
+		source, ok := byID[binding.ReferenceID]
+		if !ok || !source.Published || source.Quarantined {
+			continue
+		}
+		publications, publicationErr := s.store.SourcePublications(ctx, productID, source.ID)
+		if publicationErr != nil {
+			if errors.Is(publicationErr, store.ErrNotFound) {
+				continue
+			}
+			return nil, publicationErr
+		}
+		if len(publications) == 0 || seen[publications[0].ID] {
+			continue
+		}
+		publication := publications[0]
+		seen[publication.ID] = true
+		entries = append(entries, documentationManifestEntry{SourcePublicationID: publication.ID, SourceID: source.ID, Revision: publication.Revision, ContentHash: publication.ContentHash, Name: source.Name})
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].SourcePublicationID < entries[j].SourcePublicationID })
+	return json.Marshal(entries)
+}
+
 // reconcileIntegrationsFromDefinition is the compatibility bridge from the
 // legacy AI product builder to the first-class Integration catalog. It never
 // silently edits a resource set shared by multiple Integrations; a private copy
@@ -699,9 +736,23 @@ func (s *Service) reconcileIntegrationsFromDefinition(ctx context.Context, defin
 				if len(bindings) == 0 {
 					continue
 				}
-				manifest, marshalErr := json.Marshal(bindings)
-				if marshalErr != nil {
-					return marshalErr
+				var manifest json.RawMessage
+				if kind == "documentation" {
+					manifest, err = s.reviewedDocumentationManifest(ctx, deployment.ID, bindings)
+					if err != nil {
+						return err
+					}
+					if len(manifest) == 0 {
+						// Product Builder may discover a documentation candidate, but
+						// only the explicit crawl-review flow can create a publication.
+						continue
+					}
+				} else {
+					var marshalErr error
+					manifest, marshalErr = json.Marshal(bindings)
+					if marshalErr != nil {
+						return marshalErr
+					}
 				}
 				baseName := boundedCatalogName(component.Name + " " + release.Version + " " + kind)
 				sets, listErr := s.store.ResourceSets(ctx, deployment.ID, kind)
@@ -744,8 +795,18 @@ func (s *Service) reconcileIntegrationsFromDefinition(ctx context.Context, defin
 					}
 				}
 			}
-			if _, err := s.PublishIntegration(ctx, integration.ID, actor); err != nil {
+			preflight, err := s.IntegrationPreflight(ctx, integration.ID)
+			if err != nil {
 				return err
+			}
+			// Product Builder materializes candidate catalogue entries but cannot
+			// waive the private publication gates. Operators finish identity,
+			// authorization, service, and exact-tool bindings in the Integration
+			// workspace before publishing the server-preflighted candidate.
+			if preflight.Ready {
+				if _, err := s.PublishIntegration(ctx, integration.ID, actor); err != nil {
+					return err
+				}
 			}
 		}
 	}

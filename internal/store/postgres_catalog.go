@@ -78,6 +78,11 @@ func (p *Postgres) enrichIntegration(ctx context.Context, value model.Integratio
 		return model.Integration{}, err
 	}
 	value.Resources = links
+	packages, err := p.IntegrationPackageBindings(ctx, value.ID)
+	if err != nil && err != ErrNotFound {
+		return model.Integration{}, err
+	}
+	value.Packages = packages
 	rows, err := p.pool.Query(ctx, `SELECT access_connection_id::text FROM integration_access_bindings WHERE integration_id=$1 ORDER BY access_connection_id`, value.ID)
 	if err != nil {
 		return model.Integration{}, databaseError(err)
@@ -198,7 +203,26 @@ func (p *Postgres) IntegrationRevisions(ctx context.Context, integrationID strin
 }
 
 func (p *Postgres) CreateIntegrationRevision(ctx context.Context, value model.IntegrationRevision) (model.IntegrationRevision, error) {
-	return scanIntegrationRevision(p.pool.QueryRow(ctx, `INSERT INTO integration_revisions(id,integration_id,revision,state,snapshot,manifest_hash,published_by,published_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,integration_id::text,revision,state,snapshot,manifest_hash,published_by,published_at,created_at`, value.ID, value.IntegrationID, value.Revision, value.State, value.Snapshot, value.ManifestHash, value.PublishedBy, value.PublishedAt))
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.IntegrationRevision{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	created, err := scanIntegrationRevision(tx.QueryRow(ctx, `INSERT INTO integration_revisions(id,integration_id,revision,state,snapshot,manifest_hash,published_by,published_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,integration_id::text,revision,state,snapshot,manifest_hash,published_by,published_at,created_at`, value.ID, value.IntegrationID, value.Revision, value.State, value.Snapshot, value.ManifestHash, value.PublishedBy, value.PublishedAt))
+	if err != nil {
+		return model.IntegrationRevision{}, err
+	}
+	var deploymentID string
+	if err := tx.QueryRow(ctx, `SELECT deployment_id::text FROM integrations WHERE id=$1`, value.IntegrationID).Scan(&deploymentID); err != nil {
+		return model.IntegrationRevision{}, databaseError(err)
+	}
+	if err := bumpDeploymentCatalog(ctx, tx, deploymentID); err != nil {
+		return model.IntegrationRevision{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.IntegrationRevision{}, databaseError(err)
+	}
+	return created, nil
 }
 
 const resourceSetSelect = `SELECT id::text,deployment_id::text,organisation_id::text,kind,name,description,state,revision,created_at,updated_at FROM resource_sets`

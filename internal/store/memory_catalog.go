@@ -126,6 +126,13 @@ func (m *Memory) integrationLocked(value model.Integration) model.Integration {
 		}
 		return value.Resources[i].Kind < value.Resources[j].Kind
 	})
+	value.Packages = nil
+	for _, binding := range m.integrationPackageLinks[value.ID] {
+		value.Packages = append(value.Packages, m.integrationPackageBindingLocked(binding))
+	}
+	sort.Slice(value.Packages, func(i, j int) bool {
+		return value.Packages[i].PackageArtifactID < value.Packages[j].PackageArtifactID
+	})
 	value.AccessConnections = nil
 	for connectionID, links := range m.integrationAccessLinks {
 		if links[value.ID] {
@@ -189,6 +196,7 @@ func (m *Memory) CreateIntegration(_ context.Context, value model.Integration) (
 	}
 	m.integrations[value.ID] = value
 	m.integrationResourceLinks[value.ID] = make(map[string]model.IntegrationResourceLink)
+	m.integrationPackageLinks[value.ID] = make(map[string]model.IntegrationPackageBinding)
 	m.integrationRevisions[value.ID] = make(map[string]model.IntegrationRevision)
 	m.deployment.CatalogRevision++
 	return m.integrationLocked(value), nil
@@ -232,7 +240,8 @@ func (m *Memory) IntegrationRevisions(_ context.Context, integrationID string) (
 func (m *Memory) CreateIntegrationRevision(_ context.Context, value model.IntegrationRevision) (model.IntegrationRevision, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.integrations[value.IntegrationID]; !ok {
+	integration, ok := m.integrations[value.IntegrationID]
+	if !ok {
 		return model.IntegrationRevision{}, ErrNotFound
 	}
 	for _, current := range m.integrationRevisions[value.IntegrationID] {
@@ -242,6 +251,13 @@ func (m *Memory) CreateIntegrationRevision(_ context.Context, value model.Integr
 	}
 	value.CreatedAt = time.Now().UTC()
 	m.integrationRevisions[value.IntegrationID][value.ID] = memoryClone(value)
+	if m.hasDeployment && m.deployment.ID == integration.DeploymentID {
+		m.deployment.CatalogRevision++
+		if product, exists := m.products[integration.DeploymentID]; exists {
+			product.CatalogRevision, product.UpdatedAt = m.deployment.CatalogRevision, value.CreatedAt
+			m.products[integration.DeploymentID] = product
+		}
+	}
 	return memoryClone(value), nil
 }
 

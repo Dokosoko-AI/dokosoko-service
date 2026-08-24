@@ -49,7 +49,22 @@ func (s *Server) integrationAnalyses(w http.ResponseWriter, r *http.Request, pro
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
-		value, err := s.service.AnalyseIntegration(r.Context(), productID, actor(r))
+		var input struct {
+			IntegrationID string `json:"integration_id"`
+		}
+		if r.ContentLength != 0 {
+			if err := decodeJSON(r.Body, &input); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+				return
+			}
+		}
+		var value model.IntegrationAnalysis
+		var err error
+		if strings.TrimSpace(input.IntegrationID) == "" {
+			value, err = s.service.AnalyseIntegration(r.Context(), productID, actor(r))
+		} else {
+			value, err = s.service.AnalyseIntegrationFor(r.Context(), productID, input.IntegrationID, actor(r))
+		}
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -91,7 +106,22 @@ func (s *Server) integrationAnalysis(w http.ResponseWriter, r *http.Request, pro
 }
 
 func (s *Server) generateRecipes(w http.ResponseWriter, r *http.Request, productID, analysisID string) {
-	values, err := s.service.GenerateRecipes(r.Context(), productID, analysisID, actor(r))
+	var input struct {
+		IntegrationID string `json:"integration_id"`
+	}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r.Body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+	}
+	var values []model.Recipe
+	var err error
+	if strings.TrimSpace(input.IntegrationID) == "" {
+		values, err = s.service.GenerateRecipes(r.Context(), productID, analysisID, actor(r))
+	} else {
+		values, err = s.service.GenerateRecipesForIntegration(r.Context(), productID, analysisID, input.IntegrationID, actor(r))
+	}
 	if err != nil {
 		s.creationError(w, err)
 		return

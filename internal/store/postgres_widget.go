@@ -2,16 +2,21 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
-const widgetColumns = `id::text, deployment_id::text, organisation_id::text, name, state, allowed_origins, integration_ids::text[], appearance, revision, activated_at, created_at, updated_at`
+const widgetColumns = `id::text, deployment_id::text, organisation_id::text, name, state, allowed_origins, integration_ids::text[], integration_bindings, appearance, revision, activated_at, created_at, updated_at`
 
 func scanWidget(row interface{ Scan(...any) error }) (model.Widget, error) {
 	var value model.Widget
-	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.Name, &value.State, &value.AllowedOrigins, &value.IntegrationIDs, &value.Appearance, &value.Revision, &value.ActivatedAt, &value.CreatedAt, &value.UpdatedAt)
+	var bindings json.RawMessage
+	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.Name, &value.State, &value.AllowedOrigins, &value.IntegrationIDs, &bindings, &value.Appearance, &value.Revision, &value.ActivatedAt, &value.CreatedAt, &value.UpdatedAt)
+	if err == nil {
+		err = json.Unmarshal(bindings, &value.IntegrationBindings)
+	}
 	return value, databaseError(err)
 }
 
@@ -37,11 +42,19 @@ func (p *Postgres) Widget(ctx context.Context, deploymentID, id string) (model.W
 }
 
 func (p *Postgres) CreateWidget(ctx context.Context, value model.Widget) (model.Widget, error) {
-	return scanWidget(p.pool.QueryRow(ctx, `INSERT INTO widgets(id,deployment_id,organisation_id,name,state,allowed_origins,integration_ids,appearance) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+widgetColumns, value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.State, value.AllowedOrigins, value.IntegrationIDs, value.Appearance))
+	bindings, err := json.Marshal(value.IntegrationBindings)
+	if err != nil {
+		return model.Widget{}, err
+	}
+	return scanWidget(p.pool.QueryRow(ctx, `INSERT INTO widgets(id,deployment_id,organisation_id,name,state,allowed_origins,integration_ids,integration_bindings,appearance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING `+widgetColumns, value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.State, value.AllowedOrigins, value.IntegrationIDs, bindings, value.Appearance))
 }
 
 func (p *Postgres) UpdateWidget(ctx context.Context, value model.Widget, expected int64) (model.Widget, error) {
-	updated, err := scanWidget(p.pool.QueryRow(ctx, `UPDATE widgets SET name=$3,state=$4,allowed_origins=$5,integration_ids=$6,appearance=$7,activated_at=$8,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$9 RETURNING `+widgetColumns, value.DeploymentID, value.ID, value.Name, value.State, value.AllowedOrigins, value.IntegrationIDs, value.Appearance, value.ActivatedAt, expected))
+	bindings, marshalErr := json.Marshal(value.IntegrationBindings)
+	if marshalErr != nil {
+		return model.Widget{}, marshalErr
+	}
+	updated, err := scanWidget(p.pool.QueryRow(ctx, `UPDATE widgets SET name=$3,state=$4,allowed_origins=$5,integration_ids=$6,integration_bindings=$7,appearance=$8,activated_at=$9,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$10 RETURNING `+widgetColumns, value.DeploymentID, value.ID, value.Name, value.State, value.AllowedOrigins, value.IntegrationIDs, bindings, value.Appearance, value.ActivatedAt, expected))
 	if err == ErrNotFound {
 		if _, lookupErr := p.Widget(ctx, value.DeploymentID, value.ID); lookupErr == nil {
 			return model.Widget{}, ErrConflict

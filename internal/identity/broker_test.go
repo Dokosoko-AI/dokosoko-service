@@ -66,10 +66,14 @@ func (f fakeAccessEvaluator) Resolve(_ context.Context, _ identity.ProviderConfi
 	return identity.AccessEvaluation{ID: "eval_7", Grants: []string{"developer.pro"}, PolicyVersion: "2026-08", ExpiresAt: time.Now().UTC().Add(30 * time.Minute)}, nil
 }
 
-type staticClientMetadata struct{}
+type staticClientMetadata struct{ redirectURIs []string }
 
-func (staticClientMetadata) Resolve(_ context.Context, id string) (identity.ClientMetadata, error) {
-	return identity.ClientMetadata{ClientID: id, RedirectURIs: []string{redirect}}, nil
+func (resolver staticClientMetadata) Resolve(_ context.Context, id string) (identity.ClientMetadata, error) {
+	redirectURIs := resolver.redirectURIs
+	if len(redirectURIs) == 0 {
+		redirectURIs = []string{redirect}
+	}
+	return identity.ClientMetadata{ClientID: id, RedirectURIs: redirectURIs}, nil
 }
 
 func configuredMemory(t *testing.T) (*store.Memory, *secrets.Vault) {
@@ -165,7 +169,7 @@ func TestBrokerBindsOAuthToClientResourceAndCustomerAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if principal.ProductID != productID || principal.Resource != resource || principal.Subject != "vendor-user-42" || principal.ExternalCustomerID != "vendor-account-7" || principal.CustomerAccountID == "" || principal.UpstreamAccessToken != "vendor-access-token" || !principal.Grants["developer.pro"] {
+	if principal.ProductID != productID || principal.Resource != resource || principal.Subject != "vendor-user-42" || principal.ExternalCustomerID != "vendor-account-7" || principal.CustomerAccountID == "" || principal.UpstreamAccessToken != "vendor-access-token" || !principal.Grants["developer.pro"] || principal.AccessEvaluatedAt.IsZero() {
 		t.Fatalf("unexpected principal: %#v", principal)
 	}
 	accounts, _, err := memory.CustomerAccounts(context.Background(), productID, "", 50)
@@ -244,6 +248,28 @@ func TestBrokerRequiresRegisteredClientAndFailsClosed(t *testing.T) {
 	parsed, _ := url.Parse(upstreamURL)
 	if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); err == nil {
 		t.Fatal("access evaluation failure did not fail closed")
+	}
+}
+
+func TestBrokerAcceptsEphemeralPortForRegisteredLoopbackRedirect(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	registered := "http://127.0.0.1/callback/codex"
+	requested := "http://127.0.0.1:57742/callback/codex"
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{redirectURIs: []string{registered}})
+	verifier := strings.Repeat("v", 48)
+	request := identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: requested, Resource: resource, Scope: "mcp:private", State: "state", CodeChallenge: challenge(verifier)}
+	if _, err := broker.Begin(context.Background(), request); err != nil {
+		t.Fatalf("ephemeral loopback callback port was rejected: %v", err)
+	}
+	for _, invalid := range []string{
+		"http://127.0.0.1:57742/callback/other",
+		"http://127.0.0.2:57742/callback/codex",
+		"http://localhost:57742/callback/codex",
+	} {
+		request.RedirectURI = invalid
+		if _, err := broker.Begin(context.Background(), request); !errors.Is(err, identity.ErrInvalidOAuth) {
+			t.Fatalf("unregistered loopback callback %q was accepted: %v", invalid, err)
+		}
 	}
 }
 

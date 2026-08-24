@@ -243,7 +243,7 @@ func TestIntegrationRouteAndRevisionArePinnedAtSubmission(t *testing.T) {
 	ctx := context.Background()
 	service, memory := newReportingService(t)
 	catalog := platform.New(memory)
-	integration, err := catalog.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "voice", VersionKey: "v2", DisplayName: "Voice API", Lifecycle: "active"}, platform.Actor{ID: "root"})
+	integration, err := catalog.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "voice", VersionKey: "v2", DisplayName: "Voice API", Visibility: model.VisibilityPublic, AcknowledgePublic: true, Lifecycle: "active"}, platform.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}

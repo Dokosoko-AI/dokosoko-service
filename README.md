@@ -10,7 +10,7 @@ The public contracts are deliberately small:
 - [Access Provider API](api/provider-openapi.yaml) — optional provider-owned instance and credential lifecycle.
 - [Widget Runtime API](api/widget-runtime.openapi.yaml) — short-lived authenticated sessions and streamed assistant replies for embedded customer applications.
 
-Each integration contract is independently deployable and independently code-generatable. A vendor can generate a server stub for the contract it implements; DokoSoko does not require a package. There is no package registry abstraction and no per-operation hook configuration. If an integration is an HTTP API, expose it as an API or a tool. Client libraries are optional generated artifacts outside the runtime contract.
+Each integration contract is independently deployable and independently code-generatable. A vendor can generate a server stub for the contract it implements; DokoSoko does not require a package to expose an API. If a client library or other package helps consumers use that API, DokoSoko can catalogue bounded metadata for an exact externally hosted release and embed that metadata in an Integration manifest. The registry remains the delivery system; package metadata never becomes a runtime endpoint or per-operation hook.
 
 Runnable reference implementations live under `examples/`. Start with the complete [Go backend integration](examples/go-backend-integration/README.md), which demonstrates authenticated, retry-safe support delivery without requiring an SDK.
 
@@ -50,6 +50,18 @@ Support reporting is private and consent-gated. A user must preview and explicit
 
 Usage, if a vendor chooses to expose it, is an ordinary API operation or tool. It has no privileged hook type.
 
+## Package metadata and external delivery
+
+Packages are optional developer artifacts, represented by metadata rather than hosted content. A `package_artifact` records a stable ecosystem and coordinate, canonical unversioned Package URL identity, registry and optional source locations, visibility, and lifecycle. Package URL types must match the ecosystem. Registry, source, provenance, and SBOM locations must use HTTPS, except for loopback HTTP during local development, and cannot contain userinfo, a query, or a fragment. Each immutable `package_release` records an exact version and versioned Package URL with the same artifact identity, an operator-supplied display-only install command, a declared SHA-256, SHA-384, or SHA-512 digest, and optional provenance and SBOM locations.
+
+An Integration binds one exact release. Publication embeds that release's metadata and DokoSoko metadata content hash in the immutable Integration manifest; there is no follow-latest package binding. This lets clients identify a compatible release without turning DokoSoko into a package registry or delivery proxy.
+
+The external registry delivers package bytes and enforces any registry access policy. DokoSoko does not download, host, sign, execute, cryptographically verify, or proxy packages. Its validation covers metadata shape, PURL identity and exact-version consistency, strict URL policy, obvious credential-bearing install-command forms, digest syntax, and deterministic metadata hashing only. Free-text fields are not comprehensive secret-scanning boundaries, so operators must not enter credentials anywhere in package metadata. A separately operated external verifier should fetch the registry bytes and verify the declared digest, any provenance or SBOM claims, and the documented installation procedure before operational use. This is an operator-controlled process: DokoSoko neither records verifier evidence nor enforces that verification occurred. Verifier credentials and results remain outside package metadata.
+
+All package-artifact catalogue fields are editable only while the artifact is a draft; publishing its first release activates it, and published releases are immutable. Creating a public artifact, changing a private draft to public, and publishing each public release require explicit public acknowledgement. A public Integration may bind only public package metadata.
+
+Deprecation requires guidance and may name only an active replacement that already has a published release. It may also record a future sunset, but deprecation makes the artifact unavailable immediately: it cannot publish another release, receive a new binding, or appear in a newly published Integration candidate. Retirement is also immediate, requires guidance and an optimistic current revision, and applies the same replacement rule. Existing bindings remain readable and already-published Integration manifests remain immutable historical records; a later candidate must remove the unavailable package or explicitly bind an available replacement.
+
 ## Protocol endpoints
 
 | Surface | Endpoint |
@@ -86,6 +98,21 @@ For the UI development server:
 ```bash
 DOKOSOKO_DEV_PROXY=http://127.0.0.1:8080 pnpm dev
 ```
+
+## Documentation ingestion
+
+The isolated crawler dispatches each source according to its declared kind; it never treats every location as a website URL.
+
+| Source kind | Worker behavior |
+| --- | --- |
+| `website` | Crawls a credential-free HTTP(S) origin and its same-origin sitemap/links within the configured page and byte budgets. Non-local source URLs may use only ports 80 and 443. |
+| `openapi` | Fetches one credential-free HTTP(S) JSON or YAML document, enforces the byte budget, validates its OpenAPI/Swagger, `info`, and `paths` shape, and stores it as one authoritative document. |
+| `upload` | Reads one UTF-8 Markdown, text, HTML, JSON, or YAML file from the dedicated read-only `DOKOSOKO_UPLOAD_DIR`. Stored paths are opaque and relative; crawler reads remain canonical, symlink-free, size-bounded, and contained by that directory. |
+| `git` | Fails with the actionable `git_source_unsupported` job code. Repository URLs and credentials are never passed to the website crawler; use a website, an HTTPS OpenAPI document, or a reviewed upload. |
+
+Authenticated administrators upload reviewed files with `POST /api/v1/products/{product_id}/sources/upload`. The service streams the multipart file into the private `dokosoko-uploads` volume and creates a private draft source; it does not queue a crawl or publish anything. Compose mounts that volume read/write at `/uploads` in the service and read-only at the same path in the crawler. `DOKOSOKO_UPLOAD_MAX_BYTES` limits the browser upload and should not exceed `DOKOSOKO_CRAWLER_MAX_BYTES`. Outside Compose, set `DOKOSOKO_UPLOAD_DIR` to a dedicated service-writable directory; leaving it unset disables the endpoint.
+
+Private, loopback, link-local, and reserved network resolution is rejected by default. Local integration testing is an explicit exception: set `DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS=true`, set `DOKOSOKO_CRAWLER_LOCALHOST_HOST` to the vendor-owned Compose host-gateway name, and restrict `DOKOSOKO_CRAWLER_LOCALHOST_PORTS` to the ports needed for that test. The same host variable gives the DokoSoko service and crawler access to the local integration target; add further explicit `extra_hosts` entries when testing more than one local vendor. The exception accepts only `*.localhost` names—not bare `localhost` or IP literals—and only when every resolved address is loopback, RFC1918, or IPv6 unique-local. Keep the switch false in production.
 
 ## AI providers and recipes
 
@@ -168,17 +195,17 @@ Required configuration:
 | `DOKOSOKO_SETUP_TOKEN` | Strong one-time first-run secret. Remove or rotate it after setup. |
 | `DOKOSOKO_PUBLIC_URL` | Exact external origin used for OAuth metadata, MCP endpoints, setup prompts, and copied embed HTML. HTTPS is required outside localhost. |
 
-Back up PostgreSQL, artifact data, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly. Configure the browser-reachable origin here—not an internal container hostname—because copied setup buttons deliberately ignore request `Host` and forwarding headers.
+Back up PostgreSQL, `dokosoko-data`, `dokosoko-uploads`, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly. Configure the browser-reachable origin here—not an internal container hostname—because copied setup buttons deliberately ignore request `Host` and forwarding headers.
 
 Database migrations are append-only public deployment history. Never edit, rename, or delete an existing migration; add a new uniquely numbered migration for every schema change. Repository and runtime checksum validation enforce this policy.
 
 ### Breaking v3 upgrade
 
-Migration `0020_contract_v3.sql` deliberately removes the legacy package and open-ended hook contracts. Back up the database and encryption key before deploying it.
+Migration `0020_contract_v3.sql` deliberately removes the legacy package gateway and open-ended hook contracts. The later package catalogue is a metadata-only contract and does not restore package hosting, download, authentication, or proxy behavior. Back up the database and encryption key before deploying it.
 
 The migration preserves installations, customer version pins, and encrypted support submissions. It maps legacy customer identifiers to durable customer accounts. It invalidates outstanding OAuth states, authorization codes, and access tokens; removes identity configuration whose delegated API origin cannot be inferred safely; creates disabled backend-connection placeholders for legacy support routes; and defaults every Integration to private.
 
-After the upgrade, configure customer identity only if private customer access is required. Configure or repair each backend connection, create a fresh credential, attach it to the intended support routes, and then re-enable delivery. Legacy hook credentials are not rebound because their encryption purpose and trust boundary differ. Existing MCP clients must authenticate again. Package artifacts and hook-specific configuration are not migrated because they have no faithful representation in the new contract.
+After the upgrade, configure customer identity only if private customer access is required. Configure or repair each backend connection, create a fresh credential, attach it to the intended support routes, and then re-enable delivery. Legacy hook credentials are not rebound because their encryption purpose and trust boundary differ. Existing MCP clients must authenticate again. Legacy package-gateway credentials, stored bytes, and proxy configuration are not migrated because they have no faithful representation in the metadata-only catalogue. Before creating new bounded package metadata and exact Integration bindings, operators should use a separately operated verifier to check the corresponding registry release. That verification is an operational prerequisite, not a condition enforced or evidenced by DokoSoko.
 
 ## Verification
 

@@ -265,14 +265,19 @@ func (s *Server) currentWidgetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	integrationBindings := make([]map[string]any, 0, len(principal.Widget.IntegrationBindings))
+	for _, binding := range principal.Widget.IntegrationBindings {
+		integrationBindings = append(integrationBindings, map[string]any{"integrationId": binding.IntegrationID, "revision": binding.IntegrationRevision, "manifestHash": binding.ManifestHash})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"widgetId":       principal.Widget.ID,
-		"sessionId":      principal.Session.ID,
-		"userId":         principal.Session.UserID,
-		"organizationId": principal.Session.CustomerOrganisationID,
-		"origin":         principal.Session.Origin,
-		"expiresAt":      principal.Session.ExpiresAt,
-		"integrationIds": principal.Widget.IntegrationIDs,
+		"widgetId":            principal.Widget.ID,
+		"sessionId":           principal.Session.ID,
+		"userId":              principal.Session.UserID,
+		"organizationId":      principal.Session.CustomerOrganisationID,
+		"origin":              principal.Session.Origin,
+		"expiresAt":           principal.Session.ExpiresAt,
+		"integrationIds":      principal.Widget.IntegrationIDs,
+		"integrationBindings": integrationBindings,
 	})
 }
 
@@ -300,18 +305,7 @@ func (s *Server) widgetChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activeIntegrations := make([]model.Integration, 0, len(principal.Widget.IntegrationIDs))
-	for _, integrationID := range principal.Widget.IntegrationIDs {
-		integration, lookupErr := s.service.Store().Integration(r.Context(), principal.Widget.DeploymentID, integrationID)
-		if lookupErr == nil && integration.Lifecycle == "active" {
-			activeIntegrations = append(activeIntegrations, integration)
-		}
-	}
-	if len(activeIntegrations) == 0 {
-		writeError(w, http.StatusConflict, "widget_has_no_active_integrations", "This widget has no active integrations.", nil)
-		return
-	}
-	reply, err := s.service.AnswerWidgetMessage(r.Context(), principal, input.Message, activeIntegrations)
+	reply, err := s.service.AnswerWidgetMessage(r.Context(), principal, input.Message)
 	if err != nil {
 		s.widgetRuntimeError(w, err)
 		return
@@ -341,7 +335,7 @@ func (s *Server) widgetChat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	digest := sha256.Sum256([]byte(principal.Widget.ID + "\x00" + principal.Session.UserID))
-	_ = s.service.Store().AppendAnalytics(r.Context(), model.AnalyticsEvent{OrganisationID: principal.Widget.OrganisationID, ProductID: principal.Widget.DeploymentID, EventName: "widget.message", ActorKind: "widget_user", ActorPseudonym: hex.EncodeToString(digest[:16]), Dimensions: map[string]any{"channel": "widget", "widget_id": principal.Widget.ID, "integration_count": len(activeIntegrations)}, CreatedAt: time.Now().UTC()})
+	_ = s.service.Store().AppendAnalytics(r.Context(), model.AnalyticsEvent{OrganisationID: principal.Widget.OrganisationID, ProductID: principal.Widget.DeploymentID, EventName: "widget.message", ActorKind: "widget_user", ActorPseudonym: hex.EncodeToString(digest[:16]), Dimensions: map[string]any{"channel": "widget", "widget_id": principal.Widget.ID, "integration_count": len(principal.Widget.IntegrationBindings)}, CreatedAt: time.Now().UTC()})
 }
 
 func (s *Server) widgetRuntimeError(w http.ResponseWriter, err error) {
@@ -353,6 +347,8 @@ func (s *Server) widgetRuntimeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "widget_origin_denied", "This domain is not allowed for the widget.", nil)
 	case errors.Is(err, platform.ErrWidgetDisabled):
 		writeError(w, http.StatusConflict, "widget_disabled", "The widget is disabled.", nil)
+	case errors.Is(err, platform.ErrWidgetManifestUnavailable):
+		writeError(w, http.StatusConflict, "widget_manifest_unavailable", "The widget's pinned Integration manifest is unavailable. Review and reactivate the widget.", nil)
 	case errors.Is(err, platform.ErrWidgetAssistantUnavailable):
 		writeError(w, http.StatusConflict, "widget_assistant_unavailable", "The assistant is temporarily unavailable.", nil)
 	default:

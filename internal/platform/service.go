@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
+	"github.com/dokosoko/dokosoko-service/internal/docreview"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	secretvault "github.com/dokosoko/dokosoko-service/internal/secrets"
@@ -27,6 +27,7 @@ var (
 	ErrUnsafeForPublic      = errors.New("resource is not safe for public access")
 	ErrInvalidVisibility    = errors.New("invalid visibility")
 	ErrToolDrifted          = errors.New("imported tool schema drift requires review")
+	ErrSourceReviewRequired = errors.New("source publication requires a completed, reviewable crawl with fetched evidence")
 )
 
 type Actor struct {
@@ -76,17 +77,20 @@ type IdentityInput struct {
 
 func validHTTPSOrigin(raw string) bool {
 	parsed, err := url.Parse(raw)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == "" && parsed.RawQuery == "" && parsed.Port() == ""
+	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
+	return err == nil && (parsed.Scheme == "https" && parsed.Port() == "" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Fragment == "" && parsed.RawQuery == ""
 }
 
 func validHTTPSBaseOrigin(raw string) bool {
 	parsed, err := url.Parse(raw)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Port() == ""
+	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
+	return err == nil && (parsed.Scheme == "https" && parsed.Port() == "" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func validHTTPSURI(raw string) bool {
 	parsed, err := url.Parse(raw)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
+	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
 }
 
 func validOAuthRedirect(raw string) bool {
@@ -94,7 +98,13 @@ func validOAuthRedirect(raw string) bool {
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return false
 	}
-	return parsed.Scheme == "https" || (parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"))
+	return parsed.Scheme == "https" || (parsed.Scheme == "http" && identity.IsLocalDevelopmentHostname(parsed.Hostname()))
+}
+
+func validToolEndpoint(raw string) bool {
+	parsed, err := url.Parse(raw)
+	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
+	return err == nil && (parsed.Scheme == "https" && parsed.Port() == "" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
 }
 
 func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, actor Actor) (identity.ProviderConfig, error) {
@@ -172,7 +182,7 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 		if err != nil {
 			return identity.ProviderConfig{}, err
 		}
-		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: secretID, OrganisationID: deployment.OrganisationID, Name: "identity-provider-oidc-" + input.DeploymentID, Purpose: "identity_provider_oidc_client", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
+		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: secretID, OrganisationID: deployment.OrganisationID, Name: "identity-provider-oidc-" + input.DeploymentID + "-" + secretID, Purpose: "identity_provider_oidc_client", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
 			return identity.ProviderConfig{}, err
 		}
 		config.ClientSecretID = secretID
@@ -541,7 +551,7 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 	}
 	methods := map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	parsed, err := url.Parse(input.Endpoint)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.Port() != "" || !methods[input.HTTPMethod] {
+	if err != nil || !validToolEndpoint(input.Endpoint) || !methods[input.HTTPMethod] {
 		return model.Tool{}, errors.New("tool endpoint must be a fixed credential-free HTTPS URL on the default port and use an allowed HTTP method")
 	}
 	provider, err := s.store.IdentityProvider(ctx, input.ProductID)
@@ -558,18 +568,11 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 	if input.TimeoutMS < 100 || input.TimeoutMS > 60_000 {
 		return model.Tool{}, errors.New("tool timeout must be between 100 and 60000 milliseconds")
 	}
-	if len(input.AuthorizationPolicy) == 0 {
-		input.AuthorizationPolicy = json.RawMessage(`{}`)
+	policy, _, err := normalizeToolPolicy(input.AuthorizationPolicy, input.HTTPMethod)
+	if err != nil {
+		return model.Tool{}, err
 	}
-	var policy struct {
-		RequiredGrants       []string `json:"required_grants"`
-		ConfirmationRequired bool     `json:"confirmation_required"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(input.AuthorizationPolicy))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&policy); err != nil {
-		return model.Tool{}, fmt.Errorf("invalid authorization policy: %w", err)
-	}
+	input.AuthorizationPolicy = policy
 	toolID, err := randomUUID()
 	if err != nil {
 		return model.Tool{}, err
@@ -578,7 +581,7 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 	if err != nil {
 		return model.Tool{}, err
 	}
-	value, err := s.store.CreateTool(ctx, model.Tool{ID: toolID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIConnectionID: connectionID, BaseURL: input.Endpoint, HTTPMethod: input.HTTPMethod, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS, BackendKind: "http"})
+	value, err := s.store.CreateTool(ctx, model.Tool{ID: toolID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIConnectionID: connectionID, BaseURL: input.Endpoint, HTTPMethod: input.HTTPMethod, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
 	if err != nil {
 		return model.Tool{}, err
 	}
@@ -593,6 +596,9 @@ func (s *Service) PublishTool(ctx context.Context, productID, toolID string, rev
 	}
 	if current.BackendKind == "mcp" && current.UpstreamDrifted {
 		return model.Tool{}, ErrToolDrifted
+	}
+	if err := s.validateToolGrantRegistry(ctx, productID, current); err != nil {
+		return model.Tool{}, err
 	}
 	updated, err := s.store.PublishTool(ctx, productID, toolID, revision, actor.ID)
 	if err != nil {
@@ -668,20 +674,87 @@ func (s *Service) SetSourceVisibility(ctx context.Context, productID, sourceID s
 	return updated, nil
 }
 
-func (s *Service) PublishSource(ctx context.Context, productID, sourceID string, expectedRevision int64, actor Actor) (model.Source, error) {
+type SourcePublicationInput struct {
+	Revision            int64
+	CrawlJobID          string
+	DocumentIDs         []string
+	AcknowledgeReviewed bool
+}
+
+func (s *Service) SourceReview(ctx context.Context, productID, sourceID, crawlJobID string) (model.SourceReview, error) {
+	review, err := s.store.SourceReview(ctx, productID, sourceID, strings.TrimSpace(crawlJobID))
+	if err != nil {
+		return model.SourceReview{}, err
+	}
+	if review.CrawlJob.ProductID != productID || review.CrawlJob.SourceID != sourceID {
+		return model.SourceReview{}, store.ErrNotFound
+	}
+	return review, nil
+}
+
+func (s *Service) PublishSource(ctx context.Context, productID, sourceID string, input SourcePublicationInput, actor Actor) (model.Source, model.SourcePublication, error) {
 	current, err := s.store.Source(ctx, productID, sourceID)
 	if err != nil {
-		return model.Source{}, err
+		return model.Source{}, model.SourcePublication{}, err
 	}
 	if current.Quarantined {
-		return model.Source{}, fmt.Errorf("%w: quarantined sources require remediation and a clean crawl", ErrUnsafeForPublic)
+		return model.Source{}, model.SourcePublication{}, fmt.Errorf("%w: quarantined sources require remediation and a clean crawl", ErrUnsafeForPublic)
 	}
-	updated, err := s.store.PublishSource(ctx, productID, sourceID, expectedRevision)
+	if !input.AcknowledgeReviewed {
+		return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
+	}
+	crawls, err := s.store.CrawlJobs(ctx, productID, sourceID)
 	if err != nil {
-		return model.Source{}, err
+		return model.Source{}, model.SourcePublication{}, err
 	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "source.published", TargetType: "source", TargetID: sourceID, Prior: map[string]any{"published": current.Published}, Current: map[string]any{"published": true, "visibility": updated.Visibility}, RequestID: actor.RequestID, CreatedAt: s.now()})
-	return updated, err
+	input.CrawlJobID = strings.TrimSpace(input.CrawlJobID)
+	latestReviewable := len(crawls) > 0 && crawls[0].ID == input.CrawlJobID && crawls[0].FinishedAt != nil && (crawls[0].State == "review" || crawls[0].State == "succeeded")
+	if !latestReviewable || crawls[0].FetchedCount == 0 || input.Revision != current.Revision {
+		return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
+	}
+	review, err := s.store.SourceReview(ctx, productID, sourceID, input.CrawlJobID)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	if review.Publication != nil || len(review.Documents) == 0 {
+		return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
+	}
+	documents := make(map[string]model.CrawlReviewDocument, len(review.Documents))
+	for _, document := range review.Documents {
+		documents[document.ID] = document
+	}
+	selected := make([]model.CrawlReviewDocument, 0, len(input.DocumentIDs))
+	selectedIDs := make([]string, 0, len(input.DocumentIDs))
+	seen := make(map[string]bool, len(input.DocumentIDs))
+	for _, documentID := range input.DocumentIDs {
+		documentID = strings.TrimSpace(documentID)
+		document, ok := documents[documentID]
+		if documentID == "" || seen[documentID] || !ok || !docreview.SafeAssessment(document.State, document.InjectionIndicators) {
+			return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
+		}
+		seen[documentID] = true
+		selectedIDs = append(selectedIDs, documentID)
+		selected = append(selected, document)
+	}
+	if len(selected) == 0 {
+		return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
+	}
+	publicationHash, err := docreview.PublicationContentHash(selected)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	id, err := randomUUID()
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	now := s.now()
+	publication := model.SourcePublication{ID: id, OrganisationID: current.OrganisationID, ProductID: productID, SourceID: sourceID, CrawlJobID: input.CrawlJobID, Visibility: current.Visibility, ContentHash: publicationHash, DocumentCount: len(selectedIDs), ReviewedBy: actor.ID, ReviewedAt: now, PublishedAt: now}
+	updated, publication, err := s.store.PublishSource(ctx, productID, sourceID, input.Revision, publication, selectedIDs)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
+	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "source.publication.created", TargetType: "source_publication", TargetID: publication.ID, Prior: map[string]any{"source_revision": current.Revision}, Current: map[string]any{"source_id": sourceID, "source_revision": updated.Revision, "crawl_job_id": publication.CrawlJobID, "publication_revision": publication.Revision, "content_hash": publication.ContentHash, "document_count": publication.DocumentCount, "visibility": updated.Visibility}, RequestID: actor.RequestID, CreatedAt: now})
+	return updated, publication, err
 }
 
 func (s *Service) StartIntegrationRun(ctx context.Context, productID, environmentID, requestedOutcome string, actor Actor) (model.IntegrationRun, error) {

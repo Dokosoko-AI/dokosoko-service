@@ -15,10 +15,15 @@ services:
       DOKOSOKO_AI_ENDPOINT: ${DOKOSOKO_AI_ENDPOINT:-}
       DOKOSOKO_AI_MODEL_ANALYSIS: ${DOKOSOKO_AI_MODEL_ANALYSIS:-}
       DOKOSOKO_AI_MODEL_ASSISTANT: ${DOKOSOKO_AI_MODEL_ASSISTANT:-}
+      DOKOSOKO_UPLOAD_DIR: /uploads
+      DOKOSOKO_UPLOAD_MAX_BYTES: ${DOKOSOKO_UPLOAD_MAX_BYTES:-5000000}
     ports:
       - "8080:8080"
+    extra_hosts:
+      - "${DOKOSOKO_CRAWLER_LOCALHOST_HOST:-api.your-service.localhost}:host-gateway"
     volumes:
       - dokosoko-data:/data
+      - dokosoko-uploads:/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -31,10 +36,16 @@ services:
     environment:
       DOKOSOKO_DATABASE_URL: postgres://dokosoko:${DOKOSOKO_DATABASE_PASSWORD:?set DOKOSOKO_DATABASE_PASSWORD}@postgres:5432/dokosoko?sslmode=disable
       DOKOSOKO_DATA_DIR: /data
+      DOKOSOKO_UPLOAD_DIR: /uploads
       DOKOSOKO_CRAWLER_MAX_PAGES: ${DOKOSOKO_CRAWLER_MAX_PAGES:-500}
       DOKOSOKO_CRAWLER_MAX_BYTES: ${DOKOSOKO_CRAWLER_MAX_BYTES:-5000000}
+      DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS: ${DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS:-false}
+      DOKOSOKO_CRAWLER_LOCALHOST_PORTS: ${DOKOSOKO_CRAWLER_LOCALHOST_PORTS:-80,443}
     volumes:
       - dokosoko-data:/data
+      - dokosoko-uploads:/uploads:ro
+    extra_hosts:
+      - "${DOKOSOKO_CRAWLER_LOCALHOST_HOST:-api.your-service.localhost}:host-gateway"
     depends_on:
       dokosoko:
         condition: service_healthy
@@ -65,4 +76,5 @@ services:
 
 volumes:
   dokosoko-data:
+  dokosoko-uploads:
   postgres-data:

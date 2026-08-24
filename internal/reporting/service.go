@@ -249,7 +249,8 @@ func validDeliveryURL(raw string) bool {
 		return true
 	}
 	parsed, err := url.Parse(raw)
-	return err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && (parsed.Port() == "" || parsed.Port() == "443")
+	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
+	return err == nil && ((parsed.Scheme == "https" && (parsed.Port() == "" || parsed.Port() == "443")) || (parsed.Scheme == "http" && local)) && parsed.Hostname() != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, input RouteInput, actorID, requestID string) (model.SupportRoute, error) {

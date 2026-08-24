@@ -23,9 +23,9 @@ WORKDIR /app
 COPY --from=service-builder /out/dokosoko /app/dokosoko
 COPY --from=console-builder /src/dist/client /app/ui
 COPY migrations /app/migrations
-RUN mkdir -p /data && chown -R dokosoko:dokosoko /data /app
+RUN mkdir -p /data /uploads && chown -R dokosoko:dokosoko /data /uploads /app && chmod 0700 /uploads
 USER dokosoko
-ENV DOKOSOKO_LISTEN=:8080 DOKOSOKO_UI_DIR=/app/ui DOKOSOKO_DATA_DIR=/data DOKOSOKO_MIGRATIONS_DIR=/app/migrations
+ENV DOKOSOKO_LISTEN=:8080 DOKOSOKO_UI_DIR=/app/ui DOKOSOKO_DATA_DIR=/data DOKOSOKO_UPLOAD_DIR=/uploads DOKOSOKO_MIGRATIONS_DIR=/app/migrations
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 ENTRYPOINT ["/app/dokosoko"]

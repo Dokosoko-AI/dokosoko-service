@@ -49,6 +49,8 @@ type Server struct {
 	mcpBridge       *mcpbridge.Manager
 	reporting       *reporting.Service
 	baseURL         string
+	uploadDirectory string
+	uploadMaxBytes  int64
 	allowDemoTokens bool
 	secureCookies   bool
 	rateMu          sync.Mutex
@@ -65,6 +67,8 @@ type Options struct {
 	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
 	Reporting       *reporting.Service
+	UploadDirectory string
+	UploadMaxBytes  int64
 	AllowDemoTokens bool
 }
 
@@ -92,7 +96,11 @@ func NewWithUI(service *platform.Service, baseURL, uiDirectory string) http.Hand
 
 func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	baseURL := strings.TrimRight(options.BaseURL, "/")
-	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
+	uploadMaxBytes := options.UploadMaxBytes
+	if uploadMaxBytes <= 0 {
+		uploadMaxBytes = defaultSourceUploadMaxBytes
+	}
+	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -1112,16 +1120,46 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.integration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "publish" && r.Method == http.MethodPost:
 		s.publishIntegration(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "preflight" && r.Method == http.MethodPost:
+		s.preflightIntegration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "access-connections" && r.Method == http.MethodPut:
 		s.integrationAccessConnections(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "support-route" && r.Method == http.MethodPut:
 		s.integrationSupportRoute(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "authorization-points":
+		s.authorizationPoints(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "authorization-points":
+		s.authorizationPoint(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "authorization-points" && parts[6] == "simulate" && r.Method == http.MethodPost:
+		s.simulateAuthorizationPoint(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "tools":
+		s.integrationTools(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodPost:
 		s.attachResourceSet(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodDelete:
 		s.detachResourceSet(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "packages":
+		s.integrationPackages(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "packages":
+		s.integrationPackage(w, r, parts[3], parts[5])
+	case len(parts) == 3 && parts[2] == "package-artifacts":
+		s.packageArtifacts(w, r)
+	case len(parts) == 4 && parts[2] == "package-artifacts":
+		s.packageArtifact(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "package-artifacts" && parts[4] == "releases" && r.Method == http.MethodGet:
+		s.packageReleases(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "package-artifacts" && parts[4] == "publish" && r.Method == http.MethodPost:
+		s.publishPackageArtifact(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "package-artifacts" && parts[4] == "deprecate" && r.Method == http.MethodPost:
+		s.deprecatePackageArtifact(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "package-artifacts" && parts[4] == "retire" && r.Method == http.MethodPost:
+		s.retirePackageArtifact(w, r, parts[3])
 	case len(parts) == 3 && parts[2] == "resource-sets":
 		s.resourceSets(w, r)
+	case len(parts) == 3 && parts[2] == "grant-definitions":
+		s.grantDefinitions(w, r)
+	case len(parts) == 4 && parts[2] == "grant-definitions":
+		s.grantDefinition(w, r, parts[3])
 	case len(parts) == 4 && parts[2] == "resource-sets":
 		s.resourceSet(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "resource-sets" && parts[4] == "duplicate" && r.Method == http.MethodPost:
@@ -1198,16 +1236,30 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.publishProductBuild(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "sources":
 		s.sources(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "sources" && parts[5] == "upload":
+		s.uploadSource(w, r, parts[3])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "visibility" && r.Method == http.MethodPatch:
 		s.sourceVisibility(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawl" && r.Method == http.MethodPost:
 		s.queueCrawl(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "publish" && r.Method == http.MethodPost:
 		s.publishSource(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "review" && r.Method == http.MethodGet:
+		s.sourceReview(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "publications" && r.Method == http.MethodGet:
+		s.sourcePublications(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawls" && r.Method == http.MethodGet:
 		s.crawlJobs(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "tools":
 		s.tools(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "tools":
+		s.toolEditorResource(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "clone" && r.Method == http.MethodPost:
+		s.cloneTool(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "dry-run" && r.Method == http.MethodPost:
+		s.dryRunTool(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "retire" && r.Method == http.MethodPost:
+		s.retireTool(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "mcp-connections":
 		s.mcpConnections(w, r, parts[3])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "mcp-connections" && parts[6] == "inspect" && r.Method == http.MethodPost:
@@ -1886,6 +1938,10 @@ func (s *Server) sources(w http.ResponseWriter, r *http.Request, productID strin
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
+		if strings.EqualFold(strings.TrimSpace(input.Kind), "upload") {
+			writeError(w, http.StatusBadRequest, "source_upload_requires_multipart", "Create uploaded sources with the reviewed multipart upload endpoint.", nil)
+			return
+		}
 		value, err := s.service.CreateSource(r.Context(), input.OrganisationID, productID, input.Name, input.Kind, input.Location, actor(r))
 		if err != nil {
 			s.creationError(w, err)
@@ -1920,6 +1976,24 @@ func (s *Server) crawlJobs(w http.ResponseWriter, r *http.Request, productID, so
 	writeJSON(w, http.StatusOK, map[string]any{"items": values})
 }
 
+func (s *Server) sourceReview(w http.ResponseWriter, r *http.Request, productID, sourceID string) {
+	value, err := s.service.SourceReview(r.Context(), productID, sourceID, strings.TrimSpace(r.URL.Query().Get("crawl_job_id")))
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) sourcePublications(w http.ResponseWriter, r *http.Request, productID, sourceID string) {
+	values, err := s.service.Store().SourcePublications(r.Context(), productID, sourceID)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
 func revisionInput(r *http.Request) (int64, error) {
 	var input struct {
 		Revision int64 `json:"revision"`
@@ -1932,17 +2006,25 @@ func revisionInput(r *http.Request) (int64, error) {
 }
 
 func (s *Server) publishSource(w http.ResponseWriter, r *http.Request, productID, sourceID string) {
-	revision, err := revisionInput(r)
-	if err != nil {
+	var input struct {
+		Revision            int64    `json:"revision"`
+		CrawlJobID          string   `json:"crawl_job_id"`
+		DocumentIDs         []string `json:"document_ids"`
+		AcknowledgeReviewed bool     `json:"acknowledge_reviewed"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil || input.Revision < 1 {
+		if err == nil {
+			err = errors.New("revision must be positive")
+		}
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	value, err := s.service.PublishSource(r.Context(), productID, sourceID, revision, actor(r))
+	value, publication, err := s.service.PublishSource(r.Context(), productID, sourceID, platform.SourcePublicationInput{Revision: input.Revision, CrawlJobID: input.CrawlJobID, DocumentIDs: input.DocumentIDs, AcknowledgeReviewed: input.AcknowledgeReviewed}, actor(r))
 	if err != nil {
 		s.platformError(w, err, "Quarantined source content cannot be published.")
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	writeJSON(w, http.StatusOK, map[string]any{"source": value, "publication": publication})
 }
 
 func (s *Server) tools(w http.ResponseWriter, r *http.Request, productID string) {
@@ -1995,7 +2077,7 @@ func (s *Server) publishTool(w http.ResponseWriter, r *http.Request, productID, 
 			writeError(w, http.StatusConflict, "upstream_schema_drift", "Re-inspect and review the upstream schema before publishing this tool.", nil)
 			return
 		}
-		s.storeError(w, err)
+		s.creationError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
@@ -2247,7 +2329,7 @@ func (s *Server) privateMCP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if principal.Subject == "" && s.allowDemoTokens && isBearer(r, demoPrivateToken) {
-		principal = identity.Principal{ProductID: productID, ClientID: productID, Issuer: "development", Subject: "private_mcp_demo", Grants: map[string]bool{}}
+		principal = identity.Principal{ProductID: productID, ClientID: productID, Issuer: "development", Subject: "private_mcp_demo", Grants: map[string]bool{}, AccessEvaluatedAt: time.Now().UTC()}
 	}
 	if principal.Subject == "" {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, s.baseURL+"/.well-known/oauth-protected-resource/mcp", "mcp:private"))
@@ -2353,7 +2435,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		tools := []map[string]any{
 			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment, its applicable Integration revisions, effective pinned or default connector release, and available releases.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "deployment.releases.list", "description": "List published connector releases and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "search_knowledge", "description": "Search published connector knowledge.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+			{"name": "search_knowledge", "description": "Search only the reviewed documentation pinned by one applicable published Integration revision.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"query": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string", "description": "Published Integration ID. It may be omitted only when exactly one applicable Integration pins documentation."}}, "required": []string{"query"}}},
 			{"name": "integration.recipes.list", "description": "List published implementation recipes and their stable MCP resource URIs.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "integration.plan", "description": "Choose the closest published recipe for a requested integration outcome. This returns a plan reference, not a claim that work was completed.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"outcome"}}},
 			{"name": "integration.check", "description": "Check whether a published recipe URI is current or needs attention before implementation.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"recipe_uri": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"recipe_uri"}}},
@@ -2418,14 +2500,33 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				}
 			}
 			if s.toolRuntime != nil {
-				custom, err := s.toolRuntime.Available(r.Context(), productID, principal.Grants)
+				custom, err := s.toolRuntime.Published(r.Context(), productID)
 				if err == nil {
 					for _, item := range custom {
 						_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(r.Context(), productID, selection, item)
 						if allowErr != nil || !allowed {
 							continue
 						}
-						definition := map[string]any{"name": item.Namespace + "." + item.Name, "description": item.Description, "inputSchema": item.InputSchema}
+						binding, managedByIntegration, bindingErr := s.integrationToolAuthorization(r.Context(), productManifest, item)
+						if managedByIntegration {
+							if bindingErr != nil {
+								continue
+							}
+							available, availableErr := s.toolRuntime.AvailableBound(r.Context(), productID, []toolruntime.BoundAuthorization{binding}, toolPrincipal(principal, false, ""))
+							if availableErr != nil || len(available) != 1 || available[0].ID != item.ID {
+								continue
+							}
+						} else {
+							available, availableErr := s.toolRuntime.Available(r.Context(), productID, principal.Grants)
+							legacyAllowed := false
+							for _, candidate := range available {
+								legacyAllowed = legacyAllowed || candidate.ID == item.ID
+							}
+							if availableErr != nil || !legacyAllowed {
+								continue
+							}
+						}
+						definition := customToolDefinitionForAuthorization(productManifest, item, binding, managedByIntegration)
 						if len(item.OutputSchema) > 0 {
 							definition["outputSchema"] = item.OutputSchema
 						}
@@ -2787,8 +2888,14 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		writeToolResult(w, request.ID, value)
 	case "search_knowledge":
 		query, _ := params.Arguments["query"].(string)
+		integrationID, _ := params.Arguments["integration_id"].(string)
+		publicationIDs, scopeErr := s.knowledgePublicationIDs(ctx, productID, integrationID, productManifest)
+		if scopeErr != nil {
+			writeRPCError(w, request.ID, -32003, "Select exactly one published Integration with reviewed documentation")
+			return
+		}
 		if public {
-			items, err := s.service.Store().PublicKnowledge(ctx, productID, query)
+			items, err := s.service.Store().PublicKnowledge(ctx, productID, publicationIDs, query)
 			if err != nil {
 				writeRPCError(w, request.ID, -32603, "Search failed")
 				return
@@ -2814,7 +2921,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32003, "Knowledge access was denied by product policy")
 			return
 		}
-		items, err := s.service.Store().PrivateKnowledge(ctx, productID, query)
+		items, err := s.service.Store().PrivateKnowledge(ctx, productID, publicationIDs, query)
 		if err != nil {
 			writeRPCError(w, request.ID, -32603, "Search failed")
 			return
@@ -2839,10 +2946,15 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32601, "Tool is not available on Public MCP")
 			return
 		}
+		if manifestErr != nil {
+			writeRPCError(w, request.ID, -32003, "Tool execution requires a resolved deployment and customer selection context")
+			return
+		}
 		if s.toolRuntime != nil {
 			requestID, _ := ctx.Value(requestIDKey).(string)
 			principal, _ := ctx.Value(principalKey).(identity.Principal)
 			available, lookupErr := s.service.Store().Tools(ctx, productID, false)
+			var selectedTool model.Tool
 			if lookupErr == nil {
 				for _, candidate := range available {
 					if candidate.Namespace+"."+candidate.Name != params.Name {
@@ -2853,10 +2965,22 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 						writeRPCError(w, request.ID, -32003, "Tool is not included in the effective product version")
 						return
 					}
+					selectedTool = candidate
 					break
 				}
 			}
-			value, err := s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolPrincipal(principal, params.Meta.Confirmed, requestID))
+			var value any
+			var err error
+			bound, managedByIntegration, bindingErr := s.integrationToolAuthorization(ctx, productManifest, selectedTool)
+			if managedByIntegration {
+				if bindingErr != nil {
+					writeRPCError(w, request.ID, -32003, "Tool has no unique exact authorization action in an applicable published Integration revision")
+					return
+				}
+				value, err = s.toolRuntime.ExecuteBound(ctx, productID, params.Name, params.Arguments, toolPrincipal(principal, params.Meta.Confirmed, requestID), bound)
+			} else {
+				value, err = s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolPrincipal(principal, params.Meta.Confirmed, requestID))
+			}
 			if err == nil {
 				if upstream, ok := value.(toolruntime.MCPCallResult); ok {
 					writeRPC(w, request.ID, upstream.Result)
@@ -2875,6 +2999,224 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			}
 		}
 		writeRPCError(w, request.ID, -32601, "Tool not found")
+	}
+}
+
+func (s *Server) knowledgePublicationIDs(ctx context.Context, productID, requestedIntegrationID string, manifest model.ProductManifest) ([]string, error) {
+	requestedIntegrationID = strings.TrimSpace(requestedIntegrationID)
+	type candidate struct {
+		integrationID string
+		publications  []string
+	}
+	candidates := make([]candidate, 0)
+	for _, integration := range manifest.Integrations {
+		publications := make([]string, 0)
+		seen := make(map[string]bool)
+		for _, resource := range integration.Resources {
+			if resource.Kind != "documentation" {
+				continue
+			}
+			for _, publication := range resource.SourcePublications {
+				if publication.ID != "" && !seen[publication.ID] {
+					seen[publication.ID] = true
+					publications = append(publications, publication.ID)
+				}
+			}
+		}
+		if len(publications) > 0 {
+			sort.Strings(publications)
+			candidates = append(candidates, candidate{integrationID: integration.ID, publications: publications})
+		}
+	}
+	if requestedIntegrationID != "" {
+		for _, value := range candidates {
+			if value.integrationID == requestedIntegrationID {
+				return value.publications, nil
+			}
+		}
+		return nil, store.ErrNotFound
+	}
+	if len(candidates) == 1 {
+		return candidates[0].publications, nil
+	}
+	if len(manifest.Integrations) > 0 {
+		return nil, store.ErrConflict
+	}
+	// Legacy deployments without an Integration catalog remain usable, but are
+	// still limited to the latest explicitly reviewed publication per source.
+	sources, err := s.service.Store().Sources(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(sources))
+	for _, source := range sources {
+		publications, publicationErr := s.service.Store().SourcePublications(ctx, productID, source.ID)
+		if publicationErr != nil {
+			if errors.Is(publicationErr, store.ErrNotFound) {
+				continue
+			}
+			return nil, publicationErr
+		}
+		if len(publications) > 0 {
+			result = append(result, publications[0].ID)
+		}
+	}
+	if len(result) == 0 {
+		return nil, store.ErrNotFound
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func (s *Server) integrationToolAuthorization(ctx context.Context, manifest model.ProductManifest, tool model.Tool) (toolruntime.BoundAuthorization, bool, error) {
+	managed := manifest.ManagedIntegrationTools
+	type candidate struct {
+		integration model.IntegrationManifest
+		tool        model.IntegrationManifestTool
+	}
+	candidates := make([]candidate, 0, 1)
+	managedIntegrations := 0
+	for _, integration := range manifest.Integrations {
+		if integration.Tools == nil {
+			continue
+		}
+		managed = true
+		managedIntegrations++
+		for _, binding := range integration.Tools {
+			if binding.ToolID == tool.ID && binding.ToolRevision == tool.Revision {
+				candidates = append(candidates, candidate{integration: integration, tool: binding})
+			}
+		}
+	}
+	if !managed {
+		return toolruntime.BoundAuthorization{}, false, nil
+	}
+	if (manifest.SelectionSource == "" || manifest.SelectionSource == "unversioned") && managedIntegrations > 1 {
+		return toolruntime.BoundAuthorization{}, true, errors.New("multiple managed Integrations require an exact customer, installation, or product-version selection")
+	}
+	if len(candidates) != 1 {
+		return toolruntime.BoundAuthorization{}, true, errors.New("tool must resolve to exactly one applicable Integration")
+	}
+	selected := candidates[0]
+	if selected.tool.AuthorizationPointID == "" || selected.tool.AuthorizationPointRevision < 1 {
+		return toolruntime.BoundAuthorization{}, true, errors.New("tool has no exact authorization-point binding")
+	}
+	pointPublished := false
+	for _, point := range selected.integration.AuthorizationPoints {
+		if point.ID == selected.tool.AuthorizationPointID && point.Revision == selected.tool.AuthorizationPointRevision {
+			pointPublished = true
+			break
+		}
+	}
+	if !pointPublished {
+		return toolruntime.BoundAuthorization{}, true, errors.New("tool authorization point is not part of the same published Integration revision")
+	}
+	point, err := s.service.Store().AuthorizationPoint(ctx, selected.integration.ID, selected.tool.AuthorizationPointID)
+	if err != nil || point.State != "active" || point.Revision != selected.tool.AuthorizationPointRevision {
+		return toolruntime.BoundAuthorization{}, true, errors.New("tool authorization point changed or is not active")
+	}
+	definitions, err := s.service.Store().GrantDefinitions(ctx, manifest.DeploymentID)
+	if err != nil {
+		return toolruntime.BoundAuthorization{}, true, errors.New("grant registry could not be resolved")
+	}
+	active := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		active[definition.Key] = definition.State == "active"
+	}
+	for _, required := range point.RequiredGrants {
+		if !active[required] {
+			return toolruntime.BoundAuthorization{}, true, errors.New("tool authorization point requires an inactive grant")
+		}
+	}
+	return toolruntime.BoundAuthorization{IntegrationID: selected.integration.ID, ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPoint: point, AuthorizationPointRevision: point.Revision}, true, nil
+}
+
+func customToolDefinition(manifest model.ProductManifest, tool model.Tool) map[string]any {
+	return customToolDefinitionForAuthorization(manifest, tool, toolruntime.BoundAuthorization{}, false)
+}
+
+func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool model.Tool, binding toolruntime.BoundAuthorization, managed bool) map[string]any {
+	var policy struct {
+		RequiredGrants       []string `json:"required_grants"`
+		ConfirmationRequired bool     `json:"confirmation_required"`
+		Risk                 string   `json:"risk"`
+		IdempotencyRequired  bool     `json:"idempotency_required"`
+	}
+	_ = json.Unmarshal(tool.AuthorizationPolicy, &policy)
+	if managed {
+		seen := make(map[string]bool, len(policy.RequiredGrants)+len(binding.AuthorizationPoint.RequiredGrants))
+		combined := make([]string, 0, len(policy.RequiredGrants)+len(binding.AuthorizationPoint.RequiredGrants))
+		for _, required := range append(append([]string(nil), policy.RequiredGrants...), binding.AuthorizationPoint.RequiredGrants...) {
+			if !seen[required] {
+				seen[required] = true
+				combined = append(combined, required)
+			}
+		}
+		sort.Strings(combined)
+		policy.RequiredGrants = combined
+		policy.ConfirmationRequired = policy.ConfirmationRequired || binding.AuthorizationPoint.ConfirmationRequired
+	}
+	if policy.Risk == "" {
+		policy.Risk = "low"
+		if tool.HTTPMethod != http.MethodGet {
+			policy.Risk = "medium"
+		}
+		if tool.HTTPMethod == http.MethodDelete {
+			policy.Risk = "critical"
+		}
+	}
+	description := tool.Description
+	if policy.ConfirmationRequired {
+		description += " Explicit user confirmation is required before execution."
+	}
+	integrationIDs := make([]string, 0, 1)
+	if managed {
+		integrationIDs = append(integrationIDs, binding.IntegrationID)
+	} else {
+		for _, integration := range manifest.Integrations {
+			for _, candidate := range integration.Tools {
+				if candidate.ToolID == tool.ID && candidate.ToolRevision == tool.Revision {
+					integrationIDs = append(integrationIDs, integration.ID)
+					break
+				}
+			}
+		}
+	}
+	actionType := ""
+	pointID := ""
+	pointRevision := int64(0)
+	decisionTTL := 0
+	if managed {
+		actionType = binding.AuthorizationPoint.ActionType
+		pointID = binding.AuthorizationPoint.ID
+		pointRevision = binding.AuthorizationPointRevision
+		decisionTTL = binding.AuthorizationPoint.DecisionTTLSeconds
+	}
+	readOnly := tool.HTTPMethod == http.MethodGet
+	destructive := policy.Risk == "critical" || tool.HTTPMethod == http.MethodDelete
+	if actionType != "" {
+		readOnly = actionType == "read"
+		destructive = actionType == "destructive"
+	}
+	return map[string]any{
+		"name":        tool.Namespace + "." + tool.Name,
+		"description": description,
+		"inputSchema": tool.InputSchema,
+		"annotations": map[string]any{
+			"readOnlyHint":    readOnly,
+			"destructiveHint": destructive,
+			"idempotentHint":  tool.HTTPMethod == http.MethodGet || policy.IdempotencyRequired,
+		},
+		"_meta": map[string]any{
+			"com.dokosoko/toolRevision":                    tool.Revision,
+			"com.dokosoko/integrationIds":                  integrationIDs,
+			"com.dokosoko/authorizationPointId":            pointID,
+			"com.dokosoko/authorizationPointRevision":      pointRevision,
+			"com.dokosoko/authorizationDecisionTtlSeconds": decisionTTL,
+			"com.dokosoko/requiredGrants":                  policy.RequiredGrants,
+			"com.dokosoko/confirmationRequired":            policy.ConfirmationRequired,
+			"com.dokosoko/risk":                            policy.Risk,
+		},
 	}
 }
 
@@ -2962,6 +3304,8 @@ func toolPrincipal(principal identity.Principal, confirmed bool, requestID strin
 		ExternalCustomerID:   principal.ExternalCustomerID,
 		InstallationID:       principal.InstallationID,
 		Grants:               principal.Grants,
+		AccessEvaluationID:   principal.AccessEvaluationID,
+		AccessEvaluatedAt:    principal.AccessEvaluatedAt,
 		DelegatedAPIOrigin:   principal.DelegatedAPIOrigin,
 		DelegatedAccessToken: principal.UpstreamAccessToken,
 		Confirmed:            confirmed,
@@ -3013,6 +3357,8 @@ func (s *Server) platformError(w http.ResponseWriter, err error, warning string)
 		writeError(w, http.StatusUnprocessableEntity, "unsafe_for_public", err.Error(), nil)
 	case errors.Is(err, platform.ErrInvalidVisibility):
 		writeError(w, http.StatusBadRequest, "invalid_visibility", err.Error(), nil)
+	case errors.Is(err, platform.ErrSourceReviewRequired):
+		writeError(w, http.StatusBadRequest, "source_review_required", err.Error(), nil)
 	default:
 		s.storeError(w, err)
 	}

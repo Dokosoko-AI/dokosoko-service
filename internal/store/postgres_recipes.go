@@ -134,6 +134,10 @@ func (p *Postgres) RecipeBySlug(ctx context.Context, productID, slug string) (mo
 	return p.hydrateRecipe(ctx, value)
 }
 
+func updateRecipeRow(ctx context.Context, query pgxRowQuerier, value model.Recipe, dependencies []byte, expected int64) (model.Recipe, error) {
+	return scanRecipe(query.QueryRow(ctx, `UPDATE recipes SET analysis_id=nullif($3,'')::uuid,title=$4,outcome=$5,audience=$6,state=$7,needs_attention=$8,visibility=$9,dependencies=$10,current_revision_id=nullif($11,'')::uuid,approved_by=$12,approved_at=$13,published_at=$14,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$15 RETURNING id::text,organisation_id::text,product_id::text,coalesce(analysis_id::text,''),slug,title,outcome,audience,state,generated,needs_attention,visibility,dependencies,coalesce(current_revision_id::text,''),stable_uri,approved_by,approved_at,published_at,revision,created_at,updated_at`, value.ProductID, value.ID, value.AnalysisID, value.Title, value.Outcome, value.Audience, value.State, value.NeedsAttention, value.Visibility, dependencies, value.CurrentRevisionID, value.ApprovedBy, value.ApprovedAt, value.PublishedAt, expected))
+}
+
 func (p *Postgres) SaveRecipe(ctx context.Context, value model.Recipe, expected int64) (model.Recipe, error) {
 	dependencies, _ := json.Marshal(value.Dependencies)
 	var saved model.Recipe
@@ -141,7 +145,7 @@ func (p *Postgres) SaveRecipe(ctx context.Context, value model.Recipe, expected 
 	if expected == 0 {
 		saved, err = scanRecipe(p.pool.QueryRow(ctx, `INSERT INTO recipes(id,organisation_id,product_id,analysis_id,slug,title,outcome,audience,state,generated,needs_attention,visibility,dependencies,current_revision_id,stable_uri,approved_by,approved_at,published_at) VALUES($1,$2,$3,nullif($4,'')::uuid,$5,$6,$7,$8,$9,$10,$11,$12,$13,nullif($14,'')::uuid,$15,$16,$17,$18) RETURNING id::text,organisation_id::text,product_id::text,coalesce(analysis_id::text,''),slug,title,outcome,audience,state,generated,needs_attention,visibility,dependencies,coalesce(current_revision_id::text,''),stable_uri,approved_by,approved_at,published_at,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.ProductID, value.AnalysisID, value.Slug, value.Title, value.Outcome, value.Audience, value.State, value.Generated, value.NeedsAttention, value.Visibility, dependencies, value.CurrentRevisionID, value.StableURI, value.ApprovedBy, value.ApprovedAt, value.PublishedAt))
 	} else {
-		saved, err = scanRecipe(p.pool.QueryRow(ctx, `UPDATE recipes SET title=$3,outcome=$4,audience=$5,state=$6,needs_attention=$7,visibility=$8,dependencies=$9,current_revision_id=nullif($10,'')::uuid,approved_by=$11,approved_at=$12,published_at=$13,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$14 RETURNING id::text,organisation_id::text,product_id::text,coalesce(analysis_id::text,''),slug,title,outcome,audience,state,generated,needs_attention,visibility,dependencies,coalesce(current_revision_id::text,''),stable_uri,approved_by,approved_at,published_at,revision,created_at,updated_at`, value.ProductID, value.ID, value.Title, value.Outcome, value.Audience, value.State, value.NeedsAttention, value.Visibility, dependencies, value.CurrentRevisionID, value.ApprovedBy, value.ApprovedAt, value.PublishedAt, expected))
+		saved, err = updateRecipeRow(ctx, p.pool, value, dependencies, expected)
 		if errors.Is(err, ErrNotFound) {
 			if _, lookupErr := p.Recipe(ctx, value.ProductID, value.ID); lookupErr == nil {
 				return model.Recipe{}, ErrConflict
@@ -188,10 +192,42 @@ func (p *Postgres) RecipeRevisions(ctx context.Context, recipeID string) ([]mode
 	return values, rows.Err()
 }
 
-func (p *Postgres) CreateRecipeRevision(ctx context.Context, value model.RecipeRevision) (model.RecipeRevision, error) {
+func createRecipeRevisionRow(ctx context.Context, query pgxRowQuerier, value model.RecipeRevision) (model.RecipeRevision, error) {
 	references, _ := json.Marshal(value.References)
 	validation, _ := json.Marshal(value.Validation)
-	return scanRecipeRevision(p.pool.QueryRow(ctx, `INSERT INTO recipe_revisions(id,recipe_id,revision,markdown,reference_items,validation,review,generated_by,model,created_by) VALUES($1,$2,coalesce(nullif($3,0),(SELECT coalesce(max(revision),0)+1 FROM recipe_revisions WHERE recipe_id=$2)),$4,$5,$6,$7,$8,$9,$10) RETURNING id::text,recipe_id::text,revision,markdown,reference_items,validation,review,generated_by,model,created_by,created_at`, value.ID, value.RecipeID, value.Revision, value.Markdown, references, validation, value.Review, value.GeneratedBy, value.Model, value.CreatedBy))
+	return scanRecipeRevision(query.QueryRow(ctx, `INSERT INTO recipe_revisions(id,recipe_id,revision,markdown,reference_items,validation,review,generated_by,model,created_by) VALUES($1,$2,coalesce(nullif($3,0),(SELECT coalesce(max(revision),0)+1 FROM recipe_revisions WHERE recipe_id=$2)),$4,$5,$6,$7,$8,$9,$10) RETURNING id::text,recipe_id::text,revision,markdown,reference_items,validation,review,generated_by,model,created_by,created_at`, value.ID, value.RecipeID, value.Revision, value.Markdown, references, validation, value.Review, value.GeneratedBy, value.Model, value.CreatedBy))
+}
+
+func (p *Postgres) SaveRecipeRevision(ctx context.Context, recipe model.Recipe, value model.RecipeRevision, expected int64) (model.Recipe, error) {
+	if value.RecipeID != recipe.ID {
+		return model.Recipe{}, ErrConflict
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.Recipe{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	created, err := createRecipeRevisionRow(ctx, tx, value)
+	if err != nil {
+		return model.Recipe{}, err
+	}
+	recipe.CurrentRevisionID, recipe.CurrentRevision = created.ID, nil
+	dependencies, _ := json.Marshal(recipe.Dependencies)
+	saved, err := updateRecipeRow(ctx, tx, recipe, dependencies, expected)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			_ = tx.Rollback(ctx)
+			if _, lookupErr := p.Recipe(ctx, recipe.ProductID, recipe.ID); lookupErr == nil {
+				return model.Recipe{}, ErrConflict
+			}
+		}
+		return model.Recipe{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Recipe{}, databaseError(err)
+	}
+	saved.CurrentRevision = &created
+	return saved, nil
 }
 
 const aiJobSelect = `SELECT id::text,organisation_id::text,product_id::text,coalesce(kind,''),coalesce(target_id::text,''),state,attempt,input,output,error_code,created_by,created_at,started_at,finished_at FROM ai_jobs`

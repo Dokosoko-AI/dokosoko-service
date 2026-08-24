@@ -70,23 +70,94 @@ type Deployment struct {
 }
 
 type Integration struct {
-	ID                       string                    `json:"id"`
-	DeploymentID             string                    `json:"deployment_id"`
-	OrganisationID           string                    `json:"organisation_id"`
-	FamilyKey                string                    `json:"family_key"`
-	VersionKey               string                    `json:"version_key"`
-	DisplayName              string                    `json:"display_name"`
-	Description              string                    `json:"description"`
-	Visibility               Visibility                `json:"visibility"`
-	Lifecycle                string                    `json:"lifecycle"`
-	ReplacementIntegrationID string                    `json:"replacement_integration_id,omitempty"`
-	SunsetAt                 *time.Time                `json:"sunset_at,omitempty"`
-	Revision                 int64                     `json:"revision"`
-	Resources                []IntegrationResourceLink `json:"resources,omitempty"`
-	AccessConnections        []string                  `json:"access_connection_ids,omitempty"`
-	SupportRouteID           string                    `json:"support_route_id,omitempty"`
-	CreatedAt                time.Time                 `json:"created_at"`
-	UpdatedAt                time.Time                 `json:"updated_at"`
+	ID                       string                      `json:"id"`
+	DeploymentID             string                      `json:"deployment_id"`
+	OrganisationID           string                      `json:"organisation_id"`
+	FamilyKey                string                      `json:"family_key"`
+	VersionKey               string                      `json:"version_key"`
+	DisplayName              string                      `json:"display_name"`
+	Description              string                      `json:"description"`
+	Visibility               Visibility                  `json:"visibility"`
+	Lifecycle                string                      `json:"lifecycle"`
+	ReplacementIntegrationID string                      `json:"replacement_integration_id,omitempty"`
+	SunsetAt                 *time.Time                  `json:"sunset_at,omitempty"`
+	Revision                 int64                       `json:"revision"`
+	Resources                []IntegrationResourceLink   `json:"resources,omitempty"`
+	Packages                 []IntegrationPackageBinding `json:"packages,omitempty"`
+	AccessConnections        []string                    `json:"access_connection_ids,omitempty"`
+	SupportRouteID           string                      `json:"support_route_id,omitempty"`
+	CreatedAt                time.Time                   `json:"created_at"`
+	UpdatedAt                time.Time                   `json:"updated_at"`
+}
+
+// PackageArtifact is the registry-neutral identity of an SDK or package.
+// DokoSoko records catalogue metadata only: package bytes remain hosted and
+// delivered by the package's registry.
+type PackageArtifact struct {
+	ID                           string          `json:"id"`
+	DeploymentID                 string          `json:"deployment_id"`
+	OrganisationID               string          `json:"organisation_id"`
+	Name                         string          `json:"name"`
+	Description                  string          `json:"description"`
+	Ecosystem                    string          `json:"ecosystem"`
+	Coordinate                   string          `json:"coordinate"`
+	PURL                         string          `json:"purl"`
+	RegistryURL                  string          `json:"registry_url"`
+	SourceURL                    string          `json:"source_url,omitempty"`
+	Language                     string          `json:"language,omitempty"`
+	Platform                     string          `json:"platform,omitempty"`
+	Visibility                   Visibility      `json:"visibility"`
+	Lifecycle                    string          `json:"lifecycle"`
+	ReplacementPackageArtifactID string          `json:"replacement_package_artifact_id,omitempty"`
+	DeprecationMessage           string          `json:"deprecation_message,omitempty"`
+	SunsetAt                     *time.Time      `json:"sunset_at,omitempty"`
+	Revision                     int64           `json:"revision"`
+	LatestRelease                *PackageRelease `json:"latest_release,omitempty"`
+	UsedBy                       []string        `json:"integration_ids,omitempty"`
+	CreatedAt                    time.Time       `json:"created_at"`
+	UpdatedAt                    time.Time       `json:"updated_at"`
+}
+
+// PackageRelease is an immutable, exact registry release. Its content hash
+// covers all package-consumer metadata, making it safe to pin in an
+// Integration revision without a follow-latest interpretation.
+type PackageRelease struct {
+	ID                string     `json:"id"`
+	PackageArtifactID string     `json:"package_artifact_id"`
+	ArtifactName      string     `json:"artifact_name"`
+	Ecosystem         string     `json:"ecosystem"`
+	Coordinate        string     `json:"coordinate"`
+	Version           string     `json:"version"`
+	PURL              string     `json:"purl"`
+	RegistryURL       string     `json:"registry_url"`
+	SourceURL         string     `json:"source_url,omitempty"`
+	Language          string     `json:"language,omitempty"`
+	Platform          string     `json:"platform,omitempty"`
+	InstallCommand    string     `json:"install_command"`
+	Digest            string     `json:"digest"`
+	ProvenanceURL     string     `json:"provenance_url,omitempty"`
+	SBOMURL           string     `json:"sbom_url,omitempty"`
+	Visibility        Visibility `json:"visibility"`
+	ContentHash       string     `json:"content_hash"`
+	PublishedBy       string     `json:"published_by,omitempty"`
+	PublishedAt       time.Time  `json:"published_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+// IntegrationPackageBinding is compatibility by construction: it always
+// names one exact immutable PackageRelease. There is deliberately no
+// follow-latest flag.
+type IntegrationPackageBinding struct {
+	ID                string           `json:"id"`
+	DeploymentID      string           `json:"deployment_id"`
+	IntegrationID     string           `json:"integration_id"`
+	PackageArtifactID string           `json:"package_artifact_id"`
+	PackageReleaseID  string           `json:"package_release_id"`
+	Artifact          *PackageArtifact `json:"artifact,omitempty"`
+	Release           *PackageRelease  `json:"release,omitempty"`
+	CreatedBy         string           `json:"created_by,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
 }
 
 // BackendConnection is an operator-managed service-to-service connection.
@@ -384,26 +455,95 @@ type ProductManifestCapability struct {
 }
 
 type IntegrationManifestResource struct {
-	ResourceSetID string `json:"resource_set_id"`
-	Kind          string `json:"kind"`
-	Name          string `json:"name"`
-	Revision      int64  `json:"revision"`
-	ContentHash   string `json:"content_hash"`
+	ResourceSetID      string                                 `json:"resource_set_id"`
+	Kind               string                                 `json:"kind"`
+	Name               string                                 `json:"name"`
+	Revision           int64                                  `json:"revision"`
+	ContentHash        string                                 `json:"content_hash"`
+	SourcePublications []IntegrationManifestSourcePublication `json:"source_publications,omitempty"`
+}
+
+type IntegrationManifestSourcePublication struct {
+	ID          string `json:"id"`
+	SourceID    string `json:"source_id"`
+	Revision    int64  `json:"revision"`
+	ContentHash string `json:"content_hash"`
+}
+
+type IntegrationManifestPackage struct {
+	PackageArtifactID            string     `json:"package_artifact_id"`
+	PackageReleaseID             string     `json:"package_release_id"`
+	Name                         string     `json:"name"`
+	Ecosystem                    string     `json:"ecosystem"`
+	Coordinate                   string     `json:"coordinate"`
+	Version                      string     `json:"version"`
+	PURL                         string     `json:"purl"`
+	RegistryURL                  string     `json:"registry_url"`
+	SourceURL                    string     `json:"source_url,omitempty"`
+	Language                     string     `json:"language,omitempty"`
+	Platform                     string     `json:"platform,omitempty"`
+	InstallCommand               string     `json:"install_command"`
+	Digest                       string     `json:"digest"`
+	ProvenanceURL                string     `json:"provenance_url,omitempty"`
+	SBOMURL                      string     `json:"sbom_url,omitempty"`
+	Visibility                   Visibility `json:"visibility"`
+	Lifecycle                    string     `json:"lifecycle"`
+	ReplacementPackageArtifactID string     `json:"replacement_package_artifact_id,omitempty"`
+	DeprecationMessage           string     `json:"deprecation_message,omitempty"`
+	SunsetAt                     *time.Time `json:"sunset_at,omitempty"`
+	ContentHash                  string     `json:"content_hash"`
+}
+
+type IntegrationManifestAuthorizationPoint struct {
+	ID                   string   `json:"id"`
+	Key                  string   `json:"key"`
+	Name                 string   `json:"name"`
+	ActionType           string   `json:"action_type"`
+	RequiredGrants       []string `json:"required_grants"`
+	ConfirmationRequired bool     `json:"confirmation_required"`
+	DecisionTTLSeconds   int      `json:"decision_ttl_seconds"`
+	Revision             int64    `json:"revision"`
+}
+
+type IntegrationManifestTool struct {
+	ToolID                     string `json:"tool_id"`
+	ToolRevision               int64  `json:"tool_revision"`
+	AuthorizationPointID       string `json:"authorization_point_id"`
+	AuthorizationPointRevision int64  `json:"authorization_point_revision"`
+	Namespace                  string `json:"namespace"`
+	Name                       string `json:"name"`
+	BackendKind                string `json:"backend_kind"`
+	ContentHash                string `json:"content_hash"`
+	UpstreamSchemaHash         string `json:"upstream_schema_hash,omitempty"`
+}
+
+type IntegrationManifestAccessConnection struct {
+	ConnectionID             string `json:"connection_id"`
+	ConnectionRevision       int64  `json:"connection_revision"`
+	AccessDefinitionID       string `json:"access_definition_id"`
+	AccessDefinitionRevision int64  `json:"access_definition_revision"`
+	EnvironmentID            string `json:"environment_id,omitempty"`
+	State                    string `json:"state"`
+	ContentHash              string `json:"content_hash"`
 }
 
 type IntegrationManifest struct {
-	ID                       string                        `json:"id"`
-	FamilyKey                string                        `json:"family_key"`
-	VersionKey               string                        `json:"version_key"`
-	DisplayName              string                        `json:"display_name"`
-	Description              string                        `json:"description"`
-	Visibility               Visibility                    `json:"visibility"`
-	Lifecycle                string                        `json:"lifecycle"`
-	ReplacementIntegrationID string                        `json:"replacement_integration_id,omitempty"`
-	SunsetAt                 *time.Time                    `json:"sunset_at,omitempty"`
-	Revision                 int64                         `json:"revision"`
-	ManifestHash             string                        `json:"manifest_hash"`
-	Resources                []IntegrationManifestResource `json:"resources"`
+	ID                       string                                  `json:"id"`
+	FamilyKey                string                                  `json:"family_key"`
+	VersionKey               string                                  `json:"version_key"`
+	DisplayName              string                                  `json:"display_name"`
+	Description              string                                  `json:"description"`
+	Visibility               Visibility                              `json:"visibility"`
+	Lifecycle                string                                  `json:"lifecycle"`
+	ReplacementIntegrationID string                                  `json:"replacement_integration_id,omitempty"`
+	SunsetAt                 *time.Time                              `json:"sunset_at,omitempty"`
+	Revision                 int64                                   `json:"revision"`
+	ManifestHash             string                                  `json:"manifest_hash"`
+	Resources                []IntegrationManifestResource           `json:"resources"`
+	Packages                 []IntegrationManifestPackage            `json:"packages"`
+	AuthorizationPoints      []IntegrationManifestAuthorizationPoint `json:"authorization_points"`
+	Tools                    []IntegrationManifestTool               `json:"tools"`
+	AccessConnections        []IntegrationManifestAccessConnection   `json:"access_connections"`
 }
 
 type ProductVersionSummary struct {
@@ -424,27 +564,28 @@ type ProductVersionSummary struct {
 }
 
 type ProductManifest struct {
-	DeploymentID         string                      `json:"deployment_id"`
-	DeploymentSlug       string                      `json:"deployment_slug"`
-	DeploymentName       string                      `json:"deployment_name"`
-	ProductID            string                      `json:"product_id"`
-	ProductSlug          string                      `json:"product_slug"`
-	ProductName          string                      `json:"product_name"`
-	Description          string                      `json:"description"`
-	DefaultVersionPolicy string                      `json:"default_version_policy"`
-	CatalogRevision      int64                       `json:"catalog_revision"`
-	ManifestHash         string                      `json:"manifest_hash,omitempty"`
-	DefinitionRevision   int64                       `json:"definition_revision,omitempty"`
-	EffectiveVersion     *ProductVersionSummary      `json:"effective_version,omitempty"`
-	SelectionSource      string                      `json:"selection_source"`
-	CustomerAccountID    string                      `json:"customer_account_id,omitempty"`
-	EnvironmentID        string                      `json:"environment_id,omitempty"`
-	InstallationID       string                      `json:"installation_id,omitempty"`
-	OperationalWarnings  []string                    `json:"operational_warnings"`
-	Artifacts            []ProductManifestArtifact   `json:"artifacts"`
-	Capabilities         []ProductManifestCapability `json:"capabilities"`
-	Integrations         []IntegrationManifest       `json:"integrations"`
-	AvailableVersions    []ProductVersionSummary     `json:"available_versions"`
+	DeploymentID            string                      `json:"deployment_id"`
+	DeploymentSlug          string                      `json:"deployment_slug"`
+	DeploymentName          string                      `json:"deployment_name"`
+	ProductID               string                      `json:"product_id"`
+	ProductSlug             string                      `json:"product_slug"`
+	ProductName             string                      `json:"product_name"`
+	Description             string                      `json:"description"`
+	DefaultVersionPolicy    string                      `json:"default_version_policy"`
+	CatalogRevision         int64                       `json:"catalog_revision"`
+	ManifestHash            string                      `json:"manifest_hash,omitempty"`
+	DefinitionRevision      int64                       `json:"definition_revision,omitempty"`
+	EffectiveVersion        *ProductVersionSummary      `json:"effective_version,omitempty"`
+	SelectionSource         string                      `json:"selection_source"`
+	CustomerAccountID       string                      `json:"customer_account_id,omitempty"`
+	EnvironmentID           string                      `json:"environment_id,omitempty"`
+	InstallationID          string                      `json:"installation_id,omitempty"`
+	OperationalWarnings     []string                    `json:"operational_warnings"`
+	Artifacts               []ProductManifestArtifact   `json:"artifacts"`
+	Capabilities            []ProductManifestCapability `json:"capabilities"`
+	ManagedIntegrationTools bool                        `json:"managed_integration_tools"`
+	Integrations            []IntegrationManifest       `json:"integrations"`
+	AvailableVersions       []ProductVersionSummary     `json:"available_versions"`
 }
 
 type ProductSelectionContext struct {
@@ -740,6 +881,46 @@ type CrawlJob struct {
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
+// CrawlReviewDocument is an immutable document candidate produced by one
+// specific crawl generation. Reused snapshots are linked to every generation
+// that observed them so a reviewer always approves a complete, exact set.
+type CrawlReviewDocument struct {
+	ID                  string          `json:"id"`
+	CrawlJobID          string          `json:"crawl_job_id"`
+	SnapshotID          string          `json:"snapshot_id"`
+	Title               string          `json:"title"`
+	CanonicalURL        string          `json:"canonical_url"`
+	State               string          `json:"state"`
+	TrustLevel          int             `json:"trust_level"`
+	InjectionIndicators json.RawMessage `json:"injection_indicators"`
+	ContentHash         string          `json:"content_hash"`
+	Changed             bool            `json:"changed"`
+}
+
+// SourcePublication pins the reviewed crawl generation and the selected
+// immutable documents which may be referenced by Integration resource sets.
+type SourcePublication struct {
+	ID             string     `json:"id"`
+	OrganisationID string     `json:"organisation_id"`
+	ProductID      string     `json:"product_id"`
+	SourceID       string     `json:"source_id"`
+	CrawlJobID     string     `json:"crawl_job_id"`
+	Revision       int64      `json:"revision"`
+	Visibility     Visibility `json:"visibility"`
+	ContentHash    string     `json:"content_hash"`
+	DocumentCount  int        `json:"document_count"`
+	ReviewedBy     string     `json:"reviewed_by"`
+	ReviewedAt     time.Time  `json:"reviewed_at"`
+	PublishedAt    time.Time  `json:"published_at"`
+}
+
+type SourceReview struct {
+	Source      Source                `json:"source"`
+	CrawlJob    CrawlJob              `json:"crawl_job"`
+	Documents   []CrawlReviewDocument `json:"documents"`
+	Publication *SourcePublication    `json:"publication,omitempty"`
+}
+
 type Secret struct {
 	ID             string
 	OrganisationID string
@@ -834,18 +1015,32 @@ type MCPAuthorizationState struct {
 // that already belong to the deployment; session callers cannot expand this
 // allow-list while minting a token.
 type Widget struct {
-	ID             string          `json:"id"`
-	DeploymentID   string          `json:"deployment_id"`
-	OrganisationID string          `json:"organisation_id"`
-	Name           string          `json:"name"`
-	State          string          `json:"state"`
-	AllowedOrigins []string        `json:"allowed_origins"`
-	IntegrationIDs []string        `json:"integration_ids"`
-	Appearance     json.RawMessage `json:"appearance"`
-	Revision       int64           `json:"revision"`
-	ActivatedAt    *time.Time      `json:"activated_at,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID                  string                     `json:"id"`
+	DeploymentID        string                     `json:"deployment_id"`
+	OrganisationID      string                     `json:"organisation_id"`
+	Name                string                     `json:"name"`
+	State               string                     `json:"state"`
+	AllowedOrigins      []string                   `json:"allowed_origins"`
+	IntegrationIDs      []string                   `json:"integration_ids"`
+	IntegrationBindings []WidgetIntegrationBinding `json:"integration_bindings"`
+	Appearance          json.RawMessage            `json:"appearance"`
+	Revision            int64                      `json:"revision"`
+	ActivatedAt         *time.Time                 `json:"activated_at,omitempty"`
+	CreatedAt           time.Time                  `json:"created_at"`
+	UpdatedAt           time.Time                  `json:"updated_at"`
+}
+
+// WidgetIntegrationBinding is the widget's activation-time pin to one exact
+// immutable Integration publication. Runtime widget requests consume Snapshot
+// directly and never rebuild their allowed catalog from mutable Integration
+// rows or follow a later publication implicitly.
+type WidgetIntegrationBinding struct {
+	IntegrationID         string          `json:"integration_id"`
+	IntegrationRevisionID string          `json:"integration_revision_id"`
+	IntegrationRevision   int64           `json:"integration_revision"`
+	ManifestHash          string          `json:"manifest_hash"`
+	Snapshot              json.RawMessage `json:"snapshot"`
+	BoundAt               time.Time       `json:"bound_at"`
 }
 
 // WidgetSecret stores only a SHA-256 digest. The raw credential is returned

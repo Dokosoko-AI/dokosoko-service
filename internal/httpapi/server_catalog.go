@@ -132,7 +132,11 @@ func (s *Server) integration(w http.ResponseWriter, r *http.Request, integration
 			s.storeError(w, err)
 			return
 		}
-		revisions, _ := s.service.Store().IntegrationRevisions(r.Context(), integrationID)
+		revisions, err := s.service.Store().IntegrationRevisions(r.Context(), integrationID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
 		publishStatus, err := s.service.IntegrationPublishStatus(r.Context(), integrationID)
 		if err != nil {
 			s.storeError(w, err)
@@ -217,12 +221,30 @@ func (s *Server) integrationSupportRoute(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) publishIntegration(w http.ResponseWriter, r *http.Request, integrationID string) {
-	value, err := s.service.PublishIntegration(r.Context(), integrationID, actor(r))
+	var input struct {
+		CandidateRevision     int64  `json:"candidate_revision"`
+		CandidateManifestHash string `json:"candidate_manifest_hash"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.PublishIntegrationCandidate(r.Context(), integrationID, input.CandidateRevision, input.CandidateManifestHash, actor(r))
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "integration_publish_failed", err.Error(), nil)
 		return
 	}
 	writeJSON(w, http.StatusCreated, value)
+}
+
+func (s *Server) preflightIntegration(w http.ResponseWriter, r *http.Request, integrationID string) {
+	value, err := s.service.IntegrationPreflight(r.Context(), integrationID)
+	if err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) resourceSets(w http.ResponseWriter, r *http.Request) {

@@ -8,20 +8,23 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
 var (
-	ErrWidgetDisabled       = errors.New("widget is not active")
-	ErrWidgetOriginDenied   = errors.New("widget origin is not allowed")
-	ErrWidgetAuthentication = errors.New("widget credential is invalid or expired")
+	ErrWidgetDisabled            = errors.New("widget is not active")
+	ErrWidgetOriginDenied        = errors.New("widget origin is not allowed")
+	ErrWidgetAuthentication      = errors.New("widget credential is invalid or expired")
+	ErrWidgetManifestUnavailable = errors.New("widget Integration manifest is unavailable")
 )
 
 const (
@@ -29,7 +32,10 @@ const (
 	widgetSessionTTL   = 15 * time.Minute
 )
 
-var widgetAccentPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+var (
+	widgetAccentPattern       = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+	widgetManifestHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+)
 
 type WidgetAppearance struct {
 	Theme            string `json:"theme"`
@@ -72,7 +78,7 @@ func normalizeWidgetOrigin(raw string) (string, error) {
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return "", errors.New("allowed origins must be origins without a path, query, fragment, or credentials")
 	}
-	local := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"
+	local := identity.IsLocalDevelopmentHostname(parsed.Hostname())
 	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && local) {
 		return "", errors.New("allowed origins must use HTTPS; HTTP is accepted only for localhost")
 	}
@@ -142,6 +148,96 @@ func (s *Service) validateWidgetIntegrations(ctx context.Context, deploymentID s
 	}
 	slices.Sort(result)
 	return result, nil
+}
+
+func validateWidgetIntegrationBindings(widget model.Widget) error {
+	if len(widget.IntegrationIDs) == 0 || len(widget.IntegrationBindings) != len(widget.IntegrationIDs) {
+		return ErrWidgetManifestUnavailable
+	}
+	ids := make(map[string]bool, len(widget.IntegrationIDs))
+	for _, integrationID := range widget.IntegrationIDs {
+		ids[integrationID] = true
+	}
+	seen := make(map[string]bool, len(widget.IntegrationBindings))
+	for _, binding := range widget.IntegrationBindings {
+		if !ids[binding.IntegrationID] || seen[binding.IntegrationID] || binding.IntegrationRevisionID == "" || binding.IntegrationRevision < 1 || !widgetManifestHashPattern.MatchString(binding.ManifestHash) || len(binding.Snapshot) == 0 {
+			return ErrWidgetManifestUnavailable
+		}
+		var snapshot integrationSnapshot
+		if err := json.Unmarshal(binding.Snapshot, &snapshot); err != nil || snapshot.FamilyKey == "" || snapshot.VersionKey == "" {
+			return ErrWidgetManifestUnavailable
+		}
+		documentationReady, apiReady := false, false
+		for _, resource := range snapshot.Resources {
+			if resource.SetID == "" || resource.RevisionID == "" || resource.Revision < 1 || resource.ContentHash == "" {
+				return ErrWidgetManifestUnavailable
+			}
+			switch resource.Kind {
+			case "documentation":
+				documentationReady = len(resource.SourcePublications) > 0
+			case "api":
+				apiReady = true
+			}
+		}
+		for _, release := range snapshot.Packages {
+			if release.PackageArtifactID == "" || release.PackageReleaseID == "" || release.Version == "" || release.ContentHash == "" {
+				return ErrWidgetManifestUnavailable
+			}
+		}
+		for _, point := range snapshot.AuthorizationPoints {
+			if point.ID == "" || point.Key == "" || point.Revision < 1 {
+				return ErrWidgetManifestUnavailable
+			}
+		}
+		for _, tool := range snapshot.Tools {
+			if tool.ToolID == "" || tool.ToolRevision < 1 || tool.AuthorizationPointID == "" || tool.AuthorizationPointRevision < 1 || tool.ContentHash == "" {
+				return ErrWidgetManifestUnavailable
+			}
+		}
+		for _, connection := range snapshot.AccessConnections {
+			if connection.ConnectionID == "" || connection.ConnectionRevision < 1 || connection.AccessDefinitionID == "" || connection.AccessDefinitionRevision < 1 || connection.State != "active" || connection.ContentHash == "" {
+				return ErrWidgetManifestUnavailable
+			}
+		}
+		if snapshot.Visibility != model.VisibilityPublic && (!documentationReady || !apiReady || len(snapshot.AuthorizationPoints) == 0 || len(snapshot.Tools) == 0 || len(snapshot.AccessConnections) == 0) {
+			return ErrWidgetManifestUnavailable
+		}
+		seen[binding.IntegrationID] = true
+	}
+	return nil
+}
+
+func (s *Service) pinWidgetIntegrations(ctx context.Context, integrationIDs []string) ([]model.WidgetIntegrationBinding, error) {
+	bindings := make([]model.WidgetIntegrationBinding, 0, len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		preflight, err := s.IntegrationPreflight(ctx, integrationID)
+		if err != nil {
+			return nil, err
+		}
+		if !preflight.Ready {
+			return nil, fmt.Errorf("%s cannot be activated: %w", integrationID, integrationPreflightError(preflight))
+		}
+		if preflight.LatestPublishedID == "" || !preflight.MatchesLatestPublished {
+			return nil, errors.New("publish the exact preflight candidate before activating the widget")
+		}
+		revisions, err := s.store.IntegrationRevisions(ctx, integrationID)
+		if err != nil {
+			return nil, err
+		}
+		published := latestPublishedIntegrationRevision(revisions)
+		// Snapshot is stored as PostgreSQL jsonb, which may normalize object key
+		// order. Bind identity and integrity to the immutable revision row and its
+		// persisted manifest hash instead of re-hashing its database rendering.
+		if published == nil || published.ID != preflight.LatestPublishedID || published.ManifestHash != preflight.CandidateManifestHash || len(published.Snapshot) == 0 {
+			return nil, ErrWidgetManifestUnavailable
+		}
+		bindings = append(bindings, model.WidgetIntegrationBinding{IntegrationID: integrationID, IntegrationRevisionID: published.ID, IntegrationRevision: published.Revision, ManifestHash: published.ManifestHash, Snapshot: append(json.RawMessage(nil), published.Snapshot...), BoundAt: s.now()})
+	}
+	widget := model.Widget{IntegrationIDs: append([]string(nil), integrationIDs...), IntegrationBindings: bindings}
+	if err := validateWidgetIntegrationBindings(widget); err != nil {
+		return nil, err
+	}
+	return bindings, nil
 }
 
 func newWidgetToken(prefix string) (string, []byte, string, error) {
@@ -246,6 +342,18 @@ func (s *Service) UpdateWidget(ctx context.Context, widgetID string, input Widge
 	if err != nil {
 		return model.Widget{}, err
 	}
+	if current.State == "active" && !slices.Equal(current.IntegrationIDs, integrations) {
+		current.IntegrationBindings, err = s.pinWidgetIntegrations(ctx, integrations)
+		if err != nil {
+			return model.Widget{}, err
+		}
+	} else if current.State == "active" {
+		if err := validateWidgetIntegrationBindings(current); err != nil {
+			return model.Widget{}, err
+		}
+	} else if !slices.Equal(current.IntegrationIDs, integrations) {
+		current.IntegrationBindings = nil
+	}
 	current.Name, current.AllowedOrigins, current.IntegrationIDs, current.Appearance = input.Name, origins, integrations, appearance
 	updated, err := s.store.UpdateWidget(ctx, current, input.Revision)
 	if err != nil {
@@ -272,6 +380,10 @@ func (s *Service) SetWidgetState(ctx context.Context, widgetID, state string, re
 	}
 	if state == "active" {
 		if err := s.requireWidgetAssistant(ctx, current.DeploymentID, current.OrganisationID); err != nil {
+			return model.Widget{}, err
+		}
+		current.IntegrationBindings, err = s.pinWidgetIntegrations(ctx, current.IntegrationIDs)
+		if err != nil {
 			return model.Widget{}, err
 		}
 	}
@@ -341,6 +453,9 @@ func (s *Service) CreateWidgetBootstrap(ctx context.Context, widgetID, rawSecret
 	if widget.State != "active" {
 		return WidgetBootstrapResult{}, ErrWidgetDisabled
 	}
+	if err := validateWidgetIntegrationBindings(widget); err != nil {
+		return WidgetBootstrapResult{}, err
+	}
 	normalizedOrigin, err := normalizeWidgetOrigin(origin)
 	if err != nil || !slices.Contains(widget.AllowedOrigins, normalizedOrigin) {
 		return WidgetBootstrapResult{}, ErrWidgetOriginDenied
@@ -390,6 +505,9 @@ func (s *Service) ExchangeWidgetBootstrap(ctx context.Context, rawToken, origin 
 	if err != nil || widget.State != "active" {
 		return WidgetSessionResult{}, ErrWidgetDisabled
 	}
+	if err := validateWidgetIntegrationBindings(widget); err != nil {
+		return WidgetSessionResult{}, err
+	}
 	normalizedOrigin, err := normalizeWidgetOrigin(origin)
 	if err != nil || bootstrap.Origin != normalizedOrigin || !slices.Contains(widget.AllowedOrigins, normalizedOrigin) {
 		return WidgetSessionResult{}, ErrWidgetOriginDenied
@@ -425,6 +543,9 @@ func (s *Service) AuthenticateWidgetSession(ctx context.Context, rawToken string
 	widget, err := s.store.Widget(ctx, deployment.ID, session.WidgetID)
 	if err != nil || widget.State != "active" {
 		return WidgetPrincipal{}, ErrWidgetDisabled
+	}
+	if err := validateWidgetIntegrationBindings(widget); err != nil {
+		return WidgetPrincipal{}, err
 	}
 	if !slices.Contains(widget.AllowedOrigins, session.Origin) {
 		return WidgetPrincipal{}, ErrWidgetOriginDenied

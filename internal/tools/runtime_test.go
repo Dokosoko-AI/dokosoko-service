@@ -28,6 +28,13 @@ func (function runtimeDoer) Do(request *http.Request) (*http.Response, error) {
 	return function(request)
 }
 
+func registerGrant(t *testing.T, service *platform.Service, key string) {
+	t.Helper()
+	if _, err := service.SaveGrantDefinition(context.Background(), "", platform.GrantDefinitionInput{Key: key, DisplayName: key, Risk: "medium"}, platform.Actor{ID: "root"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRuntimePinsDefinitionValidatesSchemaAndEnforcesGrant(t *testing.T) {
 	t.Parallel()
 	memory := store.NewMemory()
@@ -49,6 +56,7 @@ func TestRuntimePinsDefinitionValidatesSchemaAndEnforcesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerGrant(t, service, "sandboxes.create")
 	tool, err = service.PublishTool(context.Background(), tool.ProductID, tool.ID, tool.Revision, platform.Actor{ID: "root", RequestID: "publish"})
 	if err != nil {
 		t.Fatal(err)
