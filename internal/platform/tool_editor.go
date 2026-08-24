@@ -178,6 +178,9 @@ func (s *Service) CloneTool(ctx context.Context, productID, toolID string, input
 	if err != nil {
 		return model.Tool{}, err
 	}
+	if current.BackendKind != "http" {
+		return model.Tool{}, errors.New("imported MCP tools cannot be cloned; import a distinct upstream tool through its MCP connection")
+	}
 	input.Namespace, input.Name = strings.TrimSpace(input.Namespace), strings.TrimSpace(input.Name)
 	if !toolNamePattern.MatchString(input.Namespace) || !toolNamePattern.MatchString(input.Name) {
 		return model.Tool{}, errors.New("tool namespace and name must be valid lower-case identifiers")

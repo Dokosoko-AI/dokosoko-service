@@ -127,12 +127,22 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 		t.Fatalf("import result = %#v", imported)
 	}
 	service := platform.NewWithVault(memory, vault)
+	dryRun, err := service.DryRunTool(context.Background(), "prod_acme", imported.Created[0].ID, map[string]any{"title": "Help"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dryRun.Risk != "medium" {
+		t.Fatalf("imported MCP risk = %q", dryRun.Risk)
+	}
 	if _, err := service.SaveGrantDefinition(context.Background(), "", platform.GrantDefinitionInput{Key: "support.write", DisplayName: "Write support data", Risk: "high", State: "active"}, platform.Actor{ID: "root"}); err != nil {
 		t.Fatal(err)
 	}
 	published, err := service.PublishTool(context.Background(), "prod_acme", imported.Created[0].ID, imported.Created[0].Revision, platform.Actor{ID: "root", RequestID: "publish"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := service.CloneTool(context.Background(), "prod_acme", published.ID, platform.ToolCloneInput{Namespace: "support_copy", Name: "incidents_create"}, platform.Actor{ID: "root"}); err == nil || !strings.Contains(err.Error(), "MCP tools cannot be cloned") {
+		t.Fatalf("imported MCP clone error = %v", err)
 	}
 	runtime := tools.NewRuntime(memory, nil, nil)
 	runtime.SetMCPExecutor(manager)
@@ -163,11 +173,73 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 	if len(drift.Drifted) != 1 || !drift.Drifted[0].UpstreamDrifted || drift.Drifted[0].ID != published.ID {
 		t.Fatalf("drift result = %#v", drift)
 	}
+	if drift.Drifted[0].Revision != published.Revision {
+		t.Fatalf("operational drift changed contract revision: published=%d drifted=%d", published.Revision, drift.Drifted[0].Revision)
+	}
 	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Grants: map[string]bool{"support.write": true}}); !errors.Is(err, tools.ErrDenied) {
 		t.Fatalf("drifted execution error = %v", err)
 	}
+	version = 1
+	recovered, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, RequiredGrants: []string{"support.write"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root", RequestID: "inspect-recovered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered.Unchanged) != 1 || recovered.Unchanged[0].UpstreamDrifted || recovered.Unchanged[0].Revision != published.Revision {
+		t.Fatalf("recovered result = %#v", recovered)
+	}
+	if _, err := runtime.Execute(context.Background(), "prod_acme", "support.incidents.create", map[string]any{"title": "Help"}, tools.Principal{Subject: "user_1", Grants: map[string]bool{"support.write": true}}); err != nil {
+		t.Fatalf("recovered execution error = %v", err)
+	}
 	if listCalls < 2 {
 		t.Fatalf("listCalls = %d", listCalls)
+	}
+}
+
+func TestImportFailsClosedForDuplicateUpstreamToolIdentities(t *testing.T) {
+	t.Parallel()
+	manager, memory, _ := managerForTest(t, recordingDoer(func(request *http.Request) (*http.Response, error) {
+		body := decodeRequest(t, request)
+		return response("application/json", rpcResult(t, body, `{"resultType":"complete","tools":[{"name":"incidents.create","description":"Create an incident","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"properties":{}}}]}`)), nil
+	}))
+	ctx := context.Background()
+	connection, err := manager.CreateConnection(ctx, mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Duplicate guard", Namespace: "support_duplicate", Endpoint: "https://mcp.vendor.example/v2", AuthMode: "none"}, mcpbridge.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := manager.Import(ctx, "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root"})
+	if err != nil || len(imported.Created) != 1 {
+		t.Fatalf("initial import = %#v, %v", imported, err)
+	}
+	duplicate := imported.Created[0]
+	duplicate.ID, duplicate.Name, duplicate.State, duplicate.Revision = "duplicate_upstream_tool", "incidents_create_copy", "draft", 0
+	duplicate, err = memory.CreateTool(ctx, duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.New(memory)
+	first, err := service.PublishTool(ctx, "prod_acme", imported.Created[0].ID, imported.Created[0].Revision, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.PublishTool(ctx, "prod_acme", duplicate.ID, duplicate.Revision, platform.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Import(ctx, "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.create"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Rejected["incidents.create"], "multiple local tools") || len(result.Drifted) != 2 {
+		t.Fatalf("duplicate import result = %#v", result)
+	}
+	for _, published := range []model.Tool{first, second} {
+		current, lookupErr := memory.Tool(ctx, published.ProductID, published.ID)
+		if lookupErr != nil {
+			t.Fatal(lookupErr)
+		}
+		if !current.UpstreamDrifted || current.Revision != published.Revision {
+			t.Fatalf("duplicate tool did not fail closed without changing revision: before=%#v after=%#v", published, current)
+		}
 	}
 }
 

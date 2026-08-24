@@ -38,6 +38,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAnalytics, APIAuditEvent, APIAuthorizationPoint, APIAuthorizationSimulation, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIGrantDefinition, APIIdentity, APIIntegration, APIIntegrationAnalysis, APIIntegrationPackageBinding, APIIntegrationPreflight, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APIIntegrationToolBinding, APIMCPCatalog, APIMCPConnection, APIPackageArtifact, APIPackageRelease, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIRecipe, APIRecipeReference, APIResourceSet, APISourcePublication, APISourceReview, APISupportRoute, APISupportSubmission, APITool, APIToolDryRun, APIUser, APIVisibility, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
 import { ConsoleRoute, EntityKind, INTEGRATION_RESOURCE_TABS, INTEGRATION_TABS, IntegrationResourceTab, IntegrationTab, SETTINGS_TABS, Section, SettingsTab, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath, settingsPath } from "../lib/console-routes";
 import { Badge, Button, Dialog, Switch } from "./core/control";
@@ -45,7 +46,7 @@ import { Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, Tab
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader, SectionHeader, SegmentedControl, ViewStack } from "./core/layout";
 import { ThemeToggle } from "./ThemeToggle";
 
-type NavigationGroup = "apis" | "recipes" | "agent-access" | "activity";
+type NavigationGroup = "apis" | "tools" | "recipes" | "agent-access" | "activity";
 type Visibility = "private" | "public";
 type AIWorkload = APIAIWorkloadProfile["workload"];
 type SourceKind = "website" | "openapi" | "git" | "upload";
@@ -154,6 +155,7 @@ const navigation: Array<{
   sections: Array<{ id: Section; label: string }>;
 }> = [
   { id: "apis", label: "APIs", icon: Sparkles, defaultSection: "product", sections: [{ id: "product", label: "APIs" }] },
+  { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }] },
   { id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes", sections: [{ id: "recipes", label: "Recipes" }] },
   { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }, { id: "widgets", label: "Widgets" }] },
   { id: "activity", label: "Activity", icon: Activity, defaultSection: "runs", sections: [{ id: "runs", label: "Activity" }] },
@@ -356,6 +358,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [mcpBusy, setMCPBusy] = useState(false);
   const [mcpCatalog, setMCPCatalog] = useState<APIMCPCatalog | null>(null);
   const [mcpSelectedTools, setMCPSelectedTools] = useState<string[]>([]);
+  const [mcpImportFailures, setMCPImportFailures] = useState<Record<string, string>>({});
   const [mcpName, setMCPName] = useState("");
   const [mcpNamespace, setMCPNamespace] = useState("");
   const [mcpEndpoint, setMCPEndpoint] = useState("");
@@ -403,6 +406,9 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [toolMethod, setToolMethod] = useState("POST");
   const [toolEndpoint, setToolEndpoint] = useState("");
   const [toolGrants, setToolGrants] = useState("");
+  const [toolRisk, setToolRisk] = useState<"low" | "medium" | "high" | "critical">("medium");
+  const [toolConfirmationRequired, setToolConfirmationRequired] = useState(false);
+  const [toolIdempotencyRequired, setToolIdempotencyRequired] = useState(false);
   const [toolInputSchema, setToolInputSchema] = useState(`{"type":"object","additionalProperties":false,"properties":{},"required":[]}`);
   const [toolOutputSchema, setToolOutputSchema] = useState(`{"type":"object","additionalProperties":false,"properties":{}}`);
 	  const [toolBusy, setToolBusy] = useState(false);
@@ -625,6 +631,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   }
 
 	async function refreshCatalog() {
+		const auditRequest = api.auditEvents(product.organisation_id).catch(() => null);
 		const [integrationValues, setValues, definitionValues, connectionValues, backendValues, routeValues, toolValues] = await Promise.all([api.integrations(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes(), api.tools(product.id)]);
 		setIntegrations(integrationValues);
 		setResourceSets(setValues);
@@ -633,11 +640,20 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 		setBackendConnections(backendValues);
 		setSupportRoutes(routeValues);
 		setTools(toolValues);
+		const eventValues = await auditRequest;
+		if (eventValues) setAuditEvents(eventValues);
 		const instanceGroups = await Promise.all(connectionValues.map((connection) => api.accessInstances(connection.id).catch(() => [])));
 		const credentialGroups = await Promise.all(connectionValues.map((connection) => api.accessCredentials(connection.id).catch(() => [])));
 		setAccessInstances(instanceGroups.flat());
 		setAccessCredentials(credentialGroups.flat());
 	}
+
+  async function refreshTools() {
+    const toolValues = await api.tools(product.id);
+    setTools(toolValues);
+    const eventValues = await api.auditEvents(product.organisation_id).catch(() => null);
+    if (eventValues) setAuditEvents(eventValues);
+  }
 
   function openProductCatalog() {
     setProductDescription(product.description);
@@ -1072,31 +1088,30 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	}
   }
 
+  const newToolNamespaceValid = /^[a-z][a-z0-9_]{0,63}$/.test(toolNamespace.trim());
+  const newToolNameValid = /^[a-z][a-z0-9_]{0,63}$/.test(toolName.trim());
+  const newToolIdentityValid = newToolNamespaceValid && newToolNameValid;
+
   async function createTool() {
+    if (!newToolIdentityValid) {
+      showToast("Tool namespace and name must be lower-case identifiers.");
+      return;
+    }
     setToolBusy(true);
     try {
       const inputSchema = JSON.parse(toolInputSchema) as Record<string, unknown>;
       const outputSchema = JSON.parse(toolOutputSchema) as Record<string, unknown>;
-      const authorizationPolicy = { required_grants: toolGrants.split(",").map((value) => value.trim()).filter(Boolean), confirmation_required: false };
+      const authorizationPolicy = { required_grants: toolGrants.split(/[,\s]+/).map((value) => value.trim()).filter(Boolean), confirmation_required: toolConfirmationRequired || toolRisk === "critical", risk: toolRisk, idempotency_required: toolIdempotencyRequired };
       const created = apiConnected ? await api.createTool(product.id, { organisation_id: product.organisation_id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, endpoint: toolEndpoint, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 }) : { id: `tool_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, state: "draft" as const, revision: 1, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 };
       setTools((items) => [...items, created as APITool]);
       setAddToolOpen(false);
-      setToolName(""); setToolDescription(""); setToolEndpoint(""); setToolGrants("");
+      setToolName(""); setToolDescription(""); setToolEndpoint(""); setToolGrants(""); setToolRisk("medium"); setToolConfirmationRequired(false); setToolIdempotencyRequired(false);
+      navigateToPath(entityPath("tool", created.id));
       showToast(`${created.namespace}.${created.name} was saved as a draft.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Schema or tool configuration is invalid.");
     } finally {
       setToolBusy(false);
-    }
-  }
-
-  async function publishTool(tool: APITool) {
-    try {
-      const updated = apiConnected ? await api.publishTool(product.id, tool.id, tool.revision) : { ...tool, state: "published" as const, revision: tool.revision + 1 };
-      setTools((items) => items.map((item) => item.id === tool.id ? updated : item));
-      showToast(`${updated.namespace}.${updated.name} is published to Private MCP.`);
-    } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not publish tool.");
     }
   }
 
@@ -1115,6 +1130,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       const catalog = apiConnected ? await api.inspectMCPConnection(product.id, connection.id) : fixtureCatalog(connection);
       setMCPCatalog(catalog);
       setMCPSelectedTools(catalog.tools.map((tool) => tool.name));
+      setMCPImportFailures({});
       setMCPImportOpen(true);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not inspect the upstream MCP catalog.");
@@ -1147,6 +1163,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       const catalog = apiConnected ? await api.inspectMCPConnection(product.id, connection.id) : fixtureCatalog(connection);
       setMCPCatalog(catalog);
       setMCPSelectedTools(catalog.tools.map((tool) => tool.name));
+      setMCPImportFailures({});
       setMCPImportOpen(true);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not create the Stateless MCPv2 connection.");
@@ -1165,13 +1182,32 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         const changed = [...result.created, ...result.updated, ...result.unchanged, ...result.drifted];
         setTools((items) => [...items.filter((item) => !changed.some((candidate) => candidate.id === item.id)), ...changed]);
         setMCPConnections((items) => items.map((item) => item.id === result.connection.id ? result.connection : item));
+		const rejected = Object.entries(result.rejected);
+		if (rejected.length > 0) {
+		  setMCPImportFailures(result.rejected);
+		  setMCPSelectedTools(rejected.map(([name]) => name));
+		  const reviewed = result.created.length + result.updated.length + result.unchanged.length + result.drifted.length;
+		  showToast(`${reviewed} tool${reviewed === 1 ? "" : "s"} reviewed; ${rejected.length} rejected. Review the reasons in this dialog.`);
+		  return;
+		}
+		setMCPImportFailures({});
+		setMCPImportOpen(false);
+		setMCPGrants("");
+		const messages = [
+		  result.created.length > 0 ? `${result.created.length} draft${result.created.length === 1 ? "" : "s"} created` : "",
+		  result.updated.length > 0 ? `${result.updated.length} draft${result.updated.length === 1 ? "" : "s"} updated` : "",
+		  result.unchanged.length > 0 ? `${result.unchanged.length} already current` : "",
+		  result.drifted.length > 0 ? `${result.drifted.length} published tool${result.drifted.length === 1 ? "" : "s"} blocked by schema drift` : "",
+		].filter(Boolean);
+		showToast(messages.length > 0 ? `${messages.join("; ")}.` : "No upstream tool changes were needed.");
       } else {
         const imported = mcpCatalog.tools.filter((item) => mcpSelectedTools.includes(item.name)).map((item, index): APITool => ({ id: `tool_mcp_${index}`, organisation_id: product.organisation_id, product_id: product.id, namespace: mcpCatalog.connection.namespace, name: item.name.replace(/[^A-Za-z0-9_]/g, "_"), description: item.description ?? item.title ?? item.name, input_schema: item.input_schema, output_schema: item.output_schema ?? {}, state: "draft", revision: 1, http_method: "MCP", authorization_policy: { required_grants: grants, confirmation_required: mcpConfirmationRequired }, timeout_ms: 10000, backend_kind: "mcp", mcp_connection_id: mcpCatalog.connection.id, upstream_tool_name: item.name, upstream_schema_hash: item.schema_hash }));
         setTools((items) => [...items, ...imported]);
+		setMCPImportFailures({});
+		setMCPImportOpen(false);
+		setMCPGrants("");
+		showToast(`${imported.length} upstream tool${imported.length === 1 ? "" : "s"} imported as reviewed drafts.`);
       }
-      setMCPImportOpen(false);
-      setMCPGrants("");
-      showToast(`${mcpSelectedTools.length} upstream tool${mcpSelectedTools.length === 1 ? "" : "s"} imported as reviewed drafts.`);
     } catch (error) {
       showToast(error instanceof APIError ? error.message : "Could not import the selected MCP tools.");
     } finally {
@@ -1653,6 +1689,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       window.scrollTo({ top: 0, behavior: "auto" });
     }
     setConsoleRoute(next);
+	requestAnimationFrame(() => document.getElementById("main-content")?.focus());
   }
 
   function navigateToSection(destination: Section) {
@@ -1697,7 +1734,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </header>
 
         <div className="content"><ViewStack>
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView productID={product.id} integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} activeResourceTab={consoleRoute.integrationResourceTab ?? "documentation"} recipeBusy={recipeBusy} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onAddTool={() => setAddToolOpen(true)} onGenerateRecipes={generateRecipesFromEvidence} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={aiProfiles.some((profile) => profile.workload === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("assistant"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "resource-set" ? <ResourceSetDetailView resource={resourceSets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "tool" ? <ToolDetailView tool={tools.find((item) => item.id === consoleRoute.uid) ?? null} connections={mcpConnections} integrations={integrations} onPublish={publishTool} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
+          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} activeResourceTab={consoleRoute.integrationResourceTab ?? "documentation"} recipeBusy={recipeBusy} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onGenerateRecipes={generateRecipesFromEvidence} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={aiProfiles.some((profile) => profile.workload === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("assistant"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "resource-set" ? <ResourceSetDetailView resource={resourceSets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "tool" ? <ToolDetailView key={`${consoleRoute.uid}:${tools.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} productID={product.id} tool={tools.find((item) => item.id === consoleRoute.uid) ?? null} connections={mcpConnections} integrations={integrations} auditEvents={auditEvents} onChanged={refreshTools} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
           {section === "distribution" && (
             <DistributionView
               enabled={publicMCPEnabled}
@@ -1718,12 +1755,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
             />
           )}
           {section === "widgets" && <WidgetsView widgets={widgets} integrations={integrations} onCreate={() => setWidgetCreateOpen(true)} onNavigate={navigateToPath} />}
-          {section === "product" && <IntegrationsView productID={product.id} integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} mcpConnections={mcpConnections} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onAddTool={() => setAddToolOpen(true)} onGenerateRecipes={generateRecipesFromEvidence} recipeBusy={recipeBusy} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+          {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onGenerateRecipes={generateRecipesFromEvidence} recipeBusy={recipeBusy} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "recipes" && <RecipesView analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={createRecipe} onEdit={editRecipe} onRework={reworkRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
-          {section === "tools" && <ToolsView tools={tools} onAdd={() => setAddToolOpen(true)} onPublish={publishTool} onNavigate={navigateToPath} />}
+          {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} onAdd={() => setAddToolOpen(true)} onNavigate={navigateToPath} />}
           {section === "releases" && <ConnectorReleasesView versions={productVersions} integrations={integrations} onConfigure={openProductCatalog} onNavigate={navigateToPath} />}
           {section === "runs" && <ActivityHubView runs={integrationRuns} environments={environments} submissions={reportSubmissions} events={auditEvents} analytics={analytics} supportRoutes={supportRoutes} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} onView={openSupportSubmission} onRetry={createSupportDeliveryAttempt} onNavigate={navigateToPath} />}
           {section === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} backendConnections={backendConnections} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
@@ -1946,6 +1983,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       >
         <div className="mcp-import-review">
           <div className="import-summary"><Badge color="violet">Stateless MCPv2 Only</Badge><code>{mcpCatalog?.connection.namespace}.*</code><span>{mcpCatalog?.tools.length ?? 0} catalog tools</span></div>
+          {Object.keys(mcpImportFailures).length > 0 && <div className="capability-unavailable mcp-import-failures" role="alert"><TriangleAlert /><span><strong>Some tools were rejected.</strong><small>Close this dialog, resolve the local conflict, then inspect the connection again.</small>{Object.entries(mcpImportFailures).map(([name, reason]) => <span key={name}><code>{name}</code><small>{reason}</small></span>)}</span></div>}
           <div className="catalog-list">{mcpCatalog?.tools.map((tool) => <label className="catalog-tool" key={tool.name}><input type="checkbox" checked={mcpSelectedTools.includes(tool.name)} onChange={(event) => setMCPSelectedTools((items) => event.target.checked ? [...items, tool.name] : items.filter((name) => name !== tool.name))} /><span className="check-box">{mcpSelectedTools.includes(tool.name) && <Check />}</span><span><strong>{tool.title || tool.name}</strong><code>{tool.name}</code><small>{tool.description || "No upstream description"}</small></span><Badge color="zinc">{tool.schema_hash.slice(0, 12)}</Badge></label>)}</div>
           <label className="auth-field"><span>Required grants</span><input value={mcpGrants} onChange={(event) => setMCPGrants(event.target.value)} placeholder="support.write, developer.pro" /><small>Evaluated before every upstream call. Access-evaluation failures deny execution.</small></label>
           <Switch checked={mcpConfirmationRequired} onChange={setMCPConfirmationRequired} label="Require user confirmation before execution" />
@@ -1980,11 +2018,11 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       <Dialog
         open={addToolOpen}
         onClose={setAddToolOpen}
-        title="Create API tool"
-        description="Define the MCP contract and one fixed API action. Agents cannot alter the host or authorization header."
-        actions={<><Button outline onClick={() => setAddToolOpen(false)}>Cancel</Button><Button color="indigo" disabled={toolBusy || !toolName.trim() || !toolDescription.trim() || !toolEndpoint.trim()} onClick={createTool}>{toolBusy ? "Validating…" : "Save draft"}</Button></>}
+        title="Create HTTP tool"
+        description="Create one reusable deployment capability. APIs can attach the published tool later."
+        actions={<><Button outline onClick={() => setAddToolOpen(false)}>Cancel</Button><Button color="indigo" disabled={toolBusy || !newToolIdentityValid || !toolDescription.trim() || !toolEndpoint.trim()} onClick={createTool}>{toolBusy ? "Validating…" : "Save draft"}</Button></>}
       >
-	    <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input value={toolNamespace} onChange={(event) => setToolNamespace(event.target.value)} /></label><label className="auth-field"><span>Tool name</span><input value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="create_sandbox" /></label></div><label className="auth-field"><span>Description</span><input value={toolDescription} onChange={(event) => setToolDescription(event.target.value)} /></label><label className="auth-field"><span>Input JSON Schema</span><textarea className="code-input" value={toolInputSchema} onChange={(event) => setToolInputSchema(event.target.value)} spellCheck={false} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea className="code-input" value={toolOutputSchema} onChange={(event) => setToolOutputSchema(event.target.value)} spellCheck={false} /></label><div className="two-fields"><label className="auth-field"><span>Method</span><select value={toolMethod} onChange={(event) => setToolMethod(event.target.value)}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="auth-field"><span>Vendor API endpoint</span><input type="url" value={toolEndpoint} onChange={(event) => setToolEndpoint(event.target.value)} placeholder="https://api.vendor.com/v1/action" /><small>Must use the configured vendor API origin. The developer&apos;s delegated bearer token is forwarded.</small></label></div><label className="auth-field"><span>Required grants</span><input value={toolGrants} onChange={(event) => setToolGrants(event.target.value)} placeholder="sandboxes.create, developer.pro" /><small>Comma-separated grant keys. Access-evaluation failures deny execution.</small></label></div>
+	    <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(toolNamespace) && !newToolNamespaceValid} aria-describedby="new-tool-identity-guidance" value={toolNamespace} onChange={(event) => setToolNamespace(event.target.value)} placeholder="platform" /></label><label className="auth-field"><span>Tool name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(toolName) && !newToolNameValid} aria-describedby="new-tool-identity-guidance" value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="check_readiness" /></label></div><small id="new-tool-identity-guidance">Namespace and name use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small><label className="auth-field"><span>Purpose</span><input value={toolDescription} onChange={(event) => setToolDescription(event.target.value)} placeholder="Describe one action for an agent." /></label><div className="two-fields"><label className="auth-field"><span>Method</span><select value={toolMethod} onChange={(event) => { const method = event.target.value; setToolMethod(method); if (method === "GET") setToolRisk("low"); else if (method === "DELETE") { setToolRisk("critical"); setToolConfirmationRequired(true); } else if (toolRisk === "low" || toolRisk === "critical") setToolRisk("medium"); }}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="auth-field"><span>Fixed endpoint</span><input type="url" value={toolEndpoint} onChange={(event) => setToolEndpoint(event.target.value)} placeholder="https://api.vendor.com/v1/action" /><small>Must use the configured delegated API origin. Agents cannot alter the host or authorization header.</small></label></div><label className="auth-field"><span>Required grants</span><input value={toolGrants} onChange={(event) => setToolGrants(event.target.value)} placeholder="platform.readiness developer.pro" /><small>Registered grant keys separated by spaces or commas.</small></label><div className="two-fields"><label className="auth-field"><span>Risk</span><select value={toolRisk} onChange={(event) => { const risk = event.target.value as typeof toolRisk; setToolRisk(risk); if (risk === "critical") setToolConfirmationRequired(true); }}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label><label className="compact-check"><input type="checkbox" disabled={toolRisk === "critical"} checked={toolConfirmationRequired || toolRisk === "critical"} onChange={(event) => setToolConfirmationRequired(event.target.checked)} /><span>Require explicit confirmation</span></label></div><label className="compact-check"><input type="checkbox" checked={toolIdempotencyRequired} onChange={(event) => setToolIdempotencyRequired(event.target.checked)} /><span>Require idempotency metadata for mutation calls</span></label><details className="inline-advanced"><summary>Contract schemas</summary><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea className="code-input" value={toolInputSchema} onChange={(event) => setToolInputSchema(event.target.value)} spellCheck={false} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea className="code-input" value={toolOutputSchema} onChange={(event) => setToolOutputSchema(event.target.value)} spellCheck={false} /></label></div></details></div>
       </Dialog>
 
       <Dialog
@@ -2151,47 +2189,220 @@ function ResourceSetDetailView({ resource, integrations, onNavigate }: { resourc
   </>;
 }
 
-function ToolDetailView({ tool, connections, integrations, onPublish, onNavigate }: { tool: APITool | null; connections: APIMCPConnection[]; integrations: APIIntegration[]; onPublish: (tool: APITool) => void; onNavigate: (path: string) => void }) {
-  const [bindingOwners, setBindingOwners] = useState<{ toolID: string; integrationIDs: string[] }>({ toolID: "", integrationIDs: [] });
+type ToolDetailTab = "overview" | "contract" | "execution" | "authorization" | "tests" | "usage" | "history";
+
+const TOOL_DETAIL_TABS: Array<{ id: ToolDetailTab; label: string }> = [
+  { id: "overview", label: "Overview" },
+  { id: "contract", label: "Contract" },
+  { id: "execution", label: "Execution" },
+  { id: "authorization", label: "Authorization" },
+  { id: "tests", label: "Tests" },
+  { id: "usage", label: "Usage" },
+  { id: "history", label: "History" },
+];
+
+function ToolDetailView({ productID, tool, connections, integrations, auditEvents, onChanged, onMessage, onNavigate }: { productID: string; tool: APITool | null; connections: APIMCPConnection[]; integrations: APIIntegration[]; auditEvents: APIAuditEvent[]; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const initialPolicy = tool ? toolPolicy(tool) : { requiredGrants: [], confirmationRequired: false, risk: "low", idempotencyRequired: false };
+  const initialRisk = initialPolicy.risk === "medium" || initialPolicy.risk === "high" || initialPolicy.risk === "critical" ? initialPolicy.risk : "low";
+  const toolID = tool?.id;
+  const [activeTool, setActiveTool] = useState<APITool | null>(null);
+  const [detailStatus, setDetailStatus] = useState<"loading" | "ready" | "error">(toolID ? "loading" : "error");
+  const [detailLoadAttempt, setDetailLoadAttempt] = useState(0);
+  const [activeTab, setActiveTab] = useState<ToolDetailTab>("overview");
+  const [usages, setUsages] = useState<Array<{ integration: APIIntegration; binding: APIIntegrationToolBinding }>>([]);
+  const [usageStatus, setUsageStatus] = useState<"loading" | "ready" | "partial">("loading");
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [description, setDescription] = useState(tool?.description ?? "");
+  const [endpoint, setEndpoint] = useState(tool?.endpoint ?? "");
+  const [method, setMethod] = useState(tool?.http_method ?? "POST");
+  const [inputSchema, setInputSchema] = useState(JSON.stringify(tool?.input_schema ?? {}, null, 2));
+  const [outputSchema, setOutputSchema] = useState(JSON.stringify(tool?.output_schema ?? {}, null, 2));
+  const [grants, setGrants] = useState(initialPolicy.requiredGrants.join(", "));
+  const [risk, setRisk] = useState<"low" | "medium" | "high" | "critical">(initialRisk);
+  const [confirmationRequired, setConfirmationRequired] = useState(initialPolicy.confirmationRequired);
+  const [idempotencyRequired, setIdempotencyRequired] = useState(initialPolicy.idempotencyRequired);
+  const [timeout, setTimeoutValue] = useState(String(tool?.timeout_ms ?? 10000));
+  const [testInput, setTestInput] = useState("{}");
+  const [testResult, setTestResult] = useState<APIToolDryRun | null>(null);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneNamespace, setCloneNamespace] = useState("");
+  const [cloneName, setCloneName] = useState("");
+  const [retireOpen, setRetireOpen] = useState(false);
+  const cloneIdentityValid = /^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim()) && /^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim());
+
   useEffect(() => {
-    if (!tool) return;
+    if (!toolID) return;
     let cancelled = false;
-    Promise.all(integrations.map(async (integration) => ({ integration, bindings: await api.integrationToolBindings(integration.id).catch(() => []) }))).then((results) => {
+    api.tool(productID, toolID).then((value) => {
       if (cancelled) return;
-      setBindingOwners({ toolID: tool.id, integrationIDs: results.filter(({ bindings }) => bindings.some((binding) => binding.tool_id === tool.id && binding.tool_revision === tool.revision)).map(({ integration }) => integration.id) });
+      const policy = toolPolicy(value);
+      setActiveTool(value);
+      setDescription(value.description);
+      setEndpoint(value.endpoint ?? "");
+      setMethod(value.http_method);
+      setInputSchema(JSON.stringify(value.input_schema, null, 2));
+      setOutputSchema(JSON.stringify(value.output_schema, null, 2));
+      setGrants(policy.requiredGrants.join(", "));
+      setRisk(policy.risk === "medium" || policy.risk === "high" || policy.risk === "critical" ? policy.risk : "low");
+      setConfirmationRequired(policy.confirmationRequired);
+      setIdempotencyRequired(policy.idempotencyRequired);
+      setTimeoutValue(String(value.timeout_ms));
+      setTestInput("{}");
+      setTestResult(null);
+      setDirty(false);
+      setDetailStatus("ready");
+    }).catch(() => {
+	  if (!cancelled) setDetailStatus("error");
+	});
+    return () => { cancelled = true; };
+  }, [productID, toolID, detailLoadAttempt]);
+
+  useEffect(() => {
+    if (!toolID) return;
+    let cancelled = false;
+    Promise.all(integrations.map(async (integration) => {
+      try { return { integration, bindings: await api.integrationToolBindings(integration.id), failed: false }; }
+      catch { return { integration, bindings: [] as APIIntegrationToolBinding[], failed: true }; }
+    })).then((results) => {
+      if (cancelled) return;
+      setUsages(results.flatMap(({ integration, bindings }) => bindings.filter((binding) => binding.tool_id === toolID).map((binding) => ({ integration, binding }))));
+      setUsageStatus(results.some((result) => result.failed) ? "partial" : "ready");
     });
     return () => { cancelled = true; };
-  }, [integrations, tool]);
-  if (!tool) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Tool unavailable</h1><p>This tool does not exist or is still loading.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>;
-  const requiredGrants = Array.isArray(tool.authorization_policy?.required_grants) ? tool.authorization_policy.required_grants.filter((value): value is string => typeof value === "string") : [];
-  const confirmationRequired = tool.authorization_policy?.confirmation_required === true;
-  const connection = tool.mcp_connection_id ? connections.find((item) => item.id === tool.mcp_connection_id) : null;
-  const owners = bindingOwners.toolID === tool.id ? integrations.filter((integration) => bindingOwners.integrationIDs.includes(integration.id)) : [];
-  const backPath = owners.length === 1 ? integrationPath(owners[0].id, "tools") : sectionPath("tools");
-  const backLabel = owners.length === 1 ? owners[0].display_name : "tools";
+  }, [toolID, integrations]);
+
+  if (!toolID) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Tool unavailable</h1><p>This tool could not be found in the deployment catalog.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>;
+  if (!activeTool) return <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon">{detailStatus === "loading" ? <RefreshCw /> : <TriangleAlert />}</span><div><h1>{detailStatus === "loading" ? "Loading tool" : "Tool details unavailable"}</h1><p>{detailStatus === "loading" ? "Loading the complete contract and fixed execution target…" : "The complete tool contract could not be loaded. No editing or lifecycle action is available."}</p></div>{detailStatus === "error" ? <Button outline onClick={() => { setActiveTool(null); setDetailStatus("loading"); setDetailLoadAttempt((value) => value + 1); }}>Retry</Button> : <ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink>}</section>;
+
+  const currentTool = activeTool;
+  const canEdit = currentTool.state === "draft";
+  const connection = activeTool.mcp_connection_id ? connections.find((item) => item.id === activeTool.mcp_connection_id) : null;
+  const currentPolicy = toolPolicy(activeTool);
+  const toolEvents = auditEvents.filter((event) => event.target_type === "tool" && event.target_id === activeTool.id).sort((left, right) => right.created_at.localeCompare(left.created_at));
+  const riskColor = risk === "critical" ? "red" : risk === "high" ? "amber" : risk === "medium" ? "violet" : "zinc";
+  const markDirty = () => setDirty(true);
+  const refreshAfterMutation = async () => { try { await onChanged(); return true; } catch { return false; } };
+  const draftPayload = () => ({ description: description.trim(), endpoint: endpoint.trim(), http_method: method, input_schema: JSON.parse(inputSchema), output_schema: JSON.parse(outputSchema), authorization_policy: { ...currentTool.authorization_policy, required_grants: grants.split(/[,\s]+/).filter(Boolean), confirmation_required: confirmationRequired || risk === "critical", risk, idempotency_required: idempotencyRequired }, timeout_ms: Number(timeout), revision: currentTool.revision });
+
+  async function saveToolDraft() {
+    if (!canEdit) return;
+    setBusy(true);
+    try {
+      const updated = await api.updateTool(productID, currentTool.id, draftPayload());
+      setActiveTool(updated);
+      setDirty(false);
+      const refreshed = await refreshAfterMutation();
+      onMessage(`${updated.namespace}.${updated.name} draft saved.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool editing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Tool draft could not be saved."); } finally { setBusy(false); }
+  }
+
+  async function publishToolRevision() {
+    if (!canEdit) return;
+    setBusy(true);
+    try {
+      let target: APITool = currentTool;
+      if (dirty) {
+        target = await api.updateTool(productID, currentTool.id, draftPayload());
+        setActiveTool(target);
+        setDirty(false);
+      }
+      const published = await api.publishTool(productID, target.id, target.revision);
+      setActiveTool(published);
+      const refreshed = await refreshAfterMutation();
+      onMessage(`${published.namespace}.${published.name} published and available for API binding.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
+    } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "Tool could not be published."); } finally { setBusy(false); }
+  }
+
+  async function dryRunTool() {
+    setBusy(true);
+    setTestResult(null);
+    try {
+      if (dirty && canEdit) {
+        onMessage("Save the draft before testing its persisted contract.");
+        return;
+      }
+      const result = await api.dryRunTool(productID, currentTool.id, JSON.parse(testInput));
+      setTestResult(result);
+      onMessage(result.valid && !result.network_call_performed ? "Tool contract validation passed without a network call." : "Tool contract validation returned a controlled failure.");
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool testing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Tool test could not run."); } finally { setBusy(false); }
+  }
+
+  function handleToolTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const currentIndex = TOOL_DETAIL_TABS.findIndex((tab) => `tool-tab-${tab.id}` === document.activeElement?.id);
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? TOOL_DETAIL_TABS.length - 1 : event.key === "ArrowRight" ? (currentIndex + 1) % TOOL_DETAIL_TABS.length : (currentIndex - 1 + TOOL_DETAIL_TABS.length) % TOOL_DETAIL_TABS.length;
+    const nextTab = TOOL_DETAIL_TABS[nextIndex];
+    setActiveTab(nextTab.id);
+    requestAnimationFrame(() => document.getElementById(`tool-tab-${nextTab.id}`)?.focus());
+  }
+
+  function openCloneTool() {
+	if (currentTool.backend_kind === "mcp") {
+	  onMessage("Imported MCP tools are updated through their upstream connection and cannot be cloned.");
+	  return;
+	}
+    const suffix = "_next";
+    setCloneNamespace(currentTool.namespace);
+    setCloneName(`${currentTool.name.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`);
+    setCloneOpen(true);
+  }
+
+  async function cloneTool() {
+    setBusy(true);
+    try {
+      const cloned = await api.cloneTool(productID, currentTool.id, cloneNamespace.trim(), cloneName.trim());
+      const refreshed = await refreshAfterMutation();
+      setCloneOpen(false);
+      onMessage(`${cloned.namespace}.${cloned.name} created as an independent draft.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
+      onNavigate(entityPath("tool", cloned.id));
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool cloning is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be cloned."); } finally { setBusy(false); }
+  }
+
+  async function retireTool() {
+    setBusy(true);
+    try {
+      const retired = await api.retireTool(productID, currentTool.id, currentTool.revision);
+      setActiveTool(retired);
+      const refreshed = await refreshAfterMutation();
+      setRetireOpen(false);
+      onMessage(`Tool retired. Existing exact API bindings are now unresolved and must be removed before publication.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool retirement is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be retired."); } finally { setBusy(false); }
+  }
+
+  const readiness = [
+    { label: "Agent contract", ready: Boolean(activeTool.description && Object.keys(activeTool.input_schema).length && Object.keys(activeTool.output_schema).length) },
+    { label: "Fixed execution target", ready: activeTool.backend_kind === "mcp" ? Boolean(connection && activeTool.upstream_tool_name) : Boolean(activeTool.endpoint) },
+    { label: "Safety policy", ready: ["low", "medium", "high", "critical"].includes(currentPolicy.risk ?? "low") },
+    { label: "Published for managed binding", ready: activeTool.state === "published" && !activeTool.upstream_drifted },
+  ];
 
   return <>
-    <div className="entity-breadcrumb"><ConsoleLink path={backPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to {backLabel}</ConsoleLink><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP backend"}</Badge></div>
-    <PageHeading eyebrow="Deployment tool" title={`${tool.namespace}.${tool.name}`} description={tool.description || "Agent-facing tool definition."} action={tool.state === "draft" && !tool.upstream_drifted ? <Button color="indigo" onClick={() => onPublish(tool)}>Publish tool</Button> : <Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge>} />
-    <div className="notice"><ShieldCheck /><span><strong>Exact Integration binding.</strong> Publishing the tool only makes its revision eligible; Private MCP exposes and executes it through an applicable published Integration that pins this exact revision and authorization point.</span></div>
-    <dl className="compact-metrics tool-detail-metrics">
-      <div className="compact-metric"><dt>Backend</dt><dd><strong>{tool.backend_kind === "mcp" ? "MCP" : "HTTP"}</strong><small>{tool.backend_kind === "mcp" ? tool.upstream_tool_name || "Upstream tool" : `${tool.http_method} request`}</small></dd></div>
-      <div className="compact-metric"><dt>Required grants</dt><dd><strong>{requiredGrants.length}</strong><small>{requiredGrants.join(", ") || "No explicit grants"}</small></dd></div>
-      <div className="compact-metric"><dt>Confirmation</dt><dd><strong>{confirmationRequired ? "Required" : "Not required"}</strong><small>Checked before execution</small></dd></div>
-      <div className="compact-metric"><dt>Timeout</dt><dd><strong>{tool.timeout_ms} ms</strong><small>Fixed execution limit</small></dd></div>
-    </dl>
-    <div className="entity-workspace-grid">
-      <div className="entity-schema-stack">
-        <section className="panel entity-schema-panel"><PanelHeader title="Input schema" description="Arguments are validated against this exact contract before authorization." /><pre className="entity-contract-json">{JSON.stringify(tool.input_schema, null, 2)}</pre></section>
-        <section className="panel entity-schema-panel"><PanelHeader title="Output schema" description="Successful backend output must match this response contract." /><pre className="entity-contract-json">{JSON.stringify(tool.output_schema, null, 2)}</pre></section>
-      </div>
-      <aside className="entity-workspace-rail">
-        <section className="panel entity-related-panel"><PanelHeader title="Used by APIs" description="Open the exact API tool workspace that binds this revision." />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "tools")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">No loaded API binds this exact published revision.</div>}</section>
-        <section className="panel entity-policy-panel"><PanelHeader title="Authorization policy" />{requiredGrants.length > 0 ? <div className="entity-grant-list">{requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div> : <p className="entity-panel-copy">No explicit grants are configured. The authenticated deployment boundary still applies.</p>}<div className="entity-policy-check"><span className={confirmationRequired ? "ready" : "neutral"}>{confirmationRequired ? <Check /> : <ShieldCheck />}</span><span><strong>{confirmationRequired ? "User confirmation required" : "No confirmation prompt"}</strong><small>{confirmationRequired ? "The client must send explicit confirmation metadata." : "The call may proceed after identity, schema, and grant checks."}</small></span></div></section>
-        {connection && <section className="panel entity-related-panel"><PanelHeader title="Upstream connection" /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section>}
-        <section className="panel entity-detail-panel"><PanelHeader title="Tool identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Tool ID</dt><dd>{tool.id}</dd></div><div><dt>Revision</dt><dd>{tool.revision}</dd></div><div><dt>Schema drift</dt><dd>{tool.upstream_drifted ? "Detected" : "None"}</dd></div><div><dt>State</dt><dd>{tool.state}</dd></div></dl></section>
-      </aside>
-    </div>
+    <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All tools</ConsoleLink><Badge color={activeTool.backend_kind === "mcp" ? "violet" : "zinc"}>{activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"}</Badge></div>
+    <PageHeading eyebrow="Deployment tool" title={`${activeTool.namespace}.${activeTool.name}`} action={<span className="heading-actions">{activeTool.state === "draft" && <><Button outline disabled={busy || !dirty} onClick={saveToolDraft}>{busy ? "Saving…" : "Save draft"}</Button><Button color="indigo" disabled={busy || activeTool.upstream_drifted} onClick={publishToolRevision}>Publish tool</Button></>}{activeTool.state === "published" && <>{activeTool.backend_kind !== "mcp" && <Button outline disabled={busy} onClick={openCloneTool}><Copy data-slot="icon" />Clone as new tool</Button>}{activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">Review connection</ConsoleLink>}<Button outline disabled={busy} onClick={() => setRetireOpen(true)}>Retire</Button></>}{activeTool.state === "retired" && <Badge color="zinc">Retired</Badge>}</span>} />
+    <div className="page-tabs" role="tablist" aria-label="Tool sections">{TOOL_DETAIL_TABS.map((tab) => <button type="button" role="tab" id={`tool-tab-${tab.id}`} aria-controls={`tool-panel-${tab.id}`} aria-selected={activeTab === tab.id} tabIndex={activeTab === tab.id ? 0 : -1} key={tab.id} className={`page-tab ${activeTab === tab.id ? "active" : ""}`} onKeyDown={handleToolTabKeyDown} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</div>
+
+    {activeTab === "overview" && <div className="tool-detail-section" role="tabpanel" id="tool-panel-overview" aria-labelledby="tool-tab-overview" tabIndex={0}>
+      <dl className="compact-metrics tool-detail-metrics"><div className="compact-metric"><dt>State</dt><dd><strong>{activeTool.state}</strong><small>revision {activeTool.revision}</small></dd></div><div className="compact-metric"><dt>Backend</dt><dd><strong>{activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"}</strong><small>{activeTool.backend_kind === "mcp" ? activeTool.upstream_tool_name || "Upstream tool" : `${activeTool.http_method} request`}</small></dd></div><div className="compact-metric"><dt>Risk</dt><dd><strong>{currentPolicy.risk ?? "low"}</strong><small>{currentPolicy.confirmationRequired ? "Confirmation required" : "No confirmation"}</small></dd></div><div className="compact-metric"><dt>Current config</dt><dd><strong>{usageStatus === "loading" ? "…" : usages.length}</strong><small>API binding{usages.length === 1 ? "" : "s"}</small></dd></div></dl>
+      <div className="entity-workspace-grid"><section className="panel"><PanelHeader title="Readiness" description="A published tool becomes eligible for a managed API to attach; publication alone does not select it for that API." />{readiness.map((item) => <div className="integration-health-check" key={item.label}><span className={`health-icon ${item.ready ? "ready" : ""}`}>{item.ready ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{item.label}</strong><small>{item.ready ? "Ready" : "Action required"}</small></span><Badge color={item.ready ? "green" : "amber"}>{item.ready ? "Ready" : "Review"}</Badge></div>)}</section><aside className="entity-workspace-rail"><section className="panel entity-policy-panel"><PanelHeader title="Delivery boundary" /><div className="entity-policy-check"><span className="ready"><ShieldCheck /></span><span><strong>Private MCP</strong><small>{activeTool.state === "published" ? "Managed API discovery requires an exact tool and authorization binding." : "Publish before managed APIs can bind this tool."}</small></span></div><div className="entity-policy-check"><span className="neutral"><Bot /></span><span><strong>Widget</strong><small>Catalog explanation only; execution requires an authorized Private MCP client.</small></span></div></section><section className="panel entity-detail-panel"><PanelHeader title="Identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Tool ID</dt><dd>{activeTool.id}</dd></div><div><dt>Revision</dt><dd>{activeTool.revision}</dd></div><div><dt>Drift</dt><dd>{activeTool.upstream_drifted ? "Detected" : "None"}</dd></div><div><dt>Lifecycle</dt><dd>{activeTool.state}</dd></div></dl></section></aside></div>
+    </div>}
+
+    {activeTab === "contract" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-contract" aria-labelledby="tool-tab-contract" tabIndex={0}><PanelHeader title="Agent contract" description="The name is stable. Published tools are immutable; cloning creates a new HTTP tool identity." action={dirty && <Badge color="amber">Unsaved</Badge>} /><label className="auth-field"><span>Purpose</span><textarea readOnly={!canEdit} value={description} onChange={(event) => { setDescription(event.target.value); markDirty(); }} /></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea spellCheck={false} readOnly={!canEdit} value={inputSchema} onChange={(event) => { setInputSchema(event.target.value); markDirty(); }} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea spellCheck={false} readOnly={!canEdit} value={outputSchema} onChange={(event) => { setOutputSchema(event.target.value); markDirty(); }} /></label></div></section>}
+
+    {activeTab === "execution" && <div className="entity-workspace-grid" role="tabpanel" id="tool-panel-execution" aria-labelledby="tool-tab-execution" tabIndex={0}><section className="panel tool-editor-page"><PanelHeader title="Execution" description="The destination is fixed before publication and cannot be supplied by an agent." /><div className="two-fields"><label className="auth-field"><span>Backend</span><input value={activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"} readOnly /></label><label className="auth-field"><span>Timeout (ms)</span><input readOnly={!canEdit} type="number" min={100} max={60000} value={timeout} onChange={(event) => { setTimeoutValue(event.target.value); markDirty(); }} /></label></div>{activeTool.backend_kind !== "mcp" ? <><div className="two-fields"><label className="auth-field"><span>Method</span>{canEdit ? <select value={method} onChange={(event) => { setMethod(event.target.value); markDirty(); }}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select> : <input value={method} readOnly />}</label><label className="auth-field"><span>Fixed endpoint</span><input readOnly={!canEdit} type="url" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); markDirty(); }} /></label></div><div className="private-default-note"><LockKeyhole />The authenticated customer&apos;s delegated vendor token is forwarded only to this configured origin.</div></> : <dl className="entity-detail-grid"><div><dt>Upstream tool</dt><dd>{activeTool.upstream_tool_name}</dd></div><div><dt>Schema hash</dt><dd>{activeTool.upstream_schema_hash}</dd></div></dl>}</section><aside className="entity-workspace-rail">{connection ? <section className="panel entity-related-panel"><PanelHeader title="Connection" /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section> : <section className="panel entity-detail-panel"><PanelHeader title="Connection model" /><p className="entity-panel-copy">HTTP tools use the deployment&apos;s delegated API origin. Credentials are never stored on the tool.</p></section>}</aside></div>}
+
+    {activeTab === "authorization" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-authorization" aria-labelledby="tool-tab-authorization" tabIndex={0}><PanelHeader title="Baseline authorization" description="An API authorization point may add stricter requirements but cannot weaken this policy." action={<Badge color={riskColor}>{risk} risk</Badge>} /><label className="auth-field"><span>Required registered grants</span><input readOnly={!canEdit} value={grants} onChange={(event) => { setGrants(event.target.value); markDirty(); }} placeholder="customers.read, invoices.write" /></label><div className="two-fields"><label className="auth-field"><span>Risk</span>{canEdit ? <select value={risk} onChange={(event) => { const next = event.target.value as typeof risk; setRisk(next); if (next === "critical") setConfirmationRequired(true); markDirty(); }}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select> : <input value={risk} readOnly />}</label>{canEdit && <label className="compact-check"><input disabled={risk === "critical"} type="checkbox" checked={confirmationRequired || risk === "critical"} onChange={(event) => { setConfirmationRequired(event.target.checked); markDirty(); }} /><span>Require explicit user confirmation</span></label>}</div>{canEdit ? <label className="compact-check"><input type="checkbox" checked={idempotencyRequired} onChange={(event) => { setIdempotencyRequired(event.target.checked); markDirty(); }} /><span>Require idempotency metadata for mutation calls</span></label> : <dl className="entity-detail-grid compact-detail-grid readonly-policy"><div><dt>Explicit confirmation</dt><dd>{confirmationRequired || risk === "critical" ? "Required" : "Not required"}</dd></div><div><dt>Idempotency metadata</dt><dd>{idempotencyRequired ? "Required" : "Not required"}</dd></div></dl>}{currentPolicy.requiredGrants.length > 0 && <div className="entity-grant-list">{currentPolicy.requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div>}</section>}
+
+    {activeTab === "tests" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-tests" aria-labelledby="tool-tab-tests" tabIndex={0}><PanelHeader title="Contract validation" description="Validates arguments against the persisted input schema, fixed destination and normalized policy. It performs no network or output validation." action={<Button outline disabled={busy || dirty} onClick={dryRunTool}>{busy ? "Checking…" : "Run validation"}</Button>} />{dirty && <div className="capability-unavailable"><TriangleAlert /><span><strong>Save this draft first.</strong><small>Validation always runs against the persisted revision shown in the header.</small></span></div>}<label className="auth-field"><span>JSON arguments</span><textarea spellCheck={false} value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label>{testResult && <pre role="status" aria-live="polite" className={`tool-test-result ${testResult.valid && !testResult.network_call_performed ? "passed" : "failed"}`}>{JSON.stringify(testResult, null, 2)}</pre>}</section>}
+
+    {activeTab === "usage" && <section className="panel" role="tabpanel" id="tool-panel-usage" aria-labelledby="tool-tab-usage" tabIndex={0}><PanelHeader title="Current API configuration" description="Each current API draft pins an exact published tool revision and one exact authorization-point revision. Published snapshots are not counted here." action={<Badge color="violet">{usageStatus === "loading" ? "…" : usages.length}</Badge>} />{usageStatus === "partial" && <div className="capability-unavailable"><TriangleAlert /><span><strong>Some API bindings could not be loaded.</strong><small>The list below may be incomplete.</small></span></div>}{usages.map(({ integration, binding }) => { const point = binding.authorization_point; const current = binding.tool_revision === activeTool.revision && activeTool.state === "published" && !activeTool.upstream_drifted && Boolean(point && point.state === "active" && point.revision === binding.authorization_point_revision); return <ConsoleLink key={`${integration.id}:${binding.tool_revision}`} path={integrationPath(integration.id, "tools")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key} · tool r{binding.tool_revision} · authorization r{binding.authorization_point_revision}</small></span><Badge color={current ? "green" : "red"}>{current ? "Current" : "Stale / unresolved"}</Badge><ChevronRight /></ConsoleLink>; })}{usageStatus === "loading" && <div className="empty-row">Loading current API bindings…</div>}{usageStatus === "ready" && usages.length === 0 && <div className="empty-row">No current API configuration binds this tool.</div>}</section>}
+
+    {activeTab === "history" && <section className="panel" role="tabpanel" id="tool-panel-history" aria-labelledby="tool-tab-history" tabIndex={0}><PanelHeader title="Tool activity" description="Append-only administrative and execution events loaded for this tool. Same-identity contract revision editing is not enabled yet." action={<ConsoleLink path={sectionPath("runs")} onNavigate={onNavigate} className="entity-back-link">Open activity</ConsoleLink>} />{toolEvents.map((event) => <div className="lease-row" key={event.id}><span><strong>{event.action}</strong><small>{event.actor_id || "system"} · {event.request_id || "no request ID"}</small></span><time>{new Date(event.created_at).toLocaleString()}</time></div>)}{toolEvents.length === 0 && <div className="empty-row">No loaded activity for this tool.</div>}</section>}
+
+    {activeTool.backend_kind !== "mcp" && <Dialog open={cloneOpen} onClose={setCloneOpen} title="Clone as a new tool" description="This service does not yet create a new revision under the same identity. Choose a distinct lower-case namespace and name for the independent draft." actions={<><Button outline onClick={() => setCloneOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !cloneIdentityValid} onClick={cloneTool}>{busy ? "Cloning…" : "Create draft"}</Button></>}><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneNamespace) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>Name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneName) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div><small id="clone-tool-identity-guidance">Use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small></Dialog>}
+    <Dialog open={retireOpen} onClose={setRetireOpen} title={`Retire ${activeTool.namespace}.${activeTool.name}?`} description="Retirement removes the tool from discovery and prevents new bindings. API drafts using it must remove their binding before publication." actions={<><Button outline onClick={() => setRetireOpen(false)}>Cancel</Button><Button color="red" disabled={busy} onClick={retireTool}>{busy ? "Retiring…" : "Retire tool"}</Button></>}><div className="private-default-note"><TriangleAlert />This changes the deployment catalogue immediately. Existing published API snapshots remain audit evidence.</div></Dialog>
   </>;
 }
 
@@ -2462,7 +2673,6 @@ function IntegrationSwitcher({ integrations, integration, activeTab, activeResou
 }
 
 type IntegrationWorkspaceViewProps = {
-  productID: string;
   integration: APIIntegration | null;
   integrations: APIIntegration[];
   activeTab: IntegrationTab;
@@ -2476,7 +2686,6 @@ type IntegrationWorkspaceViewProps = {
   connections: APIAccessConnection[];
   supportRoutes: APISupportRoute[];
   tools: APITool[];
-  mcpConnections: APIMCPConnection[];
   analyses: APIIntegrationAnalysis[];
   recipes: APIRecipe[];
   distribution: Distribution | null;
@@ -2490,7 +2699,6 @@ type IntegrationWorkspaceViewProps = {
   onAddSource: () => void;
   onCrawlSource: (sourceID: string) => void;
   onPublishSource: (source: Source) => void;
-  onAddTool: () => void;
   onGenerateRecipes: (integrationID?: string) => void;
   onEditResource: (resource: APIResourceSet) => void;
   onDuplicateResource: (resource: APIResourceSet) => void;
@@ -2498,12 +2706,11 @@ type IntegrationWorkspaceViewProps = {
   onManageAccess: (integration: APIIntegration) => void;
   onManageSupport: (integration: APIIntegration) => void;
   onInspectRevision: (revision: APIIntegrationRevision) => void;
-  onChanged: () => Promise<void>;
   onMessage: (message: string) => void;
   onNavigate: (path: string) => void;
 };
 
-function IntegrationWorkspaceView({ productID, integration, integrations, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, connections, supportRoutes, tools, mcpConnections, analyses, recipes, distribution, widgets, recipeBusy, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onAddTool, onGenerateRecipes, onEditResource, onDuplicateResource, onDetachResource, onManageAccess, onManageSupport, onInspectRevision, onChanged, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
+function IntegrationWorkspaceView({ integration, integrations, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, connections, supportRoutes, tools, analyses, recipes, distribution, widgets, recipeBusy, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onGenerateRecipes, onEditResource, onDuplicateResource, onDetachResource, onManageAccess, onManageSupport, onInspectRevision, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
   if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">API</p><h1>Loading API…</h1><p>Retrieving its configuration and published history.</p></div></section>;
   if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">API</p><h1>API unavailable</h1><p>This API is not available in the current deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 
@@ -2544,7 +2751,7 @@ function IntegrationWorkspaceView({ productID, integration, integrations, active
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All APIs</ConsoleLink></div>
     <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} activeResourceTab={activeResourceTab} onNavigate={onNavigate} />
-    <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} description={integration.description || undefined} action={<span className="heading-actions"><Button outline onClick={() => onEdit(integration)}>Edit</Button>{!publishStatus ? <span className="published-state checking"><RefreshCw />Checking…</span> : canPublish ? <Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish</Button> : hasChanges && !publishStatus.ready ? <Badge color="amber">Setup required</Badge> : <span className="published-state"><CheckCircle2 />Published</span>}</span>} />
+    <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} action={<span className="heading-actions"><Button outline onClick={() => onEdit(integration)}>Edit</Button>{!publishStatus ? <span className="published-state checking"><RefreshCw />Checking…</span> : canPublish ? <Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish</Button> : hasChanges && !publishStatus.ready ? <Badge color="amber">Setup required</Badge> : <span className="published-state"><CheckCircle2 />Published</span>}</span>} />
     <PageTabs label={`${integration.display_name} sections`}>{INTEGRATION_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, tab.id)} onNavigate={onNavigate} className={`page-tab ${activeTab === tab.id ? "active" : ""}`} ariaCurrent={activeTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
 
     {activeTab === "overview" && <div className="integration-tab-content">
@@ -2558,7 +2765,6 @@ function IntegrationWorkspaceView({ productID, integration, integrations, active
     {activeTab === "resources" && <div className="integration-tab-content">
       <PageTabs label="Resource types">{INTEGRATION_RESOURCE_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, "resources", tab.id)} onNavigate={onNavigate} className={`page-tab resource-subtab ${activeResourceTab === tab.id ? "active" : ""}`} ariaCurrent={activeResourceTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
       {activeResourceTab === "documentation" && <>
-        <div className="notice"><BookOpen /><span><strong>Ingest → crawl → review → publish → attach.</strong> Retrieved pages remain untrusted and quarantined until explicitly published.</span></div>
         <section className="panel"><PanelHeader title="Documentation ingestion" description="Deployment sources are reusable; attach a reviewed resource revision to this API." action={<span className="heading-actions"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="entity-back-link">All documentation</ConsoleLink><Button onClick={onAddSource}><Plus data-slot="icon" />Add source</Button></span>} />{sources.map((source) => <div className="provider-row documentation-source-row" key={source.id}><span className="settings-icon"><BookOpen /></span><span><EntityLink entity="source" uid={source.id} onNavigate={onNavigate} className="entity-link"><strong>{source.name}</strong></EntityLink><small>{source.kind} · {source.location}</small></span><span className="tool-badges"><Badge color={source.quarantined || source.crawlState === "failed" ? "red" : source.crawlState === "synced" ? "green" : "amber"}>{source.quarantined ? "quarantined" : source.crawlState === "synced" ? `published r${source.latestPublication?.revision ?? 1}` : source.crawlState}</Badge><Badge color={source.visibility === "public" ? "blue" : "zinc"}>{source.visibility}</Badge></span><span className="table-actions">{source.crawlState !== "queued" && source.crawlState !== "running" && <Button outline onClick={() => onCrawlSource(source.id)}>Crawl</Button>}{source.crawlState === "review" && <Button onClick={() => onPublishSource(source)}>{source.quarantined ? "Inspect" : "Review"}</Button>}</span></div>)}{sources.length === 0 && <div className="empty-row">No documentation source has been ingested.</div>}</section>
         <section className="panel"><PanelHeader title="Attached documentation" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create set</Button><Button onClick={() => onAttach(integration, "documentation")}>Attach reviewed set</Button></span>} />{renderResourceRows(documentationResources)}</section>
       </>}
@@ -2571,7 +2777,7 @@ function IntegrationWorkspaceView({ productID, integration, integrations, active
 
     {activeTab === "authorization" && <IntegrationAuthorizationWorkspace integration={integration} identity={identity} connections={integrationConnections} tools={tools} onManageAccess={() => onManageAccess(integration)} onMessage={onMessage} onNavigate={onNavigate} />}
 
-    {activeTab === "tools" && <IntegrationToolsWorkspace productID={productID} integration={integration} tools={tools} mcpConnections={mcpConnections} onAddTool={onAddTool} onChanged={onChanged} onMessage={onMessage} onNavigate={onNavigate} />}
+    {activeTab === "tools" && <IntegrationToolsWorkspace key={integration.id} integration={integration} tools={tools} onMessage={onMessage} onNavigate={onNavigate} />}
 
     {activeTab === "recipes" && <IntegrationRecipesWorkspace analyses={integrationAnalyses} recipes={integrationRecipes} busy={recipeBusy} onGenerate={() => onGenerateRecipes(integration.id)} onNavigate={onNavigate} />}
 
@@ -2959,10 +3165,13 @@ function IntegrationPackagesWorkspace({ integration, onMessage }: { integration:
 
 function toolPolicy(tool: APITool) {
   const grants = Array.isArray(tool.authorization_policy?.required_grants) ? tool.authorization_policy.required_grants.filter((value): value is string => typeof value === "string") : [];
+  const fallbackRisk = tool.http_method === "GET" ? "low" : tool.http_method === "DELETE" ? "critical" : "medium";
+  const storedRisk = tool.authorization_policy?.risk;
+  const risk = storedRisk === "low" || storedRisk === "medium" || storedRisk === "high" || storedRisk === "critical" ? storedRisk : fallbackRisk;
   return {
     requiredGrants: grants,
     confirmationRequired: tool.authorization_policy?.confirmation_required === true,
-    risk: typeof tool.authorization_policy?.risk === "string" ? tool.authorization_policy.risk : undefined,
+    risk,
     idempotencyRequired: tool.authorization_policy?.idempotency_required === true,
   };
 }
@@ -3073,196 +3282,150 @@ function IntegrationAuthorizationWorkspace({ integration, identity, connections,
   </div>;
 }
 
-function IntegrationToolsWorkspace({ productID, integration, tools, mcpConnections, onAddTool, onChanged, onMessage, onNavigate }: { productID: string; integration: APIIntegration; tools: APITool[]; mcpConnections: APIMCPConnection[]; onAddTool: () => void; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+type IntegrationToolBindingSelection = { revision: number; authorizationPointID: string; authorizationPointRevision: number };
+
+function integrationToolBindingSelectionSignature(selection: Record<string, IntegrationToolBindingSelection>) {
+  return JSON.stringify(Object.entries(selection).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }: { integration: APIIntegration; tools: APITool[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const [bindings, setBindings] = useState<APIIntegrationToolBinding[]>([]);
   const [authorizationPoints, setAuthorizationPoints] = useState<APIAuthorizationPoint[]>([]);
-  const [bindingSelection, setBindingSelection] = useState<Record<string, { revision: number; authorizationPointID: string; authorizationPointRevision: number }>>({});
+  const [bindingSelection, setBindingSelection] = useState<Record<string, IntegrationToolBindingSelection>>({});
+  const [savedSignature, setSavedSignature] = useState<string | null>(null);
+  const [bindingsLoading, setBindingsLoading] = useState(true);
   const [bindingsUnavailable, setBindingsUnavailable] = useState(false);
   const [bindingBusy, setBindingBusy] = useState(false);
-  const [editorTool, setEditorTool] = useState<APITool | null>(null);
-  const [editorBusy, setEditorBusy] = useState(false);
-  const [description, setDescription] = useState("");
-  const [endpoint, setEndpoint] = useState("");
-  const [inputSchema, setInputSchema] = useState("{}");
-  const [outputSchema, setOutputSchema] = useState("{}");
-  const [grants, setGrants] = useState("");
-  const [confirmationRequired, setConfirmationRequired] = useState(false);
-  const [timeout, setTimeoutValue] = useState("10000");
-  const [testInput, setTestInput] = useState("{}");
-  const [testResult, setTestResult] = useState<APIToolDryRun | null>(null);
-  const [cloneOpen, setCloneOpen] = useState(false);
-  const [cloneNamespace, setCloneNamespace] = useState("");
-  const [cloneName, setCloneName] = useState("");
-  const cloneIdentityValid = /^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim()) && /^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim());
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attachToolID, setAttachToolID] = useState("");
+  const [attachPointID, setAttachPointID] = useState("");
+
+  const activePoints = authorizationPoints.filter((point) => point.state === "active");
+  const availableTools = tools.filter((tool) => tool.state === "published" && !tool.upstream_drifted && !bindingSelection[tool.id]);
+  const dirty = savedSignature !== null && integrationToolBindingSelectionSignature(bindingSelection) !== savedSignature;
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([api.integrationToolBindings(integration.id), api.authorizationPoints(integration.id)]).then(([values, points]) => {
       if (cancelled) return;
+      const next = Object.fromEntries(values.map((binding) => [binding.tool_id, { revision: binding.tool_revision, authorizationPointID: binding.authorization_point_id, authorizationPointRevision: binding.authorization_point_revision }]));
       setBindings(values);
       setAuthorizationPoints(points);
-      setBindingSelection(Object.fromEntries(values.map((binding) => [binding.tool_id, { revision: binding.tool_revision, authorizationPointID: binding.authorization_point_id, authorizationPointRevision: binding.authorization_point_revision }])));
+      setBindingSelection(next);
+      setSavedSignature(integrationToolBindingSelectionSignature(next));
+      setBindingsLoading(false);
       setBindingsUnavailable(false);
-    }).catch((error) => {
+    }).catch(() => {
       if (cancelled) return;
       setBindings([]);
       setAuthorizationPoints([]);
       setBindingSelection({});
-      setBindingsUnavailable(unavailableConsoleCapability(error));
+      setSavedSignature(null);
+      setBindingsLoading(false);
+      setBindingsUnavailable(true);
     });
     return () => { cancelled = true; };
-  }, [integration.id]);
+  }, [integration.id, loadAttempt]);
 
-  function populateEditor(tool: APITool) {
-    const policy = toolPolicy(tool);
-    setEditorTool(tool);
-    setDescription(tool.description);
-    setEndpoint(tool.endpoint ?? "");
-    setInputSchema(JSON.stringify(tool.input_schema, null, 2));
-    setOutputSchema(JSON.stringify(tool.output_schema, null, 2));
-    setGrants(policy.requiredGrants.join(", "));
-    setConfirmationRequired(policy.confirmationRequired);
-    setTimeoutValue(String(tool.timeout_ms));
-    setTestInput("{}");
-    setTestResult(null);
+  function retryBindings() {
+    setBindingsLoading(true);
+    setBindingsUnavailable(false);
+    setLoadAttempt((value) => value + 1);
   }
 
-  async function openEditor(tool: APITool) {
-    setEditorBusy(true);
-    try {
-      populateEditor(await api.tool(productID, tool.id));
-    } catch (error) {
-      populateEditor(tool);
-      onMessage(unavailableConsoleCapability(error) ? "The detailed tool editor is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool details could not be loaded.");
-    } finally { setEditorBusy(false); }
+  function openAttachDialog() {
+    const defaultTool = availableTools[0];
+    const defaultPoint = activePoints[0];
+    setAttachToolID(defaultTool?.id ?? "");
+    setAttachPointID(defaultPoint?.id ?? "");
+    setAttachOpen(true);
   }
 
-  function toggleBinding(tool: APITool) {
-    const defaultPoint = authorizationPoints.find((point) => point.state === "active");
-    if (!bindingSelection[tool.id] && !defaultPoint) {
-      onMessage("Create and activate an authorization point before binding this tool.");
-      return;
-    }
+  function attachTool() {
+    const tool = tools.find((candidate) => candidate.id === attachToolID && candidate.state === "published" && !candidate.upstream_drifted);
+    const point = activePoints.find((candidate) => candidate.id === attachPointID);
+    if (!tool || !point) return;
+    setBindingSelection((current) => ({ ...current, [tool.id]: { revision: tool.revision, authorizationPointID: point.id, authorizationPointRevision: point.revision } }));
+    setAttachOpen(false);
+  }
+
+  function removeBinding(toolID: string) {
     setBindingSelection((current) => {
       const next = { ...current };
-      if (next[tool.id]) delete next[tool.id];
-      else if (defaultPoint) next[tool.id] = { revision: tool.revision, authorizationPointID: defaultPoint.id, authorizationPointRevision: defaultPoint.revision };
+      delete next[toolID];
       return next;
     });
+	requestAnimationFrame(() => document.getElementById("save-api-bindings")?.focus());
   }
 
   function selectAuthorizationPoint(toolID: string, pointID: string) {
-    const point = authorizationPoints.find((candidate) => candidate.id === pointID && candidate.state === "active");
+    const point = activePoints.find((candidate) => candidate.id === pointID);
     if (!point) return;
     setBindingSelection((current) => current[toolID] ? { ...current, [toolID]: { ...current[toolID], authorizationPointID: point.id, authorizationPointRevision: point.revision } } : current);
+  }
+
+  function selectCurrentToolRevision(toolID: string, revision: number) {
+    setBindingSelection((current) => current[toolID] ? { ...current, [toolID]: { ...current[toolID], revision } } : current);
+  }
+
+  function resolveBinding(toolID: string, selection: IntegrationToolBindingSelection) {
+    const tool = tools.find((candidate) => candidate.id === toolID) ?? bindings.find((binding) => binding.tool_id === toolID)?.tool;
+    const point = authorizationPoints.find((candidate) => candidate.id === selection.authorizationPointID);
+    const toolCurrent = Boolean(tool && tool.state === "published" && !tool.upstream_drifted && tool.revision === selection.revision);
+    const pointCurrent = Boolean(point && point.state === "active" && point.revision === selection.authorizationPointRevision);
+    const issues = [
+      !tool ? "tool missing" : tool.state !== "published" ? `tool ${tool.state}` : tool.upstream_drifted ? "schema drift" : tool.revision !== selection.revision ? `tool is now r${tool.revision}` : "",
+      !point ? "authorization point missing" : point.state !== "active" ? `authorization ${point.state}` : point.revision !== selection.authorizationPointRevision ? `authorization is now r${point.revision}` : "",
+    ].filter(Boolean);
+    return { tool, point, current: toolCurrent && pointCurrent, issues };
   }
 
   async function saveBindings() {
     setBindingBusy(true);
     try {
       const value = await api.setIntegrationToolBindings(integration.id, Object.entries(bindingSelection).map(([tool_id, selection]) => ({ tool_id, revision: selection.revision, authorization_point_id: selection.authorizationPointID, authorization_point_revision: selection.authorizationPointRevision })));
+      const next = Object.fromEntries(value.items.map((binding) => [binding.tool_id, { revision: binding.tool_revision, authorizationPointID: binding.authorization_point_id, authorizationPointRevision: binding.authorization_point_revision }]));
       setBindings(value.items);
-      onMessage(`${value.items.length} exact tool revision${value.items.length === 1 ? "" : "s"} bound to this API draft.`);
+      setBindingSelection(next);
+      setSavedSignature(integrationToolBindingSelectionSignature(next));
+      onMessage(value.items.length === 0 ? "All tool bindings cleared from this API draft." : `${value.items.length} exact tool revision${value.items.length === 1 ? "" : "s"} bound to this API draft.`);
     } catch (error) {
       onMessage(unavailableConsoleCapability(error) ? "Exact API tool bindings are not enabled in this deployment yet." : error instanceof APIError ? error.message : "Tool bindings could not be saved.");
     } finally { setBindingBusy(false); }
   }
 
-  async function saveToolDraft() {
-    if (!editorTool) return;
-    setEditorBusy(true);
-    try {
-      const updated = await api.updateTool(productID, editorTool.id, { description: description.trim(), endpoint: endpoint.trim(), http_method: editorTool.http_method, input_schema: JSON.parse(inputSchema), output_schema: JSON.parse(outputSchema), authorization_policy: { ...editorTool.authorization_policy, required_grants: grants.split(/[\s,]+/).filter(Boolean), confirmation_required: confirmationRequired }, timeout_ms: Number(timeout), revision: editorTool.revision });
-      setEditorTool(updated);
-      await onChanged();
-      onMessage(`${updated.namespace}.${updated.name} draft updated.`);
-    } catch (error) {
-      onMessage(unavailableConsoleCapability(error) ? "Tool draft editing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Tool draft could not be saved.");
-    } finally { setEditorBusy(false); }
-  }
+  const selectedBindings = Object.entries(bindingSelection);
+  const staleBindingCount = selectedBindings.filter(([toolID, selection]) => !resolveBinding(toolID, selection).current).length;
 
-  function openCloneTool() {
-    if (!editorTool) return;
-    const suffix = "_copy";
-    setCloneNamespace(editorTool.namespace);
-    setCloneName(`${editorTool.name.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`);
-    setCloneOpen(true);
-  }
-
-  async function cloneTool() {
-    if (!editorTool) return;
-    setEditorBusy(true);
-    try {
-      const cloned = await api.cloneTool(productID, editorTool.id, cloneNamespace.trim(), cloneName.trim());
-      await onChanged();
-      setCloneOpen(false);
-      populateEditor(cloned);
-      onMessage(`${cloned.namespace}.${cloned.name} cloned as a draft.`);
-    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool cloning is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be cloned."); } finally { setEditorBusy(false); }
-  }
-
-  async function dryRunTool() {
-    if (!editorTool) return;
-    setEditorBusy(true);
-    setTestResult(null);
-    try {
-      const result = await api.dryRunTool(productID, editorTool.id, JSON.parse(testInput));
-      setTestResult(result);
-      onMessage(result.valid && !result.network_call_performed ? "Tool dry-run passed without a network call." : "Tool dry-run returned a controlled failure.");
-    } catch (error) {
-      if (unavailableConsoleCapability(error)) onMessage("The bounded tool dry-run endpoint is not enabled by this service version yet.");
-      else onMessage(error instanceof APIError || error instanceof Error ? error.message : "Tool dry-run could not run.");
-    } finally { setEditorBusy(false); }
-  }
-
-  async function publishEditorTool() {
-    if (!editorTool) return;
-    setEditorBusy(true);
-    try {
-      const updated = await api.publishTool(productID, editorTool.id, editorTool.revision);
-      setEditorTool(updated);
-      await onChanged();
-      onMessage(`${updated.namespace}.${updated.name} published.`);
-    } catch (error) { onMessage(error instanceof APIError ? error.message : "Tool could not be published."); } finally { setEditorBusy(false); }
-  }
-
-  async function retireEditorTool() {
-    if (!editorTool) return;
-    setEditorBusy(true);
-    try {
-      const retiredToolID = editorTool.id;
-      await api.retireTool(productID, retiredToolID, editorTool.revision);
-      setBindingSelection((current) => {
-        if (!current[retiredToolID]) return current;
-        const next = { ...current };
-        delete next[retiredToolID];
-        return next;
-      });
-      setEditorTool(null);
-      await onChanged();
-      onMessage("Tool retired and removed from discovery. Save exact bindings to remove its revision from this API draft.");
-    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool retirement is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be retired."); } finally { setEditorBusy(false); }
-  }
-
-  const bindingCount = Object.keys(bindingSelection).length;
-  const currentAuthorizationPoint = (selection: { authorizationPointID: string; authorizationPointRevision: number }) => authorizationPoints.find((point) => point.id === selection.authorizationPointID && point.state === "active" && point.revision === selection.authorizationPointRevision);
-  const staleBindingCount = Object.values(bindingSelection).filter((selection) => !currentAuthorizationPoint(selection)).length;
   return <div className="integration-tab-content">
-    <div className="notice"><Wrench /><span><strong>Reusable definitions, exact API bindings.</strong> Tools live in the deployment catalogue; this API snapshot binds a reviewed revision and never follows a mutable draft.</span></div>
-    {bindingsUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Exact tool binding is not enabled on this deployment.</strong><small>You can still edit and publish reusable tools. API binding controls will activate when the endpoint is available.</small></span></div>}
-    <section className="panel"><PanelHeader title="MCP Tool Editor" description="Definition → schemas → fixed backend → exact authorization action → dry-run → publish." action={<span className="heading-actions"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Deployment catalogue</ConsoleLink><Button onClick={onAddTool}><Plus data-slot="icon" />Create tool</Button></span>} />{tools.map((tool) => {
-      const selection = bindingSelection[tool.id];
-      const actionCurrent = selection ? currentAuthorizationPoint(selection) : undefined;
-      return <div className={`provider-row integration-tool-editor-row ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><label className="tool-binding-check" title={bindingsUnavailable ? "Tool binding endpoint unavailable" : selection && (tool.state !== "published" || tool.upstream_drifted) ? "Remove obsolete exact-revision binding" : `Bind revision ${tool.revision}`}><input type="checkbox" disabled={bindingsUnavailable || (!selection && (tool.state !== "published" || tool.upstream_drifted))} checked={Boolean(selection)} onChange={() => toggleBinding(tool)} /><span className="sr-only">Bind {tool.namespace}.{tool.name}</span></label><span className="settings-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><strong>{tool.namespace}.{tool.name}</strong><small>revision {tool.revision} · {tool.backend_kind === "mcp" ? `MCP · ${tool.upstream_tool_name}` : `${tool.http_method} · fixed endpoint`} · {toolPolicy(tool).requiredGrants.join(", ") || "no tool grants"}</small></span>{selection ? <select className="tool-action-select" aria-label={`Authorization point for ${tool.namespace}.${tool.name}`} value={actionCurrent ? selection.authorizationPointID : ""} onChange={(event) => selectAuthorizationPoint(tool.id, event.target.value)}>{!actionCurrent && <option value="" disabled>Choose current active action (bound r{selection.authorizationPointRevision} is stale)</option>}{authorizationPoints.filter((point) => point.state === "active").map((point) => <option key={point.id} value={point.id}>{point.name} · r{point.revision}</option>)}</select> : <span />}<span className="tool-badges"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge>{selection && <Badge color={actionCurrent ? "blue" : "red"}>{actionCurrent ? "action bound" : "action stale"}</Badge>}{tool.upstream_drifted && <Badge color="red">drifted</Badge>}</span><Button outline disabled={editorBusy} onClick={() => void openEditor(tool)}>Edit & dry-run</Button></div>;
-    })}{tools.length === 0 && <div className="empty-row">No reusable tools are available.</div>}<div className="panel-footer-actions"><small>{bindingCount} selected · {bindings.length} currently saved{staleBindingCount > 0 ? ` · ${staleBindingCount} stale action${staleBindingCount === 1 ? "" : "s"}` : ""}</small><Button disabled={bindingsUnavailable || bindingBusy || staleBindingCount > 0} onClick={saveBindings}>{bindingBusy ? "Saving…" : "Save exact bindings"}</Button></div></section>
-    {mcpConnections.length > 0 && <details className="panel advanced-details"><summary>Tool proxy connections</summary>{mcpConnections.map((connection) => <div className="lease-row" key={connection.id}><span><EntityLink entity="connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.endpoint} · {connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge></div>)}<ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className="panel-footer-link">Manage MCP tool proxy connections <ChevronRight /></ConsoleLink></details>}
-    <Dialog open={Boolean(editorTool)} onClose={(open) => { if (!open) setEditorTool(null); }} title={editorTool ? `${editorTool.namespace}.${editorTool.name}` : "MCP Tool Editor"} description="Edit a reusable agent-facing contract. Published revisions are immutable; clone before changing a published tool." actions={<><Button outline onClick={() => setEditorTool(null)}>Close</Button>{editorTool?.state === "draft" ? <Button color="indigo" disabled={editorBusy || !description.trim()} onClick={saveToolDraft}>{editorBusy ? "Saving…" : "Save draft"}</Button> : <Button outline disabled={editorBusy} onClick={openCloneTool}><Copy data-slot="icon" />Clone to edit</Button>}</>}>
-      {editorTool && <div className="tool-editor"><div className="tool-editor-status"><span><Badge color={editorTool.state === "published" ? "green" : editorTool.state === "retired" ? "zinc" : "amber"}>{editorTool.state}</Badge><Badge color="zinc">revision {editorTool.revision}</Badge><Badge color={editorTool.backend_kind === "mcp" ? "violet" : "zinc"}>{editorTool.backend_kind ?? "http"}</Badge><Badge color="zinc">{editorTool.http_method}</Badge></span><span className="heading-actions">{editorTool.state === "draft" && <Button outline disabled={editorBusy} onClick={publishEditorTool}>Publish</Button>}{editorTool.state === "published" && <Button outline disabled={editorBusy} onClick={retireEditorTool}>Retire</Button>}</span></div><label className="auth-field"><span>Description</span><textarea disabled={editorTool.state !== "draft"} value={description} onChange={(event) => setDescription(event.target.value)} /></label>{editorTool.backend_kind !== "mcp" && <label className="auth-field"><span>Fixed endpoint</span><input disabled={editorTool.state !== "draft"} type="url" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="Loaded only in this restricted editor" /></label>}<div className="two-fields"><label className="auth-field"><span>Required grants</span><input disabled={editorTool.state !== "draft"} value={grants} onChange={(event) => setGrants(event.target.value)} placeholder="customers.read, invoices.write" /></label><label className="auth-field"><span>Timeout (ms)</span><input disabled={editorTool.state !== "draft"} type="number" min={100} max={60000} value={timeout} onChange={(event) => setTimeoutValue(event.target.value)} /></label></div><label className="compact-check"><input disabled={editorTool.state !== "draft"} type="checkbox" checked={confirmationRequired} onChange={(event) => setConfirmationRequired(event.target.checked)} /><span>Require an explicit confirmation marker for this exact MCP call</span></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea spellCheck={false} disabled={editorTool.state !== "draft"} value={inputSchema} onChange={(event) => setInputSchema(event.target.value)} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea spellCheck={false} disabled={editorTool.state !== "draft"} value={outputSchema} onChange={(event) => setOutputSchema(event.target.value)} /></label></div><section className="catalog-settings-section"><div className="catalog-settings-heading"><span><strong>Bounded dry-run</strong><small>Validates the saved schema, destination and policy. The server guarantees no network call is performed.</small></span><Button outline disabled={editorBusy} onClick={dryRunTool}>{editorBusy ? "Checking…" : "Run dry-run"}</Button></div><label className="auth-field"><span>JSON arguments</span><textarea spellCheck={false} value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label>{testResult && <pre className={`tool-test-result ${testResult.valid && !testResult.network_call_performed ? "passed" : "failed"}`}>{JSON.stringify(testResult, null, 2)}</pre>}</section></div>}
+    {bindingsUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Exact tool binding is unavailable.</strong><small>The current API bindings and authorization points could not be loaded. No changes can be saved.</small></span><Button outline onClick={retryBindings}>Retry</Button></div>}
+    {activePoints.length === 0 && !bindingsLoading && !bindingsUnavailable && <div className="capability-unavailable"><ShieldCheck /><span><strong>Create an active authorization point first.</strong><small>Every exposed tool must pin an exact authorization policy revision.</small></span><ConsoleLink path={integrationPath(integration.id, "authorization")} onNavigate={onNavigate} className="entity-back-link">Open Authorization</ConsoleLink></div>}
+    <section className="panel integration-tool-bindings">
+      <PanelHeader title="Exposed tools" description="This API draft selects exact published tool and authorization-point revisions. Tool contracts are managed in the deployment catalog." action={<span className="heading-actions">{dirty && <Badge color="amber">Unsaved changes</Badge>}<ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Open Tools catalog</ConsoleLink><Button disabled={bindingsLoading || bindingBusy || bindingsUnavailable || activePoints.length === 0 || availableTools.length === 0} onClick={openAttachDialog}><Plus data-slot="icon" />Attach published tool</Button></span>} />
+      {selectedBindings.map(([toolID, selection]) => {
+        const resolution = resolveBinding(toolID, selection);
+        const tool = resolution.tool;
+        const pointCurrent = resolution.point?.state === "active" && resolution.point.revision === selection.authorizationPointRevision;
+        return <div className={`integration-tool-binding-row ${resolution.current ? "" : "stale"}`} key={toolID}>
+          <span className="settings-icon">{tool?.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span>
+          <span className="integration-tool-binding-main">{tool ? <EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink> : <strong>{toolID}</strong>}<small>pinned tool revision {selection.revision}{tool ? ` · ${tool.backend_kind === "mcp" ? "MCP" : tool.http_method}` : ""}</small></span>
+          <label className="tool-binding-action"><span className="sr-only">Authorization point for {tool ? `${tool.namespace}.${tool.name}` : toolID}</span><select disabled={bindingsLoading || bindingBusy} aria-label={`Authorization point for ${tool ? `${tool.namespace}.${tool.name}` : toolID}`} value={pointCurrent ? selection.authorizationPointID : ""} onChange={(event) => selectAuthorizationPoint(toolID, event.target.value)}>{!pointCurrent && <option value="" disabled>Choose a current authorization point</option>}{activePoints.map((point) => <option key={point.id} value={point.id}>{point.name} · r{point.revision}</option>)}</select><small>pinned authorization revision {selection.authorizationPointRevision}</small></label>
+          <span className="tool-badges"><Badge color={resolution.current ? "green" : "red"}>{resolution.current ? "Current" : "Stale / unresolved"}</Badge>{tool?.upstream_drifted && <Badge color="red">schema drift</Badge>}<small className="binding-issue">{resolution.issues.join(" · ")}</small></span>
+          <span className="binding-row-actions">{tool && tool.state === "published" && !tool.upstream_drifted && tool.revision !== selection.revision && <Button outline disabled={bindingsLoading || bindingBusy} onClick={() => selectCurrentToolRevision(toolID, tool.revision)}>Use r{tool.revision}</Button>}<Button outline disabled={bindingsLoading || bindingBusy} aria-label={`Remove ${tool ? `${tool.namespace}.${tool.name}` : toolID} from this API draft`} onClick={() => removeBinding(toolID)}>Remove</Button></span>
+        </div>;
+      })}
+      {bindingsLoading ? <div className="empty-row">Loading exact tool and authorization bindings…</div> : selectedBindings.length === 0 && <div className="empty-row"><span>No tools are exposed by this API draft. Attach a published deployment tool when this API needs an executable capability.</span></div>}
+      <div className="panel-footer-actions"><small>{bindingsLoading ? "Loading current API configuration…" : `${selectedBindings.length} selected · ${bindings.length} currently saved${staleBindingCount > 0 ? ` · ${staleBindingCount} stale or unresolved` : ""}`}</small><Button id="save-api-bindings" disabled={bindingsLoading || bindingsUnavailable || bindingBusy || staleBindingCount > 0 || !dirty} onClick={saveBindings}>{bindingBusy ? "Saving…" : "Save API bindings"}</Button></div>
+    </section>
+    <Dialog open={attachOpen} onClose={setAttachOpen} title="Attach published tool" description="Choose one deployment tool and pin it to one active authorization-point revision for this API draft." actions={<><Button outline disabled={bindingBusy} onClick={() => setAttachOpen(false)}>Cancel</Button><Button color="indigo" disabled={bindingBusy || !attachToolID || !attachPointID} onClick={attachTool}>Attach tool</Button></>}>
+      <div className="auth-form compact-form">
+        <label className="auth-field"><span>Published tool</span><select value={attachToolID} onChange={(event) => setAttachToolID(event.target.value)}><option value="" disabled>No eligible tool selected</option>{availableTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.namespace}.{tool.name} · r{tool.revision}</option>)}</select><small>Draft, retired and schema-drifted tools are not eligible.</small></label>
+        <label className="auth-field"><span>Authorization point</span><select value={attachPointID} onChange={(event) => setAttachPointID(event.target.value)}><option value="" disabled>No active point selected</option>{activePoints.map((point) => <option key={point.id} value={point.id}>{point.name} · {point.action_type} · r{point.revision}</option>)}</select><small>The API pins this exact revision; later authorization changes make the binding stale until reviewed.</small></label>
+      </div>
     </Dialog>
-    <Dialog open={cloneOpen} onClose={setCloneOpen} title="Clone tool to a draft" description="Published tool identity is immutable. Choose a new lower-case namespace and name for the editable copy." actions={<><Button outline onClick={() => setCloneOpen(false)}>Cancel</Button><Button color="indigo" disabled={editorBusy || !cloneIdentityValid} onClick={cloneTool}>{editorBusy ? "Cloning…" : "Clone tool"}</Button></>}><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>Name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div>{!cloneIdentityValid && <small>Use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small>}</Dialog>
   </div>;
 }
-
 function IntegrationRecipesWorkspace({ analyses, recipes, busy, onGenerate, onNavigate }: { analyses: APIIntegrationAnalysis[]; recipes: APIRecipe[]; busy: boolean; onGenerate: () => void; onNavigate: (path: string) => void }) {
   const latestAnalysis = [...analyses].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
   const blockers = latestAnalysis?.unknowns.filter((unknown) => unknown.blocking && !unknown.answer?.trim()) ?? [];
@@ -3312,14 +3475,12 @@ function IntegrationTestWorkspace({ integration, distribution, onNavigate }: { i
 }
 
 type IntegrationsViewProps = {
-  productID: string;
   integrations: APIIntegration[];
   resourceSets: APIResourceSet[];
   sources: Source[];
   supportRoutes: APISupportRoute[];
   connections: APIAccessConnection[];
   tools: APITool[];
-  mcpConnections: APIMCPConnection[];
   identity: APIIdentity | null;
   analyses: APIIntegrationAnalysis[];
   recipes: APIRecipe[];
@@ -3333,14 +3494,13 @@ type IntegrationsViewProps = {
   onAddSource: () => void;
   onCrawlSource: (sourceID: string) => void;
   onPublishSource: (source: Source) => void;
-  onAddTool: () => void;
   onGenerateRecipes: (integrationID?: string) => void;
   onChanged: () => Promise<void>;
   onMessage: (message: string) => void;
   onNavigate: (path: string) => void;
 };
 
-function IntegrationsView({ productID, integrations, resourceSets, sources, supportRoutes, connections, tools, mcpConnections, identity, analyses, recipes, distribution, widgets, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", recipeBusy, onBuild, onAddSource, onCrawlSource, onPublishSource, onAddTool, onGenerateRecipes, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
+function IntegrationsView({ integrations, resourceSets, sources, supportRoutes, connections, tools, identity, analyses, recipes, distribution, widgets, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", recipeBusy, onBuild, onAddSource, onCrawlSource, onPublishSource, onGenerateRecipes, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
   const [query, setQuery] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
   const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
@@ -3549,7 +3709,7 @@ function IntegrationsView({ productID, integrations, resourceSets, sources, supp
   ].map((entry) => [String(entry.source_publication_id), entry])).values());
 
   return <>
-    {selectedIntegrationID ? <IntegrationWorkspaceView productID={productID} integration={selectedIntegration} integrations={integrations} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} connections={connections} supportRoutes={supportRoutes} tools={tools} mcpConnections={mcpConnections} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} recipeBusy={recipeBusy} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAddTool={onAddTool} onGenerateRecipes={onGenerateRecipes} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onChanged={onChanged} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
+    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} connections={connections} supportRoutes={supportRoutes} tools={tools} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} recipeBusy={recipeBusy} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onGenerateRecipes={onGenerateRecipes} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
 
     <Dialog
       open={integrationOpen}
@@ -3701,12 +3861,20 @@ function ReportingView({ routes, integrations, backendConnections, settingsTab, 
 }
 
 
+function ToolsWorkspaceTabs({ active, onNavigate }: { active: "catalog" | "connections"; onNavigate: (path: string) => void }) {
+  return <PageTabs label="Tool management sections">
+    <ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className={`page-tab ${active === "catalog" ? "active" : ""}`} ariaCurrent={active === "catalog" ? "page" : undefined}>Catalog</ConsoleLink>
+    <ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className={`page-tab ${active === "connections" ? "active" : ""}`} ariaCurrent={active === "connections" ? "page" : undefined}>Connections</ConsoleLink>
+  </PageTabs>;
+}
+
 function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect, onNavigate }: { connections: APIMCPConnection[]; tools: APITool[]; busy: boolean; onAdd: () => void; onInspect: (connection: APIMCPConnection) => void; onNavigate: (path: string) => void }) {
   const imported = tools.filter((tool) => tool.backend_kind === "mcp");
   const delegated = connections.filter((connection) => connection.auth_mode === "delegated_oauth").length;
   const authLabel = (mode: APIMCPConnection["auth_mode"]) => mode === "delegated_oauth" ? "Delegated user OAuth" : mode === "service" ? "Service credential" : "No upstream auth";
   return <>
-    <PageHeading eyebrow="Managed bridges" title="MCP connections" action={<Button onClick={onAdd}><Plus data-slot="icon" />Connect MCP</Button>} />
+    <PageHeading eyebrow="Tools" title="Connections" description="Inspect upstream MCP catalogs and import reviewed definitions into the deployment tool catalog." action={<Button onClick={onAdd}><Plus data-slot="icon" />Connect MCP</Button>} />
+    <ToolsWorkspaceTabs active="connections" onNavigate={onNavigate} />
     <a className="mcp-policy-banner" href="https://blog.modelcontextprotocol.io/posts/2026-07-28/" target="_blank" rel="noreferrer"><span className="mcp-policy-icon"><ShieldCheck /></span><span><strong>Stateless MCPv2 Only</strong><small>Protocol 2026-07-28 · self-contained requests · no logical live sessions</small></span><ExternalLink /></a>
     <div className="metrics-grid"><Metric label="Upstream connections" value={String(connections.length)} detail="Fixed HTTPS destinations" /><Metric label="Imported tools" value={String(imported.length)} detail={`${imported.filter((tool) => tool.state === "published").length} published`} /><Metric label="Delegated identities" value={String(delegated)} detail="Separate upstream grants" /><Metric label="Drifted schemas" value={String(imported.filter((tool) => tool.upstream_drifted).length)} detail="Published calls fail closed" positive={!imported.some((tool) => tool.upstream_drifted)} /></div>
     <section className="panel mcp-connections-panel">
@@ -3721,8 +3889,61 @@ function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect, onNavi
   </>;
 }
 
-function ToolsView({ tools, onAdd, onPublish, onNavigate }: { tools: APITool[]; onAdd: () => void; onPublish: (tool: APITool) => void; onNavigate: (path: string) => void }) {
-  return <><PageHeading eyebrow="Actions" title="Tools" action={<Button onClick={onAdd}><Plus data-slot="icon" />Create API tool</Button>} /><div className="notice"><ShieldCheck /><span><strong>Policy-wrapped execution.</strong> Every call is schema validated, grant-scoped, reauthorized, rate-limited, and audited before a fixed backend is reached.</span></div><div className="tool-grid">{tools.map((tool) => <article className={`panel tool-card ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}><span className="tool-icon">{tool.backend_kind === "mcp" ? <Share2 /> : tool.namespace === "credentials" ? <KeyRound /> : <TerminalSquare />}</span><div><span className="tool-badges"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge><Badge color={tool.backend_kind === "mcp" ? "violet" : "zinc"}>{tool.backend_kind === "mcp" ? "Stateless MCPv2" : "HTTP"}</Badge>{tool.upstream_drifted && <Badge color="red">Schema drift</Badge>}</span><h2><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link">{tool.namespace}.{tool.name}</EntityLink></h2><code>{tool.backend_kind === "mcp" ? `upstream · ${tool.upstream_tool_name}` : `${tool.http_method} · tool backend`}</code>{tool.state === "draft" && !tool.upstream_drifted && <Button outline className="publish-tool" onClick={() => onPublish(tool)}>Publish</Button>}{tool.upstream_drifted && <small className="drift-warning">Re-inspect and review before republishing.</small>}</div><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow tool-open-link" ariaLabel={`Open ${tool.namespace}.${tool.name}`}><ChevronRight /></ConsoleLink></article>)}<button type="button" className="new-tool-card" onClick={onAdd}><Plus /><strong>Add API tool</strong><span>Definition → schema → API action → authz → test → publish</span></button></div></>;
+type ToolCatalogFilter = "all" | "published" | "draft" | "drifted" | "retired";
+
+function ToolsView({ tools, integrations, connections, onAdd, onNavigate }: { tools: APITool[]; integrations: APIIntegration[]; connections: APIMCPConnection[]; onAdd: () => void; onNavigate: (path: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<ToolCatalogFilter>("all");
+  const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
+  const [usageStatus, setUsageStatus] = useState<"loading" | "ready" | "partial">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(integrations.map(async (integration) => {
+      try { return { bindings: await api.integrationToolBindings(integration.id), failed: false }; }
+      catch { return { bindings: [] as APIIntegrationToolBinding[], failed: true }; }
+    })).then((results) => {
+      if (cancelled) return;
+      const next: Record<string, number> = {};
+      results.flatMap((result) => result.bindings).forEach((binding) => { next[binding.tool_id] = (next[binding.tool_id] ?? 0) + 1; });
+      setUsageCounts(next);
+      setUsageStatus(results.some((result) => result.failed) ? "partial" : "ready");
+    });
+    return () => { cancelled = true; };
+  }, [integrations]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleTools = tools.filter((tool) => {
+    const matchesQuery = !normalizedQuery || `${tool.namespace}.${tool.name} ${tool.description} ${tool.backend_kind ?? "http"} ${tool.upstream_tool_name ?? ""}`.toLowerCase().includes(normalizedQuery);
+    const matchesFilter = filter === "all" || filter === "drifted" ? filter === "all" || Boolean(tool.upstream_drifted) : tool.state === filter;
+    return matchesQuery && matchesFilter;
+  });
+  const connectionName = (tool: APITool) => connections.find((connection) => connection.id === tool.mcp_connection_id)?.name ?? "MCP upstream";
+
+  return <>
+    <PageHeading eyebrow="Capabilities" title="Tools" description="Create reusable agent-facing contracts once, then bind exact published revisions to the APIs that expose them." action={<span className="heading-actions"><Button outline onClick={() => onNavigate(sectionPath("connections"))}><Share2 data-slot="icon" />Import from MCP</Button><Button color="indigo" onClick={onAdd}><Plus data-slot="icon" />Create tool</Button></span>} />
+    <ToolsWorkspaceTabs active="catalog" onNavigate={onNavigate} />
+    <dl className="compact-metrics tool-catalog-metrics"><div className="compact-metric"><dt>Total</dt><dd><strong>{tools.length}</strong><small>deployment tools</small></dd></div><div className="compact-metric"><dt>Published</dt><dd><strong>{tools.filter((tool) => tool.state === "published").length}</strong><small>eligible to bind</small></dd></div><div className="compact-metric"><dt>Drafts</dt><dd><strong>{tools.filter((tool) => tool.state === "draft").length}</strong><small>editable contracts</small></dd></div><div className="compact-metric"><dt>Drifted</dt><dd><strong>{tools.filter((tool) => tool.upstream_drifted).length}</strong><small>blocked upstreams</small></dd></div></dl>
+    <div className="table-toolbar tool-catalog-toolbar"><label className="table-search"><Search /><span className="sr-only">Search tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools" /></label><SegmentedControl label="Filter tools" items={[{ id: "all", label: "All", count: tools.length }, { id: "published", label: "Published", count: tools.filter((tool) => tool.state === "published").length }, { id: "draft", label: "Drafts", count: tools.filter((tool) => tool.state === "draft").length }, { id: "drifted", label: "Drifted", count: tools.filter((tool) => tool.upstream_drifted).length }, { id: "retired", label: "Retired", count: tools.filter((tool) => tool.state === "retired").length }]} value={filter} onChange={setFilter} /></div>
+    <span className="sr-only" role="status" aria-live="polite">{visibleTools.length} tool{visibleTools.length === 1 ? "" : "s"} shown.</span>
+    <DataTable label="Deployment tools" className="tool-catalog-table">
+      <DataTableHeader className="tool-catalog-columns"><span>Tool</span><span>Source</span><span>Risk &amp; access</span><span>State</span><span>Current APIs</span><span>Open</span></DataTableHeader>
+      {visibleTools.map((tool) => {
+        const policy = toolPolicy(tool);
+        const risk = policy.risk === "critical" || policy.risk === "high" || policy.risk === "medium" ? policy.risk : "low";
+        const riskColor = risk === "critical" ? "red" : risk === "high" ? "amber" : risk === "medium" ? "violet" : "zinc";
+        return <DataTableRow className={`tool-catalog-columns ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}>
+          <span className="resource-name tool-catalog-name"><span className="resource-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.description || "No purpose documented"}</small></span></span>
+          <span><strong className="cell-value">{tool.backend_kind === "mcp" ? connectionName(tool) : "HTTP"}</strong><small className="cell-note">{tool.backend_kind === "mcp" ? tool.upstream_tool_name : `${tool.http_method} · fixed endpoint`}</small></span>
+          <span className="tool-policy-cell"><span className="tool-badges"><Badge color={riskColor}>{risk} risk</Badge>{policy.confirmationRequired && <Badge color="amber">confirmation</Badge>}</span><small className="cell-note">{policy.requiredGrants.join(", ") || "No baseline grants"}</small></span>
+          <span className="tool-state-cell"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge><small className="cell-note">revision {tool.revision}</small>{tool.upstream_drifted && <Badge color="red">schema drift</Badge>}</span>
+          <span><strong className="cell-value">{usageStatus === "loading" ? "…" : usageStatus === "partial" ? `≥${usageCounts[tool.id] ?? 0}` : usageCounts[tool.id] ?? 0}</strong><small className="cell-note">current API draft{(usageCounts[tool.id] ?? 0) === 1 ? "" : "s"}{usageStatus === "partial" ? " · partial" : ""}</small></span>
+          <span className="table-open-cell"><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow" ariaLabel={`Open ${tool.namespace}.${tool.name}`}><ChevronRight /></ConsoleLink></span>
+        </DataTableRow>;
+      })}
+      {visibleTools.length === 0 && <DataTableEmpty columns={6}><div className="tool-catalog-empty"><span className="entity-missing-icon"><Wrench /></span><div><h2>{tools.length === 0 ? "No tools yet" : "No matching tools"}</h2><p>{tools.length === 0 ? "Create a fixed HTTP tool or import a reviewed MCP definition." : "Change the search or lifecycle filter."}</p></div>{tools.length === 0 && <Button color="indigo" onClick={onAdd}><Plus data-slot="icon" />Create tool</Button>}</div></DataTableEmpty>}
+    </DataTable>
+  </>;
 }
 
 

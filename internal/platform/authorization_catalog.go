@@ -345,8 +345,8 @@ func (s *Service) SetIntegrationToolBindings(ctx context.Context, integrationID 
 		if err != nil {
 			return nil, err
 		}
-		if tool.State != "published" || selection.Revision != tool.Revision {
-			return nil, fmt.Errorf("tool %s must reference its exact published revision", tool.Namespace+"."+tool.Name)
+		if tool.State != "published" || tool.UpstreamDrifted || selection.Revision != tool.Revision {
+			return nil, fmt.Errorf("tool %s must reference its exact non-drifted published revision", tool.Namespace+"."+tool.Name)
 		}
 		point, err := catalog.AuthorizationPoint(ctx, integrationID, selection.AuthorizationPointID)
 		if err != nil {

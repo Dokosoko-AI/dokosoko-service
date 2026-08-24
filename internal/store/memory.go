@@ -1042,7 +1042,6 @@ func (m *Memory) MarkImportedToolDrift(_ context.Context, productID, id string, 
 		return model.Tool{}, ErrNotFound
 	}
 	value.UpstreamDrifted = drifted
-	value.Revision++
 	value.UpdatedAt = time.Now().UTC()
 	m.tools[productID][id] = cloneTool(value)
 	return cloneTool(value), nil

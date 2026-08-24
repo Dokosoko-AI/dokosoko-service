@@ -567,16 +567,30 @@ func (m *Manager) Import(ctx context.Context, productID, connectionID string, in
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return ImportResult{}, err
 	}
-	existing := make(map[string]model.Tool)
+	existing := make(map[string][]model.Tool)
 	for _, value := range existingValues {
 		if value.BackendKind == "mcp" && value.MCPConnectionID == connectionID {
-			existing[value.UpstreamToolName] = value
+			existing[value.UpstreamToolName] = append(existing[value.UpstreamToolName], value)
 		}
 	}
 	result := ImportResult{Connection: catalog.Connection, Rejected: make(map[string]string)}
-	policy, _ := json.Marshal(map[string]any{"required_grants": normalizeScopes(input.RequiredGrants), "confirmation_required": input.ConfirmationRequired})
+	policy, _ := json.Marshal(map[string]any{"required_grants": normalizeScopes(input.RequiredGrants), "confirmation_required": input.ConfirmationRequired, "risk": "medium", "idempotency_required": false})
 	for _, upstream := range catalog.Tools {
 		if !selected[upstream.Name] {
+			continue
+		}
+		matching := existing[upstream.Name]
+		if len(matching) > 1 {
+			for _, duplicate := range matching {
+				if duplicate.State == "published" && !duplicate.UpstreamDrifted {
+					drifted, markErr := m.store.MarkImportedToolDrift(ctx, productID, duplicate.ID, true)
+					if markErr != nil {
+						return ImportResult{}, markErr
+					}
+					result.Drifted = append(result.Drifted, drifted)
+				}
+			}
+			result.Rejected[upstream.Name] = "multiple local tools reference this upstream identity; retire duplicates before importing"
 			continue
 		}
 		if !upstreamToolPattern.MatchString(upstream.Name) || len(catalog.Connection.Namespace)+1+len(upstream.Name) > 128 {
@@ -604,7 +618,10 @@ func (m *Manager) Import(ctx context.Context, productID, connectionID string, in
 		if candidate.Description == "" {
 			candidate.Description = "Imported Stateless MCPv2 tool " + upstream.Name
 		}
-		current, ok := existing[upstream.Name]
+		current, ok := model.Tool{}, len(matching) == 1
+		if ok {
+			current = matching[0]
+		}
 		if !ok {
 			candidate.ID, err = randomUUID()
 			if err != nil {

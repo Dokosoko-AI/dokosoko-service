@@ -897,7 +897,7 @@ func (p *Postgres) UpdateImportedTool(ctx context.Context, value model.Tool, exp
 }
 
 func (p *Postgres) MarkImportedToolDrift(ctx context.Context, productID, id string, drifted bool) (model.Tool, error) {
-	query := `WITH updated AS (UPDATE tool_definitions SET upstream_drifted=$3,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND backend_kind='mcp' RETURNING id) ` + toolSelect + ` WHERE t.id IN (SELECT id FROM updated)`
+	query := `WITH updated AS (UPDATE tool_definitions SET upstream_drifted=$3,updated_at=now() WHERE product_id=$1 AND id=$2 AND backend_kind='mcp' RETURNING id) ` + toolSelect + ` WHERE t.id IN (SELECT id FROM updated)`
 	return scanTool(p.pool.QueryRow(ctx, query, productID, id, drifted))
 }
 

@@ -46,6 +46,17 @@ func TestPublishedIntegrationManifestCarriesExactAuthorizationAndToolContract(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	mcpDraft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_drifted_support", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "support", Name: "create_incident", Description: "Create an incident.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), HTTPMethod: "MCP", AuthorizationPolicy: json.RawMessage(`{"required_grants":[]}`), TimeoutMS: 5000, BackendKind: "mcp", UpstreamToolName: "incidents.create", UpstreamSchemaHash: "sha256:test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpPublished, err := service.PublishTool(ctx, "prod_acme", mcpDraft.ID, mcpDraft.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.MarkImportedToolDrift(ctx, "prod_acme", mcpPublished.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	invalidSelections := []struct {
 		name       string
 		selections []platform.ToolRevisionSelection
@@ -54,6 +65,7 @@ func TestPublishedIntegrationManifestCarriesExactAuthorizationAndToolContract(t 
 		{name: "blank tool id", selections: []platform.ToolRevisionSelection{{ToolID: "  ", Revision: publishedTool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, message: "tool_id is required"},
 		{name: "missing authorization point", selections: []platform.ToolRevisionSelection{{ToolID: publishedTool.ID, Revision: publishedTool.Revision}}, message: "authorization_point_id"},
 		{name: "duplicate tool id", selections: []platform.ToolRevisionSelection{{ToolID: publishedTool.ID, Revision: publishedTool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}, {ToolID: publishedTool.ID, Revision: publishedTool.Revision + 1, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, message: "selected more than once"},
+		{name: "drifted MCP tool", selections: []platform.ToolRevisionSelection{{ToolID: mcpPublished.ID, Revision: mcpPublished.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, message: "exact non-drifted published revision"},
 	}
 	for _, test := range invalidSelections {
 		t.Run(test.name, func(t *testing.T) {

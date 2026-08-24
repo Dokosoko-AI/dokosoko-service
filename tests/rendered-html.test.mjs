@@ -13,6 +13,14 @@ async function render() {
   );
 }
 
+function componentSource(source, startName, endName) {
+  const start = source.indexOf(`function ${startName}`);
+  const end = source.indexOf(`function ${endName}`, start);
+  assert.notEqual(start, -1, `${startName} should exist`);
+  assert.notEqual(end, -1, `${endName} should follow ${startName}`);
+  return source.slice(start, end);
+}
+
 test("server-renders an authentication-safe loading shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -26,21 +34,23 @@ test("server-renders an authentication-safe loading shell", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("keeps the global navigation to five obvious destinations", async () => {
+test("keeps the global navigation to six obvious destinations", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
+  const primaryNavigation = source.slice(source.indexOf("const navigation"), source.indexOf("const initialSources"));
 
-  for (const label of ["APIs", "Recipes", "Agent access", "Activity"]) {
-    assert.match(source, new RegExp(`label: "${label}"`));
+  for (const label of ["APIs", "Tools", "Recipes", "Agent access", "Activity"]) {
+    assert.match(primaryNavigation, new RegExp(`label: "${label}"`));
   }
-  assert.match(source, /\{ id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes"/);
+  assert.match(primaryNavigation, /\{ id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: \[\{ id: "tools", label: "Catalog" \}, \{ id: "connections", label: "Connections" \}\] \}/);
+  assert.match(primaryNavigation, /\{ id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes"/);
   assert.doesNotMatch(source, /<BookOpen data-slot="icon" \/>Recipes<\/Button>/);
   assert.doesNotMatch(source, /Control plane/);
   assert.doesNotMatch(source, /className="environment"/);
   assert.doesNotMatch(styles, /\.environment\s*\{/);
   for (const removed of ["label: \"Overview\"", "label: \"Integrations\"", "label: \"Access\"", "label: \"Distribution\"", "label: \"Operations\"", "label: \"Insights\""]) {
-    assert.ok(!source.includes(removed), `${removed} should not remain in primary navigation`);
+    assert.ok(!primaryNavigation.includes(removed), `${removed} should not remain in primary navigation`);
   }
   assert.match(source, /useState<ConsoleRoute>/);
   assert.doesNotMatch(source, /setSection/);
@@ -49,7 +59,7 @@ test("keeps the global navigation to five obvious destinations", async () => {
   assert.doesNotMatch(source, /replaceState\(null, "", `\$\{sectionPath\("overview"\)/);
   assert.doesNotMatch(source, /className="section-tabs"/);
   assert.match(source, /className="mobile-navigation"/);
-  for (const path of ["/integrations", "/recipes", "/agent-access", "/activity", "/settings"]) {
+  for (const path of ["/integrations", "/tools", "/tools/connections", "/recipes", "/agent-access", "/activity", "/settings"]) {
     assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
   }
   for (const entity of ["integration", "resource-set", "source", "tool", "connection", "release", "run", "support-route", "report", "audit-event", "root-user"]) {
@@ -137,6 +147,7 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const directory = componentSource(source, "IntegrationDirectoryView", "IntegrationSwitcher");
 
   for (const label of ["Overview", "Resources", "Authorization", "Tools", "Recipes", "Delivery", "Test", "History"]) {
     assert.ok(routes.includes(`label: "${label}"`), `${label} API tab should be registered`);
@@ -155,10 +166,12 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.match(source, /<DataTableEmpty columns=\{5\}>/);
   assert.match(source, /Published history/);
   assert.match(source, /Switch API/);
+  assert.doesNotMatch(source, /description=\{integration\.description \|\| undefined\}/);
+  assert.doesNotMatch(source, /Ingest → crawl → review → publish → attach\./);
   assert.doesNotMatch(source, /Only unresolved actions appear here/);
   assert.match(source, /Customer identity/);
   assert.match(source, /Advanced details/);
-  assert.doesNotMatch(source, /No changes|Filter by API family|Filter by setup state|integration-family-heading|groupedIntegrations/);
+  assert.doesNotMatch(directory, /No changes|Filter by API family|Filter by setup state|integration-family-heading|groupedIntegrations/);
   assert.match(styles, /\.integration-directory-columns/);
   assert.doesNotMatch(styles, /\.integration-family-heading/);
   assert.match(styles, /\.page-tab\.active/);
@@ -208,9 +221,43 @@ test("uses recoverable, lifecycle-safe package publication flows", async () => {
   assert.ok(openapi.includes(String.raw`(?![^?#\s]*//)`), "release PURL schema should reject empty path segments");
 });
 
-test("uses the finalized authorization and tool-editor contracts", async () => {
+test("uses one top-level tool catalog and MCP connections workspace", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const catalog = componentSource(source, "ToolsView", "SettingsTabs");
+  const connections = componentSource(source, "MCPConnectionsView", "ToolsView");
+
+  assert.match(source, /function ToolsWorkspaceTabs/);
+  assert.match(source, /path=\{sectionPath\("tools"\)\}[\s\S]*?>Catalog<\/ConsoleLink>/);
+  assert.match(source, /path=\{sectionPath\("connections"\)\}[\s\S]*?>Connections<\/ConsoleLink>/);
+  assert.match(catalog, /<ToolsWorkspaceTabs active="catalog"/);
+  assert.match(connections, /<ToolsWorkspaceTabs active="connections"/);
+
+  assert.match(catalog, /<DataTable label="Deployment tools" className="tool-catalog-table">/);
+  assert.match(catalog, /<DataTableHeader className="tool-catalog-columns"><span>Tool<\/span><span>Source<\/span><span>Risk &amp; access<\/span><span>State<\/span><span>Current APIs<\/span><span>Open<\/span><\/DataTableHeader>/);
+  assert.match(catalog, /<SegmentedControl label="Filter tools"/);
+  for (const filter of ["all", "published", "draft", "drifted", "retired"]) assert.match(catalog, new RegExp(`id: "${filter}"`));
+  assert.match(catalog, /results\.flatMap\(\(result\) => result\.bindings\)\.forEach\(\(binding\) => \{ next\[binding\.tool_id\]/);
+  assert.match(catalog, /<DataTableEmpty columns=\{6\}>/);
+  assert.match(catalog, /Import from MCP/);
+  assert.match(catalog, /Create tool/);
+  assert.match(catalog, /entityPath\("tool", tool\.id\)/);
+  assert.match(source, /Object\.entries\(result\.rejected\)/);
+  assert.match(source, /published tool\$\{result\.drifted\.length === 1 \? "" : "s"\} blocked by schema drift/);
+  assert.match(source, /Some tools were rejected\./);
+  assert.match(source, /const fallbackRisk = tool\.http_method === "GET" \? "low" : tool\.http_method === "DELETE" \? "critical" : "medium"/);
+  assert.match(styles, /@media \(max-width: 840px\) \{[\s\S]*?\.tool-catalog-columns\.table-row/);
+  assert.doesNotMatch(catalog, /onPublish|publishTool|MCP Tool Editor|Edit & dry-run|Run contract test/);
+
+  assert.match(connections, /title="Connections"/);
+  assert.match(connections, /Inspect & import/);
+  assert.match(connections, /import always creates or updates local drafts/);
+});
+
+test("uses the finalized authorization contracts", async () => {
   const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
   const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const authorizationWorkspace = componentSource(source, "IntegrationAuthorizationWorkspace", "IntegrationToolsWorkspace");
 
   for (const capability of ["grantDefinitions", "createGrantDefinition", "updateGrantDefinition", "authorizationPoints", "createAuthorizationPoint", "updateAuthorizationPoint", "simulateAuthorizationPoint"]) {
     assert.match(client, new RegExp(`\\b${capability}\\b`));
@@ -220,27 +267,75 @@ test("uses the finalized authorization and tool-editor contracts", async () => {
   assert.match(client, /granted_grants: grantedGrants, confirmed/);
   assert.doesNotMatch(client, /integrations\/\$\{[^}]+\}\/authorization\/simulate|simulateIntegrationAuthorization|access\/evaluations/);
 
+  for (const label of ["Grant registry", "Authorization points", "Policy simulator", "Simulation only"]) {
+    assert.ok(authorizationWorkspace.includes(label), `${label} should be present in the authorization workspace`);
+  }
+  assert.match(authorizationWorkspace, /api\.simulateAuthorizationPoint\(integration\.id, selectedPoint\.id, granted, confirmed\)/);
+  assert.doesNotMatch(authorizationWorkspace, /one-time confirmation receipt/);
+  assert.match(source, /publishValidationCodes\.has\("authorization_missing"\)/);
+});
+
+test("keeps reusable tool authoring in the deployment tool detail", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const detail = componentSource(source, "ToolDetailView", "ConsoleNotFoundView");
+
   assert.match(client, /tool_revision: number/);
-  assert.match(client, /tools: Array<\{ tool_id: string; revision: number; authorization_point_id: string; authorization_point_revision: number \}>/);
   assert.match(client, /tool: \(productID: string, toolID: string\)/);
   assert.match(client, /JSON\.stringify\(\{ namespace, name \}\)/);
   assert.match(client, /\/dry-run`[\s\S]*JSON\.stringify\(\{ arguments: args \}\)/);
   assert.match(client, /\/retire`[\s\S]*JSON\.stringify\(\{ revision \}\)/);
   assert.match(client, /state: "draft" \| "published" \| "retired"/);
 
-  assert.match(source, /populateEditor\(await api\.tool\(productID, tool\.id\)\)/);
-  assert.match(source, /http_method: editorTool\.http_method/);
-  assert.match(source, /authorization_policy: \{ \.\.\.editorTool\.authorization_policy/);
-  assert.match(source, /binding\.tool_revision/);
-  for (const label of ["Grant registry", "Authorization points", "Policy simulator", "Simulation only", "Bounded dry-run", "Run dry-run", "Clone tool to a draft", "Retire"]) {
-    assert.ok(source.includes(label), `${label} should be present in the API workspace`);
+  assert.match(source, /const TOOL_DETAIL_TABS:[\s\S]*?"overview"[\s\S]*?"contract"[\s\S]*?"execution"[\s\S]*?"authorization"[\s\S]*?"tests"[\s\S]*?"usage"[\s\S]*?"history"/);
+  assert.match(detail, /api\.tool\(productID, toolID\)/);
+  assert.match(detail, /api\.updateTool\(productID, currentTool\.id, draftPayload\(\)\)/);
+  assert.match(detail, /api\.publishTool\(productID, target\.id, target\.revision\)/);
+  assert.match(detail, /api\.cloneTool\(productID, currentTool\.id, cloneNamespace\.trim\(\), cloneName\.trim\(\)\)/);
+  assert.match(detail, /api\.dryRunTool\(productID, currentTool\.id, JSON\.parse\(testInput\)\)/);
+  assert.match(detail, /api\.retireTool\(productID, currentTool\.id, currentTool\.revision\)/);
+  assert.match(detail, /const \[activeTool, setActiveTool\] = useState<APITool \| null>\(null\)/);
+  assert.match(detail, /role="tablist"[\s\S]*?role="tab"[\s\S]*?aria-selected/);
+  assert.match(detail, /role="tabpanel"[\s\S]*?aria-labelledby="tool-tab-/);
+  assert.match(detail, /activeTool\.backend_kind !== "mcp" && <Button[\s\S]*?Clone as new tool/);
+  assert.match(detail, /activeTool\.backend_kind !== "mcp" && <Dialog open=\{cloneOpen\}/);
+  assert.match(detail, /readOnly=\{!canEdit\}/);
+  for (const field of ["description", "endpoint", "http_method", "input_schema", "output_schema", "authorization_policy", "timeout_ms", "revision"]) {
+    assert.match(detail, new RegExp(`\\b${field}:`), `draft replacement should include ${field}`);
   }
-  assert.match(source, /api\.simulateAuthorizationPoint\(integration\.id, selectedPoint\.id, granted, confirmed\)/);
-  assert.match(source, /network_call_performed/);
-  assert.match(source, /Require an explicit confirmation marker for this exact MCP call/);
-  assert.doesNotMatch(source, /one-time confirmation receipt/);
-  assert.match(source, /<span>Fixed endpoint<\/span>/);
-  assert.match(source, /publishValidationCodes\.has\("authorization_missing"\)/);
+  for (const label of ["Agent contract", "Execution", "Baseline authorization", "Contract validation", "Current API configuration", "Tool activity", "Clone as a new tool", "Retire"]) {
+    assert.ok(detail.includes(label), `${label} should be present in the deployment tool detail`);
+  }
+  assert.match(detail, /network_call_performed/);
+  assert.match(detail, /bindings\.filter\(\(binding\) => binding\.tool_id === toolID\)/);
+  assert.doesNotMatch(detail, /bindings\.filter\(\(binding\) => binding\.tool_id === toolID && binding\.tool_revision/);
+  assert.match(detail, /path=\{sectionPath\("tools"\)\}[\s\S]*?All tools/);
+  assert.doesNotMatch(detail, /MCP Tool Editor|Edit & dry-run|Bounded dry-run|Run dry-run/);
+});
+
+test("keeps the API tools workspace binding-only", async () => {
+  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const bindingWorkspace = componentSource(source, "IntegrationToolsWorkspace", "IntegrationRecipesWorkspace");
+
+  assert.match(client, /tools: Array<\{ tool_id: string; revision: number; authorization_point_id: string; authorization_point_revision: number \}>/);
+  assert.match(bindingWorkspace, /api\.integrationToolBindings\(integration\.id\)/);
+  assert.match(bindingWorkspace, /api\.authorizationPoints\(integration\.id\)/);
+  assert.match(bindingWorkspace, /api\.setIntegrationToolBindings\(integration\.id/);
+  assert.match(bindingWorkspace, /binding\.tool_revision/);
+  assert.match(bindingWorkspace, /tool_id, revision: selection\.revision, authorization_point_id: selection\.authorizationPointID, authorization_point_revision: selection\.authorizationPointRevision/);
+  assert.match(bindingWorkspace, /point && point\.state === "active" && point\.revision === selection\.authorizationPointRevision/);
+  assert.match(bindingWorkspace, /const availableTools = tools\.filter\(\(tool\) => tool\.state === "published" && !tool\.upstream_drifted && !bindingSelection\[tool\.id\]\)/);
+  assert.match(bindingWorkspace, /const toolCurrent = Boolean\(tool && tool\.state === "published" && !tool\.upstream_drifted && tool\.revision === selection\.revision\)/);
+  assert.match(bindingWorkspace, /sectionPath\("tools"\)/);
+  assert.match(bindingWorkspace, /Save API bindings/);
+  assert.match(bindingWorkspace, /activePoints\.length === 0 && !bindingsLoading && !bindingsUnavailable/);
+  assert.match(bindingWorkspace, /aria-label=\{`Remove \$\{tool/);
+  assert.match(bindingWorkspace, /id="save-api-bindings"/);
+
+  assert.doesNotMatch(bindingWorkspace, /api\.(?:tool|updateTool|cloneTool|dryRunTool|publishTool|retireTool)\(/);
+  assert.doesNotMatch(bindingWorkspace, /editorTool|populateEditor|openEditor|saveToolDraft|publishEditorTool|retireEditorTool/);
+  assert.doesNotMatch(bindingWorkspace, /MCP Tool Editor|Edit & dry-run|Bounded dry-run|Run dry-run|Clone tool to a draft/);
   assert.match(source, /publishValidationCodes\.has\("tools_missing"\)/);
 });
 

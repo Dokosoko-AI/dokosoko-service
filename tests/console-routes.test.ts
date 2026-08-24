@@ -16,12 +16,33 @@ import {
 } from "../app/lib/console-routes";
 
 test("primary console sections have canonical, round-trippable URLs", () => {
-  for (const section of ["product", "distribution", "widgets", "runs", "settings"] as const) {
+  for (const section of ["product", "tools", "connections", "distribution", "widgets", "runs", "settings"] as const) {
     const path = SECTION_PATHS[section];
     assert.equal(sectionPath(section as keyof typeof SECTION_PATHS), path);
     assert.deepEqual(parseConsolePath(path), { kind: "section", section, path });
     assert.deepEqual(parseConsolePath(`${path}/`), { kind: "section", section, path });
   }
+});
+
+test("tools have canonical catalog, connection, and detail URLs", () => {
+  assert.equal(sectionPath("tools"), "/tools");
+  assert.deepEqual(parseConsolePath("/tools"), {
+    kind: "section",
+    section: "tools",
+    path: "/tools",
+  });
+  assert.equal(sectionPath("connections"), "/tools/connections");
+  assert.deepEqual(parseConsolePath("/tools/connections"), {
+    kind: "section",
+    section: "connections",
+    path: "/tools/connections",
+  });
+
+  const uid = "billing tool/v2";
+  assert.equal(entityPath("tool", uid), "/tool/billing%20tool%2Fv2");
+  assert.deepEqual(parseConsolePath(entityPath("tool", uid)), routeForEntity("tool", uid));
+  assert.equal(routeForEntity("tool", uid).section, "tools");
+  assert.equal(routeForEntity("connection", "mcp_vendor").section, "connections");
 });
 
 test("the root canonicalizes to APIs without legacy aliases", () => {
@@ -33,6 +54,8 @@ test("the root canonicalizes to APIs without legacy aliases", () => {
   assert.equal(parseConsolePath("/overview").kind, "not-found");
   assert.equal(parseConsolePath("/distribution").kind, "not-found");
   assert.equal(parseConsolePath("/operations").kind, "not-found");
+  assert.equal(parseConsolePath("/integrations/tools").kind, "not-found");
+  assert.equal(parseConsolePath("/integrations/mcp").kind, "not-found");
 });
 
 test("entity URLs encode UIDs and resolve to their owning section", () => {
@@ -114,6 +137,8 @@ test("unknown and malformed paths render the console not-found route", () => {
   assert.equal(parseConsolePath("/integration/%E0%A4%A").kind, "not-found");
   assert.equal(parseConsolePath("/integration").kind, "not-found");
   assert.equal(parseConsolePath("/integration/voice-api/not-a-tab").kind, "not-found");
+  assert.equal(parseConsolePath("/tools/catalog").kind, "not-found");
+  assert.equal(parseConsolePath("/tools/not-a-tools-area").kind, "not-found");
   assert.equal(parseConsolePath("/insights").kind, "not-found");
   assert.equal(parseConsolePath("/insights/activity").kind, "not-found");
 });
