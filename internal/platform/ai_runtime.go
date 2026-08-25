@@ -71,16 +71,51 @@ type aiInvocation struct {
 	ActorKind      string
 	ProviderRole   string
 	FallbackReason string
+	// DisableFallback keeps a consented or otherwise provider-bound payload
+	// from being disclosed to a separately configured backup provider.
+	DisableFallback                    bool
+	ExpectedProviderConnectionID       string
+	ExpectedProviderConnectionRevision int64
+	ExpectedWorkloadProfileID          string
+	ExpectedWorkloadProfileRevision    int64
 }
 
-func (s *Service) aiWorkloadConfiguration(ctx context.Context, product model.Product, workload airuntime.Workload) (model.AIWorkloadProfile, model.AIProviderConnection, []byte, error) {
+// aiInvocationTargetMatches binds a consented invocation to the exact
+// workload and provider records that were disclosed in its durable intent.
+// Revisions are part of the boundary because a stable record ID can still be
+// repointed to another model, endpoint, or credential.
+func aiInvocationTargetMatches(invocation aiInvocation, profile model.AIWorkloadProfile, connection model.AIProviderConnection) bool {
+	if invocation.ExpectedProviderConnectionID != "" && connection.ID != invocation.ExpectedProviderConnectionID {
+		return false
+	}
+	if invocation.ExpectedProviderConnectionRevision > 0 && connection.Revision != invocation.ExpectedProviderConnectionRevision {
+		return false
+	}
+	if invocation.ExpectedWorkloadProfileID != "" && profile.ID != invocation.ExpectedWorkloadProfileID {
+		return false
+	}
+	if invocation.ExpectedWorkloadProfileRevision > 0 && profile.Revision != invocation.ExpectedWorkloadProfileRevision {
+		return false
+	}
+	return true
+}
+
+func (s *Service) aiWorkloadTarget(ctx context.Context, product model.Product, workload airuntime.Workload) (model.AIWorkloadProfile, model.AIProviderConnection, error) {
 	profile, err := s.store.AIWorkloadProfile(ctx, product.ID, string(workload))
 	if err != nil || !profile.Enabled {
-		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, ErrAIUnavailable
+		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, ErrAIUnavailable
 	}
 	connection, err := s.store.AIProviderConnection(ctx, product.ID, profile.ProviderConnectionID)
 	if err != nil || !connection.Enabled {
-		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, ErrAIUnavailable
+		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, ErrAIUnavailable
+	}
+	return profile, connection, nil
+}
+
+func (s *Service) aiWorkloadConfiguration(ctx context.Context, product model.Product, workload airuntime.Workload) (model.AIWorkloadProfile, model.AIProviderConnection, []byte, error) {
+	profile, connection, err := s.aiWorkloadTarget(ctx, product, workload)
+	if err != nil {
+		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, nil, err
 	}
 	credential, err := s.aiConnectionCredential(ctx, product, connection)
 	if err != nil {
@@ -190,6 +225,10 @@ func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocat
 	if err != nil {
 		return airuntime.Result{}, err
 	}
+	if !aiInvocationTargetMatches(invocation, profile, connection) {
+		zeroBytes(credential)
+		return airuntime.Result{}, ErrAIUnavailable
+	}
 	if invocation.MaxOutput <= 0 || invocation.MaxOutput > profile.MaxOutputTokens {
 		invocation.MaxOutput = profile.MaxOutputTokens
 	}
@@ -204,7 +243,7 @@ func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocat
 	}
 	result, runErr := run(profile, connection, credential, invocation)
 	zeroBytes(credential)
-	if runErr == nil || !airuntime.Retryable(runErr) {
+	if runErr == nil || !airuntime.Retryable(runErr) || invocation.DisableFallback {
 		return result, runErr
 	}
 	backupProfile, backupConnection, backupCredential, backupErr := s.aiBackupConfiguration(ctx, invocation.Product, invocation.Workload, connection, profile)
@@ -223,6 +262,10 @@ func (s *Service) generateAIText(ctx context.Context, invocation aiInvocation) (
 	if err != nil {
 		return airuntime.Result{}, err
 	}
+	if !aiInvocationTargetMatches(invocation, profile, connection) {
+		zeroBytes(credential)
+		return airuntime.Result{}, ErrAIUnavailable
+	}
 	if invocation.MaxOutput <= 0 || invocation.MaxOutput > profile.MaxOutputTokens {
 		invocation.MaxOutput = profile.MaxOutputTokens
 	}
@@ -237,7 +280,7 @@ func (s *Service) generateAIText(ctx context.Context, invocation aiInvocation) (
 	}
 	result, runErr := run(profile, connection, credential, invocation)
 	zeroBytes(credential)
-	if runErr == nil || !airuntime.Retryable(runErr) {
+	if runErr == nil || !airuntime.Retryable(runErr) || invocation.DisableFallback {
 		return result, runErr
 	}
 	backupProfile, backupConnection, backupCredential, backupErr := s.aiBackupConfiguration(ctx, invocation.Product, invocation.Workload, connection, profile)

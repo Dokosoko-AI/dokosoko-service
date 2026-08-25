@@ -557,6 +557,9 @@ type integrationToolSnapshot struct {
 	ToolRevision               int64  `json:"tool_revision"`
 	AuthorizationPointID       string `json:"authorization_point_id"`
 	AuthorizationPointRevision int64  `json:"authorization_point_revision"`
+	Scope                      string `json:"scope"`
+	OwnerIntegrationID         string `json:"owner_integration_id,omitempty"`
+	RuntimeServiceConnectionID string `json:"runtime_service_connection_id,omitempty"`
 	Namespace                  string `json:"namespace"`
 	Name                       string `json:"name"`
 	BackendKind                string `json:"backend_kind"`
@@ -574,49 +577,95 @@ type integrationAccessSnapshot struct {
 	ContentHash              string `json:"content_hash"`
 }
 
-type integrationSnapshot struct {
-	FamilyKey                string                             `json:"family_key"`
-	VersionKey               string                             `json:"version_key"`
-	DisplayName              string                             `json:"display_name"`
-	Description              string                             `json:"description"`
-	Visibility               model.Visibility                   `json:"visibility"`
-	Lifecycle                string                             `json:"lifecycle"`
-	ReplacementIntegrationID string                             `json:"replacement_integration_id,omitempty"`
-	SunsetAt                 *time.Time                         `json:"sunset_at,omitempty"`
-	Resources                []integrationResourceSnapshot      `json:"resource_sets"`
-	Packages                 []integrationPackageSnapshot       `json:"packages"`
-	AuthorizationPoints      []integrationAuthorizationSnapshot `json:"authorization_points"`
-	Tools                    []integrationToolSnapshot          `json:"tools"`
-	AccessConnections        []integrationAccessSnapshot        `json:"access_connections"`
-	AccessConnectionIDs      []string                           `json:"access_connection_ids,omitempty"`
-	SupportRouteID           string                             `json:"support_route_id,omitempty"`
+type integrationServiceConnectionRevisionSnapshot struct {
+	RevisionID         string          `json:"revision_id"`
+	Revision           int64           `json:"revision"`
+	EnvironmentID      string          `json:"environment_id"`
+	BaseURL            string          `json:"base_url"`
+	AuthenticationType string          `json:"authentication_type"`
+	CredentialSetID    string          `json:"credential_set_id,omitempty"`
+	AuthConfig         json.RawMessage `json:"auth_config"`
+	ContentHash        string          `json:"content_hash"`
+	Current            bool            `json:"current"`
+	CredentialReady    bool            `json:"credential_ready"`
 }
 
-func (s *Service) integrationPublicationInputs(ctx context.Context, integration model.Integration) ([]model.GrantDefinition, []model.AuthorizationPoint, []model.IntegrationToolBinding, []model.AccessConnection, error) {
+type integrationServiceConnectionSnapshot struct {
+	ConnectionID       string                                         `json:"connection_id"`
+	ConnectionRevision int64                                          `json:"connection_revision"`
+	Name               string                                         `json:"name"`
+	Description        string                                         `json:"description,omitempty"`
+	State              string                                         `json:"state"`
+	CurrentRevisions   []integrationServiceConnectionRevisionSnapshot `json:"current_revisions"`
+}
+
+type integrationSnapshot struct {
+	FamilyKey                string                                 `json:"family_key"`
+	VersionKey               string                                 `json:"version_key"`
+	DisplayName              string                                 `json:"display_name"`
+	Description              string                                 `json:"description"`
+	Visibility               model.Visibility                       `json:"visibility"`
+	Lifecycle                string                                 `json:"lifecycle"`
+	ReplacementIntegrationID string                                 `json:"replacement_integration_id,omitempty"`
+	SunsetAt                 *time.Time                             `json:"sunset_at,omitempty"`
+	Resources                []integrationResourceSnapshot          `json:"resource_sets"`
+	Packages                 []integrationPackageSnapshot           `json:"packages"`
+	AuthorizationPoints      []integrationAuthorizationSnapshot     `json:"authorization_points"`
+	Tools                    []integrationToolSnapshot              `json:"tools"`
+	ServiceConnections       []integrationServiceConnectionSnapshot `json:"service_connections"`
+	AccessConnections        []integrationAccessSnapshot            `json:"access_connections"`
+	AccessConnectionIDs      []string                               `json:"access_connection_ids,omitempty"`
+	SupportRouteID           string                                 `json:"support_route_id,omitempty"`
+}
+
+type integrationPublicationInputSet struct {
+	GrantDefinitions              []model.GrantDefinition
+	AuthorizationPoints           []model.AuthorizationPoint
+	ToolBindings                  []model.IntegrationToolBinding
+	ProviderManagementConnections []model.AccessConnection
+	RuntimeServiceConnections     []model.RuntimeServiceConnection
+	RuntimeCredentialSets         []model.RuntimeCredentialSet
+}
+
+func (s *Service) integrationPublicationInputs(ctx context.Context, integration model.Integration) (integrationPublicationInputSet, error) {
+	var result integrationPublicationInputSet
 	grants, err := s.store.GrantDefinitions(ctx, integration.DeploymentID)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return result, err
 	}
+	result.GrantDefinitions = grants
 	points, err := s.store.AuthorizationPoints(ctx, integration.ID)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return result, err
 	}
+	result.AuthorizationPoints = points
 	bindings, err := s.store.IntegrationToolBindings(ctx, integration.ID)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return result, err
 	}
+	result.ToolBindings = bindings
 	connections := make([]model.AccessConnection, 0, len(integration.AccessConnections))
 	for _, connectionID := range integration.AccessConnections {
 		connection, connectionErr := s.store.AccessConnection(ctx, integration.DeploymentID, connectionID)
 		if connectionErr != nil {
-			return nil, nil, nil, nil, connectionErr
+			return result, connectionErr
 		}
 		connections = append(connections, connection)
 	}
-	return grants, points, bindings, connections, nil
+	result.ProviderManagementConnections = connections
+	result.RuntimeServiceConnections, err = s.store.RuntimeServiceConnections(ctx, integration.DeploymentID, integration.ID)
+	if err != nil {
+		return result, err
+	}
+	result.RuntimeCredentialSets, err = s.store.RuntimeCredentialSets(ctx, integration.DeploymentID, "")
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
-func buildIntegrationSnapshot(integration model.Integration, grantDefinitions []model.GrantDefinition, authorizationPoints []model.AuthorizationPoint, toolBindings []model.IntegrationToolBinding, accessConnectionBindings []model.AccessConnection, now time.Time) (json.RawMessage, []IntegrationPublishValidation, error) {
+func buildIntegrationSnapshot(integration model.Integration, inputs integrationPublicationInputSet, now time.Time) (json.RawMessage, []IntegrationPublishValidation, error) {
+	grantDefinitions, authorizationPoints, toolBindings := inputs.GrantDefinitions, inputs.AuthorizationPoints, inputs.ToolBindings
 	validations := make([]IntegrationPublishValidation, 0)
 	resources := make([]integrationResourceSnapshot, 0, len(integration.Resources))
 	for _, link := range integration.Resources {
@@ -700,11 +749,15 @@ func buildIntegrationSnapshot(integration model.Integration, grantDefinitions []
 			continue
 		}
 		tool := binding.Tool
-		definition, err := json.Marshal(map[string]any{"id": tool.ID, "revision": tool.Revision, "namespace": tool.Namespace, "name": tool.Name, "description": tool.Description, "input_schema": tool.InputSchema, "output_schema": tool.OutputSchema, "http_method": tool.HTTPMethod, "authorization_policy": tool.AuthorizationPolicy, "timeout_ms": tool.TimeoutMS, "backend_kind": tool.BackendKind, "mcp_connection_id": tool.MCPConnectionID, "upstream_tool_name": tool.UpstreamToolName, "upstream_schema_hash": tool.UpstreamSchemaHash})
+		if err := validateToolBindingOwnership(*tool, integration); err != nil {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "tool_ownership_invalid", Message: err.Error(), Tab: "tools"})
+			continue
+		}
+		definition, err := json.Marshal(map[string]any{"id": tool.ID, "revision": tool.Revision, "scope": tool.Scope, "owner_integration_id": tool.OwnerIntegrationID, "runtime_service_connection_id": tool.RuntimeServiceConnectionID, "http_path": tool.HTTPPath, "namespace": tool.Namespace, "name": tool.Name, "description": tool.Description, "input_schema": tool.InputSchema, "output_schema": tool.OutputSchema, "http_method": tool.HTTPMethod, "authorization_policy": tool.AuthorizationPolicy, "timeout_ms": tool.TimeoutMS, "backend_kind": tool.BackendKind, "mcp_connection_id": tool.MCPConnectionID, "upstream_tool_name": tool.UpstreamToolName, "upstream_schema_hash": tool.UpstreamSchemaHash})
 		if err != nil {
 			return nil, validations, err
 		}
-		boundTools = append(boundTools, integrationToolSnapshot{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: binding.AuthorizationPointID, AuthorizationPointRevision: binding.AuthorizationPointRevision, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: contentHash(definition), UpstreamSchemaHash: tool.UpstreamSchemaHash})
+		boundTools = append(boundTools, integrationToolSnapshot{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: binding.AuthorizationPointID, AuthorizationPointRevision: binding.AuthorizationPointRevision, Scope: tool.Scope, OwnerIntegrationID: tool.OwnerIntegrationID, RuntimeServiceConnectionID: tool.RuntimeServiceConnectionID, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: contentHash(definition), UpstreamSchemaHash: tool.UpstreamSchemaHash})
 	}
 	sort.Slice(boundTools, func(i, j int) bool {
 		if boundTools[i].Namespace == boundTools[j].Namespace {
@@ -715,12 +768,88 @@ func buildIntegrationSnapshot(integration model.Integration, grantDefinitions []
 	if len(boundTools) == 0 {
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "tools_missing", Message: "No reviewed tool revision is bound to this API.", Tab: "tools"})
 	}
-	accessConnections := make([]integrationAccessSnapshot, 0, len(accessConnectionBindings))
-	seenAccessConnections := make(map[string]bool, len(accessConnectionBindings))
-	for _, connection := range accessConnectionBindings {
+	credentialSets := runtimeCredentialSetIndex(inputs.RuntimeCredentialSets)
+	serviceConnections := make([]integrationServiceConnectionSnapshot, 0, len(inputs.RuntimeServiceConnections))
+	seenServiceConnections := make(map[string]bool, len(inputs.RuntimeServiceConnections))
+	readyServiceConnections := 0
+	for _, connection := range inputs.RuntimeServiceConnections {
+		readiness := runtimeServiceConnectionReadinessFrom(connection, credentialSets)
+		configurationReady, credentialsReady := true, true
+		for _, check := range readiness.Checks {
+			if check.Ready {
+				continue
+			}
+			if check.Key == "credential" {
+				credentialsReady = false
+			} else {
+				configurationReady = false
+			}
+		}
+		if connection.ID == "" || seenServiceConnections[connection.ID] || connection.DeploymentID != integration.DeploymentID || connection.OrganisationID != integration.OrganisationID || connection.IntegrationID != integration.ID {
+			configurationReady = false
+		}
+		seenServiceConnections[connection.ID] = true
+
+		revisions := append([]model.RuntimeServiceConnectionRevision(nil), connection.CurrentRevisions...)
+		sort.Slice(revisions, func(i, j int) bool {
+			if revisions[i].EnvironmentID == revisions[j].EnvironmentID {
+				if revisions[i].Revision == revisions[j].Revision {
+					return revisions[i].ID < revisions[j].ID
+				}
+				return revisions[i].Revision < revisions[j].Revision
+			}
+			return revisions[i].EnvironmentID < revisions[j].EnvironmentID
+		})
+		currentRevisions := make([]integrationServiceConnectionRevisionSnapshot, 0, len(revisions))
+		for _, revision := range revisions {
+			normalized, exact := normalizedRuntimeServiceConnectionRevision(connection, revision)
+			if !exact {
+				configurationReady = false
+				continue
+			}
+			credentialReady := runtimeServiceCredentialReady(connection, revision, credentialSets)
+			currentRevisions = append(currentRevisions, integrationServiceConnectionRevisionSnapshot{
+				RevisionID:         revision.ID,
+				Revision:           revision.Revision,
+				EnvironmentID:      revision.EnvironmentID,
+				BaseURL:            normalized.BaseURL,
+				AuthenticationType: normalized.AuthenticationType,
+				CredentialSetID:    normalized.CredentialSetID,
+				AuthConfig:         normalized.AuthConfig,
+				ContentHash:        revision.ContentHash,
+				Current:            revision.Current,
+				CredentialReady:    credentialReady,
+			})
+		}
+		serviceConnections = append(serviceConnections, integrationServiceConnectionSnapshot{
+			ConnectionID:       connection.ID,
+			ConnectionRevision: connection.Revision,
+			Name:               connection.Name,
+			Description:        connection.Description,
+			State:              connection.State,
+			CurrentRevisions:   currentRevisions,
+		})
+		if configurationReady && credentialsReady && readiness.Ready {
+			readyServiceConnections++
+		}
+		if !configurationReady {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "runtime_service_connection_unresolved", Message: fmt.Sprintf("%s does not resolve to exact active API-owned runtime connection revisions.", connection.Name), Tab: "access"})
+		}
+		if !credentialsReady {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "runtime_service_credential_unavailable", Message: fmt.Sprintf("%s requires an active compatible runtime credential for every configured environment.", connection.Name), Tab: "access"})
+		}
+	}
+	sort.Slice(serviceConnections, func(i, j int) bool { return serviceConnections[i].ConnectionID < serviceConnections[j].ConnectionID })
+	if readyServiceConnections == 0 {
+		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No publish-ready API-owned runtime service connection is configured.", Tab: "access"})
+	}
+
+	accessConnections := make([]integrationAccessSnapshot, 0, len(inputs.ProviderManagementConnections))
+	seenAccessConnections := make(map[string]bool, len(inputs.ProviderManagementConnections))
+	for _, connection := range inputs.ProviderManagementConnections {
 		definition := connection.Definition
 		if connection.ID == "" || seenAccessConnections[connection.ID] || connection.Revision < 1 || connection.State != "active" || definition == nil || definition.ID != connection.AccessDefinitionID || definition.Revision < 1 || definition.State != "active" {
-			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "access_connection_unresolved", Message: "A service connection does not resolve to one exact active connection and service-definition revision.", Tab: "access"})
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "provider_management_connection_unresolved", Message: "An optional provider-management connection does not resolve to one exact active connection and service-definition revision.", Tab: "access"})
 			continue
 		}
 		seenAccessConnections[connection.ID] = true
@@ -753,15 +882,12 @@ func buildIntegrationSnapshot(integration model.Integration, grantDefinitions []
 	}
 	sort.Slice(accessConnections, func(i, j int) bool { return accessConnections[i].ConnectionID < accessConnections[j].ConnectionID })
 	if len(accessConnections) != len(integration.AccessConnections) {
-		validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "access_connection_selection_incomplete", Message: "Every selected service connection must resolve to an exact immutable manifest entry.", Tab: "access"})
-	}
-	if len(integration.AccessConnections) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No service connection is attached.", Tab: "access"})
+		validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "provider_management_connection_selection_incomplete", Message: "Every selected optional provider-management connection must resolve to an exact immutable manifest entry.", Tab: "access"})
 	}
 	if integration.SupportRouteID == "" {
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "support_inherited", Message: "Bug reports and feedback use the deployment default, if one is configured.", Tab: "overview"})
 	}
-	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, Packages: packages, AuthorizationPoints: authorization, Tools: boundTools, AccessConnections: accessConnections, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
+	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, Packages: packages, AuthorizationPoints: authorization, Tools: boundTools, ServiceConnections: serviceConnections, AccessConnections: accessConnections, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
 	return snapshot, validations, err
 }
 
@@ -803,7 +929,7 @@ func publishChanges(previous, current json.RawMessage) []IntegrationPublishChang
 	var before, after map[string]any
 	_ = json.Unmarshal(previous, &before)
 	_ = json.Unmarshal(current, &after)
-	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "packages", "authorization_points", "tools", "access_connections", "access_connection_ids", "support_route_id"}
+	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "packages", "authorization_points", "tools", "service_connections", "access_connections", "access_connection_ids", "support_route_id"}
 	changes := make([]IntegrationPublishChange, 0)
 	for _, field := range fields {
 		beforeJSON, _ := json.Marshal(before[field])
@@ -827,11 +953,11 @@ func (s *Service) IntegrationPublishStatus(ctx context.Context, integrationID st
 	if integration.Lifecycle == "draft" {
 		integration.Lifecycle = "active"
 	}
-	grants, points, toolBindings, accessConnections, err := s.integrationPublicationInputs(ctx, integration)
+	inputs, err := s.integrationPublicationInputs(ctx, integration)
 	if err != nil {
 		return IntegrationPublishStatus{}, err
 	}
-	snapshot, validations, err := buildIntegrationSnapshot(integration, grants, points, toolBindings, accessConnections, s.now())
+	snapshot, validations, err := buildIntegrationSnapshot(integration, inputs, s.now())
 	if err != nil {
 		return IntegrationPublishStatus{}, err
 	}
@@ -885,11 +1011,11 @@ func (s *Service) PublishIntegration(ctx context.Context, integrationID string, 
 			return model.IntegrationRevision{}, err
 		}
 	}
-	grants, points, toolBindings, accessConnections, err := s.integrationPublicationInputs(ctx, integration)
+	inputs, err := s.integrationPublicationInputs(ctx, integration)
 	if err != nil {
 		return model.IntegrationRevision{}, err
 	}
-	snapshot, validations, err := buildIntegrationSnapshot(integration, grants, points, toolBindings, accessConnections, s.now())
+	snapshot, validations, err := buildIntegrationSnapshot(integration, inputs, s.now())
 	if err != nil {
 		return model.IntegrationRevision{}, err
 	}

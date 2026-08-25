@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+var contextKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 
 func validateSubmission(value SupportSubmissionRequest) error {
 	if err := boundedRequired("submission_id", value.SubmissionID, 200); err != nil {
@@ -17,8 +20,8 @@ func validateSubmission(value SupportSubmissionRequest) error {
 		return err
 	}
 	submission := value.Submission
-	if submission.SchemaVersion != "2026-08-20" {
-		return fmt.Errorf("submission.schema_version must be 2026-08-20")
+	if submission.SchemaVersion != "2026-08-25" {
+		return fmt.Errorf("submission.schema_version must be 2026-08-25")
 	}
 	if submission.Kind != "bug" && submission.Kind != "feedback" {
 		return fmt.Errorf("submission.kind must be bug or feedback")
@@ -29,23 +32,46 @@ func validateSubmission(value SupportSubmissionRequest) error {
 	if submission.Kind == "feedback" && (submission.Feedback == nil || submission.Bug != nil) {
 		return fmt.Errorf("a feedback submission must contain feedback and must not contain bug")
 	}
-	if submission.Source != "private_mcp" {
-		return fmt.Errorf("submission.source must be private_mcp")
+	if submission.Channel != "private_mcp" {
+		return fmt.Errorf("submission.channel must be private_mcp")
 	}
 	if err := dateTime("submission.confirmed_at", submission.ConfirmedAt); err != nil {
 		return err
 	}
-	if err := boundedRequired("submission.request_id", submission.RequestID, 0); err != nil {
+	if err := boundedRequired("submission.request_id", submission.RequestID, 200); err != nil {
 		return err
 	}
 	if err := validateReporter(submission.Reporter); err != nil {
 		return err
 	}
-	if err := validateProduct(submission.Product); err != nil {
+	if submission.Provider.Key != "dokosoko" {
+		return fmt.Errorf("submission.provider.key must be dokosoko")
+	}
+	if utf8.RuneCountInString(submission.Provider.Name) > 200 || utf8.RuneCountInString(submission.Provider.Version) > 100 {
+		return fmt.Errorf("submission.provider field exceeds its documented maximum length")
+	}
+	if err := validateResource("submission.resource", submission.Resource); err != nil {
 		return err
 	}
-	if submission.Integration != nil {
-		if err := validateIntegration(*submission.Integration); err != nil {
+	if len(submission.RelatedResources) > 20 {
+		return fmt.Errorf("submission.related_resources must contain no more than 20 items")
+	}
+	seen := map[string]bool{submission.Resource.Type + "\x00" + submission.Resource.ID: true}
+	for index, resource := range submission.RelatedResources {
+		if err := validateResource(fmt.Sprintf("submission.related_resources[%d]", index), resource); err != nil {
+			return err
+		}
+		key := resource.Type + "\x00" + resource.ID
+		if seen[key] {
+			return fmt.Errorf("submission resource identities must be unique")
+		}
+		seen[key] = true
+	}
+	if submission.Extensions == nil {
+		return fmt.Errorf("submission.extensions is required")
+	}
+	if submission.Extensions.DokoSoko.Integration != nil {
+		if err := validateIntegration(*submission.Extensions.DokoSoko.Integration); err != nil {
 			return err
 		}
 	}
@@ -90,11 +116,35 @@ func validateReporter(value ReporterContext) error {
 	return nil
 }
 
-func validateProduct(value ProductContext) error {
-	if err := boundedRequired("submission.product.product_id", value.ProductID, 0); err != nil {
+func validateResource(name string, value ResourceContext) error {
+	if !contextKeyPattern.MatchString(value.Type) || utf8.RuneCountInString(value.Type) > 64 {
+		return fmt.Errorf("%s.type is invalid", name)
+	}
+	if err := boundedRequired(name+".id", value.ID, 200); err != nil {
 		return err
 	}
-	return boundedRequired("submission.product.product_name", value.ProductName, 0)
+	if err := boundedRequired(name+".name", value.Name, 200); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+		max   int
+	}{
+		{"version_id", value.VersionID, 200},
+		{"version", value.Version, 100},
+		{"environment_id", value.EnvironmentID, 200},
+		{"installation_id", value.InstallationID, 200},
+		{"state", value.State, 64},
+	} {
+		if utf8.RuneCountInString(field.value) > field.max {
+			return fmt.Errorf("%s.%s must not exceed %d characters", name, field.name, field.max)
+		}
+	}
+	if value.Revision < 0 {
+		return fmt.Errorf("%s.revision must be at least 1 when supplied", name)
+	}
+	return nil
 }
 
 func validateIntegration(value IntegrationContext) error {
@@ -108,12 +158,12 @@ func validateIntegration(value IntegrationContext) error {
 		{"display_name", value.DisplayName},
 		{"lifecycle", value.Lifecycle},
 	} {
-		if err := boundedRequired("submission.integration."+field.name, field.value, 0); err != nil {
+		if err := boundedRequired("submission.extensions.dokosoko.integration."+field.name, field.value, 0); err != nil {
 			return err
 		}
 	}
 	if value.Revision < 1 {
-		return fmt.Errorf("submission.integration.revision must be at least 1")
+		return fmt.Errorf("submission.extensions.dokosoko.integration.revision must be at least 1")
 	}
 	return nil
 }

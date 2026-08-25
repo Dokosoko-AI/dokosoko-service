@@ -11,7 +11,7 @@ This is a server example, not a DokoSoko SDK. DokoSoko is the client. Your servi
 ## What is included
 
 - exact bearer-token authentication using a constant-time comparison;
-- strict `Content-Type`, `Idempotency-Key`, and `X-DokoSoko-Request-ID` validation;
+- strict `Content-Type`, `Idempotency-Key`, and `X-External-Request-ID` validation;
 - a 256 KiB body limit, unknown-field rejection, and bounded contract validation;
 - mutually exclusive bug and feedback payload validation;
 - canonical JSON hashing so insignificant whitespace does not create false conflicts;
@@ -122,7 +122,7 @@ The default tests use an in-memory test double and require no external services.
 
 ## Idempotency model
 
-DokoSoko delivers at least once. The `Idempotency-Key` identifies one logical submission, while `X-DokoSoko-Request-ID` identifies one HTTP attempt.
+DokoSoko delivers at least once. The `Idempotency-Key` identifies one logical submission, while the provider-neutral `X-External-Request-ID` identifies one HTTP attempt.
 
 For every request, this example:
 
@@ -148,6 +148,6 @@ The advisory-lock hash is used only for serialization. A theoretical hash collis
 - Never log bearer tokens, full request bodies, email addresses, or diagnostic content.
 - Apply your data-retention, access-control, encryption-at-rest, and deletion policies to `support_submissions`.
 - Run multiple replicas against the same PostgreSQL database; in-memory idempotency is not sufficient.
-- Alert on sustained `401`, `409`, `429`, and `5xx` rates, and propagate `X-DokoSoko-Request-ID` into internal tracing.
+- Alert on sustained `401`, `409`, `429`, and `5xx` rates, and propagate `X-External-Request-ID` into internal tracing.
 
 The sample intentionally does not call DokoSoko, validate customer OIDC tokens, or share credentials with the optional identity integration. Those belong to separate trust boundaries.

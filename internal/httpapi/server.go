@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -35,8 +36,12 @@ import (
 )
 
 const (
-	demoAdminToken   = "doko_admin_demo"
-	demoPrivateToken = "doko_private_demo"
+	demoAdminToken                    = "doko_admin_demo"
+	demoPrivateToken                  = "doko_private_demo"
+	managedToolConfirmationTTL        = 2 * time.Minute
+	managedToolConfirmationMetaField  = "confirmation_challenge"
+	managedToolConfirmationDomain     = "dokosoko-managed-tool-confirmation-v1"
+	managedToolConfirmationNonceBytes = 32
 )
 
 type Server struct {
@@ -52,6 +57,7 @@ type Server struct {
 	uploadDirectory string
 	uploadMaxBytes  int64
 	allowDemoTokens bool
+	widgetsEnabled  bool
 	secureCookies   bool
 	rateMu          sync.Mutex
 	rates           map[string]rateWindow
@@ -70,6 +76,7 @@ type Options struct {
 	UploadDirectory string
 	UploadMaxBytes  int64
 	AllowDemoTokens bool
+	WidgetsEnabled  bool
 }
 
 type rateWindow struct {
@@ -100,7 +107,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	if uploadMaxBytes <= 0 {
 		uploadMaxBytes = defaultSourceUploadMaxBytes
 	}
-	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
+	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, widgetsEnabled: options.WidgetsEnabled, secureCookies: strings.HasPrefix(baseURL, "https://"), rates: make(map[string]rateWindow)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -121,11 +128,23 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("POST /mcp/public", server.publicMCP)
 	mux.HandleFunc("POST /mcp", server.privateMCP)
 	mux.HandleFunc("GET /agent-setup/{kind}/prompt.md", server.agentSetupPrompt)
-	mux.HandleFunc("GET /v1/widgets/{widgetID}/configuration", server.widgetConfiguration)
-	mux.HandleFunc("POST /v1/widget-sessions", server.createWidgetSession)
-	mux.HandleFunc("POST /v1/widget-sessions/exchange", server.exchangeWidgetSession)
-	mux.HandleFunc("GET /v1/widget-session", server.currentWidgetSession)
-	mux.HandleFunc("POST /v1/widget-chat", server.widgetChat)
+	if options.WidgetsEnabled {
+		mux.HandleFunc("GET /v1/widgets/{widgetID}/configuration", server.widgetConfiguration)
+		mux.HandleFunc("POST /v1/widget-sessions", server.createWidgetSession)
+		mux.HandleFunc("POST /v1/widget-sessions/exchange", server.exchangeWidgetSession)
+		mux.HandleFunc("GET /v1/widget-session", server.currentWidgetSession)
+		mux.HandleFunc("POST /v1/widget-chat", server.widgetChat)
+	} else {
+		widgetUnavailable := func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			writeError(w, http.StatusNotFound, "not_found", "Route not found.", nil)
+		}
+		mux.HandleFunc("/v1/widgets/{widgetID}/configuration", widgetUnavailable)
+		mux.HandleFunc("/v1/widget-sessions", widgetUnavailable)
+		mux.HandleFunc("/v1/widget-sessions/exchange", widgetUnavailable)
+		mux.HandleFunc("/v1/widget-session", widgetUnavailable)
+		mux.HandleFunc("/v1/widget-chat", widgetUnavailable)
+	}
 	if options.UIDirectory != "" {
 		mux.Handle("/", staticConsole(options.UIDirectory))
 	}
@@ -740,11 +759,22 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Identity broker is not configured.")
 		return
 	}
+	rawState := r.URL.Query().Get("state")
+	if identity.IsProviderTestState(rawState) {
+		test, err := s.identityBroker.CompleteProviderTest(r.Context(), rawState, r.URL.Query().Get("code"), r.URL.Query().Get("error"))
+		if err != nil {
+			http.Redirect(w, r, s.baseURL+"/identity?identity_test_error=invalid_or_expired", http.StatusSeeOther)
+			return
+		}
+		query := url.Values{"identity_test_id": {test.ID}}
+		http.Redirect(w, r, s.baseURL+"/identity?"+query.Encode(), http.StatusSeeOther)
+		return
+	}
 	if r.URL.Query().Get("error") != "" {
 		oauthError(w, http.StatusUnauthorized, "access_denied", "The vendor authorization server denied access.")
 		return
 	}
-	result, err := s.identityBroker.Callback(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
+	result, err := s.identityBroker.Callback(r.Context(), rawState, r.URL.Query().Get("code"))
 	if err != nil {
 		oauthError(w, http.StatusUnauthorized, "access_denied", "Vendor identity or access verification failed.")
 		return
@@ -806,41 +836,58 @@ func (s *Server) identityProvider(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		value, err := s.service.Store().IdentityProvider(r.Context(), deployment.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			s.writeIdentityProvider(w, r, identity.ProviderConfig{OrganisationID: deployment.OrganisationID, DeploymentID: deployment.ID}, false)
+			return
+		}
 		if err != nil {
 			s.storeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, value)
+		s.writeIdentityProvider(w, r, value, true)
 	case http.MethodPut:
 		var input struct {
+			Provider           string   `json:"provider"`
 			Issuer             string   `json:"issuer"`
 			ClientID           string   `json:"client_id"`
 			ClientSecret       string   `json:"client_secret"`
 			Scopes             []string `json:"scopes"`
 			Audience           string   `json:"audience"`
 			OAuthResource      string   `json:"oauth_resource"`
-			OrganisationClaim  string   `json:"organisation_claim"`
+			OrganisationClaim  string   `json:"customer_account_claim"`
 			InstallationClaim  string   `json:"installation_claim"`
-			DelegatedAPIOrigin string   `json:"delegated_api_origin"`
-			State              *string  `json:"state"`
+			DelegatedAPIOrigin string   `json:"authorization_api_origin"`
 			Revision           *int64   `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		if input.Issuer == "" || input.ClientID == "" || input.DelegatedAPIOrigin == "" || input.State == nil || input.Revision == nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "issuer, client_id, delegated_api_origin, state, and revision are required.", nil)
+		if input.Provider != "oidc" || input.Issuer == "" || input.ClientID == "" || input.OrganisationClaim == "" || input.DelegatedAPIOrigin == "" || input.Revision == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "provider oidc, issuer, client_id, customer_account_claim, authorization_api_origin, and revision are required.", nil)
 			return
 		}
-		value, err := s.service.ConfigureIdentity(r.Context(), platform.IdentityInput{DeploymentID: deployment.ID, Issuer: input.Issuer, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: input.Scopes, Audience: input.Audience, OAuthResource: input.OAuthResource, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, DelegatedAPIOrigin: input.DelegatedAPIOrigin, State: *input.State, Revision: *input.Revision}, actor(r))
+		value, err := s.service.ConfigureIdentity(r.Context(), platform.IdentityInput{DeploymentID: deployment.ID, Issuer: input.Issuer, ClientID: input.ClientID, ClientSecret: input.ClientSecret, Scopes: input.Scopes, Audience: input.Audience, OAuthResource: input.OAuthResource, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, DelegatedAPIOrigin: input.DelegatedAPIOrigin, Revision: *input.Revision}, actor(r))
 		if err != nil {
-			s.creationError(w, err)
+			s.identityConfigurationError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, value)
+		s.writeIdentityProvider(w, r, value, true)
+	case http.MethodDelete:
+		var input struct {
+			Revision *int64 `json:"revision"`
+		}
+		if err := decodeJSON(r.Body, &input); err != nil || input.Revision == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "revision is required.", nil)
+			return
+		}
+		if _, err := s.service.DisconnectIdentityProvider(r.Context(), deployment.ID, *input.Revision, actor(r)); err != nil {
+			s.identityDisconnectError(w, err)
+			return
+		}
+		s.writeIdentityProvider(w, r, identity.ProviderConfig{OrganisationID: deployment.OrganisationID, DeploymentID: deployment.ID}, false)
 	default:
-		w.Header().Set("Allow", "GET, PUT")
+		w.Header().Set("Allow", "GET, PUT, DELETE")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
 }
@@ -1100,21 +1147,23 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.deploymentEnvironments(w, r)
 	case len(parts) == 3 && parts[2] == "integrations":
 		s.integrations(w, r)
-	case len(parts) == 3 && parts[2] == "widgets":
+	case s.widgetsEnabled && len(parts) == 3 && parts[2] == "widgets":
 		s.adminWidgets(w, r)
-	case len(parts) == 4 && parts[2] == "widgets":
+	case s.widgetsEnabled && len(parts) == 4 && parts[2] == "widgets":
 		s.adminWidget(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "activate" && r.Method == http.MethodPost:
+	case s.widgetsEnabled && len(parts) == 5 && parts[2] == "widgets" && parts[4] == "activate" && r.Method == http.MethodPost:
 		s.setAdminWidgetState(w, r, parts[3], "active")
-	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "disable" && r.Method == http.MethodPost:
+	case s.widgetsEnabled && len(parts) == 5 && parts[2] == "widgets" && parts[4] == "disable" && r.Method == http.MethodPost:
 		s.setAdminWidgetState(w, r, parts[3], "disabled")
-	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "secrets":
+	case s.widgetsEnabled && len(parts) == 5 && parts[2] == "widgets" && parts[4] == "secrets":
 		s.adminWidgetSecrets(w, r, parts[3])
-	case len(parts) == 6 && parts[2] == "widgets" && parts[4] == "secrets" && r.Method == http.MethodDelete:
+	case s.widgetsEnabled && len(parts) == 6 && parts[2] == "widgets" && parts[4] == "secrets" && r.Method == http.MethodDelete:
 		s.revokeAdminWidgetSecret(w, r, parts[3], parts[5])
-	case len(parts) == 5 && parts[2] == "widgets" && parts[4] == "sessions" && r.Method == http.MethodGet:
+	case s.widgetsEnabled && len(parts) == 5 && parts[2] == "widgets" && parts[4] == "sessions" && r.Method == http.MethodGet:
 		s.adminWidgetSessions(w, r, parts[3])
-	case len(parts) == 6 && parts[2] == "widgets" && parts[4] == "sessions" && r.Method == http.MethodDelete:
+	case s.widgetsEnabled && len(parts) == 5 && parts[2] == "widgets" && parts[4] == "preview-session" && r.Method == http.MethodPost:
+		s.createAdminWidgetPreviewSession(w, r, parts[3])
+	case s.widgetsEnabled && len(parts) == 6 && parts[2] == "widgets" && parts[4] == "sessions" && r.Method == http.MethodDelete:
 		s.revokeAdminWidgetSession(w, r, parts[3], parts[5])
 	case len(parts) == 4 && parts[2] == "integrations":
 		s.integration(w, r, parts[3])
@@ -1122,6 +1171,22 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.publishIntegration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "preflight" && r.Method == http.MethodPost:
 		s.preflightIntegration(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "runtime-setup":
+		s.integrationRuntimeSetup(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "runtime-connections":
+		s.integrationRuntimeConnections(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "runtime-credential-sets" && r.Method == http.MethodPost:
+		s.createIntegrationRuntimeCredentialSet(w, r, parts[3])
+	case len(parts) == 4 && parts[2] == "runtime-credential-sets" && r.Method == http.MethodGet:
+		s.runtimeCredentialSet(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "runtime-credential-sets" && parts[4] == "usage" && r.Method == http.MethodGet:
+		s.runtimeCredentialUsage(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "runtime-credential-sets" && parts[4] == "rotate" && r.Method == http.MethodPost:
+		s.rotateRuntimeCredential(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "runtime-service-connections" && parts[4] == "check" && r.Method == http.MethodPost:
+		s.checkRuntimeServiceConnection(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "runtime-credential-sets" && parts[4] == "versions" && parts[6] == "revoke" && r.Method == http.MethodPost:
+		s.revokeRuntimeCredential(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "access-connections" && r.Method == http.MethodPut:
 		s.integrationAccessConnections(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "support-route" && r.Method == http.MethodPut:
@@ -1130,8 +1195,6 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.authorizationPoints(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "authorization-points":
 		s.authorizationPoint(w, r, parts[3], parts[5])
-	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "authorization-points" && parts[6] == "simulate" && r.Method == http.MethodPost:
-		s.simulateAuthorizationPoint(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "tools":
 		s.integrationTools(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "resource-sets" && r.Method == http.MethodPost:
@@ -1168,6 +1231,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.resourceSetRevisions(w, r, parts[3])
 	case len(parts) == 3 && parts[2] == "access-definitions":
 		s.accessDefinitions(w, r)
+	case len(parts) == 4 && parts[2] == "access-definitions":
+		s.accessDefinition(w, r, parts[3])
 	case len(parts) == 3 && parts[2] == "access-connections":
 		s.accessConnections(w, r)
 	case len(parts) == 3 && parts[2] == "backend-connections":
@@ -1250,6 +1315,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.sourcePublications(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawls" && r.Method == http.MethodGet:
 		s.crawlJobs(w, r, parts[3], parts[5])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "tool-builder":
+		s.toolBuilder(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "tools":
 		s.tools(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "tools":
@@ -1258,6 +1325,14 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.cloneTool(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "dry-run" && r.Method == http.MethodPost:
 		s.dryRunTool(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "test-confirmations" && r.Method == http.MethodPost:
+		s.createToolTestConfirmation(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "test-runs":
+		s.toolTestRuns(w, r, parts[3], parts[5])
+	case len(parts) == 9 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "test-runs" && parts[8] == "analyse":
+		s.analyseToolTestRun(w, r, parts[3], parts[5], parts[7])
+	case len(parts) == 8 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "test-runs" && r.Method == http.MethodGet:
+		s.toolTestRun(w, r, parts[3], parts[5], parts[7])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "retire" && r.Method == http.MethodPost:
 		s.retireTool(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "mcp-connections":
@@ -1268,6 +1343,14 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.importMCPConnection(w, r, parts[3], parts[5])
 	case len(parts) == 3 && parts[2] == "identity-provider":
 		s.identityProvider(w, r)
+	case len(parts) == 4 && parts[2] == "identity-provider" && parts[3] == "tests":
+		s.identityProviderTests(w, r)
+	case len(parts) == 5 && parts[2] == "identity-provider" && parts[3] == "tests":
+		s.identityProviderTest(w, r, parts[4])
+	case len(parts) == 4 && parts[2] == "identity-provider" && parts[3] == "activate":
+		s.activateIdentityProvider(w, r)
+	case len(parts) == 4 && parts[2] == "identity-provider" && parts[3] == "disable":
+		s.disableIdentityProvider(w, r)
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "analytics" && r.Method == http.MethodGet:
 		s.analytics(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "integration-runs":
@@ -2038,22 +2121,32 @@ func (s *Server) tools(w http.ResponseWriter, r *http.Request, productID string)
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			OrganisationID      string          `json:"organisation_id"`
-			Namespace           string          `json:"namespace"`
-			Name                string          `json:"name"`
-			Description         string          `json:"description"`
-			InputSchema         json.RawMessage `json:"input_schema"`
-			OutputSchema        json.RawMessage `json:"output_schema"`
-			Endpoint            string          `json:"endpoint"`
-			HTTPMethod          string          `json:"http_method"`
-			AuthorizationPolicy json.RawMessage `json:"authorization_policy"`
-			TimeoutMS           int             `json:"timeout_ms"`
+			OrganisationID             string          `json:"organisation_id,omitempty"`
+			Scope                      string          `json:"scope"`
+			OwnerIntegrationID         string          `json:"owner_integration_id"`
+			RuntimeServiceConnectionID string          `json:"runtime_service_connection_id"`
+			HTTPPath                   string          `json:"http_path"`
+			Namespace                  string          `json:"namespace"`
+			Name                       string          `json:"name"`
+			Description                string          `json:"description"`
+			InputSchema                json.RawMessage `json:"input_schema"`
+			OutputSchema               json.RawMessage `json:"output_schema"`
+			Endpoint                   string          `json:"endpoint"`
+			HTTPMethod                 string          `json:"http_method"`
+			UpstreamAuth               json.RawMessage `json:"upstream_auth"`
+			Credential                 string          `json:"credential"`
+			RequestMapping             json.RawMessage `json:"request_mapping"`
+			ResponseMapping            json.RawMessage `json:"response_mapping"`
+			RequestExample             json.RawMessage `json:"request_example"`
+			ResponseExample            json.RawMessage `json:"response_example"`
+			AuthorizationPolicy        json.RawMessage `json:"authorization_policy"`
+			TimeoutMS                  int             `json:"timeout_ms"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateTool(r.Context(), platform.ToolInput{OrganisationID: input.OrganisationID, ProductID: productID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, Endpoint: input.Endpoint, HTTPMethod: input.HTTPMethod, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS}, actor(r))
+		value, err := s.service.CreateTool(r.Context(), platform.ToolInput{ProductID: productID, Scope: input.Scope, OwnerIntegrationID: input.OwnerIntegrationID, RuntimeServiceConnectionID: input.RuntimeServiceConnectionID, HTTPPath: input.HTTPPath, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, Endpoint: input.Endpoint, HTTPMethod: input.HTTPMethod, UpstreamAuth: input.UpstreamAuth, Credential: input.Credential, RequestMapping: input.RequestMapping, ResponseMapping: input.ResponseMapping, RequestExample: input.RequestExample, ResponseExample: input.ResponseExample, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -2435,13 +2528,18 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		tools := []map[string]any{
 			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment, its applicable Integration revisions, effective pinned or default connector release, and available releases.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "deployment.releases.list", "description": "List published connector releases and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "search_knowledge", "description": "Search only the reviewed documentation pinned by one applicable published Integration revision.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"query": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string", "description": "Published Integration ID. It may be omitted only when exactly one applicable Integration pins documentation."}}, "required": []string{"query"}}},
 			{"name": "integration.recipes.list", "description": "List published implementation recipes and their stable MCP resource URIs.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "integration.plan", "description": "Choose the closest published recipe for a requested integration outcome. This returns a plan reference, not a claim that work was completed.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"outcome"}}},
 			{"name": "integration.check", "description": "Check whether a published recipe URI is current or needs attention before implementation.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"recipe_uri": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"recipe_uri"}}},
 		}
+		principal, _ := r.Context().Value(principalKey).(identity.Principal)
+		if len(productManifest.Integrations) == 0 {
+			tools = append(tools, map[string]any{"name": "search_knowledge", "description": "Search the latest reviewed documentation for a legacy deployment without an Integration catalog.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}})
+		} else {
+			generated, _ := s.apiDefaultToolDefinitions(r.Context(), productID, productManifest, principal, public)
+			tools = append(tools, generated...)
+		}
 		if !public {
-			principal, _ := r.Context().Value(principalKey).(identity.Principal)
 			tools = append(tools,
 				map[string]any{"name": "integration_runs.start", "description": "Start an environment-scoped integration outcome run.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"environment_id": map[string]any{"type": "string"}, "requested_outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"environment_id", "requested_outcome"}}},
 				map[string]any{"name": "integration_runs.complete", "description": "Complete a run with a deterministic validation result.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"run_id": map[string]any{"type": "string"}, "reported_success": map[string]any{"type": "boolean"}, "validated_success": map[string]any{"type": "boolean"}, "failure_code": map[string]any{"type": "string", "maxLength": 120}}, "required": []string{"run_id", "validated_success"}}},
@@ -2474,7 +2572,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 					}
 				}
 			}
-			if s.accessRuntime != nil {
+			if s.accessRuntime != nil && len(productManifest.Integrations) == 0 {
 				capabilities := s.accessRuntime.Capabilities(r.Context(), productID, principal.Grants)
 				if len(capabilities) > 0 {
 					metadata := map[string]any{"com.dokosoko/accessConnections": capabilities}
@@ -2502,6 +2600,12 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			if s.toolRuntime != nil {
 				custom, err := s.toolRuntime.Published(r.Context(), productID)
 				if err == nil {
+					type namedCustomDefinition struct {
+						name       string
+						definition map[string]any
+					}
+					candidates := make([]namedCustomDefinition, 0, len(custom))
+					nameCounts := make(map[string]int)
 					for _, item := range custom {
 						_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(r.Context(), productID, selection, item)
 						if allowErr != nil || !allowed {
@@ -2512,7 +2616,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 							if bindingErr != nil {
 								continue
 							}
-							available, availableErr := s.toolRuntime.AvailableBound(r.Context(), productID, []toolruntime.BoundAuthorization{binding}, toolPrincipal(principal, false, ""))
+							available, availableErr := s.toolRuntime.AvailableBound(r.Context(), productID, []toolruntime.BoundAuthorization{binding}, toolPrincipal(principal, false, "", ""))
 							if availableErr != nil || len(available) != 1 || available[0].ID != item.ID {
 								continue
 							}
@@ -2526,11 +2630,22 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 								continue
 							}
 						}
+						canonicalName, canonical := canonicalCustomToolName(productManifest, item)
+						if !canonical {
+							continue
+						}
 						definition := customToolDefinitionForAuthorization(productManifest, item, binding, managedByIntegration)
+						definition["name"] = canonicalName
 						if len(item.OutputSchema) > 0 {
 							definition["outputSchema"] = item.OutputSchema
 						}
-						tools = append(tools, definition)
+						nameCounts[canonicalName]++
+						candidates = append(candidates, namedCustomDefinition{name: canonicalName, definition: definition})
+					}
+					for _, candidate := range candidates {
+						if nameCounts[candidate.name] == 1 {
+							tools = append(tools, candidate.definition)
+						}
 					}
 				}
 			}
@@ -2597,15 +2712,198 @@ func (s *Server) validateStatelessMCPv2(r *http.Request, request rpcRequest) err
 	return nil
 }
 
-func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rpcRequest, productID string, public bool, productManifest model.ProductManifest, manifestErr error) {
-	var params struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
-		Meta      struct {
-			Confirmed bool `json:"confirmed"`
-		} `json:"_meta"`
+type toolCallParams struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+	Meta      struct {
+		Confirmed             bool   `json:"confirmed"`
+		ConfirmationChallenge string `json:"confirmation_challenge"`
+		IdempotencyKey        string `json:"idempotency_key"`
+	} `json:"_meta"`
+}
+
+func decodeToolCallParams(raw json.RawMessage) (toolCallParams, error) {
+	var params toolCallParams
+	paramsDecoder := json.NewDecoder(bytes.NewReader(raw))
+	paramsDecoder.UseNumber()
+	err := paramsDecoder.Decode(&params)
+	return params, err
+}
+
+type managedToolConfirmationChallenge struct {
+	Nonce     string
+	ExpiresAt time.Time
+}
+
+type managedToolConfirmationHashInput struct {
+	ProductID                  string         `json:"product_id"`
+	ToolID                     string         `json:"tool_id"`
+	ToolRevision               int64          `json:"tool_revision"`
+	IntegrationID              string         `json:"integration_id"`
+	AuthorizationPointID       string         `json:"authorization_point_id"`
+	AuthorizationPointRevision int64          `json:"authorization_point_revision"`
+	Issuer                     string         `json:"issuer"`
+	Subject                    string         `json:"subject"`
+	CustomerAccountID          string         `json:"customer_account_id"`
+	InstallationID             string         `json:"installation_id"`
+	AccessEvaluationID         string         `json:"access_evaluation_id"`
+	AccessEvaluatedAt          string         `json:"access_evaluated_at"`
+	IdempotencyKey             string         `json:"idempotency_key"`
+	Arguments                  map[string]any `json:"arguments"`
+}
+
+func managedToolConfirmationArgumentHash(productID string, tool model.Tool, binding toolruntime.BoundAuthorization, principal identity.Principal, arguments map[string]any, idempotencyKey string) ([]byte, error) {
+	if arguments == nil {
+		arguments = map[string]any{}
 	}
-	if err := json.Unmarshal(request.Params, &params); err != nil {
+	payload, err := json.Marshal(managedToolConfirmationHashInput{
+		ProductID:                  productID,
+		ToolID:                     tool.ID,
+		ToolRevision:               tool.Revision,
+		IntegrationID:              binding.IntegrationID,
+		AuthorizationPointID:       binding.AuthorizationPoint.ID,
+		AuthorizationPointRevision: binding.AuthorizationPointRevision,
+		Issuer:                     principal.Issuer,
+		Subject:                    principal.Subject,
+		CustomerAccountID:          principal.CustomerAccountID,
+		InstallationID:             principal.InstallationID,
+		AccessEvaluationID:         principal.AccessEvaluationID,
+		AccessEvaluatedAt:          principal.AccessEvaluatedAt.UTC().Format(time.RFC3339Nano),
+		IdempotencyKey:             idempotencyKey,
+		Arguments:                  arguments,
+	})
+	if err != nil {
+		return nil, errors.New("managed tool arguments are not canonical JSON")
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(managedToolConfirmationDomain))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(payload)
+	return digest.Sum(nil), nil
+}
+
+func randomManagedToolConfirmationUUID() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16]), nil
+}
+
+func randomManagedToolConfirmationNonce() (string, []byte, error) {
+	raw := make([]byte, managedToolConfirmationNonceBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", nil, err
+	}
+	nonce := "mtc_" + base64.RawURLEncoding.EncodeToString(raw)
+	digest := sha256.Sum256([]byte(nonce))
+	return nonce, digest[:], nil
+}
+
+func managedToolConfirmationActor(principal identity.Principal) (string, error) {
+	actorID := vendorActorID(principal)
+	if actorID == "" || strings.TrimSpace(principal.AccessEvaluationID) == "" || principal.AccessEvaluatedAt.IsZero() {
+		return "", errors.New("managed tool confirmation requires an exact authenticated access evaluation")
+	}
+	return actorID, nil
+}
+
+func (s *Server) issueManagedToolConfirmation(ctx context.Context, productID string, tool model.Tool, binding toolruntime.BoundAuthorization, principal identity.Principal, arguments map[string]any, idempotencyKey string, now time.Time) (managedToolConfirmationChallenge, error) {
+	actorID, err := managedToolConfirmationActor(principal)
+	if err != nil {
+		return managedToolConfirmationChallenge{}, err
+	}
+	argumentHash, err := managedToolConfirmationArgumentHash(productID, tool, binding, principal, arguments, idempotencyKey)
+	if err != nil {
+		return managedToolConfirmationChallenge{}, err
+	}
+	nonce, nonceDigest, err := randomManagedToolConfirmationNonce()
+	if err != nil {
+		return managedToolConfirmationChallenge{}, err
+	}
+	id, err := randomManagedToolConfirmationUUID()
+	if err != nil {
+		return managedToolConfirmationChallenge{}, err
+	}
+	expiresAt := now.Add(managedToolConfirmationTTL)
+	decisionExpiresAt := principal.AccessEvaluatedAt.Add(time.Duration(binding.AuthorizationPoint.DecisionTTLSeconds) * time.Second)
+	if decisionExpiresAt.Before(expiresAt) {
+		expiresAt = decisionExpiresAt
+	}
+	if !now.Before(expiresAt) {
+		return managedToolConfirmationChallenge{}, errors.New("the access evaluation expires before confirmation can be issued")
+	}
+	confirmation := model.ToolTestConfirmation{
+		ID:             id,
+		OrganisationID: tool.OrganisationID,
+		ProductID:      productID,
+		ToolID:         tool.ID,
+		ToolRevision:   tool.Revision,
+		ArgumentHash:   argumentHash,
+		NonceDigest:    nonceDigest,
+		ActorID:        actorID,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+	}
+	if err := s.service.Store().CreateToolTestConfirmation(ctx, confirmation); err != nil {
+		return managedToolConfirmationChallenge{}, err
+	}
+	return managedToolConfirmationChallenge{Nonce: nonce, ExpiresAt: expiresAt}, nil
+}
+
+func (s *Server) consumeManagedToolConfirmation(ctx context.Context, challenge, productID string, tool model.Tool, binding toolruntime.BoundAuthorization, principal identity.Principal, arguments map[string]any, idempotencyKey string, now time.Time) error {
+	if len(challenge) != len("mtc_")+base64.RawURLEncoding.EncodedLen(managedToolConfirmationNonceBytes) || !strings.HasPrefix(challenge, "mtc_") {
+		return errors.New("managed tool confirmation challenge is malformed")
+	}
+	actorID, err := managedToolConfirmationActor(principal)
+	if err != nil {
+		return err
+	}
+	argumentHash, err := managedToolConfirmationArgumentHash(productID, tool, binding, principal, arguments, idempotencyKey)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(challenge))
+	consumptionID, err := randomManagedToolConfirmationUUID()
+	if err != nil {
+		return err
+	}
+	_, err = s.service.Store().ConsumeToolTestConfirmation(ctx, digest[:], productID, tool.ID, tool.Revision, argumentHash, actorID, consumptionID, now)
+	return err
+}
+
+func managedToolPolicy(tool model.Tool, binding toolruntime.BoundAuthorization) (confirmationRequired, idempotencyRequired bool, err error) {
+	var policy struct {
+		ConfirmationRequired bool `json:"confirmation_required"`
+		IdempotencyRequired  bool `json:"idempotency_required"`
+	}
+	if err := json.Unmarshal(tool.AuthorizationPolicy, &policy); err != nil {
+		return false, false, err
+	}
+	return policy.ConfirmationRequired || binding.AuthorizationPoint.ConfirmationRequired, strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)) != http.MethodGet && policy.IdempotencyRequired, nil
+}
+
+func writeManagedToolConfirmationRequired(w http.ResponseWriter, id any, challenge managedToolConfirmationChallenge, tool model.Tool, binding toolruntime.BoundAuthorization) {
+	writeRPCErrorData(w, id, -32003, "Client confirmation attestation is required for this exact managed tool invocation", map[string]any{
+		"confirmation_required":          true,
+		"confirmation_challenge":         challenge.Nonce,
+		"expires_at":                     challenge.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		"retry_metadata_field":           "params._meta." + managedToolConfirmationMetaField,
+		"confirmation_attestation_field": "params._meta.confirmed",
+		"confirmation_attestation_value": true,
+		"tool_id":                        tool.ID,
+		"tool_revision":                  tool.Revision,
+		"authorization_point_id":         binding.AuthorizationPoint.ID,
+		"authorization_point_revision":   binding.AuthorizationPointRevision,
+		"notice":                         "Retrying with the challenge and confirmed=true is the client's attestation that it obtained confirmation; the server does not independently prove that a human approved.",
+	})
+}
+
+func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rpcRequest, productID string, public bool, productManifest model.ProductManifest, manifestErr error) {
+	params, err := decodeToolCallParams(request.Params)
+	if err != nil {
 		writeRPCError(w, request.ID, -32602, "Invalid params")
 		return
 	}
@@ -2627,6 +2925,13 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 	}
 	s.recordAnalytics(ctx, productID, "tool.called", actorKind, actorID, dimensions)
+	if manifestErr == nil && len(productManifest.Integrations) > 0 {
+		_, generatedBindings := s.apiDefaultToolDefinitions(ctx, productID, productManifest, principal, public)
+		if binding, ok := generatedBindings[params.Name]; ok {
+			s.executeAPIDefaultTool(ctx, w, request, params, productID, binding, public, productManifest, selection, principal)
+			return
+		}
+	}
 	switch params.Name {
 	case "integration.recipes.list":
 		values, err := s.publishedRecipes(ctx, productID, public)
@@ -2759,7 +3064,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		connectionID, _ := params.Arguments["connection_id"].(string)
 		requestID, _ := ctx.Value(requestIDKey).(string)
-		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolPrincipal(principal, false, requestID))
+		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolPrincipal(principal, false, requestID, ""))
 		if err != nil {
 			writeRPCError(w, request.ID, -32003, "Upstream user authorization could not be started")
 			return
@@ -2808,7 +3113,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		writeToolResult(w, request.ID, value)
 	case "access.instances.list":
-		if public || s.accessRuntime == nil {
+		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
@@ -2821,7 +3126,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		writeToolResult(w, request.ID, map[string]any{"instances": values})
 	case "access.instances.create":
-		if public || s.accessRuntime == nil {
+		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
@@ -2841,7 +3146,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		s.recordAnalytics(ctx, productID, "access_instance.created", "vendor_user", pseudonym(productID, principal), map[string]any{"connection_id": input.ConnectionID, "integration_id": input.IntegrationID})
 		writeToolResult(w, request.ID, value)
 	case "access.credentials.list":
-		if public || s.accessRuntime == nil {
+		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
@@ -2855,7 +3160,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		writeToolResult(w, request.ID, map[string]any{"credentials": values})
 	case "access.credentials.create":
-		if public || s.accessRuntime == nil {
+		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
@@ -2875,7 +3180,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		s.recordAnalytics(ctx, productID, "access_credential.created", "vendor_user", pseudonym(productID, principal), map[string]any{"connection_id": input.ConnectionID, "integration_id": input.IntegrationID, "existing": value.Existing})
 		writeToolResult(w, request.ID, value)
 	case "access.credentials.revoke":
-		if public || s.accessRuntime == nil {
+		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
 			return
 		}
@@ -2887,6 +3192,10 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		writeToolResult(w, request.ID, value)
 	case "search_knowledge":
+		if len(productManifest.Integrations) > 0 {
+			writeRPCError(w, request.ID, -32601, "Tool is not available for Integration-catalog deployments")
+			return
+		}
 		query, _ := params.Arguments["query"].(string)
 		integrationID, _ := params.Arguments["integration_id"].(string)
 		publicationIDs, scopeErr := s.knowledgePublicationIDs(ctx, productID, integrationID, productManifest)
@@ -2953,21 +3262,14 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		if s.toolRuntime != nil {
 			requestID, _ := ctx.Value(requestIDKey).(string)
 			principal, _ := ctx.Value(principalKey).(identity.Principal)
-			available, lookupErr := s.service.Store().Tools(ctx, productID, false)
-			var selectedTool model.Tool
-			if lookupErr == nil {
-				for _, candidate := range available {
-					if candidate.Namespace+"."+candidate.Name != params.Name {
-						continue
-					}
-					_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(ctx, productID, selection, candidate)
-					if allowErr != nil || !allowed {
-						writeRPCError(w, request.ID, -32003, "Tool is not included in the effective product version")
-						return
-					}
-					selectedTool = candidate
-					break
-				}
+			selectedTool, lookupErr := s.executableTool(ctx, productID, params.Name, selection)
+			if errors.Is(lookupErr, errToolVersionExcluded) {
+				writeRPCError(w, request.ID, -32003, "Tool is not included in the effective product version")
+				return
+			}
+			if lookupErr != nil || selectedTool.ID == "" {
+				writeRPCError(w, request.ID, -32601, "Tool not found")
+				return
 			}
 			var value any
 			var err error
@@ -2977,9 +3279,65 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 					writeRPCError(w, request.ID, -32003, "Tool has no unique exact authorization action in an applicable published Integration revision")
 					return
 				}
-				value, err = s.toolRuntime.ExecuteBound(ctx, productID, params.Name, params.Arguments, toolPrincipal(principal, params.Meta.Confirmed, requestID), bound)
+				confirmationRequired, idempotencyRequired, policyErr := managedToolPolicy(selectedTool, bound)
+				if policyErr != nil {
+					writeRPCError(w, request.ID, -32003, "Tool execution was denied by policy")
+					return
+				}
+				if (params.Meta.IdempotencyKey != "" && !toolruntime.ValidIdempotencyKey(params.Meta.IdempotencyKey)) || (idempotencyRequired && !toolruntime.ValidIdempotencyKey(params.Meta.IdempotencyKey)) {
+					writeRPCError(w, request.ID, -32602, "params._meta.idempotency_key must contain 16 to 200 visible ASCII characters")
+					return
+				}
+				managedPrincipal := toolPrincipal(principal, false, requestID, params.Meta.IdempotencyKey)
+				managedPrincipal.EnvironmentID = productManifest.EnvironmentID
+				if confirmationRequired {
+					if params.Arguments == nil {
+						params.Arguments = map[string]any{}
+					}
+					if validationErr := toolruntime.ValidateArguments(selectedTool.InputSchema, params.Arguments); validationErr != nil {
+						writeRPCError(w, request.ID, -32602, "Tool arguments do not match the declared input schema")
+						return
+					}
+					available, availabilityErr := s.toolRuntime.AvailableBound(ctx, productID, []toolruntime.BoundAuthorization{bound}, managedPrincipal)
+					if availabilityErr != nil || len(available) != 1 || available[0].ID != selectedTool.ID || available[0].Revision != selectedTool.Revision {
+						writeRPCError(w, request.ID, -32003, "Tool execution was denied by policy")
+						return
+					}
+					now := time.Now().UTC()
+					if strings.TrimSpace(params.Meta.ConfirmationChallenge) == "" {
+						challenge, challengeErr := s.issueManagedToolConfirmation(ctx, productID, selectedTool, bound, principal, params.Arguments, params.Meta.IdempotencyKey, now)
+						if challengeErr != nil {
+							writeRPCError(w, request.ID, -32603, "A confirmation challenge could not be issued safely")
+							return
+						}
+						writeManagedToolConfirmationRequired(w, request.ID, challenge, selectedTool, bound)
+						return
+					}
+					if !params.Meta.Confirmed {
+						writeRPCErrorData(w, request.ID, -32003, "Client confirmation attestation is required with the server-issued challenge", map[string]any{
+							"confirmation_required":          true,
+							"confirmation_attestation_field": "params._meta.confirmed",
+							"confirmation_attestation_value": true,
+							"notice":                         "confirmed=true is a client attestation; the server does not independently prove that a human approved.",
+						})
+						return
+					}
+					if confirmationErr := s.consumeManagedToolConfirmation(ctx, params.Meta.ConfirmationChallenge, productID, selectedTool, bound, principal, params.Arguments, params.Meta.IdempotencyKey, now); confirmationErr != nil {
+						writeRPCErrorData(w, request.ID, -32003, "The confirmation challenge is invalid, expired, already used, or does not match this exact invocation", map[string]any{
+							"confirmation_required":                        true,
+							"retry_without_challenge_to_request_a_new_one": true,
+						})
+						return
+					}
+					managedPrincipal.Confirmed = true
+				}
+				runtimeName := selectedTool.Namespace + "." + selectedTool.Name
+				value, err = s.toolRuntime.ExecuteBound(ctx, productID, runtimeName, params.Arguments, managedPrincipal, bound)
 			} else {
-				value, err = s.toolRuntime.Execute(ctx, productID, params.Name, params.Arguments, toolPrincipal(principal, params.Meta.Confirmed, requestID))
+				runtimePrincipal := toolPrincipal(principal, params.Meta.Confirmed, requestID, params.Meta.IdempotencyKey)
+				runtimePrincipal.EnvironmentID = productManifest.EnvironmentID
+				runtimeName := selectedTool.Namespace + "." + selectedTool.Name
+				value, err = s.toolRuntime.Execute(ctx, productID, runtimeName, params.Arguments, runtimePrincipal)
 			}
 			if err == nil {
 				if upstream, ok := value.(toolruntime.MCPCallResult); ok {
@@ -2993,13 +3351,62 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 				writeRPCError(w, request.ID, -32003, "Tool execution was denied by policy")
 				return
 			}
+			if errors.Is(err, toolruntime.ErrInvalidIdempotencyKey) {
+				writeRPCError(w, request.ID, -32602, "params._meta.idempotency_key must contain 16 to 200 visible ASCII characters")
+				return
+			}
+			if errors.Is(err, toolruntime.ErrRateLimited) {
+				writeRPCError(w, request.ID, -32029, "The upstream tool connection request limit was exceeded")
+				return
+			}
 			if errors.Is(err, mcpbridge.ErrGrantRequired) {
 				writeRPCError(w, request.ID, -32001, "Authorize this Stateless MCPv2 connection with mcp_connections.authorize before calling its tools")
 				return
 			}
+			writeRPCError(w, request.ID, -32603, "Tool execution failed safely; review the tool activity for the sanitized failure category")
+			return
 		}
 		writeRPCError(w, request.ID, -32601, "Tool not found")
 	}
+}
+
+var errToolVersionExcluded = errors.New("tool is excluded from the effective product version")
+
+// executableTool resolves the exact row that was checked against the
+// effective-version allowlist. Callers must not fall through to Runtime's
+// second lookup when this read fails or finds no row: doing so would create a
+// publication race that bypasses the version check.
+func (s *Server) executableTool(ctx context.Context, productID, fullName string, selection model.ProductSelectionContext) (model.Tool, error) {
+	available, err := s.service.Store().Tools(ctx, productID, false)
+	if err != nil {
+		return model.Tool{}, err
+	}
+	manifest, manifestErr := s.service.ProductManifestFor(ctx, productID, selection)
+	matches := make([]model.Tool, 0, 1)
+	excluded := false
+	for _, candidate := range available {
+		legacyName := candidate.Namespace + "." + candidate.Name
+		canonicalName, canonical := canonicalCustomToolName(manifest, candidate)
+		if legacyName != fullName && (manifestErr != nil || !canonical || canonicalName != fullName) {
+			continue
+		}
+		_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(ctx, productID, selection, candidate)
+		if allowErr != nil || !allowed {
+			excluded = true
+			continue
+		}
+		matches = append(matches, candidate)
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return model.Tool{}, store.ErrConflict
+	}
+	if excluded {
+		return model.Tool{}, errToolVersionExcluded
+	}
+	return model.Tool{}, store.ErrNotFound
 }
 
 func (s *Server) knowledgePublicationIDs(ctx context.Context, productID, requestedIntegrationID string, manifest model.ProductManifest) ([]string, error) {
@@ -3165,9 +3572,17 @@ func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool m
 			policy.Risk = "critical"
 		}
 	}
+	idempotencyKeyRequired := tool.HTTPMethod != http.MethodGet && policy.IdempotencyRequired
 	description := tool.Description
 	if policy.ConfirmationRequired {
-		description += " Explicit user confirmation is required before execution."
+		if managed {
+			description += " The client must preview the exact invocation, obtain confirmation, and retry with the server-issued confirmation challenge; the retry is a client attestation, not independent server proof of human approval."
+		} else {
+			description += " The client must preview the exact invocation and attest that it obtained confirmation; this client attestation is not independent server proof of human approval."
+		}
+	}
+	if idempotencyKeyRequired {
+		description += " Supply one stable params._meta.idempotency_key for the invocation and reuse it across transport retries."
 	}
 	integrationIDs := make([]string, 0, 1)
 	if managed {
@@ -3192,11 +3607,29 @@ func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool m
 		pointRevision = binding.AuthorizationPointRevision
 		decisionTTL = binding.AuthorizationPoint.DecisionTTLSeconds
 	}
-	readOnly := tool.HTTPMethod == http.MethodGet
-	destructive := policy.Risk == "critical" || tool.HTTPMethod == http.MethodDelete
-	if actionType != "" {
-		readOnly = actionType == "read"
-		destructive = actionType == "destructive"
+	method := strings.ToUpper(strings.TrimSpace(tool.HTTPMethod))
+	actionType = strings.ToLower(strings.TrimSpace(actionType))
+	// An authorization point may make an operation more restrictive, but it
+	// must never erase the safety signal inherent in the HTTP method or tool
+	// policy. This also remains fail-safe if stale data contains an invalid
+	// read binding for a mutation.
+	readOnly := method == http.MethodGet && (actionType == "" || actionType == "read")
+	destructive := strings.EqualFold(strings.TrimSpace(policy.Risk), "critical") || method == http.MethodDelete || actionType == "destructive"
+	metadata := map[string]any{
+		"com.dokosoko/toolRevision":                    tool.Revision,
+		"com.dokosoko/integrationIds":                  integrationIDs,
+		"com.dokosoko/authorizationPointId":            pointID,
+		"com.dokosoko/authorizationPointRevision":      pointRevision,
+		"com.dokosoko/authorizationDecisionTtlSeconds": decisionTTL,
+		"com.dokosoko/requiredGrants":                  policy.RequiredGrants,
+		"com.dokosoko/confirmationRequired":            policy.ConfirmationRequired,
+		"com.dokosoko/risk":                            policy.Risk,
+		"com.dokosoko/idempotencyKeyRequired":          idempotencyKeyRequired,
+		"com.dokosoko/idempotencyKeyMetaField":         "idempotency_key",
+	}
+	if managed && policy.ConfirmationRequired {
+		metadata["com.dokosoko/confirmationChallengeMetaField"] = managedToolConfirmationMetaField
+		metadata["com.dokosoko/confirmationAttestationMetaField"] = "confirmed"
 	}
 	return map[string]any{
 		"name":        tool.Namespace + "." + tool.Name,
@@ -3205,18 +3638,9 @@ func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool m
 		"annotations": map[string]any{
 			"readOnlyHint":    readOnly,
 			"destructiveHint": destructive,
-			"idempotentHint":  tool.HTTPMethod == http.MethodGet || policy.IdempotencyRequired,
+			"idempotentHint":  method == http.MethodGet || policy.IdempotencyRequired,
 		},
-		"_meta": map[string]any{
-			"com.dokosoko/toolRevision":                    tool.Revision,
-			"com.dokosoko/integrationIds":                  integrationIDs,
-			"com.dokosoko/authorizationPointId":            pointID,
-			"com.dokosoko/authorizationPointRevision":      pointRevision,
-			"com.dokosoko/authorizationDecisionTtlSeconds": decisionTTL,
-			"com.dokosoko/requiredGrants":                  policy.RequiredGrants,
-			"com.dokosoko/confirmationRequired":            policy.ConfirmationRequired,
-			"com.dokosoko/risk":                            policy.Risk,
-		},
+		"_meta": metadata,
 	}
 }
 
@@ -3296,7 +3720,7 @@ func accessPrincipal(principal identity.Principal, ctx context.Context) accessru
 	return accessruntime.Principal{Subject: vendorActorID(principal), ExternalCustomerID: principal.ExternalCustomerID, InstallationID: principal.InstallationID, Grants: principal.Grants, RequestID: requestID}
 }
 
-func toolPrincipal(principal identity.Principal, confirmed bool, requestID string) toolruntime.Principal {
+func toolPrincipal(principal identity.Principal, confirmed bool, requestID, idempotencyKey string) toolruntime.Principal {
 	return toolruntime.Principal{
 		Subject:              principal.Subject,
 		Issuer:               principal.Issuer,
@@ -3310,6 +3734,7 @@ func toolPrincipal(principal identity.Principal, confirmed bool, requestID strin
 		DelegatedAccessToken: principal.UpstreamAccessToken,
 		Confirmed:            confirmed,
 		RequestID:            requestID,
+		IdempotencyKey:       idempotencyKey,
 	}
 }
 
@@ -3406,6 +3831,10 @@ func writeRPC(w http.ResponseWriter, id, result any) {
 
 func writeRPCError(w http.ResponseWriter, id any, code int, message string) {
 	writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
+}
+
+func writeRPCErrorData(w http.ResponseWriter, id any, code int, message string, data map[string]any) {
+	writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message, "data": data}})
 }
 
 func writeToolResult(w http.ResponseWriter, id, value any) {

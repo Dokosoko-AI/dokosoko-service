@@ -20,13 +20,13 @@ paths:
       description: >-
         Called asynchronously from DokoSoko's durable outbox. Delivery is at
         least once. DokoSoko retries network errors, 408, 429, and 5xx responses
-        with the same Idempotency-Key and a new X-DokoSoko-Request-ID. Vendors
+        with the same Idempotency-Key and a new X-External-Request-ID. Vendors
         retain an exact idempotency result for at least 24 hours. Reusing a key
         with a different payload returns 409. Other 4xx responses are permanent.
       security: [{ serviceBearer: [] }]
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/DokoSokoRequestID"
+        - $ref: "#/components/parameters/ExternalRequestID"
       requestBody:
         required: true
         content:
@@ -60,8 +60,8 @@ components:
       required: true
       description: Stable identifier for one logical support submission.
       schema: { type: string, minLength: 16, maxLength: 200 }
-    DokoSokoRequestID:
-      name: X-DokoSoko-Request-ID
+    ExternalRequestID:
+      name: X-External-Request-ID
       in: header
       required: true
       description: Unique identifier for this HTTP attempt; retries use a new value.
@@ -89,17 +89,22 @@ components:
       type: object
       additionalProperties: false
       properties:
-        schema_version: { const: "2026-08-20" }
+        schema_version: { const: "2026-08-25" }
         kind: { type: string, enum: [bug, feedback] }
         bug: { $ref: "#/components/schemas/BugReport" }
         feedback: { $ref: "#/components/schemas/FeedbackReport" }
         reporter: { $ref: "#/components/schemas/ReporterContext" }
-        product: { $ref: "#/components/schemas/ProductContext" }
-        integration: { $ref: "#/components/schemas/IntegrationContext" }
-        source: { const: private_mcp }
+        provider: { $ref: "#/components/schemas/ProviderContext" }
+        resource: { $ref: "#/components/schemas/ResourceContext" }
+        related_resources:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/ResourceContext" }
+        channel: { const: private_mcp }
+        extensions: { $ref: "#/components/schemas/SupportExtensions" }
         confirmed_at: { type: string, format: date-time }
-        request_id: { type: string, minLength: 1 }
-      required: [schema_version, kind, reporter, product, source, confirmed_at, request_id]
+        request_id: { type: string, minLength: 1, maxLength: 200 }
+      required: [schema_version, kind, reporter, provider, resource, channel, extensions, confirmed_at, request_id]
       oneOf:
         - properties: { kind: { const: bug }, feedback: false }
           required: [bug]
@@ -121,24 +126,46 @@ components:
         external_customer_id:
           type: string
           maxLength: 200
-          description: Vendor-owned customer identifier derived from authenticated identity.
+          description: Receiver customer identifier derived from the authenticated identity.
         installation_id: { type: string, maxLength: 200 }
         allow_contact: { type: boolean }
       required: [principal, allow_contact]
-    ProductContext:
+    ProviderContext:
       type: object
       additionalProperties: false
       properties:
-        product_id: { type: string, minLength: 1 }
-        product_name: { type: string, minLength: 1 }
-        product_version_id: { type: string }
-        product_version: { type: string }
+        key: { const: dokosoko }
+        name: { type: string, maxLength: 200 }
+        version: { type: string, maxLength: 100 }
+      required: [key]
+    ResourceContext:
+      type: object
+      additionalProperties: false
+      properties:
+        type: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z][a-z0-9._-]*$' }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        version_id: { type: string, maxLength: 200 }
+        version: { type: string, maxLength: 100 }
+        environment_id: { type: string, maxLength: 200 }
+        installation_id: { type: string, maxLength: 200 }
+        state: { type: string, maxLength: 64 }
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [type, id, name]
+    SupportExtensions:
+      type: object
+      additionalProperties: true
+      properties:
+        dokosoko: { $ref: "#/components/schemas/DokoSokoSupportExtension" }
+      required: [dokosoko]
+    DokoSokoSupportExtension:
+      type: object
+      additionalProperties: false
+      properties:
         manifest_hash: { type: string }
         catalog_revision: { type: integer, format: int64 }
         selection_source: { type: string }
-        environment_id: { type: string }
-        installation_id: { type: string }
-      required: [product_id, product_name]
+        integration: { $ref: "#/components/schemas/IntegrationContext" }
     IntegrationContext:
       type: object
       additionalProperties: false

@@ -69,7 +69,7 @@ func validBody(t *testing.T) []byte {
 		SubmissionID: "submission_01JY4R8T7N6M5K4J3H2G1F0E9D",
 		CreatedAt:    "2026-08-22T12:00:00Z",
 		Submission: SupportSubmission{
-			SchemaVersion: "2026-08-20",
+			SchemaVersion: "2026-08-25",
 			Kind:          "bug",
 			Bug:           &BugReport{Summary: "Request fails", Description: "The request returns an unexpected response.", Severity: &severity},
 			Reporter: ReporterContext{
@@ -77,11 +77,13 @@ func validBody(t *testing.T) []byte {
 				ExternalCustomerID: "customer_456",
 				AllowContact:       &allowContact,
 			},
-			Product:     ProductContext{ProductID: "product_123", ProductName: "Example API"},
-			Integration: &IntegrationContext{IntegrationID: "integration_123", FamilyKey: "payments", VersionKey: "v1", DisplayName: "Payments API", Lifecycle: "active", Revision: 3},
-			Source:      "private_mcp",
-			ConfirmedAt: "2026-08-22T12:00:00Z",
-			RequestID:   "req_22222222222222222222222222222222",
+			Provider:         ProviderContext{Key: "dokosoko", Name: "DokoSoko"},
+			Resource:         ResourceContext{Type: "deployment", ID: "product_123", Name: "Example API"},
+			RelatedResources: []ResourceContext{{Type: "api", ID: "integration_123", Name: "Payments API", Version: "v1", State: "active", Revision: 3}},
+			Channel:          "private_mcp",
+			Extensions:       &SupportExtensions{DokoSoko: DokoSokoSupportExtension{Integration: &IntegrationContext{IntegrationID: "integration_123", FamilyKey: "payments", VersionKey: "v1", DisplayName: "Payments API", Lifecycle: "active", Revision: 3}}},
+			ConfirmedAt:      "2026-08-22T12:00:00Z",
+			RequestID:        "req_22222222222222222222222222222222",
 		},
 	}
 	body, err := json.Marshal(value)
@@ -102,7 +104,7 @@ func request(handler http.Handler, body []byte, token, key, requestID string) *h
 		req.Header.Set("Idempotency-Key", key)
 	}
 	if requestID != "" {
-		req.Header.Set("X-DokoSoko-Request-ID", requestID)
+		req.Header.Set("X-External-Request-ID", requestID)
 	}
 	handler.ServeHTTP(recorder, req)
 	return recorder

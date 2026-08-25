@@ -209,8 +209,10 @@ use an isolated test environment and idempotent arguments.
 ## Confirmation checks
 
 An unconfirmed call is always attempted when `--confirmation-tool` is set and
-must return JSON-RPC error `-32003`. A confirmed call can have side effects, so
-it requires a second explicit flag:
+must return JSON-RPC error `-32003` with a server-issued one-time confirmation
+challenge. A confirmed call can have side effects, so it requires a second
+explicit flag. The client repeats the exact arguments and idempotency metadata
+with that challenge, then proves the consumed challenge is rejected on replay:
 
 ```sh
 ./mcp-acceptance run \

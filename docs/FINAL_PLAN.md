@@ -84,7 +84,7 @@ The response contains:
 
 DokoSoko defines tools and `required_grants`. Access evaluation narrows access; it does not remotely define DokoSoko resources. Network errors, non-success HTTP statuses, malformed data, missing identity, expired evaluations, and unavailable dependencies deny authorization.
 
-The `Idempotency-Key` is stable for retries of one evaluation and unique for a later evaluation. Each transport attempt has a new `X-DokoSoko-Request-ID`.
+The `Idempotency-Key` is stable for retries of one evaluation and unique for a later evaluation. Each transport attempt has a new provider-neutral `X-External-Request-ID`.
 
 ### Support submission
 
@@ -92,7 +92,7 @@ The `Idempotency-Key` is stable for retries of one evaluation and unique for a l
 
 DokoSoko accepts a report only after explicit user confirmation, schema and size validation, and secret screening. It stores the payload encrypted and returns a local receipt before vendor delivery. A durable worker provides at-least-once delivery.
 
-Retries preserve `Idempotency-Key` and change `X-DokoSoko-Request-ID`. Network failures, 408, 429, and 5xx are retryable. Other 4xx statuses are permanent. A vendor returns `409` if a key is reused with a different payload and retains the original result for at least 24 hours.
+Retries preserve `Idempotency-Key` and change `X-External-Request-ID`. Network failures, 408, 429, and 5xx are retryable. Other 4xx statuses are permanent. A vendor returns `409` if a key is reused with a different payload and retains the original result for at least 24 hours.
 
 Usage is an ordinary API operation or tool if required. It has no separate integration mechanism.
 

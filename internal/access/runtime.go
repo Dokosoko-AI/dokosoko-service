@@ -15,10 +15,12 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 )
@@ -61,13 +63,14 @@ type tokenCacheEntry struct {
 }
 
 type Runtime struct {
-	store    Store
-	vault    *secrets.Vault
-	resolver Resolver
-	doer     Doer
-	now      func() time.Time
-	tokenMu  sync.Mutex
-	tokens   map[string]tokenCacheEntry
+	store                        Store
+	vault                        *secrets.Vault
+	resolver                     Resolver
+	doer                         Doer
+	now                          func() time.Time
+	tokenMu                      sync.Mutex
+	tokens                       map[string]tokenCacheEntry
+	privateLocalhostDestinations map[string]struct{}
 }
 
 type Principal struct {
@@ -87,18 +90,20 @@ type InstanceRequest struct {
 }
 
 type CredentialRequest struct {
-	IntegrationID    string   `json:"integration_id"`
-	EnvironmentID    string   `json:"environment_id"`
-	AccessInstanceID string   `json:"access_instance_id,omitempty"`
-	Scopes           []string `json:"scopes"`
-	IdempotencyKey   string   `json:"idempotency_key"`
-	TTLSeconds       int      `json:"ttl_seconds,omitempty"`
+	IntegrationID           string   `json:"integration_id"`
+	EnvironmentID           string   `json:"environment_id"`
+	AccessInstanceID        string   `json:"access_instance_id,omitempty"`
+	RotatedFromCredentialID string   `json:"rotated_from_credential_id,omitempty"`
+	Scopes                  []string `json:"scopes"`
+	IdempotencyKey          string   `json:"idempotency_key"`
+	TTLSeconds              int      `json:"ttl_seconds,omitempty"`
 }
 
 type CredentialResult struct {
-	Credential         model.AccessCredential `json:"credential"`
-	CredentialMaterial json.RawMessage        `json:"credential_material,omitempty"`
-	Existing           bool                   `json:"existing"`
+	Credential          model.AccessCredential `json:"credential"`
+	CredentialMaterial  json.RawMessage        `json:"credential_material,omitempty"`
+	Existing            bool                   `json:"existing"`
+	EnvironmentVariable string                 `json:"environment_variable,omitempty"`
 }
 
 type Capability struct {
@@ -115,8 +120,9 @@ type Capability struct {
 }
 
 type operation struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
+	Method                         string `json:"method"`
+	Path                           string `json:"path"`
+	AcceptsRotatedFromCredentialID bool   `json:"accepts_rotated_from_credential_id,omitempty"`
 }
 
 type definitionConfig struct {
@@ -138,6 +144,48 @@ func New(store Store, vault *secrets.Vault, resolver Resolver, doer Doer) *Runti
 		resolver = net.DefaultResolver
 	}
 	return &Runtime{store: store, vault: vault, resolver: resolver, doer: doer, now: func() time.Time { return time.Now().UTC() }, tokens: make(map[string]tokenCacheEntry)}
+}
+
+// SetPrivateLocalhostHosts configures exact HTTP development destinations.
+// It never relaxes public-host SSRF checks and a host-only entry grants only
+// the default HTTP port.
+func (r *Runtime) SetPrivateLocalhostHosts(destinations []string) {
+	r.privateLocalhostDestinations = make(map[string]struct{}, len(destinations))
+	for _, destination := range destinations {
+		hostname, port := localDevelopmentDestination(destination)
+		if hostname != "" {
+			r.privateLocalhostDestinations[net.JoinHostPort(hostname, port)] = struct{}{}
+		}
+	}
+}
+
+func localDevelopmentDestination(raw string) (string, string) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" || strings.Contains(raw, "://") || strings.ContainsAny(raw, "/?#@") {
+		return "", ""
+	}
+	hostname, port, err := net.SplitHostPort(raw)
+	if err != nil {
+		hostname, port = raw, "80"
+	}
+	hostname = strings.TrimSuffix(strings.Trim(hostname, "[]"), ".")
+	parsedPort, err := strconv.Atoi(port)
+	if err != nil || parsedPort < 1 || parsedPort > 65535 || !identity.IsLocalDevelopmentHostname(hostname) {
+		return "", ""
+	}
+	return hostname, strconv.Itoa(parsedPort)
+}
+
+func (r *Runtime) privateLocalDevelopmentURL(destination *url.URL) bool {
+	if destination.Scheme != "http" || !identity.IsLocalDevelopmentHostname(destination.Hostname()) {
+		return false
+	}
+	port := destination.Port()
+	if port == "" {
+		port = "80"
+	}
+	_, ok := r.privateLocalhostDestinations[net.JoinHostPort(strings.ToLower(destination.Hostname()), port)]
+	return ok
 }
 
 func randomUUID() string {
@@ -248,7 +296,8 @@ func validOperationPath(raw string) bool {
 }
 
 func (r *Runtime) clientForURL(ctx context.Context, destination *url.URL) (Doer, error) {
-	if destination.Scheme != "https" || destination.Hostname() == "" || destination.User != nil || destination.Port() != "" {
+	localDevelopment := r.privateLocalDevelopmentURL(destination)
+	if (destination.Scheme != "https" && !localDevelopment) || destination.Hostname() == "" || destination.User != nil || (destination.Scheme == "https" && destination.Port() != "") {
 		return nil, ErrUnsafeDestination
 	}
 	addresses, err := r.resolver.LookupIP(ctx, "ip", destination.Hostname())
@@ -256,7 +305,7 @@ func (r *Runtime) clientForURL(ctx context.Context, destination *url.URL) (Doer,
 		return nil, ErrUnsafeDestination
 	}
 	for _, address := range addresses {
-		if unsafeIP(address) {
+		if unsafeIP(address) && !localDevelopment {
 			return nil, ErrUnsafeDestination
 		}
 	}
@@ -264,15 +313,22 @@ func (r *Runtime) clientForURL(ctx context.Context, destination *url.URL) (Doer,
 		return r.doer, nil
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	port := destination.Port()
+	if port == "" {
+		port = "443"
+		if destination.Scheme == "http" {
+			port = "80"
+		}
+	}
 	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: destination.Hostname()}, DisableCompression: true, ResponseHeaderTimeout: 10 * time.Second, DialContext: func(dialContext context.Context, network, _ string) (net.Conn, error) {
-		return dialer.DialContext(dialContext, network, net.JoinHostPort(addresses[0].String(), "443"))
+		return dialer.DialContext(dialContext, network, net.JoinHostPort(addresses[0].String(), port))
 	}}
 	return &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 
 func (r *Runtime) destination(ctx context.Context, connection model.AccessConnection, operationPath string) (*url.URL, Doer, error) {
 	base, err := url.Parse(connection.BaseURL)
-	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.Port() != "" || base.RawQuery != "" || base.Fragment != "" || !validOperationPath(operationPath) {
+	if err != nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || !validOperationPath(operationPath) {
 		return nil, nil, ErrUnsafeDestination
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + operationPath
@@ -637,7 +693,7 @@ func (r *Runtime) IssueCredential(ctx context.Context, deploymentID, connectionI
 		return CredentialResult{}, ErrUnsupported
 	}
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
-	if request.EnvironmentID == "" || len(request.IdempotencyKey) < 16 || len(request.Scopes) > 20 || !validTTL(request.TTLSeconds, cfg.MaxTTLSeconds) || (connection.EnvironmentID != "" && connection.EnvironmentID != request.EnvironmentID) {
+	if request.EnvironmentID == "" || request.EnvironmentID != strings.TrimSpace(request.EnvironmentID) || len(request.EnvironmentID) > 200 || len(request.IdempotencyKey) < 16 || len(request.Scopes) > 20 || !validTTL(request.TTLSeconds, cfg.MaxTTLSeconds) || (connection.EnvironmentID != "" && connection.EnvironmentID != request.EnvironmentID) {
 		return CredentialResult{}, ErrInvalidRequest
 	}
 	if definition.CredentialScope == "connection" && request.AccessInstanceID != "" {
@@ -652,12 +708,22 @@ func (r *Runtime) IssueCredential(ctx context.Context, deploymentID, connectionI
 			return CredentialResult{}, ErrDenied
 		}
 	}
+	var rotatedFrom model.AccessCredential
+	if request.RotatedFromCredentialID != "" {
+		rotatedFrom, err = r.store.AccessCredential(ctx, deploymentID, request.RotatedFromCredentialID)
+		if err != nil || rotatedFrom.SubjectID != principal.Subject || rotatedFrom.State != "active" || rotatedFrom.AccessConnectionID != connectionID || rotatedFrom.AccessInstanceID != request.AccessInstanceID || rotatedFrom.EnvironmentID != request.EnvironmentID {
+			return CredentialResult{}, ErrDenied
+		}
+	}
 	existingValues, err := r.store.AccessCredentials(ctx, deploymentID, connectionID, request.AccessInstanceID)
 	if err != nil {
 		return CredentialResult{}, err
 	}
 	for _, existing := range existingValues {
 		if existing.IdempotencyKey == request.IdempotencyKey {
+			if existing.RotatedFromID != request.RotatedFromCredentialID {
+				return CredentialResult{}, ErrDenied
+			}
 			return CredentialResult{Credential: existing, Existing: true}, nil
 		}
 	}
@@ -670,7 +736,11 @@ func (r *Runtime) IssueCredential(ctx context.Context, deploymentID, connectionI
 		CredentialMaterial json.RawMessage `json:"credential_material"`
 		ExpiresAt          *time.Time      `json:"expires_at"`
 	}
-	err = r.call(ctx, connection, definition, create, map[string]any{"deployment_id": deploymentID, "integration_id": request.IntegrationID, "environment_id": request.EnvironmentID, "access_instance_id": request.AccessInstanceID, "subject": principal.Subject, "scopes": request.Scopes, "idempotency_key": request.IdempotencyKey, "ttl_seconds": request.TTLSeconds}, &response)
+	providerRequest := map[string]any{"deployment_id": deploymentID, "integration_id": request.IntegrationID, "environment_id": request.EnvironmentID, "access_instance_id": request.AccessInstanceID, "subject": principal.Subject, "scopes": request.Scopes, "idempotency_key": request.IdempotencyKey, "ttl_seconds": request.TTLSeconds}
+	if request.RotatedFromCredentialID != "" && create.AcceptsRotatedFromCredentialID {
+		providerRequest["rotated_from_credential_id"] = rotatedFrom.ExternalID
+	}
+	err = r.call(ctx, connection, definition, create, providerRequest, &response)
 	if err != nil {
 		return CredentialResult{}, err
 	}
@@ -678,6 +748,9 @@ func (r *Runtime) IssueCredential(ctx context.Context, deploymentID, connectionI
 		response.CredentialMaterial, _ = json.Marshal(response.Credential)
 	}
 	if response.CredentialID == "" || (cfg.CredentialStorageMode != "reference" && len(response.CredentialMaterial) == 0) {
+		return CredentialResult{}, ErrInvalidRequest
+	}
+	if rotatedFrom.ID != "" && response.CredentialID == rotatedFrom.ExternalID {
 		return CredentialResult{}, ErrInvalidRequest
 	}
 	if response.ExpiresAt != nil && (!response.ExpiresAt.After(r.now()) || (request.TTLSeconds > 0 && cfg.MaxTTLSeconds > 0 && response.ExpiresAt.After(r.now().Add(time.Duration(cfg.MaxTTLSeconds)*time.Second)))) {
@@ -698,11 +771,15 @@ func (r *Runtime) IssueCredential(ctx context.Context, deploymentID, connectionI
 			return CredentialResult{}, err
 		}
 	}
-	credential, err := r.store.CreateAccessCredential(ctx, model.AccessCredential{ID: randomUUID(), DeploymentID: deploymentID, OrganisationID: connection.OrganisationID, AccessConnectionID: connectionID, AccessInstanceID: request.AccessInstanceID, EnvironmentID: request.EnvironmentID, SubjectID: principal.Subject, ExternalID: response.CredentialID, IdempotencyKey: request.IdempotencyKey, Scopes: request.Scopes, SecretFingerprint: hex.EncodeToString(fingerprint[:]), StorageMode: cfg.CredentialStorageMode, EncryptedSecretID: secretID, State: "active", ExpiresAt: response.ExpiresAt})
+	credential, err := r.store.CreateAccessCredential(ctx, model.AccessCredential{ID: randomUUID(), DeploymentID: deploymentID, OrganisationID: connection.OrganisationID, AccessConnectionID: connectionID, AccessInstanceID: request.AccessInstanceID, EnvironmentID: request.EnvironmentID, SubjectID: principal.Subject, ExternalID: response.CredentialID, IdempotencyKey: request.IdempotencyKey, Scopes: request.Scopes, SecretFingerprint: hex.EncodeToString(fingerprint[:]), StorageMode: cfg.CredentialStorageMode, EncryptedSecretID: secretID, State: "active", ExpiresAt: response.ExpiresAt, RotatedFromID: request.RotatedFromCredentialID})
 	if err != nil {
 		return CredentialResult{}, err
 	}
-	_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: "access_credential.created", TargetType: "access_credential", TargetID: credential.ID, Current: map[string]any{"connection_id": connectionID, "access_instance_id": request.AccessInstanceID, "integration_id": request.IntegrationID, "scopes": credential.Scopes, "storage_mode": credential.StorageMode, "expires_at": credential.ExpiresAt}, RequestID: principal.RequestID, CreatedAt: r.now()})
+	action := "access_credential.created"
+	if request.RotatedFromCredentialID != "" {
+		action = "access_credential.rotated"
+	}
+	_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: action, TargetType: "access_credential", TargetID: credential.ID, Current: map[string]any{"connection_id": connectionID, "access_instance_id": request.AccessInstanceID, "integration_id": request.IntegrationID, "rotated_from_id": request.RotatedFromCredentialID, "prior_retained_active": request.RotatedFromCredentialID != "", "scopes": credential.Scopes, "storage_mode": credential.StorageMode, "expires_at": credential.ExpiresAt}, RequestID: principal.RequestID, CreatedAt: r.now()})
 	return CredentialResult{Credential: credential, CredentialMaterial: response.CredentialMaterial}, nil
 }
 
@@ -743,4 +820,24 @@ func (r *Runtime) RevokeCredential(ctx context.Context, deploymentID, credential
 		_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: "access_credential.revoked", TargetType: "access_credential", TargetID: credentialID, RequestID: principal.RequestID, CreatedAt: r.now()})
 	}
 	return updated, err
+}
+
+// RevokeCredentialBound is the API-scoped variant used by generated admin
+// tools. The caller cannot redirect a credential ID to another published API
+// or management connection.
+func (r *Runtime) RevokeCredentialBound(ctx context.Context, deploymentID, connectionID, integrationID, credentialID string, principal Principal) (model.AccessCredential, error) {
+	credential, err := r.store.AccessCredential(ctx, deploymentID, credentialID)
+	if err != nil || credential.AccessConnectionID != connectionID || credential.SubjectID != principal.Subject {
+		return model.AccessCredential{}, ErrDenied
+	}
+	if _, _, _, err := r.connectionAndDefinition(ctx, deploymentID, connectionID, integrationID, principal); err != nil {
+		return model.AccessCredential{}, err
+	}
+	if credential.AccessInstanceID != "" {
+		instance, lookupErr := r.store.AccessInstance(ctx, deploymentID, credential.AccessInstanceID)
+		if lookupErr != nil || instance.AccessConnectionID != connectionID || !contains(instance.IntegrationIDs, integrationID) || !ownsInstance(instance, principal) {
+			return model.AccessCredential{}, ErrDenied
+		}
+	}
+	return r.RevokeCredential(ctx, deploymentID, credentialID, principal)
 }

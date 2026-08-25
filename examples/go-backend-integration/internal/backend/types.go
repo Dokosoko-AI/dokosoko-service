@@ -40,16 +40,18 @@ type SupportSubmissionRequest struct {
 }
 
 type SupportSubmission struct {
-	SchemaVersion string              `json:"schema_version"`
-	Kind          string              `json:"kind"`
-	Bug           *BugReport          `json:"bug,omitempty"`
-	Feedback      *FeedbackReport     `json:"feedback,omitempty"`
-	Reporter      ReporterContext     `json:"reporter"`
-	Product       ProductContext      `json:"product"`
-	Integration   *IntegrationContext `json:"integration,omitempty"`
-	Source        string              `json:"source"`
-	ConfirmedAt   string              `json:"confirmed_at"`
-	RequestID     string              `json:"request_id"`
+	SchemaVersion    string             `json:"schema_version"`
+	Kind             string             `json:"kind"`
+	Bug              *BugReport         `json:"bug,omitempty"`
+	Feedback         *FeedbackReport    `json:"feedback,omitempty"`
+	Reporter         ReporterContext    `json:"reporter"`
+	Provider         ProviderContext    `json:"provider"`
+	Resource         ResourceContext    `json:"resource"`
+	RelatedResources []ResourceContext  `json:"related_resources,omitempty"`
+	Channel          string             `json:"channel"`
+	Extensions       *SupportExtensions `json:"extensions"`
+	ConfirmedAt      string             `json:"confirmed_at"`
+	RequestID        string             `json:"request_id"`
 }
 
 type ReporterContext struct {
@@ -66,16 +68,33 @@ type ReporterPrincipal struct {
 	Subject string `json:"subject"`
 }
 
-type ProductContext struct {
-	ProductID        string `json:"product_id"`
-	ProductName      string `json:"product_name"`
-	ProductVersionID string `json:"product_version_id,omitempty"`
-	ProductVersion   string `json:"product_version,omitempty"`
-	ManifestHash     string `json:"manifest_hash,omitempty"`
-	CatalogRevision  int64  `json:"catalog_revision,omitempty"`
-	SelectionSource  string `json:"selection_source,omitempty"`
-	EnvironmentID    string `json:"environment_id,omitempty"`
-	InstallationID   string `json:"installation_id,omitempty"`
+type ProviderContext struct {
+	Key     string `json:"key"`
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+type ResourceContext struct {
+	Type           string `json:"type"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	VersionID      string `json:"version_id,omitempty"`
+	Version        string `json:"version,omitempty"`
+	EnvironmentID  string `json:"environment_id,omitempty"`
+	InstallationID string `json:"installation_id,omitempty"`
+	State          string `json:"state,omitempty"`
+	Revision       int64  `json:"revision,omitempty"`
+}
+
+type SupportExtensions struct {
+	DokoSoko DokoSokoSupportExtension `json:"dokosoko"`
+}
+
+type DokoSokoSupportExtension struct {
+	ManifestHash    string              `json:"manifest_hash,omitempty"`
+	CatalogRevision int64               `json:"catalog_revision,omitempty"`
+	SelectionSource string              `json:"selection_source,omitempty"`
+	Integration     *IntegrationContext `json:"integration,omitempty"`
 }
 
 type IntegrationContext struct {

@@ -148,23 +148,6 @@ func (s *Server) authorizationPoint(w http.ResponseWriter, r *http.Request, inte
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) simulateAuthorizationPoint(w http.ResponseWriter, r *http.Request, integrationID, pointID string) {
-	var input struct {
-		GrantedGrants []string `json:"granted_grants"`
-		Confirmed     bool     `json:"confirmed"`
-	}
-	if err := decodeJSON(r.Body, &input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	value, err := s.service.SimulateAuthorizationPoint(r.Context(), integrationID, pointID, input.GrantedGrants, input.Confirmed)
-	if err != nil {
-		s.creationError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
 func (s *Server) integrationTools(w http.ResponseWriter, r *http.Request, integrationID string) {
 	switch r.Method {
 	case http.MethodGet:

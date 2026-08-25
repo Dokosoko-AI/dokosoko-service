@@ -611,7 +611,7 @@ func (m *Manager) Import(ctx context.Context, productID, connectionID string, in
 		if len(annotations) == 0 {
 			annotations = json.RawMessage(`{}`)
 		}
-		candidate := model.Tool{OrganisationID: catalog.Connection.OrganisationID, ProductID: productID, Namespace: catalog.Connection.Namespace, Name: upstream.Name, Description: strings.TrimSpace(upstream.Description), InputSchema: inputSchema, OutputSchema: outputSchema, HTTPMethod: "MCP", AuthorizationPolicy: policy, TimeoutMS: input.TimeoutMS, BackendKind: "mcp", MCPConnectionID: connectionID, UpstreamToolName: upstream.Name, UpstreamSchemaHash: upstream.SchemaHash, UpstreamAnnotations: annotations}
+		candidate := model.Tool{OrganisationID: catalog.Connection.OrganisationID, ProductID: productID, Scope: model.ToolScopeCommon, Namespace: catalog.Connection.Namespace, Name: upstream.Name, Description: strings.TrimSpace(upstream.Description), InputSchema: inputSchema, OutputSchema: outputSchema, HTTPMethod: "MCP", AuthorizationPolicy: policy, TimeoutMS: input.TimeoutMS, BackendKind: "mcp", MCPConnectionID: connectionID, UpstreamToolName: upstream.Name, UpstreamSchemaHash: upstream.SchemaHash, UpstreamAnnotations: annotations}
 		if candidate.Description == "" {
 			candidate.Description = upstream.Title
 		}

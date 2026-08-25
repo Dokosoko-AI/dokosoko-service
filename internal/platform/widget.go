@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
@@ -189,8 +190,36 @@ func validateWidgetIntegrationBindings(widget model.Widget) error {
 				return ErrWidgetManifestUnavailable
 			}
 		}
+		requiredRuntimeConnections := make(map[string]bool)
 		for _, tool := range snapshot.Tools {
 			if tool.ToolID == "" || tool.ToolRevision < 1 || tool.AuthorizationPointID == "" || tool.AuthorizationPointRevision < 1 || tool.ContentHash == "" {
+				return ErrWidgetManifestUnavailable
+			}
+			if tool.RuntimeServiceConnectionID != "" {
+				requiredRuntimeConnections[tool.RuntimeServiceConnectionID] = true
+			}
+		}
+		availableRuntimeConnections := make(map[string]bool, len(snapshot.ServiceConnections))
+		for _, connection := range snapshot.ServiceConnections {
+			if connection.ConnectionID == "" || connection.ConnectionRevision < 1 || strings.TrimSpace(connection.Name) == "" || connection.State != "active" || len(connection.CurrentRevisions) == 0 {
+				return ErrWidgetManifestUnavailable
+			}
+			availableRuntimeConnections[connection.ConnectionID] = true
+			seenEnvironments := make(map[string]bool, len(connection.CurrentRevisions))
+			for _, revision := range connection.CurrentRevisions {
+				authenticationType, authErr := normalizeRuntimeAuthenticationType(revision.AuthenticationType)
+				canonicalAuthConfig, configErr := normalizeRuntimeAuthConfig(revision.AuthConfig, authenticationType)
+				if revision.RevisionID == "" || revision.Revision < 1 || revision.EnvironmentID == "" || seenEnvironments[revision.EnvironmentID] || !validHTTPSBaseOrigin(revision.BaseURL) || authErr != nil || authenticationType != revision.AuthenticationType || configErr != nil || string(canonicalAuthConfig) != string(revision.AuthConfig) || revision.ContentHash == "" || !revision.Current || !revision.CredentialReady {
+					return ErrWidgetManifestUnavailable
+				}
+				if runtimeAuthenticationNeedsCredential(authenticationType) != (revision.CredentialSetID != "") {
+					return ErrWidgetManifestUnavailable
+				}
+				seenEnvironments[revision.EnvironmentID] = true
+			}
+		}
+		for connectionID := range requiredRuntimeConnections {
+			if !availableRuntimeConnections[connectionID] {
 				return ErrWidgetManifestUnavailable
 			}
 		}
@@ -199,10 +228,33 @@ func validateWidgetIntegrationBindings(widget model.Widget) error {
 				return ErrWidgetManifestUnavailable
 			}
 		}
-		if snapshot.Visibility != model.VisibilityPublic && (!documentationReady || !apiReady || len(snapshot.AuthorizationPoints) == 0 || len(snapshot.Tools) == 0 || len(snapshot.AccessConnections) == 0) {
+		if snapshot.Visibility != model.VisibilityPublic && (!documentationReady || !apiReady || len(snapshot.AuthorizationPoints) == 0 || len(snapshot.Tools) == 0) {
 			return ErrWidgetManifestUnavailable
 		}
 		seen[binding.IntegrationID] = true
+	}
+	if err := validateWidgetKnowledgeBindings(widget); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateWidgetKnowledgeBindings(widget model.Widget) error {
+	allowedIntegrations := make(map[string]bool, len(widget.IntegrationIDs))
+	for _, integrationID := range widget.IntegrationIDs {
+		allowedIntegrations[integrationID] = true
+	}
+	seen := make(map[string]bool, len(widget.KnowledgeBindings))
+	for _, binding := range widget.KnowledgeBindings {
+		if binding.RecipeID == "" || binding.RecipeRevisionID == "" || binding.RecipeRevision < 1 || seen[binding.RecipeRevisionID] || strings.TrimSpace(binding.Title) == "" || strings.TrimSpace(binding.Outcome) == "" || strings.TrimSpace(binding.Markdown) == "" || len(binding.Markdown) > 256_000 || !strings.HasPrefix(binding.StableURI, "dokosoko://") || !widgetManifestHashPattern.MatchString(binding.ContentHash) || len(binding.IntegrationIDs) == 0 {
+			return ErrWidgetManifestUnavailable
+		}
+		for _, integrationID := range binding.IntegrationIDs {
+			if !allowedIntegrations[integrationID] {
+				return ErrWidgetManifestUnavailable
+			}
+		}
+		seen[binding.RecipeRevisionID] = true
 	}
 	return nil
 }
@@ -240,6 +292,62 @@ func (s *Service) pinWidgetIntegrations(ctx context.Context, integrationIDs []st
 	return bindings, nil
 }
 
+func (s *Service) pinWidgetKnowledge(ctx context.Context, deploymentID string, integrationIDs []string) ([]model.WidgetKnowledgeBinding, error) {
+	recipes, err := s.ReconcileRecipeDrift(ctx, deploymentID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	allowed := make(map[string]bool, len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		allowed[integrationID] = true
+	}
+	bindings := make([]model.WidgetKnowledgeBinding, 0)
+	for _, recipe := range recipes {
+		if recipe.State != "published" || recipe.NeedsAttention || recipe.CurrentRevision == nil || recipe.CurrentRevision.ID == "" || recipe.CurrentRevision.ID != recipe.CurrentRevisionID || strings.TrimSpace(recipe.CurrentRevision.Markdown) == "" {
+			continue
+		}
+		scope := make([]string, 0)
+		seenScope := make(map[string]bool)
+		for _, dependency := range recipe.Dependencies {
+			if (dependency.Kind == "integration" || dependency.Kind == "integration_scope") && allowed[dependency.ResourceID] && !seenScope[dependency.ResourceID] {
+				scope = append(scope, dependency.ResourceID)
+				seenScope[dependency.ResourceID] = true
+			}
+		}
+		if len(scope) == 0 {
+			continue
+		}
+		slices.Sort(scope)
+		references, marshalErr := json.Marshal(recipe.CurrentRevision.References)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		digest := sha256.Sum256(append(append([]byte(recipe.CurrentRevision.Markdown), 0), references...))
+		bindings = append(bindings, model.WidgetKnowledgeBinding{
+			RecipeID:         recipe.ID,
+			RecipeRevisionID: recipe.CurrentRevision.ID,
+			RecipeRevision:   recipe.CurrentRevision.Revision,
+			IntegrationIDs:   scope,
+			Title:            recipe.Title,
+			Outcome:          recipe.Outcome,
+			Audience:         recipe.Audience,
+			StableURI:        recipe.StableURI,
+			Markdown:         recipe.CurrentRevision.Markdown,
+			References:       append([]model.RecipeReference(nil), recipe.CurrentRevision.References...),
+			ContentHash:      fmt.Sprintf("sha256:%x", digest),
+			BoundAt:          s.now(),
+		})
+	}
+	slices.SortFunc(bindings, func(left, right model.WidgetKnowledgeBinding) int {
+		return strings.Compare(left.StableURI, right.StableURI)
+	})
+	widget := model.Widget{IntegrationIDs: append([]string(nil), integrationIDs...), KnowledgeBindings: bindings}
+	if err := validateWidgetKnowledgeBindings(widget); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
 func newWidgetToken(prefix string) (string, []byte, string, error) {
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
@@ -254,9 +362,9 @@ func newWidgetToken(prefix string) (string, []byte, string, error) {
 	return raw, digest[:], fingerprint, nil
 }
 
-func idempotentWidgetToken(rawSecret, widgetID, userID, customerOrganisationID, origin, key string) (string, []byte) {
+func idempotentWidgetToken(rawSecret, widgetID, userID, customerOrganisationID, origin, sessionContext, key string) (string, []byte) {
 	mac := hmac.New(sha256.New, []byte(rawSecret))
-	_, _ = mac.Write([]byte("dokosoko-widget-bootstrap-v1\x00" + widgetID + "\x00" + userID + "\x00" + customerOrganisationID + "\x00" + origin + "\x00" + key))
+	_, _ = mac.Write([]byte("dokosoko-widget-bootstrap-v2\x00" + widgetID + "\x00" + userID + "\x00" + customerOrganisationID + "\x00" + origin + "\x00" + sessionContext + "\x00" + key))
 	raw := "doko_wbt_" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	digest := sha256.Sum256([]byte(raw))
 	return raw, digest[:]
@@ -347,12 +455,17 @@ func (s *Service) UpdateWidget(ctx context.Context, widgetID string, input Widge
 		if err != nil {
 			return model.Widget{}, err
 		}
+		current.KnowledgeBindings, err = s.pinWidgetKnowledge(ctx, current.DeploymentID, integrations)
+		if err != nil {
+			return model.Widget{}, err
+		}
 	} else if current.State == "active" {
 		if err := validateWidgetIntegrationBindings(current); err != nil {
 			return model.Widget{}, err
 		}
 	} else if !slices.Equal(current.IntegrationIDs, integrations) {
 		current.IntegrationBindings = nil
+		current.KnowledgeBindings = nil
 	}
 	current.Name, current.AllowedOrigins, current.IntegrationIDs, current.Appearance = input.Name, origins, integrations, appearance
 	updated, err := s.store.UpdateWidget(ctx, current, input.Revision)
@@ -383,6 +496,10 @@ func (s *Service) SetWidgetState(ctx context.Context, widgetID, state string, re
 			return model.Widget{}, err
 		}
 		current.IntegrationBindings, err = s.pinWidgetIntegrations(ctx, current.IntegrationIDs)
+		if err != nil {
+			return model.Widget{}, err
+		}
+		current.KnowledgeBindings, err = s.pinWidgetKnowledge(ctx, current.DeploymentID, current.IntegrationIDs)
 		if err != nil {
 			return model.Widget{}, err
 		}
@@ -431,11 +548,54 @@ func (s *Service) RotateWidgetSecret(ctx context.Context, widgetID string, actor
 }
 
 func (s *Service) CreateWidgetBootstrap(ctx context.Context, widgetID, rawSecret, userID, customerOrganisationID, origin, idempotencyKey string) (WidgetBootstrapResult, error) {
+	return s.CreateWidgetBootstrapWithContext(ctx, widgetID, rawSecret, userID, customerOrganisationID, origin, model.WidgetSessionContext{}, idempotencyKey)
+}
+
+func normalizeWidgetSessionContext(value model.WidgetSessionContext) (model.WidgetSessionContext, error) {
+	value.View = strings.TrimSpace(value.View)
+	value.Title = strings.TrimSpace(value.Title)
+	if len(value.View) > 80 || len(value.Title) > 160 || len(value.Facts) > 20 {
+		return model.WidgetSessionContext{}, errors.New("widget context exceeds the allowed size")
+	}
+	validText := func(text string) bool {
+		return strings.IndexFunc(text, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) < 0
+	}
+	if !validText(value.View) || !validText(value.Title) {
+		return model.WidgetSessionContext{}, errors.New("widget context must contain printable text")
+	}
+	result := model.WidgetSessionContext{View: value.View, Title: value.Title, Facts: make([]model.WidgetContextFact, 0, len(value.Facts))}
+	seen := make(map[string]bool)
+	total := len(value.View) + len(value.Title)
+	for _, fact := range value.Facts {
+		fact.Label, fact.Value = strings.TrimSpace(fact.Label), strings.TrimSpace(fact.Value)
+		key := strings.ToLower(fact.Label)
+		if fact.Label == "" || fact.Value == "" || len(fact.Label) > 80 || len(fact.Value) > 500 || !validText(fact.Label) || !validText(fact.Value) || seen[key] {
+			return model.WidgetSessionContext{}, errors.New("widget context facts require unique printable labels and bounded values")
+		}
+		total += len(fact.Label) + len(fact.Value)
+		if total > 6000 {
+			return model.WidgetSessionContext{}, errors.New("widget context exceeds the 6000 character limit")
+		}
+		seen[key] = true
+		result.Facts = append(result.Facts, fact)
+	}
+	return result, nil
+}
+
+func (s *Service) CreateWidgetBootstrapWithContext(ctx context.Context, widgetID, rawSecret, userID, customerOrganisationID, origin string, sessionContext model.WidgetSessionContext, idempotencyKey string) (WidgetBootstrapResult, error) {
 	userID, customerOrganisationID = strings.TrimSpace(userID), strings.TrimSpace(customerOrganisationID)
 	if userID == "" || len(userID) > 255 || len(customerOrganisationID) > 255 {
 		return WidgetBootstrapResult{}, errors.New("userId is required and identity values must not exceed 255 characters")
 	}
 	digest, err := widgetTokenDigest(strings.TrimSpace(rawSecret), "doko_wsk_")
+	if err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	sessionContext, err = normalizeWidgetSessionContext(sessionContext)
+	if err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	encodedContext, err := json.Marshal(sessionContext)
 	if err != nil {
 		return WidgetBootstrapResult{}, err
 	}
@@ -467,7 +627,7 @@ func (s *Service) CreateWidgetBootstrap(ctx context.Context, widgetID, rawSecret
 	var raw string
 	var bootstrapDigest []byte
 	if idempotencyKey != "" {
-		raw, bootstrapDigest = idempotentWidgetToken(rawSecret, widget.ID, userID, customerOrganisationID, normalizedOrigin, idempotencyKey)
+		raw, bootstrapDigest = idempotentWidgetToken(rawSecret, widget.ID, userID, customerOrganisationID, normalizedOrigin, string(encodedContext), idempotencyKey)
 	} else {
 		raw, bootstrapDigest, _, err = newWidgetToken("doko_wbt_")
 		if err != nil {
@@ -475,7 +635,7 @@ func (s *Service) CreateWidgetBootstrap(ctx context.Context, widgetID, rawSecret
 		}
 	}
 	expiresAt := s.now().Add(widgetBootstrapTTL)
-	if err := s.store.CreateWidgetBootstrap(ctx, model.WidgetBootstrap{Digest: bootstrapDigest, WidgetID: widget.ID, UserID: userID, CustomerOrganisationID: customerOrganisationID, Origin: normalizedOrigin, ExpiresAt: expiresAt}); err != nil {
+	if err := s.store.CreateWidgetBootstrap(ctx, model.WidgetBootstrap{Digest: bootstrapDigest, WidgetID: widget.ID, Kind: model.WidgetSessionKindCustomer, UserID: userID, CustomerOrganisationID: customerOrganisationID, Context: sessionContext, Origin: normalizedOrigin, ExpiresAt: expiresAt}); err != nil {
 		if idempotencyKey != "" && errors.Is(err, store.ErrConflict) {
 			existing, lookupErr := s.store.WidgetBootstrap(ctx, bootstrapDigest)
 			if lookupErr == nil {
@@ -484,6 +644,45 @@ func (s *Service) CreateWidgetBootstrap(ctx context.Context, widgetID, rawSecret
 		}
 		return WidgetBootstrapResult{}, err
 	}
+	return WidgetBootstrapResult{BootstrapToken: raw, ExpiresAt: expiresAt}, nil
+}
+
+// CreateWidgetPreviewBootstrap gives an authenticated administrator the same
+// one-time bootstrap consumed by the browser widget without exposing or using a
+// customer backend secret. Preview tokens are bound to the console origin and
+// remain distinguishable throughout their short-lived session.
+func (s *Service) CreateWidgetPreviewBootstrap(ctx context.Context, widgetID, origin string, actor Actor) (WidgetBootstrapResult, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	widget, err := s.store.Widget(ctx, deployment.ID, widgetID)
+	if err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	if widget.State != "active" {
+		return WidgetBootstrapResult{}, ErrWidgetDisabled
+	}
+	if err := validateWidgetIntegrationBindings(widget); err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	normalizedOrigin, err := normalizeWidgetOrigin(origin)
+	if err != nil {
+		return WidgetBootstrapResult{}, ErrWidgetOriginDenied
+	}
+	actorID := strings.TrimSpace(actor.ID)
+	if actorID == "" || len(actorID) > 220 {
+		return WidgetBootstrapResult{}, ErrWidgetAuthentication
+	}
+	raw, digest, _, err := newWidgetToken("doko_wbt_")
+	if err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	expiresAt := s.now().Add(widgetBootstrapTTL)
+	if err := s.store.CreateWidgetBootstrap(ctx, model.WidgetBootstrap{Digest: digest, WidgetID: widget.ID, Kind: model.WidgetSessionKindAdminPreview, UserID: "admin-preview:" + actorID, Origin: normalizedOrigin, ExpiresAt: expiresAt}); err != nil {
+		return WidgetBootstrapResult{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor.ID, Action: "widget.preview.started", TargetType: "widget", TargetID: widget.ID, Current: map[string]any{"kind": model.WidgetSessionKindAdminPreview, "origin": normalizedOrigin, "revision": widget.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return WidgetBootstrapResult{BootstrapToken: raw, ExpiresAt: expiresAt}, nil
 }
 
@@ -509,7 +708,11 @@ func (s *Service) ExchangeWidgetBootstrap(ctx context.Context, rawToken, origin 
 		return WidgetSessionResult{}, err
 	}
 	normalizedOrigin, err := normalizeWidgetOrigin(origin)
-	if err != nil || bootstrap.Origin != normalizedOrigin || !slices.Contains(widget.AllowedOrigins, normalizedOrigin) {
+	kind := bootstrap.Kind
+	if kind == "" {
+		kind = model.WidgetSessionKindCustomer
+	}
+	if err != nil || bootstrap.Origin != normalizedOrigin || (kind == model.WidgetSessionKindCustomer && !slices.Contains(widget.AllowedOrigins, normalizedOrigin)) || (kind != model.WidgetSessionKindCustomer && kind != model.WidgetSessionKindAdminPreview) {
 		return WidgetSessionResult{}, ErrWidgetOriginDenied
 	}
 	raw, sessionDigest, _, err := newWidgetToken("doko_wss_")
@@ -520,7 +723,7 @@ func (s *Service) ExchangeWidgetBootstrap(ctx context.Context, rawToken, origin 
 	if err != nil {
 		return WidgetSessionResult{}, err
 	}
-	session, err := s.store.CreateWidgetSession(ctx, model.WidgetSession{ID: id, WidgetID: widget.ID, Digest: sessionDigest, UserID: bootstrap.UserID, CustomerOrganisationID: bootstrap.CustomerOrganisationID, Origin: normalizedOrigin, ExpiresAt: now.Add(widgetSessionTTL)})
+	session, err := s.store.CreateWidgetSession(ctx, model.WidgetSession{ID: id, WidgetID: widget.ID, Kind: kind, Digest: sessionDigest, UserID: bootstrap.UserID, CustomerOrganisationID: bootstrap.CustomerOrganisationID, Context: bootstrap.Context, Origin: normalizedOrigin, ExpiresAt: now.Add(widgetSessionTTL)})
 	if err != nil {
 		return WidgetSessionResult{}, err
 	}
@@ -547,7 +750,12 @@ func (s *Service) AuthenticateWidgetSession(ctx context.Context, rawToken string
 	if err := validateWidgetIntegrationBindings(widget); err != nil {
 		return WidgetPrincipal{}, err
 	}
-	if !slices.Contains(widget.AllowedOrigins, session.Origin) {
+	kind := session.Kind
+	if kind == "" {
+		kind = model.WidgetSessionKindCustomer
+		session.Kind = kind
+	}
+	if (kind == model.WidgetSessionKindCustomer && !slices.Contains(widget.AllowedOrigins, session.Origin)) || (kind != model.WidgetSessionKindCustomer && kind != model.WidgetSessionKindAdminPreview) {
 		return WidgetPrincipal{}, ErrWidgetOriginDenied
 	}
 	return WidgetPrincipal{Widget: widget, Session: session}, nil

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -17,81 +18,93 @@ import (
 )
 
 type Memory struct {
-	mu                       sync.RWMutex
-	orgs                     map[string]model.Organisation
-	deployment               model.Deployment
-	hasDeployment            bool
-	integrations             map[string]model.Integration
-	integrationRevisions     map[string]map[string]model.IntegrationRevision
-	resourceSets             map[string]model.ResourceSet
-	resourceSetRevisions     map[string]map[string]model.ResourceSetRevision
-	integrationResourceLinks map[string]map[string]model.IntegrationResourceLink
-	packageArtifacts         map[string]model.PackageArtifact
-	packageReleases          map[string]map[string]model.PackageRelease
-	integrationPackageLinks  map[string]map[string]model.IntegrationPackageBinding
-	grantDefinitions         map[string]model.GrantDefinition
-	authorizationPoints      map[string]map[string]model.AuthorizationPoint
-	integrationToolLinks     map[string]map[string]model.IntegrationToolBinding
-	accessDefinitions        map[string]model.AccessDefinition
-	accessConnections        map[string]model.AccessConnection
-	integrationAccessLinks   map[string]map[string]bool
-	accessInstances          map[string]model.AccessInstance
-	instanceIntegrationLinks map[string]map[string]bool
-	accessCredentials        map[string]model.AccessCredential
-	backendConnections       map[string]model.BackendConnection
-	supportRoutes            map[string]model.SupportRoute
-	integrationSupportRoutes map[string]string
-	products                 map[string]model.Product
-	productVersions          map[string]map[string]model.ProductVersion
-	productVersionPins       map[string]map[string]model.ProductVersionPin
-	productVersionPinHistory map[string][]model.ProductVersionPinHistory
-	productInstallations     map[string]map[string]model.ProductInstallation
-	productDefinitions       map[string]model.ProductDefinition
-	productBuilds            map[string]map[string]model.ProductBuild
-	envs                     map[string]map[string]model.Environment
-	sources                  map[string]map[string]model.Source
-	sourcePublications       map[string]map[string]model.SourcePublication
-	publicationDocuments     map[string]map[string]bool
-	crawlReviewDocuments     map[string][]model.CrawlReviewDocument
-	secrets                  map[string]model.Secret
-	tools                    map[string]map[string]model.Tool
-	mcpConnections           map[string]map[string]model.MCPConnection
-	mcpGrants                map[string]map[string]model.MCPUserGrant
-	mcpAuthStates            map[string]model.MCPAuthorizationState
-	providers                map[string]map[string]model.Provider
-	projects                 map[string]map[string]model.Project
-	leases                   map[string]map[string]model.CredentialLease
-	integrationRuns          map[string]map[string]model.IntegrationRun
-	reportSubmissions        map[string]map[string]model.ReportSubmission
-	llmProfiles              map[string]map[string]model.LLMProfile
-	aiProviderConnections    map[string]map[string]model.AIProviderConnection
-	aiWorkloadProfiles       map[string]map[string]model.AIWorkloadProfile
-	aiBudgetReservations     map[string]model.AIBudgetReservation
-	aiBudgetUsed             map[string]int64
-	aiUsage                  []model.AIUsageEvent
-	integrationAnalyses      map[string]map[string]model.IntegrationAnalysis
-	recipes                  map[string]map[string]model.Recipe
-	recipeRevisions          map[string]map[string]model.RecipeRevision
-	aiJobs                   map[string]map[string]model.AIJob
-	widgets                  map[string]model.Widget
-	widgetSecrets            map[string]model.WidgetSecret
-	widgetSecretDigests      map[string]string
-	widgetBootstraps         map[string]model.WidgetBootstrap
-	widgetSessions           map[string]model.WidgetSession
-	knowledge                map[string][]model.KnowledgeRecord
-	crawls                   map[string][]model.CrawlJob
-	audit                    []model.AuditEvent
-	analytics                []model.AnalyticsEvent
-	setupDone                bool
-	roots                    map[string]auth.RootAccount
-	rootEmail                map[string]string
-	sessions                 map[string]auth.SessionRecord
-	idps                     map[string]identity.ProviderConfig
-	oauthClients             map[string]identity.OAuthClient
-	customerAccounts         map[string]identity.CustomerAccount
-	oauthState               map[string]identity.OAuthState
-	oauthCodes               map[string]identity.OAuthCode
-	accessTokens             map[string]identity.AccessToken
+	mu                               sync.RWMutex
+	orgs                             map[string]model.Organisation
+	deployment                       model.Deployment
+	hasDeployment                    bool
+	integrations                     map[string]model.Integration
+	integrationRevisions             map[string]map[string]model.IntegrationRevision
+	runtimeConnections               map[string]model.RuntimeServiceConnection
+	runtimeConnectionHistory         map[string]map[string]model.RuntimeServiceConnectionRevision
+	runtimeCredentialSets            map[string]model.RuntimeCredentialSet
+	runtimeCredentialHistory         map[string]map[string]model.RuntimeCredentialVersion
+	resourceSets                     map[string]model.ResourceSet
+	resourceSetRevisions             map[string]map[string]model.ResourceSetRevision
+	integrationResourceLinks         map[string]map[string]model.IntegrationResourceLink
+	packageArtifacts                 map[string]model.PackageArtifact
+	packageReleases                  map[string]map[string]model.PackageRelease
+	integrationPackageLinks          map[string]map[string]model.IntegrationPackageBinding
+	grantDefinitions                 map[string]model.GrantDefinition
+	authorizationPoints              map[string]map[string]model.AuthorizationPoint
+	integrationToolLinks             map[string]map[string]model.IntegrationToolBinding
+	accessDefinitions                map[string]model.AccessDefinition
+	accessConnections                map[string]model.AccessConnection
+	integrationAccessLinks           map[string]map[string]bool
+	accessInstances                  map[string]model.AccessInstance
+	instanceIntegrationLinks         map[string]map[string]bool
+	accessCredentials                map[string]model.AccessCredential
+	backendConnections               map[string]model.BackendConnection
+	supportRoutes                    map[string]model.SupportRoute
+	integrationSupportRoutes         map[string]string
+	products                         map[string]model.Product
+	productVersions                  map[string]map[string]model.ProductVersion
+	productVersionPins               map[string]map[string]model.ProductVersionPin
+	productVersionPinHistory         map[string][]model.ProductVersionPinHistory
+	productInstallations             map[string]map[string]model.ProductInstallation
+	productDefinitions               map[string]model.ProductDefinition
+	productBuilds                    map[string]map[string]model.ProductBuild
+	envs                             map[string]map[string]model.Environment
+	sources                          map[string]map[string]model.Source
+	sourcePublications               map[string]map[string]model.SourcePublication
+	publicationDocuments             map[string]map[string]bool
+	crawlReviewDocuments             map[string][]model.CrawlReviewDocument
+	secrets                          map[string]model.Secret
+	tools                            map[string]map[string]model.Tool
+	toolRuntimeTargets               map[string]map[int64][]model.ToolRuntimeTarget
+	toolTestConfirmations            map[string]model.ToolTestConfirmation
+	toolTestConfirmationUses         map[string]time.Time
+	managedOperationConfirmations    map[string]model.ManagedOperationConfirmation
+	managedOperationConfirmationUses map[string]time.Time
+	toolTestRuns                     []model.ToolTestRun
+	mcpConnections                   map[string]map[string]model.MCPConnection
+	mcpGrants                        map[string]map[string]model.MCPUserGrant
+	mcpAuthStates                    map[string]model.MCPAuthorizationState
+	providers                        map[string]map[string]model.Provider
+	projects                         map[string]map[string]model.Project
+	leases                           map[string]map[string]model.CredentialLease
+	integrationRuns                  map[string]map[string]model.IntegrationRun
+	reportSubmissions                map[string]map[string]model.ReportSubmission
+	llmProfiles                      map[string]map[string]model.LLMProfile
+	aiProviderConnections            map[string]map[string]model.AIProviderConnection
+	aiWorkloadProfiles               map[string]map[string]model.AIWorkloadProfile
+	aiBudgetReservations             map[string]model.AIBudgetReservation
+	aiBudgetUsed                     map[string]int64
+	aiUsage                          []model.AIUsageEvent
+	integrationAnalyses              map[string]map[string]model.IntegrationAnalysis
+	recipes                          map[string]map[string]model.Recipe
+	recipeRevisions                  map[string]map[string]model.RecipeRevision
+	aiJobs                           map[string]map[string]model.AIJob
+	widgets                          map[string]model.Widget
+	widgetSecrets                    map[string]model.WidgetSecret
+	widgetSecretDigests              map[string]string
+	widgetBootstraps                 map[string]model.WidgetBootstrap
+	widgetSessions                   map[string]model.WidgetSession
+	widgetAgentMessages              map[string][]model.WidgetAgentMessage
+	knowledge                        map[string][]model.KnowledgeRecord
+	crawls                           map[string][]model.CrawlJob
+	audit                            []model.AuditEvent
+	analytics                        []model.AnalyticsEvent
+	setupDone                        bool
+	roots                            map[string]auth.RootAccount
+	rootEmail                        map[string]string
+	sessions                         map[string]auth.SessionRecord
+	idps                             map[string]identity.ProviderConfig
+	identityTests                    map[string]identity.ProviderTest
+	oauthClients                     map[string]identity.OAuthClient
+	customerAccounts                 map[string]identity.CustomerAccount
+	oauthState                       map[string]identity.OAuthState
+	oauthCodes                       map[string]identity.OAuthCode
+	accessTokens                     map[string]identity.AccessToken
 }
 
 func NewMemory() *Memory {
@@ -114,6 +127,10 @@ func NewMemory() *Memory {
 		hasDeployment:            true,
 		integrations:             make(map[string]model.Integration),
 		integrationRevisions:     make(map[string]map[string]model.IntegrationRevision),
+		runtimeConnections:       make(map[string]model.RuntimeServiceConnection),
+		runtimeConnectionHistory: make(map[string]map[string]model.RuntimeServiceConnectionRevision),
+		runtimeCredentialSets:    make(map[string]model.RuntimeCredentialSet),
+		runtimeCredentialHistory: make(map[string]map[string]model.RuntimeCredentialVersion),
 		resourceSets:             make(map[string]model.ResourceSet),
 		resourceSetRevisions:     make(map[string]map[string]model.ResourceSetRevision),
 		integrationResourceLinks: make(map[string]map[string]model.IntegrationResourceLink),
@@ -153,30 +170,36 @@ func NewMemory() *Memory {
 			docsCrawl.ID: {{ID: "doc_api_keys", CrawlJobID: docsCrawl.ID, SnapshotID: "snapshot_docs_seed", Title: "Create an API key", CanonicalURL: "https://docs.acme.dev/api-keys", State: "published", TrustLevel: 70, InjectionIndicators: json.RawMessage(`[]`), ContentHash: "sha256:" + strings.Repeat("1", 64), Changed: true}},
 			apiCrawl.ID:  {{ID: "doc_internal", CrawlJobID: apiCrawl.ID, SnapshotID: "snapshot_api_seed", Title: "Internal administration", CanonicalURL: "https://docs.acme.dev/internal", State: "published", TrustLevel: 70, InjectionIndicators: json.RawMessage(`[]`), ContentHash: "sha256:" + strings.Repeat("2", 64), Changed: true}},
 		},
-		secrets:               make(map[string]model.Secret),
-		tools:                 map[string]map[string]model.Tool{product.ID: {}},
-		mcpConnections:        map[string]map[string]model.MCPConnection{product.ID: {}},
-		mcpGrants:             make(map[string]map[string]model.MCPUserGrant),
-		mcpAuthStates:         make(map[string]model.MCPAuthorizationState),
-		providers:             map[string]map[string]model.Provider{product.ID: {}},
-		projects:              map[string]map[string]model.Project{product.ID: {}},
-		leases:                map[string]map[string]model.CredentialLease{product.ID: {}},
-		integrationRuns:       map[string]map[string]model.IntegrationRun{product.ID: {}},
-		reportSubmissions:     map[string]map[string]model.ReportSubmission{product.ID: {}},
-		llmProfiles:           map[string]map[string]model.LLMProfile{product.ID: {}},
-		aiProviderConnections: map[string]map[string]model.AIProviderConnection{product.ID: {}},
-		aiWorkloadProfiles:    map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
-		aiBudgetReservations:  make(map[string]model.AIBudgetReservation),
-		aiBudgetUsed:          make(map[string]int64),
-		integrationAnalyses:   map[string]map[string]model.IntegrationAnalysis{product.ID: {}},
-		recipes:               map[string]map[string]model.Recipe{product.ID: {}},
-		recipeRevisions:       make(map[string]map[string]model.RecipeRevision),
-		aiJobs:                map[string]map[string]model.AIJob{product.ID: {}},
-		widgets:               make(map[string]model.Widget),
-		widgetSecrets:         make(map[string]model.WidgetSecret),
-		widgetSecretDigests:   make(map[string]string),
-		widgetBootstraps:      make(map[string]model.WidgetBootstrap),
-		widgetSessions:        make(map[string]model.WidgetSession),
+		secrets:                          make(map[string]model.Secret),
+		tools:                            map[string]map[string]model.Tool{product.ID: {}},
+		toolRuntimeTargets:               make(map[string]map[int64][]model.ToolRuntimeTarget),
+		toolTestConfirmations:            make(map[string]model.ToolTestConfirmation),
+		toolTestConfirmationUses:         make(map[string]time.Time),
+		managedOperationConfirmations:    make(map[string]model.ManagedOperationConfirmation),
+		managedOperationConfirmationUses: make(map[string]time.Time),
+		mcpConnections:                   map[string]map[string]model.MCPConnection{product.ID: {}},
+		mcpGrants:                        make(map[string]map[string]model.MCPUserGrant),
+		mcpAuthStates:                    make(map[string]model.MCPAuthorizationState),
+		providers:                        map[string]map[string]model.Provider{product.ID: {}},
+		projects:                         map[string]map[string]model.Project{product.ID: {}},
+		leases:                           map[string]map[string]model.CredentialLease{product.ID: {}},
+		integrationRuns:                  map[string]map[string]model.IntegrationRun{product.ID: {}},
+		reportSubmissions:                map[string]map[string]model.ReportSubmission{product.ID: {}},
+		llmProfiles:                      map[string]map[string]model.LLMProfile{product.ID: {}},
+		aiProviderConnections:            map[string]map[string]model.AIProviderConnection{product.ID: {}},
+		aiWorkloadProfiles:               map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
+		aiBudgetReservations:             make(map[string]model.AIBudgetReservation),
+		aiBudgetUsed:                     make(map[string]int64),
+		integrationAnalyses:              map[string]map[string]model.IntegrationAnalysis{product.ID: {}},
+		recipes:                          map[string]map[string]model.Recipe{product.ID: {}},
+		recipeRevisions:                  make(map[string]map[string]model.RecipeRevision),
+		aiJobs:                           map[string]map[string]model.AIJob{product.ID: {}},
+		widgets:                          make(map[string]model.Widget),
+		widgetSecrets:                    make(map[string]model.WidgetSecret),
+		widgetSecretDigests:              make(map[string]string),
+		widgetBootstraps:                 make(map[string]model.WidgetBootstrap),
+		widgetSessions:                   make(map[string]model.WidgetSession),
+		widgetAgentMessages:              make(map[string][]model.WidgetAgentMessage),
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},
@@ -189,6 +212,7 @@ func NewMemory() *Memory {
 		rootEmail:        make(map[string]string),
 		sessions:         make(map[string]auth.SessionRecord),
 		idps:             make(map[string]identity.ProviderConfig),
+		identityTests:    make(map[string]identity.ProviderTest),
 		oauthClients:     make(map[string]identity.OAuthClient),
 		customerAccounts: make(map[string]identity.CustomerAccount),
 		oauthState:       make(map[string]identity.OAuthState),
@@ -970,6 +994,17 @@ func (m *Memory) Secret(_ context.Context, organisationID, id string) (model.Sec
 	return cloneSecret(value), nil
 }
 
+func (m *Memory) DeleteSecret(_ context.Context, organisationID, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.secrets[id]
+	if !ok || value.OrganisationID != organisationID {
+		return ErrNotFound
+	}
+	delete(m.secrets, id)
+	return nil
+}
+
 func (m *Memory) Tools(_ context.Context, productID string, publishedOnly bool) ([]model.Tool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -980,7 +1015,7 @@ func (m *Memory) Tools(_ context.Context, productID string, publishedOnly bool) 
 	result := make([]model.Tool, 0, len(values))
 	for _, value := range values {
 		if !publishedOnly || value.State == "published" {
-			result = append(result, cloneTool(value))
+			result = append(result, m.enrichToolRuntimeTargetsLocked(value))
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Namespace+result[i].Name < result[j].Namespace+result[j].Name })
@@ -994,7 +1029,7 @@ func (m *Memory) Tool(_ context.Context, productID, id string) (model.Tool, erro
 	if !ok {
 		return model.Tool{}, ErrNotFound
 	}
-	return cloneTool(value), nil
+	return m.enrichToolRuntimeTargetsLocked(value), nil
 }
 
 func (m *Memory) CreateTool(_ context.Context, value model.Tool) (model.Tool, error) {
@@ -1003,17 +1038,44 @@ func (m *Memory) CreateTool(_ context.Context, value model.Tool) (model.Tool, er
 	if _, ok := m.products[value.ProductID]; !ok {
 		return model.Tool{}, ErrNotFound
 	}
+	var err error
+	value.Scope, value.OwnerIntegrationID, err = normalizeToolOwnership(value.Scope, value.OwnerIntegrationID)
+	if err != nil {
+		return model.Tool{}, err
+	}
+	if value.Scope == model.ToolScopeAPI {
+		owner, ok := m.integrations[value.OwnerIntegrationID]
+		if !ok || owner.DeploymentID != value.ProductID || owner.OrganisationID != value.OrganisationID {
+			return model.Tool{}, ErrConflict
+		}
+	}
+	if value.RuntimeServiceConnectionID != "" {
+		connection, ok := m.runtimeConnections[value.RuntimeServiceConnectionID]
+		if !ok || value.Scope != model.ToolScopeAPI || value.BackendKind != "http" || value.APIConnectionID != "" || connection.IntegrationID != value.OwnerIntegrationID || connection.DeploymentID != value.ProductID || connection.State != "active" || value.HTTPPath == "" {
+			return model.Tool{}, ErrConflict
+		}
+		current := false
+		for _, revision := range m.runtimeConnectionHistory[connection.ID] {
+			current = current || revision.Current
+		}
+		if !current {
+			return model.Tool{}, ErrConflict
+		}
+	}
 	for _, current := range m.tools[value.ProductID] {
 		if current.Namespace == value.Namespace && current.Name == value.Name {
 			return model.Tool{}, ErrConflict
 		}
 	}
 	value.State = "draft"
+	if value.BackendKind == "mcp" && len(value.UpstreamAuth) == 0 {
+		value.UpstreamAuth = json.RawMessage(`{"type":"none"}`)
+	}
 	value.Revision = 1
 	value.CreatedAt = time.Now().UTC()
 	value.UpdatedAt = value.CreatedAt
 	m.tools[value.ProductID][value.ID] = cloneTool(value)
-	return cloneTool(value), nil
+	return m.enrichToolRuntimeTargetsLocked(value), nil
 }
 
 func (m *Memory) UpdateImportedTool(_ context.Context, value model.Tool, expected int64) (model.Tool, error) {
@@ -1026,6 +1088,7 @@ func (m *Memory) UpdateImportedTool(_ context.Context, value model.Tool, expecte
 	if current.Revision != expected || current.BackendKind != "mcp" || current.State == "published" {
 		return model.Tool{}, ErrConflict
 	}
+	value.Scope, value.OwnerIntegrationID = current.Scope, current.OwnerIntegrationID
 	value.State = current.State
 	value.Revision = current.Revision + 1
 	value.CreatedAt = current.CreatedAt
@@ -1057,11 +1120,220 @@ func (m *Memory) PublishTool(_ context.Context, productID, id string, expected i
 	if value.Revision != expected || value.State != "draft" {
 		return model.Tool{}, ErrConflict
 	}
+	if value.RuntimeServiceConnectionID != "" {
+		connection, ok := m.runtimeConnections[value.RuntimeServiceConnectionID]
+		if !ok || connection.State != "active" || connection.IntegrationID != value.OwnerIntegrationID {
+			return model.Tool{}, ErrConflict
+		}
+		targets := m.currentToolRuntimeTargetsLocked(connection.ID)
+		if len(targets) == 0 {
+			return model.Tool{}, ErrConflict
+		}
+		if m.toolRuntimeTargets[value.ID] == nil {
+			m.toolRuntimeTargets[value.ID] = make(map[int64][]model.ToolRuntimeTarget)
+		}
+		m.toolRuntimeTargets[value.ID][expected+1] = cloneToolRuntimeTargets(targets)
+	}
 	value.State = "published"
 	value.Revision++
 	value.UpdatedAt = time.Now().UTC()
 	m.tools[productID][id] = cloneTool(value)
-	return cloneTool(value), nil
+	return m.enrichToolRuntimeTargetsLocked(value), nil
+}
+
+func (m *Memory) CreateToolTestConfirmation(_ context.Context, value model.ToolTestConfirmation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tool, ok := m.tools[value.ProductID][value.ToolID]
+	if !ok || tool.Revision != value.ToolRevision || value.ID == "" || len(value.NonceDigest) != 32 || len(value.ArgumentHash) != 32 {
+		return ErrConflict
+	}
+	key := hex.EncodeToString(value.NonceDigest)
+	if _, exists := m.toolTestConfirmations[key]; exists {
+		return ErrConflict
+	}
+	value.NonceDigest = append([]byte(nil), value.NonceDigest...)
+	value.ArgumentHash = append([]byte(nil), value.ArgumentHash...)
+	m.toolTestConfirmations[key] = value
+	return nil
+}
+
+func (m *Memory) ConsumeToolTestConfirmation(_ context.Context, digest []byte, productID, toolID string, revision int64, argumentHash []byte, actorID, _ string, now time.Time) (model.ToolTestConfirmation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.toolTestConfirmations[hex.EncodeToString(digest)]
+	if !ok || value.ProductID != productID || value.ToolID != toolID || value.ToolRevision != revision || value.ActorID != actorID || !bytes.Equal(value.ArgumentHash, argumentHash) || !now.Before(value.ExpiresAt) {
+		return model.ToolTestConfirmation{}, ErrNotFound
+	}
+	tool, ok := m.tools[productID][toolID]
+	if !ok || tool.Revision != revision {
+		return model.ToolTestConfirmation{}, ErrConflict
+	}
+	if _, used := m.toolTestConfirmationUses[value.ID]; used {
+		return model.ToolTestConfirmation{}, ErrConflict
+	}
+	m.toolTestConfirmationUses[value.ID] = now
+	value.NonceDigest = append([]byte(nil), value.NonceDigest...)
+	value.ArgumentHash = append([]byte(nil), value.ArgumentHash...)
+	return value, nil
+}
+
+func (m *Memory) CreateManagedOperationConfirmation(_ context.Context, value model.ManagedOperationConfirmation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.products[value.ProductID]; !ok || value.ID == "" || value.OperationKey == "" || len(value.NonceDigest) != 32 || len(value.ArgumentHash) != 32 {
+		return ErrConflict
+	}
+	key := hex.EncodeToString(value.NonceDigest)
+	if _, exists := m.managedOperationConfirmations[key]; exists {
+		return ErrConflict
+	}
+	value.NonceDigest = append([]byte(nil), value.NonceDigest...)
+	value.ArgumentHash = append([]byte(nil), value.ArgumentHash...)
+	m.managedOperationConfirmations[key] = value
+	return nil
+}
+
+func (m *Memory) ConsumeManagedOperationConfirmation(_ context.Context, digest []byte, productID, operationKey string, argumentHash []byte, actorID, _ string, now time.Time) (model.ManagedOperationConfirmation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.managedOperationConfirmations[hex.EncodeToString(digest)]
+	if !ok || value.ProductID != productID || value.OperationKey != operationKey || value.ActorID != actorID || !bytes.Equal(value.ArgumentHash, argumentHash) || !now.Before(value.ExpiresAt) {
+		return model.ManagedOperationConfirmation{}, ErrNotFound
+	}
+	if _, used := m.managedOperationConfirmationUses[value.ID]; used {
+		return model.ManagedOperationConfirmation{}, ErrConflict
+	}
+	m.managedOperationConfirmationUses[value.ID] = now
+	value.NonceDigest = append([]byte(nil), value.NonceDigest...)
+	value.ArgumentHash = append([]byte(nil), value.ArgumentHash...)
+	return value, nil
+}
+
+func (m *Memory) DeleteExpiredToolTestData(_ context.Context, now time.Time, limit int) (int64, error) {
+	limit = boundedToolTestCleanupLimit(limit)
+	if limit == 0 {
+		return 0, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var deleted int64
+	confirmationDeletes := 0
+	for digest, value := range m.toolTestConfirmations {
+		if confirmationDeletes >= limit {
+			break
+		}
+		if now.Before(value.ExpiresAt) {
+			continue
+		}
+		delete(m.toolTestConfirmations, digest)
+		delete(m.toolTestConfirmationUses, value.ID)
+		confirmationDeletes++
+		deleted++
+	}
+	managedDeletes := 0
+	for digest, value := range m.managedOperationConfirmations {
+		if managedDeletes >= limit {
+			break
+		}
+		if now.Before(value.ExpiresAt) {
+			continue
+		}
+		delete(m.managedOperationConfirmations, digest)
+		delete(m.managedOperationConfirmationUses, value.ID)
+		managedDeletes++
+		deleted++
+	}
+	runDeletes := 0
+	kept := m.toolTestRuns[:0]
+	for _, value := range m.toolTestRuns {
+		if runDeletes < limit && !now.Before(value.ExpiresAt) {
+			runDeletes++
+			deleted++
+			continue
+		}
+		kept = append(kept, value)
+	}
+	for index := len(kept); index < len(m.toolTestRuns); index++ {
+		m.toolTestRuns[index] = model.ToolTestRun{}
+	}
+	m.toolTestRuns = kept
+	return deleted, nil
+}
+
+func cloneJSONShape(value model.JSONShape) model.JSONShape {
+	result := value
+	if value.Properties != nil {
+		result.Properties = make(map[string]model.JSONShape, len(value.Properties))
+		for key, child := range value.Properties {
+			result.Properties[key] = cloneJSONShape(child)
+		}
+	}
+	if value.Items != nil {
+		result.Items = make([]model.JSONShape, len(value.Items))
+		for index, child := range value.Items {
+			result.Items[index] = cloneJSONShape(child)
+		}
+	}
+	return result
+}
+
+func cloneToolTestRun(value model.ToolTestRun) model.ToolTestRun {
+	result := value
+	result.ArgumentHash = append([]byte(nil), value.ArgumentHash...)
+	result.RequestShape = cloneJSONShape(value.RequestShape)
+	if value.ResponseShape != nil {
+		shape := cloneJSONShape(*value.ResponseShape)
+		result.ResponseShape = &shape
+	}
+	result.Findings = append([]model.ToolTestFinding(nil), value.Findings...)
+	return result
+}
+
+func (m *Memory) AppendToolTestRun(_ context.Context, value model.ToolTestRun) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.tools[value.ProductID][value.ToolID]
+	if !ok || value.ID == "" || len(value.ArgumentHash) != 32 {
+		return ErrConflict
+	}
+	for _, current := range m.toolTestRuns {
+		if current.ID == value.ID {
+			return ErrConflict
+		}
+	}
+	m.toolTestRuns = append(m.toolTestRuns, cloneToolTestRun(value))
+	return nil
+}
+
+func (m *Memory) ToolTestRuns(_ context.Context, productID, toolID string, now time.Time) ([]model.ToolTestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.tools[productID]; !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]model.ToolTestRun, 0)
+	for _, value := range m.toolTestRuns {
+		if value.ProductID == productID && (toolID == "" || value.ToolID == toolID) && now.Before(value.ExpiresAt) {
+			result = append(result, cloneToolTestRun(value))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	if len(result) > 100 {
+		result = result[:100]
+	}
+	return result, nil
+}
+
+func (m *Memory) ToolTestRun(_ context.Context, productID, toolID, runID string, now time.Time) (model.ToolTestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, value := range m.toolTestRuns {
+		if value.ID == runID && value.ProductID == productID && value.ToolID == toolID && now.Before(value.ExpiresAt) {
+			return cloneToolTestRun(value), nil
+		}
+	}
+	return model.ToolTestRun{}, ErrNotFound
 }
 
 func (m *Memory) MCPConnections(_ context.Context, productID string) ([]model.MCPConnection, error) {
@@ -1907,6 +2179,199 @@ func (m *Memory) SaveIdentityProvider(_ context.Context, value identity.Provider
 	return value, nil
 }
 
+func (m *Memory) DeleteIdentityProvider(_ context.Context, deploymentID string, expectedRevision int64) (identity.ProviderConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.idps[deploymentID]
+	if !ok {
+		return identity.ProviderConfig{}, ErrNotFound
+	}
+	if current.Revision != expectedRevision || current.State != "disabled" {
+		return identity.ProviderConfig{}, ErrConflict
+	}
+	secretIDs := map[string]bool{current.ClientSecretID: true}
+	for key, value := range m.oauthState {
+		if value.ProductID == deploymentID {
+			delete(m.oauthState, key)
+		}
+	}
+	for key, value := range m.oauthCodes {
+		if value.ProductID == deploymentID {
+			secretIDs[value.UpstreamAccessSecretID] = true
+			delete(m.oauthCodes, key)
+		}
+	}
+	for key, value := range m.accessTokens {
+		if value.ProductID == deploymentID {
+			secretIDs[value.UpstreamAccessSecretID] = true
+			delete(m.accessTokens, key)
+		}
+	}
+	for id, value := range m.identityTests {
+		if value.DeploymentID == deploymentID {
+			delete(m.identityTests, id)
+		}
+	}
+	delete(m.idps, deploymentID)
+	for secretID := range secretIDs {
+		if secretID == "" {
+			continue
+		}
+		referenced := false
+		for _, provider := range m.idps {
+			if provider.ClientSecretID == secretID {
+				referenced = true
+				break
+			}
+		}
+		for _, code := range m.oauthCodes {
+			if code.UpstreamAccessSecretID == secretID {
+				referenced = true
+				break
+			}
+		}
+		for _, token := range m.accessTokens {
+			if token.UpstreamAccessSecretID == secretID {
+				referenced = true
+				break
+			}
+		}
+		if !referenced {
+			delete(m.secrets, secretID)
+		}
+	}
+	return current, nil
+}
+
+func (m *Memory) CreateIdentityProviderTest(_ context.Context, value identity.ProviderTest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasDeployment || value.DeploymentID != m.deployment.ID {
+		return ErrNotFound
+	}
+	provider, ok := m.idps[value.DeploymentID]
+	if !ok || provider.Revision != value.ConfigurationRevision || (provider.State != "disabled" && provider.State != "active") {
+		return ErrConflict
+	}
+	if _, exists := m.identityTests[value.ID]; exists {
+		return ErrConflict
+	}
+	for _, current := range m.identityTests {
+		if bytes.Equal(current.StateDigest, value.StateDigest) {
+			return ErrConflict
+		}
+	}
+	m.identityTests[value.ID] = cloneIdentityProviderTest(value)
+	return nil
+}
+
+func (m *Memory) IdentityProviderTest(_ context.Context, deploymentID, id string) (identity.ProviderTest, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, ok := m.identityTests[id]
+	if !ok || value.DeploymentID != deploymentID {
+		return identity.ProviderTest{}, ErrNotFound
+	}
+	return cloneIdentityProviderTest(value), nil
+}
+
+func (m *Memory) ClaimIdentityProviderTestByStateDigest(_ context.Context, digest []byte, now time.Time) (identity.ProviderTest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, value := range m.identityTests {
+		if !bytes.Equal(value.StateDigest, digest) {
+			continue
+		}
+		if value.Status != "pending" || value.CallbackClaimedAt != nil {
+			return identity.ProviderTest{}, ErrConflict
+		}
+		if !value.ExpiresAt.After(now) {
+			completedAt := now
+			value.Status = "expired"
+			value.FailureCode = "test_expired"
+			value.UpstreamVerifier = ""
+			value.Nonce = ""
+			value.Subject = ""
+			value.CustomerID = ""
+			value.CompletedAt = &completedAt
+			m.identityTests[id] = cloneIdentityProviderTest(value)
+			return identity.ProviderTest{}, ErrConflict
+		}
+		claimedAt := now
+		value.CallbackClaimedAt = &claimedAt
+		m.identityTests[id] = cloneIdentityProviderTest(value)
+		return cloneIdentityProviderTest(value), nil
+	}
+	return identity.ProviderTest{}, ErrNotFound
+}
+
+func (m *Memory) LatestIdentityProviderTest(_ context.Context, deploymentID string) (identity.ProviderTest, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var latest identity.ProviderTest
+	found := false
+	for _, value := range m.identityTests {
+		if value.DeploymentID != deploymentID {
+			continue
+		}
+		if !found || value.CreatedAt.After(latest.CreatedAt) || value.CreatedAt.Equal(latest.CreatedAt) && value.ID > latest.ID {
+			latest, found = value, true
+		}
+	}
+	if !found {
+		return identity.ProviderTest{}, ErrNotFound
+	}
+	return cloneIdentityProviderTest(latest), nil
+}
+
+func (m *Memory) CompleteIdentityProviderTest(_ context.Context, value identity.ProviderTest) (identity.ProviderTest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.identityTests[value.ID]
+	if !ok || current.DeploymentID != value.DeploymentID {
+		return identity.ProviderTest{}, ErrNotFound
+	}
+	if current.Status != "pending" || current.ConfigurationRevision != value.ConfigurationRevision {
+		return identity.ProviderTest{}, ErrConflict
+	}
+	current.Status = value.Status
+	current.FailureCode = value.FailureCode
+	current.Issuer = value.Issuer
+	current.Subject = value.Subject
+	current.CustomerID = value.CustomerID
+	current.CompletedAt = value.CompletedAt
+	current.UpstreamVerifier = ""
+	current.Nonce = ""
+	m.identityTests[current.ID] = cloneIdentityProviderTest(current)
+	return cloneIdentityProviderTest(current), nil
+}
+
+func (m *Memory) ExpireIdentityProviderTests(_ context.Context, deploymentID string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, current := range m.identityTests {
+		if current.DeploymentID != deploymentID || current.ExpiresAt.After(now) {
+			continue
+		}
+		claimActive := current.Status == "pending" && current.CallbackClaimedAt != nil && current.CallbackClaimedAt.Add(2*time.Minute).After(now)
+		if claimActive {
+			continue
+		}
+		if current.Status == "pending" {
+			completedAt := now
+			current.Status = "expired"
+			current.FailureCode = "test_expired"
+			current.UpstreamVerifier = ""
+			current.Nonce = ""
+			current.CompletedAt = &completedAt
+		}
+		current.Subject = ""
+		current.CustomerID = ""
+		m.identityTests[id] = cloneIdentityProviderTest(current)
+	}
+	return nil
+}
+
 func (m *Memory) OAuthClient(_ context.Context, deploymentID, clientID string) (identity.OAuthClient, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -2027,6 +2492,10 @@ func (m *Memory) UpdateCustomerAccount(_ context.Context, value identity.Custome
 func (m *Memory) CreateOAuthState(_ context.Context, value identity.OAuthState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	provider, ok := m.idps[value.ProductID]
+	if !ok || provider.State != "active" || provider.Revision != value.ProviderRevision {
+		return ErrConflict
+	}
 	m.oauthState[hex.EncodeToString(value.Digest)] = cloneOAuthState(value)
 	return nil
 }
@@ -2046,6 +2515,10 @@ func (m *Memory) ConsumeOAuthState(_ context.Context, digest []byte) (identity.O
 func (m *Memory) CreateOAuthCode(_ context.Context, value identity.OAuthCode) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	provider, ok := m.idps[value.ProductID]
+	if !ok || provider.State != "active" || provider.Revision != value.ProviderRevision {
+		return ErrConflict
+	}
 	m.oauthCodes[hex.EncodeToString(value.Digest)] = cloneOAuthCode(value)
 	return nil
 }
@@ -2065,6 +2538,10 @@ func (m *Memory) ConsumeOAuthCode(_ context.Context, digest []byte) (identity.OA
 func (m *Memory) CreateAccessToken(_ context.Context, value identity.AccessToken) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	provider, ok := m.idps[value.ProductID]
+	if !ok || provider.State != "active" || provider.Revision != value.ProviderRevision {
+		return ErrConflict
+	}
 	m.accessTokens[hex.EncodeToString(value.Digest)] = cloneAccessToken(value)
 	return nil
 }
@@ -2077,6 +2554,125 @@ func (m *Memory) AccessTokenByDigest(_ context.Context, digest []byte) (identity
 		return identity.AccessToken{}, ErrNotFound
 	}
 	return cloneAccessToken(value), nil
+}
+
+func (m *Memory) DeleteStaleOAuthArtifacts(_ context.Context, productID string, now time.Time, limit int) (int64, error) {
+	limit = boundedOAuthArtifactCleanupLimit(limit)
+	if limit == 0 {
+		return 0, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	activeProviderRevision := int64(0)
+	if provider, ok := m.idps[productID]; ok && provider.State == "active" {
+		activeProviderRevision = provider.Revision
+	}
+
+	var deleted int64
+	statesDeleted := 0
+	for key, value := range m.oauthState {
+		if statesDeleted >= limit {
+			break
+		}
+		if value.ProductID == productID && (!value.ExpiresAt.After(now) || activeProviderRevision <= 0 || value.ProviderRevision != activeProviderRevision) {
+			delete(m.oauthState, key)
+			statesDeleted++
+			deleted++
+		}
+	}
+
+	secretIDs := make(map[string]bool)
+	codesDeleted := 0
+	for key, value := range m.oauthCodes {
+		if codesDeleted >= limit {
+			break
+		}
+		if value.ProductID == productID && (!value.ExpiresAt.After(now) || !value.AccessExpiresAt.After(now) || activeProviderRevision <= 0 || value.ProviderRevision != activeProviderRevision) {
+			delete(m.oauthCodes, key)
+			secretIDs[value.UpstreamAccessSecretID] = true
+			codesDeleted++
+			deleted++
+		}
+	}
+
+	tokensDeleted := 0
+	for key, value := range m.accessTokens {
+		if tokensDeleted >= limit {
+			break
+		}
+		if value.ProductID == productID && (!value.ExpiresAt.After(now) || value.RevokedAt != nil || activeProviderRevision <= 0 || value.ProviderRevision != activeProviderRevision) {
+			delete(m.accessTokens, key)
+			secretIDs[value.UpstreamAccessSecretID] = true
+			tokensDeleted++
+			deleted++
+		}
+	}
+
+	for secretID := range secretIDs {
+		if secretID == "" {
+			continue
+		}
+		referenced := false
+		for _, value := range m.oauthCodes {
+			if value.UpstreamAccessSecretID == secretID {
+				referenced = true
+				break
+			}
+		}
+		if !referenced {
+			for _, value := range m.accessTokens {
+				if value.UpstreamAccessSecretID == secretID {
+					referenced = true
+					break
+				}
+			}
+		}
+		if secret, ok := m.secrets[secretID]; ok && !referenced && secret.Purpose == "vendor_delegated_access" {
+			delete(m.secrets, secretID)
+		}
+	}
+
+	product, ok := m.products[productID]
+	if !ok {
+		return deleted, ErrNotFound
+	}
+	orphansDeleted := 0
+	orphanCutoff := now.Add(-identitySecretOrphanGrace)
+	for secretID, secret := range m.secrets {
+		if orphansDeleted >= limit || secret.OrganisationID != product.OrganisationID || secret.CreatedAt.After(orphanCutoff) {
+			continue
+		}
+		referencedByOAuth := false
+		for _, value := range m.oauthCodes {
+			if value.UpstreamAccessSecretID == secretID {
+				referencedByOAuth = true
+				break
+			}
+		}
+		if !referencedByOAuth {
+			for _, value := range m.accessTokens {
+				if value.UpstreamAccessSecretID == secretID {
+					referencedByOAuth = true
+					break
+				}
+			}
+		}
+		referencedByProvider := false
+		for _, value := range m.idps {
+			if value.ClientSecretID == secretID {
+				referencedByProvider = true
+				break
+			}
+		}
+		vendorOrphan := secret.Purpose == "vendor_delegated_access" && !referencedByOAuth
+		providerOrphan := secret.Purpose == "identity_provider_oidc_client" && !referencedByProvider
+		if vendorOrphan || providerOrphan {
+			delete(m.secrets, secretID)
+			orphansDeleted++
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 func cloneRoot(account auth.RootAccount) auth.RootAccount {
@@ -2101,11 +2697,27 @@ func cloneSecret(value model.Secret) model.Secret {
 }
 
 func cloneTool(value model.Tool) model.Tool {
+	value.CredentialPresent = value.CredentialID != ""
 	value.InputSchema = append([]byte(nil), value.InputSchema...)
 	value.OutputSchema = append([]byte(nil), value.OutputSchema...)
+	value.UpstreamAuth = append([]byte(nil), value.UpstreamAuth...)
+	value.RequestMapping = append([]byte(nil), value.RequestMapping...)
+	value.ResponseMapping = append([]byte(nil), value.ResponseMapping...)
+	value.RequestExample = append([]byte(nil), value.RequestExample...)
+	value.ResponseExample = append([]byte(nil), value.ResponseExample...)
 	value.AuthorizationPolicy = append([]byte(nil), value.AuthorizationPolicy...)
 	value.UpstreamAnnotations = append([]byte(nil), value.UpstreamAnnotations...)
+	value.RuntimeTargets = cloneToolRuntimeTargets(value.RuntimeTargets)
 	return value
+}
+
+func cloneToolRuntimeTargets(values []model.ToolRuntimeTarget) []model.ToolRuntimeTarget {
+	result := make([]model.ToolRuntimeTarget, len(values))
+	copy(result, values)
+	for index := range result {
+		result[index].AuthConfig = append(json.RawMessage(nil), result[index].AuthConfig...)
+	}
+	return result
 }
 
 func cloneMCPConnection(value model.MCPConnection) model.MCPConnection {
@@ -2134,6 +2746,19 @@ func cloneMCPAuthorizationState(value model.MCPAuthorizationState) model.MCPAuth
 
 func cloneProvider(value model.Provider) model.Provider {
 	value.Config = append([]byte(nil), value.Config...)
+	return value
+}
+
+func cloneIdentityProviderTest(value identity.ProviderTest) identity.ProviderTest {
+	value.StateDigest = append([]byte(nil), value.StateDigest...)
+	if value.CompletedAt != nil {
+		completed := *value.CompletedAt
+		value.CompletedAt = &completed
+	}
+	if value.CallbackClaimedAt != nil {
+		claimed := *value.CallbackClaimedAt
+		value.CallbackClaimedAt = &claimed
+	}
 	return value
 }
 

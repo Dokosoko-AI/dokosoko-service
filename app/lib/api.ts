@@ -24,6 +24,9 @@ export type APIDeployment = {
   require_promotion_approval: boolean;
   public_mcp_enabled: boolean;
   revision: number;
+  features?: {
+    widgets: boolean;
+  };
 };
 
 export type APIResourceSetRevision = {
@@ -151,6 +154,20 @@ export type APIWidget = {
     snapshot: Record<string, unknown>;
     bound_at: string;
   }>;
+  knowledge_bindings: Array<{
+    recipe_id: string;
+    recipe_revision_id: string;
+    recipe_revision: number;
+    integration_ids: string[];
+    title: string;
+    outcome: string;
+    audience: string;
+    stable_uri: string;
+    markdown: string;
+    references: APIRecipeReference[];
+    content_hash: string;
+    bound_at: string;
+  }>;
   appearance: APIWidgetAppearance;
   revision: number;
   activated_at?: string;
@@ -170,6 +187,7 @@ export type APIWidgetSecret = {
 export type APIWidgetSession = {
   id: string;
   widget_id: string;
+  kind: "customer" | "admin_preview";
   user_id: string;
   customer_organisation_id?: string;
   origin: string;
@@ -181,6 +199,9 @@ export type APIWidgetSession = {
 
 export type APIWidgetProvisioning = { widget: APIWidget; secret: string };
 export type APIWidgetSecretProvisioning = { credential: APIWidgetSecret; secret: string };
+export type APIWidgetConfiguration = { widgetId: string; name: string; appearance: APIWidgetAppearance; protocolVersion: "1" };
+export type APIWidgetBootstrap = { bootstrapToken: string; expiresAt: string };
+export type APIWidgetRuntimeSession = { sessionToken: string; sessionId: string; expiresAt: string };
 export type APIWidgetInput = {
   name: string;
   allowed_origins: string[];
@@ -500,6 +521,138 @@ export type APIEnvironment = {
   revision: number;
 };
 
+export type APIRuntimeAuthenticationType =
+  | "none"
+  | "delegated_oauth"
+  | "bearer"
+  | "authorization_scheme"
+  | "api_key_header"
+  | "api_key_query"
+  | "basic"
+  | "oauth_client_credentials"
+  | "custom_header";
+
+export type APIRuntimeServiceConnectionRevision = {
+  id: string;
+  connection_id: string;
+  environment_id: string;
+  base_url: string;
+  authentication_type: APIRuntimeAuthenticationType;
+  credential_set_id?: string;
+  auth_config?: Record<string, unknown>;
+  content_hash: string;
+  revision: number;
+  current: boolean;
+  created_by?: string;
+  created_at: string;
+};
+
+export type APIRuntimeServiceConnection = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  integration_id: string;
+  name: string;
+  description?: string;
+  state: string;
+  revision: number;
+  current_revisions?: APIRuntimeServiceConnectionRevision[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIRuntimeServiceConnectionReadiness = {
+  connection_id: string;
+  ready: boolean;
+  checks: Array<{
+    key: string;
+    label: string;
+    ready: boolean;
+    message: string;
+    environment_id?: string;
+  }>;
+};
+
+// Runtime credentials are deliberately represented by masked metadata only.
+// The backing vault identifier and secret value are never part of this client contract.
+export type APIRuntimeCredentialVersion = {
+  id: string;
+  credential_set_id: string;
+  fingerprint: string;
+  state: string;
+  created_by?: string;
+  activated_at?: string;
+  retires_at?: string;
+  revoked_at?: string;
+  expires_at?: string;
+  created_at: string;
+};
+
+export type APIRuntimeCredentialSet = {
+  id: string;
+  deployment_id: string;
+  organisation_id: string;
+  environment_id: string;
+  scope: "dedicated" | "shared";
+  owner_integration_id?: string;
+  name: string;
+  environment_variable: string;
+  authentication_type: APIRuntimeAuthenticationType;
+  header_name?: string;
+  state: string;
+  credential_present: boolean;
+  active_fingerprint?: string;
+  revision: number;
+  versions?: APIRuntimeCredentialVersion[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type APIRuntimeSetup = {
+  integration: APIIntegration;
+  environments: APIEnvironment[];
+  service_connections: APIRuntimeServiceConnection[];
+  credential_sets: APIRuntimeCredentialSet[];
+};
+
+export type APIRuntimeSetupInput = {
+  environment_id: string;
+  connection_name?: string;
+  connection_description?: string;
+  base_url: string;
+  authentication_type: APIRuntimeAuthenticationType;
+  auth_config?: Record<string, unknown>;
+  existing_credential_set_id?: string;
+  credential_scope?: "dedicated" | "shared";
+  credential_name?: string;
+  environment_variable?: string;
+  header_name?: string;
+  credential?: string;
+  credential_expires_at?: string;
+};
+
+export type APIRuntimeServiceConnectionInput = {
+  name: string;
+  description?: string;
+  environment_id: string;
+  base_url: string;
+  authentication_type: APIRuntimeAuthenticationType;
+  credential_set_id?: string;
+  auth_config?: Record<string, unknown>;
+  state?: string;
+};
+
+export type APIRuntimeCredentialSetInput = {
+  environment_id: string;
+  scope: "dedicated" | "shared";
+  name?: string;
+  environment_variable?: string;
+  authentication_type: Exclude<APIRuntimeAuthenticationType, "none" | "delegated_oauth">;
+  header_name?: string;
+  credential: string;
+  expires_at?: string;
+};
+
 export type APISource = {
   id: string;
   organisation_id: string;
@@ -564,10 +717,275 @@ export type APISourcePublishResult = {
   publication: APISourcePublication;
 };
 
+export type APIToolHTTPMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export type APIToolRisk = "low" | "medium" | "high" | "critical";
+
+export type APIToolUpstreamAuthType =
+  | "delegated_oauth"
+  | "none"
+  | "bearer"
+  | "authorization_scheme"
+  | "api_key_header"
+  | "api_key_query"
+  | "basic"
+  | "oauth_client_credentials"
+  | "custom_header";
+
+export type APIToolUpstreamAuth = {
+  type: APIToolUpstreamAuthType;
+  scheme?: string;
+  header_name?: string;
+  query_name?: string;
+  prefix?: string;
+  username?: string;
+  client_id?: string;
+  token_url?: string;
+  token_endpoint_auth_method?: "client_secret_basic" | "client_secret_post";
+  scopes?: string[];
+  audience?: string;
+  resource?: string;
+};
+
+export type APIToolRequestMapping = {
+  parameter_locations: Record<string, "path" | "query" | "header" | "body">;
+};
+
+export type APIToolResponseMapping = {
+  result_path?: string;
+};
+
+export type APIToolAuthorizationPolicy = {
+  required_grants: string[];
+  confirmation_required: boolean;
+  risk: APIToolRisk;
+  idempotency_required: boolean;
+};
+
+/**
+ * The complete non-secret working contract used by every tool-builder mode.
+ * Credentials intentionally do not belong to this type so it is safe to send
+ * to proposal, import, validation, and analysis endpoints.
+ */
+export type APIToolBuilderDraft = {
+  namespace: string;
+  name: string;
+  description: string;
+  http_method: APIToolHTTPMethod;
+  endpoint: string;
+  timeout_ms: number;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  upstream_auth: APIToolUpstreamAuth;
+  request_mapping: APIToolRequestMapping;
+  response_mapping: APIToolResponseMapping;
+  authorization_policy: APIToolAuthorizationPolicy;
+  request_example?: Record<string, unknown>;
+  response_example?: unknown;
+  credential_present: boolean;
+};
+
+const TOOL_BUILDER_FOLLOW_UP_FIELDS: Array<keyof APIToolBuilderDraft> = [
+  "namespace",
+  "name",
+  "description",
+  "http_method",
+  "endpoint",
+  "timeout_ms",
+  "input_schema",
+  "output_schema",
+  "upstream_auth",
+  "request_mapping",
+  "response_mapping",
+  "authorization_policy",
+  "request_example",
+  "response_example",
+];
+
+/**
+ * Refines one complete pending candidate while preserving explicit human
+ * rejections. Credential material is not part of either draft; only the
+ * server-derived presence bit is carried from the current browser state.
+ */
+export function toolBuilderFollowUpDraft(
+  current: APIToolBuilderDraft,
+  pending: APIToolBuilderDraft | null,
+  decisions: Readonly<Record<string, "accepted" | "rejected">>,
+  stale: boolean,
+  identityLocked = false,
+): APIToolBuilderDraft {
+  if (!pending || stale) return current;
+  const followUp = { ...pending, credential_present: current.credential_present };
+  for (const field of TOOL_BUILDER_FOLLOW_UP_FIELDS) {
+    if (decisions[field] === "rejected" || (identityLocked && (field === "namespace" || field === "name"))) {
+      Object.assign(followUp, { [field]: current[field] });
+    }
+  }
+  return followUp;
+}
+
+export type APIToolBuilderFinding = {
+  level: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  field?: string;
+  suggestion?: string;
+};
+
+export type APIToolBuilderChange = {
+  field: string;
+  summary?: string;
+  before?: unknown;
+  after?: unknown;
+  rationale?: string;
+  security_sensitive?: boolean;
+};
+
+export type APIToolBuilderAnalysis = {
+  draft?: APIToolBuilderDraft;
+  valid?: boolean;
+  network_call_performed?: false;
+  reply?: string;
+  summary?: string;
+  findings: APIToolBuilderFinding[];
+  generated_at?: string;
+};
+
+export type APIToolBuilderValidation = {
+  valid: boolean;
+  network_call_performed: false;
+  findings: APIToolBuilderFinding[];
+  normalized_draft?: APIToolBuilderDraft;
+  checked_at?: string;
+};
+
+export type APIToolBuilderProposal = {
+  proposal_id?: string;
+  base_fingerprint?: string;
+  reply?: string;
+  summary?: string;
+  valid?: boolean;
+  draft: APIToolBuilderDraft;
+  changes: APIToolBuilderChange[];
+  findings: APIToolBuilderFinding[];
+  analysis?: APIToolBuilderAnalysis;
+  generated_at?: string;
+};
+
+export type APIToolBuilderContext = {
+  draft: APIToolBuilderDraft;
+  base_tool_id?: string;
+  base_revision?: number;
+  credential_will_be_supplied?: boolean;
+};
+
+export const TOOL_BUILDER_CHAT_LIMITS = {
+  maxMessages: 12,
+  maxMessageBytes: 2_048,
+  maxHistoryBytes: 12_288,
+} as const;
+
+export type APIToolBuilderChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+function utf8Bytes(value: string) {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+/**
+ * Retains one contiguous suffix that fits the public conversation contract.
+ * The API applies the same limits authoritatively and rejects credential-like
+ * content; this helper only keeps browser-held context bounded between turns.
+ */
+export function boundedToolBuilderChatHistory(history: readonly APIToolBuilderChatMessage[]): APIToolBuilderChatMessage[] {
+  const result: APIToolBuilderChatMessage[] = [];
+  let totalBytes = 0;
+  for (let index = history.length - 1; index >= 0 && result.length < TOOL_BUILDER_CHAT_LIMITS.maxMessages; index--) {
+    const message = history[index];
+    const content = message.content.trim();
+    const contentBytes = utf8Bytes(content);
+    const messageBytes = utf8Bytes(message.role) + contentBytes;
+    if (!content || contentBytes > TOOL_BUILDER_CHAT_LIMITS.maxMessageBytes) break;
+    if (totalBytes + messageBytes > TOOL_BUILDER_CHAT_LIMITS.maxHistoryBytes) break;
+    result.unshift({ role: message.role, content });
+    totalBytes += messageBytes;
+  }
+  return result;
+}
+
+export type APIToolBuilderProposalInput = APIToolBuilderContext & {
+  instruction: string;
+  history?: APIToolBuilderChatMessage[];
+};
+
+export type APIToolBuilderImportKind = "openapi_document" | "postman" | "curl";
+
+export type APIToolBuilderImportInput = APIToolBuilderContext & {
+  source: {
+    kind: APIToolBuilderImportKind;
+    value: string;
+  };
+};
+
+export type APIToolBuilderImportCandidate = {
+  title?: string;
+  summary?: string;
+  valid?: boolean;
+  draft: APIToolBuilderDraft;
+  changes?: APIToolBuilderChange[];
+  findings?: APIToolBuilderFinding[];
+};
+
+export type APIToolBuilderImportResult = {
+  candidates: APIToolBuilderImportCandidate[];
+  findings: APIToolBuilderFinding[];
+  generated_at?: string;
+};
+
+export type APIToolBuilderValidationInput = APIToolBuilderContext;
+export type APIToolBuilderAnalysisInput = APIToolBuilderContext;
+
+type APIToolPersistedDraftInput = {
+  description: string;
+  http_method: string;
+  endpoint?: string;
+  runtime_service_connection_id?: string;
+  http_path?: string;
+  timeout_ms: number;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  authorization_policy: APIToolAuthorizationPolicy | Record<string, unknown>;
+  request_example?: Record<string, unknown> | null;
+  response_example?: unknown | null;
+} & Partial<Pick<
+  APIToolBuilderDraft,
+  "upstream_auth" | "request_mapping" | "response_mapping"
+>>;
+
+export type APIToolCreateInput = APIToolPersistedDraftInput & {
+  organisation_id: string;
+  scope?: "common" | "api";
+  owner_integration_id?: string;
+  namespace: string;
+  name: string;
+  credential?: string;
+};
+
+export type APIToolUpdateInput = APIToolPersistedDraftInput & {
+  revision: number;
+  credential?: string;
+};
+
 export type APITool = {
   id: string;
   organisation_id: string;
   product_id: string;
+  scope?: "common" | "api";
+  owner_integration_id?: string;
+  runtime_service_connection_id?: string;
+  http_path?: string;
   namespace: string;
   name: string;
   description: string;
@@ -579,6 +997,13 @@ export type APITool = {
   authorization_policy: Record<string, unknown>;
   timeout_ms: number;
   endpoint?: string;
+  endpoint_requires_review?: boolean;
+  upstream_auth?: APIToolUpstreamAuth;
+  request_mapping?: APIToolRequestMapping;
+  response_mapping?: APIToolResponseMapping;
+  request_example?: Record<string, unknown>;
+  response_example?: unknown;
+  credential_present?: boolean;
   backend_kind?: "http" | "mcp";
   mcp_connection_id?: string;
   upstream_tool_name?: string;
@@ -604,6 +1029,150 @@ export type APIToolDryRun = {
   normalized_arguments: Record<string, unknown>;
   warnings: string[];
 };
+
+export type APIToolTestConfirmationInput = {
+  revision: number;
+  arguments: Record<string, unknown>;
+  typed_tool_name: string;
+  acknowledge_side_effects: boolean;
+};
+
+export type APIToolTestConfirmation = {
+  confirmation_nonce: string;
+  expires_at: string;
+  tool_id: string;
+  tool_revision: number;
+};
+
+export type APIToolTestRunInput = {
+  revision: number;
+  arguments: Record<string, unknown>;
+  confirmation_nonce?: string;
+  idempotency_key?: string;
+};
+
+export type APIToolTestShape = {
+  type: string;
+  properties?: Record<string, APIToolTestShape>;
+  items?: APIToolTestShape[];
+  length?: number;
+  truncated?: boolean;
+};
+
+export type APIToolTestFinding = {
+  phase: string;
+  code: string;
+  message: string;
+  instance_path?: string;
+  schema_path?: string;
+};
+
+/** Sanitized evidence from an exact-revision upstream test. */
+export type APIToolTestRun = {
+  id: string;
+  organisation_id: string;
+  product_id: string;
+  tool_id: string;
+  tool_revision: number;
+  tool_name: string;
+  method: string;
+  authentication_type: string;
+  outcome: "success" | "failure";
+  phase: string;
+  network_call_performed: boolean;
+  upstream_status_code?: number;
+  response_bytes?: number;
+  duration_ms: number;
+  request_shape: APIToolTestShape;
+  response_shape?: APIToolTestShape;
+  findings: APIToolTestFinding[];
+  evidence_hash: string;
+  expires_at: string;
+  created_at: string;
+};
+
+export type APIToolTestAnalysisMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type APIToolTestAnalysisInput = {
+  revision: number;
+  evidence_hash: string;
+  consent_to_analysis_provider: boolean;
+  question: string;
+  history?: APIToolTestAnalysisMessage[];
+};
+
+export type APIToolTestAnalysisProposal = {
+  proposal_id: string;
+  base_tool_id: string;
+  base_revision: number;
+  base_fingerprint: string;
+  requires_clone: boolean;
+  draft: APIToolBuilderDraft;
+  changes: APIToolBuilderChange[];
+  findings: APIToolBuilderFinding[];
+  valid: boolean;
+};
+
+export type APIToolTestAnalysis = {
+  tool_revision: number;
+  evidence_hash: string;
+  reply: string;
+  findings: APIToolBuilderFinding[];
+  proposal?: APIToolTestAnalysisProposal;
+  provider_outcome: "succeeded" | "unusable";
+  advisory: true;
+  generated_at: string;
+};
+
+export const TOOL_TEST_ANALYSIS_CHAT_LIMITS = {
+  maxMessages: 12,
+  maxMessageBytes: 2_048,
+  maxHistoryBytes: 12_288,
+} as const;
+
+export function boundedToolTestAnalysisHistory(history: readonly APIToolTestAnalysisMessage[]): APIToolTestAnalysisMessage[] {
+  const result: APIToolTestAnalysisMessage[] = [];
+  let totalBytes = 0;
+  for (let index = history.length - 1; index >= 0 && result.length < TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessages; index--) {
+    const message = history[index];
+    const content = message.content.trim();
+    const messageBytes = utf8Bytes(message.role) + utf8Bytes(content);
+    // History is one contiguous chronological suffix. Once an invalid older
+    // boundary is reached, do not skip over it and resurrect still-older turns.
+    if (!content || utf8Bytes(content) > TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes) break;
+    if (totalBytes + messageBytes > TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxHistoryBytes) break;
+    result.unshift({ role: message.role, content });
+    totalBytes += messageBytes;
+  }
+  return result;
+}
+
+/** Exact value-free evidence object shown before provider consent. */
+export function toolTestAnalysisEvidencePreview(run: APIToolTestRun) {
+  return {
+    method: run.method.toUpperCase(),
+    authentication_type: run.authentication_type,
+    outcome: run.outcome,
+    phase: run.phase,
+    network_call_performed: run.network_call_performed,
+    ...(run.upstream_status_code ? { upstream_status_code: run.upstream_status_code } : {}),
+    ...(run.response_bytes ? { response_bytes: run.response_bytes } : {}),
+    duration_ms: run.duration_ms,
+    request_shape: run.request_shape,
+    ...(run.response_shape ? { response_shape: run.response_shape } : {}),
+    findings: run.findings ?? [],
+  };
+}
+
+/** Server-computed consent binding; the browser never re-serializes evidence. */
+export async function toolTestAnalysisEvidenceHash(run: APIToolTestRun): Promise<string> {
+  const value = run.evidence_hash.toLowerCase().trim();
+  if (!/^sha256:[0-9a-f]{64}$/.test(value)) throw new Error("The server did not return a valid evidence preview hash.");
+  return value;
+}
 
 export type APIIntegrationToolBinding = {
   integration_id: string;
@@ -717,16 +1286,6 @@ export type APIIntegrationPackageBinding = {
   updated_at: string;
 };
 
-export type APIAuthorizationSimulation = {
-  authorization_point_id: string;
-  allowed: boolean;
-  missing_grants: string[];
-  confirmation_required: boolean;
-  confirmation_missing: boolean;
-  explanation: string;
-  simulation_only: true;
-};
-
 export type APIMCPConnection = {
   id: string;
   organisation_id: string;
@@ -794,20 +1353,39 @@ export type APIAgentSetupLinks = {
   private: APIAgentSetupLink;
 };
 
-export type APIIdentity = {
+export type APIIdentityTest = {
   id: string;
+  status: "pending" | "passed" | "failed" | "expired";
+  configuration_revision: number;
+  authorization_url?: string;
+  failure_code?: string;
+  issuer?: string;
+  customer_id?: string;
+  created_at: string;
+  expires_at: string;
+  completed_at?: string;
+};
+
+export type APIIdentity = {
+  id?: string;
   organisation_id: string;
   deployment_id: string;
+  provider: "oidc";
+  configured: boolean;
+  credential_present: boolean;
+  callback_url: string;
+  access_evaluation_url: string;
   issuer: string;
   client_id: string;
   scopes: string[];
-  audience?: string;
-  oauth_resource?: string;
-  organisation_claim: string;
+  audience: string;
+  oauth_resource: string;
+  customer_account_claim: string;
   installation_claim: string;
-  delegated_api_origin: string;
+  authorization_api_origin: string;
   state: "active" | "disabled";
   revision: number;
+  last_test?: APIIdentityTest;
 };
 
 export type APICustomerAccount = {
@@ -821,6 +1399,11 @@ export type APICustomerAccount = {
   created_at: string;
   updated_at: string;
   last_authenticated_at: string;
+};
+
+export type APICustomerAccountPage = {
+  items: APICustomerAccount[];
+  has_more: boolean;
 };
 
 export type APISupportSubmission = {
@@ -1074,11 +1657,12 @@ function cookie(name: string): string {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
-  const csrfToken = !["GET", "HEAD", "OPTIONS"].includes(method) ? cookie("dokosoko_csrf") : "";
+  const credentials = init?.credentials ?? "same-origin";
+  const csrfToken = credentials !== "omit" && !["GET", "HEAD", "OPTIONS"].includes(method) ? cookie("dokosoko_csrf") : "";
   const multipartBody = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(path, {
     ...init,
-    credentials: "same-origin",
+    credentials,
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -1093,6 +1677,67 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new APIError(response.status, error.code ?? "request_failed", error.message ?? "Request failed.", error.details);
   }
   return payload as T;
+}
+
+export type APIWidgetAgentSource = { kind: "recipe" | "documentation"; title: string; uri?: string; revision?: number; integration?: string };
+export type APIWidgetAgentTrace = { intent: string; promptVersion: string; plannerVersion?: string; recipeCount: number; documentationCount: number; historyMessages: number; contextFacts: number; mcpSuggestionAllowed: boolean };
+
+export async function streamWidgetMessage(sessionToken: string, message: string, onText: (text: string) => void, signal?: AbortSignal, onSource?: (source: APIWidgetAgentSource) => void, onTrace?: (trace: APIWidgetAgentTrace) => void): Promise<void> {
+  const response = await fetch("/v1/widget-chat", {
+    method: "POST",
+    credentials: "omit",
+    cache: "no-store",
+    signal,
+    headers: {
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${sessionToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const error = payload?.error ?? {};
+    throw new APIError(response.status, error.code ?? "widget_request_failed", error.message ?? "The widget could not answer.", error.details);
+  }
+  if (!response.body) throw new APIError(502, "widget_stream_unavailable", "The widget response stream is unavailable.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finished = false;
+  const consume = (event: string) => {
+    const data = event.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+    if (!data) return;
+    if (data === "[DONE]") {
+      finished = true;
+      return;
+    }
+    try {
+      const payload = JSON.parse(data) as { type?: unknown; text?: unknown; source?: unknown; trace?: unknown };
+      if (payload.type === "source" && payload.source && typeof payload.source === "object") onSource?.(payload.source as APIWidgetAgentSource);
+      else if (payload.type === "trace" && payload.trace && typeof payload.trace === "object") onTrace?.(payload.trace as APIWidgetAgentTrace);
+      else if (typeof payload.text === "string") onText(payload.text);
+    } catch {
+      throw new APIError(502, "widget_stream_invalid", "The widget returned an invalid response stream.");
+    }
+  };
+
+  while (!finished) {
+    const { done, value } = await reader.read();
+    buffer = (buffer + decoder.decode(value, { stream: !done })).replaceAll("\r\n", "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      consume(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      if (finished) break;
+      boundary = buffer.indexOf("\n\n");
+    }
+    if (done) {
+      if (buffer.trim()) consume(buffer);
+      break;
+    }
+  }
 }
 
 const productPath = (productID: string) => `/api/v1/products/${encodeURIComponent(productID)}`;
@@ -1138,7 +1783,20 @@ export const api = {
   revokeWidgetSecret: (widgetID: string, secretID: string) => request<APIWidgetSecret>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/secrets/${encodeURIComponent(secretID)}`, { method: "DELETE" }),
   widgetSessions: async (widgetID: string) => (await request<{ items: APIWidgetSession[] }>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/sessions`)).items,
   revokeWidgetSession: (widgetID: string, sessionID: string) => request<APIWidgetSession>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/sessions/${encodeURIComponent(sessionID)}`, { method: "DELETE" }),
+  widgetConfiguration: (widgetID: string) => request<APIWidgetConfiguration>(`/v1/widgets/${encodeURIComponent(widgetID)}/configuration`, { credentials: "omit" }),
+  widgetPreviewBootstrap: (widgetID: string) => request<APIWidgetBootstrap>(`/api/v1/widgets/${encodeURIComponent(widgetID)}/preview-session`, { method: "POST" }),
+  exchangeWidgetSession: (bootstrapToken: string, origin: string) => request<APIWidgetRuntimeSession>("/v1/widget-sessions/exchange", { method: "POST", credentials: "omit", body: JSON.stringify({ bootstrapToken, origin }) }),
   integration: (integrationID: string) => request<APIIntegrationDetail>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
+  integrationRuntimeSetup: (integrationID: string) => request<APIRuntimeSetup>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-setup`),
+  configureIntegrationRuntimeSetup: (integrationID: string, input: APIRuntimeSetupInput) => request<APIRuntimeSetup>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-setup`, { method: "PUT", body: JSON.stringify(input) }),
+  integrationRuntimeConnections: async (integrationID: string) => (await request<{ items: APIRuntimeServiceConnection[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-connections`)).items,
+  createIntegrationRuntimeConnection: (integrationID: string, input: APIRuntimeServiceConnectionInput) => request<APIRuntimeServiceConnection>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-connections`, { method: "POST", body: JSON.stringify(input) }),
+  checkRuntimeServiceConnection: (connectionID: string) => request<APIRuntimeServiceConnectionReadiness>(`/api/v1/runtime-service-connections/${encodeURIComponent(connectionID)}/check`, { method: "POST" }),
+  createIntegrationRuntimeCredentialSet: (integrationID: string, input: APIRuntimeCredentialSetInput) => request<APIRuntimeCredentialSet>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-credential-sets`, { method: "POST", body: JSON.stringify(input) }),
+  runtimeCredentialSet: (credentialSetID: string) => request<APIRuntimeCredentialSet>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}`),
+  runtimeCredentialUsage: (credentialSetID: string) => request<{ items: APIRuntimeServiceConnection[]; count: number }>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}/usage`),
+  rotateRuntimeCredential: (credentialSetID: string, credential: string, expiresAt?: string) => request<APIRuntimeCredentialSet>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}/rotate`, { method: "POST", body: JSON.stringify({ credential, ...(expiresAt ? { expires_at: expiresAt } : {}) }) }),
+  revokeRuntimeCredentialVersion: (credentialSetID: string, versionID: string) => request<APIRuntimeCredentialSet>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}/versions/${encodeURIComponent(versionID)}/revoke`, { method: "POST" }),
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; visibility?: APIVisibility; acknowledge_public?: boolean; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "visibility" | "lifecycle" | "revision"> & { acknowledge_public?: boolean; replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PUT", body: JSON.stringify(input) }),
   preflightIntegration: (integrationID: string) => request<APIIntegrationPreflight>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/preflight`, { method: "POST", body: JSON.stringify({}) }),
@@ -1153,7 +1811,6 @@ export const api = {
   authorizationPoints: async (integrationID: string) => (await request<{ items: APIAuthorizationPoint[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points`)).items,
   createAuthorizationPoint: (integrationID: string, input: { key: string; name: string; description: string; action_type: APIAuthorizationPoint["action_type"]; required_grants: string[]; confirmation_required: boolean; decision_ttl_seconds: number; state: APIAuthorizationPoint["state"] }) => request<APIAuthorizationPoint>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points`, { method: "POST", body: JSON.stringify(input) }),
   updateAuthorizationPoint: (integrationID: string, pointID: string, input: { key: string; name: string; description: string; action_type: APIAuthorizationPoint["action_type"]; required_grants: string[]; confirmation_required: boolean; decision_ttl_seconds: number; state: APIAuthorizationPoint["state"]; revision: number }) => request<APIAuthorizationPoint>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points/${encodeURIComponent(pointID)}`, { method: "PATCH", body: JSON.stringify(input) }),
-  simulateAuthorizationPoint: (integrationID: string, pointID: string, grantedGrants: string[], confirmed: boolean) => request<APIAuthorizationSimulation>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization-points/${encodeURIComponent(pointID)}/simulate`, { method: "POST", body: JSON.stringify({ granted_grants: grantedGrants, confirmed }) }),
   integrationPackages: async (integrationID: string) => (await request<{ items: APIIntegrationPackageBinding[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages`)).items,
   bindIntegrationPackage: (integrationID: string, packageReleaseID: string) => request<APIIntegrationPackageBinding>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages`, { method: "POST", body: JSON.stringify({ package_release_id: packageReleaseID }) }),
   replaceIntegrationPackage: (integrationID: string, artifactID: string, packageReleaseID: string) => request<APIIntegrationPackageBinding>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/packages/${encodeURIComponent(artifactID)}`, { method: "PUT", body: JSON.stringify({ package_release_id: packageReleaseID }) }),
@@ -1166,6 +1823,7 @@ export const api = {
   detachResourceSet: (integrationID: string, resourceSetID: string) => request<void>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/resource-sets/${encodeURIComponent(resourceSetID)}`, { method: "DELETE" }),
   accessDefinitions: async () => (await request<{ items: APIAccessDefinition[] }>("/api/v1/access-definitions")).items,
   createAccessDefinition: (input: { service_key: string; name: string; instance_cardinality: APIAccessDefinition["instance_cardinality"]; instance_label_singular: string; instance_label_plural: string; credential_scope: APIAccessDefinition["credential_scope"]; management_auth_type: APIAccessDefinition["management_auth_type"]; api_resource_set_id?: string; operations: Record<string, unknown> }) => request<APIAccessDefinition>("/api/v1/access-definitions", { method: "POST", body: JSON.stringify(input) }),
+  updateAccessDefinition: (definitionID: string, input: { name: string; instance_label_singular: string; instance_label_plural: string; api_resource_set_id?: string; operations: Record<string, unknown>; revision: number }) => request<APIAccessDefinition>(`/api/v1/access-definitions/${encodeURIComponent(definitionID)}`, { method: "PUT", body: JSON.stringify(input) }),
   accessConnections: async () => (await request<{ items: APIAccessConnection[] }>("/api/v1/access-connections")).items,
   createAccessConnection: (input: { access_definition_id: string; environment_id?: string; name: string; region?: string; base_url: string; management_secret?: string; config: Record<string, unknown>; integration_ids: string[] }) => request<APIAccessConnection>("/api/v1/access-connections", { method: "POST", body: JSON.stringify(input) }),
   accessInstances: async (connectionID: string) => (await request<{ items: APIAccessInstance[] }>(`/api/v1/access-connections/${encodeURIComponent(connectionID)}/instances`)).items,
@@ -1194,7 +1852,7 @@ export const api = {
   productVersionPinHistory: async (productID: string) => (await request<{ items: APIProductVersionPinHistory[] }>(`${productPath(productID)}/version-pins/history`)).items,
   productInstallations: async (productID: string) => (await request<{ items: APIProductInstallation[] }>(`${productPath(productID)}/installations`)).items,
   saveProductInstallation: (productID: string, input: { id?: string; customer_account_id: string; environment_id: string; external_id: string; name: string; state: "active" | "paused"; revision: number }) => request<APIProductInstallation>(`${productPath(productID)}/installations`, { method: "POST", body: JSON.stringify(input) }),
-  customerAccounts: async (productID: string) => (await request<{ items: APICustomerAccount[]; has_more: boolean }>(`${productPath(productID)}/customer-accounts?limit=200`)).items,
+  customerAccounts: (productID: string, startingAfter = "") => request<APICustomerAccountPage>(`${productPath(productID)}/customer-accounts?limit=200${startingAfter ? `&starting_after=${encodeURIComponent(startingAfter)}` : ""}`),
   updateCustomerAccount: (productID: string, accountID: string, state: APICustomerAccount["state"], revision: number) => request<APICustomerAccount>(`${productPath(productID)}/customer-accounts/${encodeURIComponent(accountID)}`, { method: "PATCH", body: JSON.stringify({ state, revision }) }),
   productDefinition: (productID: string) => request<APIProductDefinition>(`${productPath(productID)}/definition`),
   productBuilds: async (productID: string) => (await request<{ items: APIProductBuild[] }>(`${productPath(productID)}/product-builds`)).items,
@@ -1204,7 +1862,12 @@ export const api = {
   createEnvironment: (productID: string, organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>(`${productPath(productID)}/environments`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   distribution: (productID: string) => request<Distribution>(`${productPath(productID)}/distribution`),
   identity: () => request<APIIdentity>("/api/v1/identity-provider"),
-  configureIdentity: (input: { issuer: string; client_id: string; client_secret: string; scopes: string[]; audience: string; oauth_resource: string; organisation_claim: string; installation_claim: string; delegated_api_origin: string; state: APIIdentity["state"]; revision: number }) => request<APIIdentity>("/api/v1/identity-provider", { method: "PUT", body: JSON.stringify(input) }),
+  saveIdentityDraft: (input: { provider: "oidc"; issuer: string; client_id: string; client_secret: string; scopes: string[]; audience: string; oauth_resource: string; customer_account_claim: string; installation_claim: string; authorization_api_origin: string; revision: number }) => request<APIIdentity>("/api/v1/identity-provider", { method: "PUT", body: JSON.stringify(input) }),
+  beginIdentityTest: (revision: number) => request<APIIdentityTest>("/api/v1/identity-provider/tests", { method: "POST", body: JSON.stringify({ revision }) }),
+  identityTest: (testID: string) => request<APIIdentityTest>(`/api/v1/identity-provider/tests/${encodeURIComponent(testID)}`),
+  activateIdentity: (revision: number, testID: string) => request<APIIdentity>("/api/v1/identity-provider/activate", { method: "POST", body: JSON.stringify({ revision, test_id: testID }) }),
+  disableIdentity: (revision: number) => request<APIIdentity>("/api/v1/identity-provider/disable", { method: "POST", body: JSON.stringify({ revision }) }),
+  disconnectIdentity: (revision: number) => request<APIIdentity>("/api/v1/identity-provider", { method: "DELETE", body: JSON.stringify({ revision }) }),
   supportSubmissions: async () => (await request<{ items: APISupportSubmission[]; has_more: boolean }>("/api/v1/support-submissions?limit=200")).items,
   supportSubmission: (submissionID: string) => request<APISupportSubmission>(`/api/v1/support-submissions/${encodeURIComponent(submissionID)}`),
   createSupportDeliveryAttempt: (submissionID: string) => request<APISupportSubmission>(`/api/v1/support-submissions/${encodeURIComponent(submissionID)}/delivery-attempts`, { method: "POST" }),
@@ -1225,7 +1888,7 @@ export const api = {
   answerAnalysis: (productID: string, analysisID: string, answers: Record<string, string>) => request<APIIntegrationAnalysis>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}`, { method: "PATCH", body: JSON.stringify({ answers }) }),
   generateRecipes: async (productID: string, analysisID: string, integrationID?: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/analyses/${encodeURIComponent(analysisID)}/recipes`, { method: "POST", body: JSON.stringify(integrationID ? { integration_id: integrationID } : {}) })).items,
   recipes: async (productID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/recipes`)).items,
-  createRecipe: (productID: string, prompt: string) => request<APIRecipe>(`${productPath(productID)}/recipes`, { method: "POST", body: JSON.stringify({ prompt }) }),
+  createRecipe: (productID: string, prompt: string, integrationID = "") => request<APIRecipe>(`${productPath(productID)}/recipes`, { method: "POST", body: JSON.stringify({ prompt, integration_id: integrationID }) }),
   recipe: (productID: string, recipeID: string) => request<{ recipe: APIRecipe; revisions: APIRecipeRevision[] }>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`),
   updateRecipe: (productID: string, recipeID: string, markdown: string, references: APIRecipeReference[], visibility: APIVisibility) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`, { method: "PATCH", body: JSON.stringify({ markdown, references, visibility }) }),
   reworkRecipe: (productID: string, recipeID: string, instruction: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/rework`, { method: "POST", body: JSON.stringify({ instruction }) }),
@@ -1249,10 +1912,17 @@ export const api = {
   publishSource: (productID: string, sourceID: string, input: { revision: number; crawl_job_id: string; document_ids: string[]; acknowledge_reviewed: boolean }) => request<APISourcePublishResult>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/publish`, { method: "POST", body: JSON.stringify(input) }),
   tools: async (productID: string) => (await request<{ items: APITool[] }>(`${productPath(productID)}/tools`)).items,
   tool: (productID: string, toolID: string) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}`),
-  createTool: (productID: string, input: Record<string, unknown>) => request<APITool>(`${productPath(productID)}/tools`, { method: "POST", body: JSON.stringify(input) }),
-  updateTool: (productID: string, toolID: string, input: Record<string, unknown>) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}`, { method: "PUT", body: JSON.stringify(input) }),
-  cloneTool: (productID: string, toolID: string, namespace: string, name: string) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/clone`, { method: "POST", body: JSON.stringify({ namespace, name }) }),
+  createTool: (productID: string, input: APIToolCreateInput) => request<APITool>(`${productPath(productID)}/tools`, { method: "POST", body: JSON.stringify(input) }),
+  updateTool: (productID: string, toolID: string, input: APIToolUpdateInput) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}`, { method: "PUT", body: JSON.stringify(input) }),
+  proposeToolDraft: (productID: string, input: APIToolBuilderProposalInput) => request<APIToolBuilderProposal>(`${productPath(productID)}/tool-builder/propose`, { method: "POST", body: JSON.stringify({ ...input, ...(input.history ? { history: boundedToolBuilderChatHistory(input.history) } : {}) }) }),
+  importToolDraft: (productID: string, input: APIToolBuilderImportInput) => request<APIToolBuilderImportResult>(`${productPath(productID)}/tool-builder/import`, { method: "POST", body: JSON.stringify(input) }),
+  validateToolDraft: (productID: string, input: APIToolBuilderValidationInput) => request<APIToolBuilderValidation>(`${productPath(productID)}/tool-builder/validate`, { method: "POST", body: JSON.stringify(input) }),
+  analyseToolDraft: (productID: string, input: APIToolBuilderAnalysisInput) => request<APIToolBuilderAnalysis>(`${productPath(productID)}/tool-builder/analyse`, { method: "POST", body: JSON.stringify(input) }),
+  cloneTool: (productID: string, toolID: string, revision: number, namespace: string, name: string, credential = "") => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/clone`, { method: "POST", body: JSON.stringify({ revision, namespace, name, ...(credential ? { credential } : {}) }) }),
   dryRunTool: (productID: string, toolID: string, args: Record<string, unknown>) => request<APIToolDryRun>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/dry-run`, { method: "POST", body: JSON.stringify({ arguments: args }) }),
+  createToolTestConfirmation: (productID: string, toolID: string, input: APIToolTestConfirmationInput) => request<APIToolTestConfirmation>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/test-confirmations`, { method: "POST", body: JSON.stringify(input) }),
+  runToolTest: (productID: string, toolID: string, input: APIToolTestRunInput) => request<APIToolTestRun>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/test-runs`, { method: "POST", body: JSON.stringify(input) }),
+  analyseToolTestRun: (productID: string, toolID: string, runID: string, input: APIToolTestAnalysisInput) => request<APIToolTestAnalysis>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/test-runs/${encodeURIComponent(runID)}/analyse`, { method: "POST", body: JSON.stringify({ ...input, ...(input.history ? { history: boundedToolTestAnalysisHistory(input.history) } : {}) }) }),
   retireTool: (productID: string, toolID: string, revision: number) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/retire`, { method: "POST", body: JSON.stringify({ revision }) }),
   publishTool: (productID: string, toolID: string, revision: number) => request<APITool>(`${productPath(productID)}/tools/${encodeURIComponent(toolID)}/publish`, { method: "POST", body: JSON.stringify({ revision }) }),
   packageArtifacts: async () => (await request<{ items: APIPackageArtifact[] }>("/api/v1/package-artifacts")).items,

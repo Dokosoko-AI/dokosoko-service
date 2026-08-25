@@ -140,13 +140,14 @@ func (s *Server) recipes(w http.ResponseWriter, r *http.Request, productID strin
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			Prompt string `json:"prompt"`
+			Prompt        string `json:"prompt"`
+			IntegrationID string `json:"integration_id"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateRecipeFromPrompt(r.Context(), productID, input.Prompt, actor(r))
+		value, err := s.service.CreateRecipeFromPromptFor(r.Context(), productID, input.IntegrationID, input.Prompt, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return

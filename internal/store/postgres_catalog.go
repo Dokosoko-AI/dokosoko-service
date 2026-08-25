@@ -481,7 +481,7 @@ func (p *Postgres) CreateAccessDefinition(ctx context.Context, value model.Acces
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
-	snapshot, err := json.Marshal(map[string]any{"service_key": created.ServiceKey, "name": created.Name, "instance_cardinality": created.InstanceCardinality, "instance_label_singular": created.InstanceLabelSingular, "instance_label_plural": created.InstanceLabelPlural, "credential_scope": created.CredentialScope, "management_auth_type": created.ManagementAuthType, "api_resource_set_id": created.APIResourceSetID, "operations": json.RawMessage(created.Operations), "state": created.State})
+	snapshot, err := accessDefinitionSnapshot(created)
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
@@ -493,6 +493,34 @@ func (p *Postgres) CreateAccessDefinition(ctx context.Context, value model.Acces
 		return model.AccessDefinition{}, err
 	}
 	return created, tx.Commit(ctx)
+}
+
+func accessDefinitionSnapshot(value model.AccessDefinition) ([]byte, error) {
+	return json.Marshal(map[string]any{"service_key": value.ServiceKey, "name": value.Name, "instance_cardinality": value.InstanceCardinality, "instance_label_singular": value.InstanceLabelSingular, "instance_label_plural": value.InstanceLabelPlural, "credential_scope": value.CredentialScope, "management_auth_type": value.ManagementAuthType, "api_resource_set_id": value.APIResourceSetID, "operations": json.RawMessage(value.Operations), "state": value.State})
+}
+
+func (p *Postgres) UpdateAccessDefinition(ctx context.Context, value model.AccessDefinition, expected int64) (model.AccessDefinition, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	updated, err := scanAccessDefinition(tx.QueryRow(ctx, `UPDATE access_definitions SET name=$3,instance_label_singular=$4,instance_label_plural=$5,api_resource_set_id=nullif($6,'')::uuid,operations=$7,state=$8,revision=revision+1,updated_at=now() WHERE deployment_id=$1 AND id=$2 AND revision=$9 RETURNING id::text,deployment_id::text,organisation_id::text,service_key,name,instance_cardinality,instance_label_singular,instance_label_plural,credential_scope,management_auth_type,coalesce(api_resource_set_id::text,''),operations,state,revision,created_at,updated_at`, value.DeploymentID, value.ID, value.Name, value.InstanceLabelSingular, value.InstanceLabelPlural, value.APIResourceSetID, value.Operations, value.State, expected))
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	snapshot, err := accessDefinitionSnapshot(updated)
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	digest := sha256.Sum256(snapshot)
+	if _, err := tx.Exec(ctx, `INSERT INTO access_definition_revisions(access_definition_id,revision,snapshot,content_hash) VALUES($1,$2,$3,$4)`, updated.ID, updated.Revision, snapshot, "sha256:"+hex.EncodeToString(digest[:])); err != nil {
+		return model.AccessDefinition{}, databaseError(err)
+	}
+	if err := bumpDeploymentCatalog(ctx, tx, value.DeploymentID); err != nil {
+		return model.AccessDefinition{}, err
+	}
+	return updated, tx.Commit(ctx)
 }
 
 const accessConnectionSelect = `SELECT id::text,deployment_id::text,organisation_id::text,access_definition_id::text,coalesce(environment_id::text,''),name,region,base_url,coalesce(management_secret_id::text,''),coalesce(legacy_provider_id::text,''),config,state,revision,created_at,updated_at FROM access_connections`

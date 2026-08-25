@@ -26,7 +26,7 @@ paths:
       security: [{ delegatedCustomerToken: [] }]
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/DokoSokoRequestID"
+        - $ref: "#/components/parameters/ExternalRequestID"
       requestBody:
         required: true
         content:
@@ -66,8 +66,8 @@ components:
         Stable for retries of one authorization-time evaluation and unique for
         the next evaluation. Retain the result for at least 10 minutes.
       schema: { type: string, pattern: '^aeval_[a-f0-9]{32}$' }
-    DokoSokoRequestID:
-      name: X-DokoSoko-Request-ID
+    ExternalRequestID:
+      name: X-External-Request-ID
       in: header
       required: true
       description: Unique identifier for this HTTP attempt; retries use a new value.

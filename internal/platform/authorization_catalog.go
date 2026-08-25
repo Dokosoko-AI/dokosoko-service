@@ -250,48 +250,6 @@ func (s *Service) SaveAuthorizationPoint(ctx context.Context, integrationID, poi
 	return updated, nil
 }
 
-type AuthorizationSimulation struct {
-	AuthorizationPointID string   `json:"authorization_point_id"`
-	Allowed              bool     `json:"allowed"`
-	MissingGrants        []string `json:"missing_grants"`
-	ConfirmationRequired bool     `json:"confirmation_required"`
-	ConfirmationMissing  bool     `json:"confirmation_missing"`
-	Explanation          string   `json:"explanation"`
-	SimulationOnly       bool     `json:"simulation_only"`
-}
-
-func (s *Service) SimulateAuthorizationPoint(ctx context.Context, integrationID, pointID string, granted []string, confirmed bool) (AuthorizationSimulation, error) {
-	catalog, err := s.authorizationCatalog()
-	if err != nil {
-		return AuthorizationSimulation{}, err
-	}
-	point, err := catalog.AuthorizationPoint(ctx, integrationID, pointID)
-	if err != nil {
-		return AuthorizationSimulation{}, err
-	}
-	available := make(map[string]bool, len(granted))
-	for _, key := range granted {
-		available[strings.ToLower(strings.TrimSpace(key))] = true
-	}
-	missing := make([]string, 0)
-	for _, required := range point.RequiredGrants {
-		if !available[required] {
-			missing = append(missing, required)
-		}
-	}
-	confirmationMissing := point.ConfirmationRequired && !confirmed
-	allowed := point.State == "active" && len(missing) == 0 && !confirmationMissing
-	explanation := "The simulated policy allows this action."
-	if point.State != "active" {
-		explanation = "The authorization point is not active."
-	} else if len(missing) > 0 {
-		explanation = "One or more required grants are missing."
-	} else if confirmationMissing {
-		explanation = "Explicit confirmation is required."
-	}
-	return AuthorizationSimulation{AuthorizationPointID: point.ID, Allowed: allowed, MissingGrants: missing, ConfirmationRequired: point.ConfirmationRequired, ConfirmationMissing: confirmationMissing, Explanation: explanation, SimulationOnly: true}, nil
-}
-
 func (s *Service) IntegrationToolBindings(ctx context.Context, integrationID string) ([]model.IntegrationToolBinding, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
@@ -314,12 +272,69 @@ type ToolRevisionSelection struct {
 	AuthorizationPointRevision int64  `json:"authorization_point_revision"`
 }
 
+func validateToolBindingOwnership(tool model.Tool, integration model.Integration) error {
+	if tool.ProductID != integration.DeploymentID || tool.OrganisationID != integration.OrganisationID {
+		return errors.New("tool and integration must belong to the same deployment")
+	}
+	switch tool.Scope {
+	case model.ToolScopeCommon:
+		if tool.OwnerIntegrationID != "" {
+			return errors.New("common tool has invalid owner metadata")
+		}
+		return nil
+	case model.ToolScopeAPI:
+		if tool.OwnerIntegrationID == "" {
+			return errors.New("api tool has no owner integration")
+		}
+		if tool.OwnerIntegrationID != integration.ID {
+			return fmt.Errorf("api tool %s.%s is owned by another integration", tool.Namespace, tool.Name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("tool %s.%s has unsupported ownership scope %q", tool.Namespace, tool.Name, tool.Scope)
+	}
+}
+
+func authorizationActionRank(action string) int {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "read":
+		return 1
+	case "write":
+		return 2
+	case "destructive":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func minimumHTTPAuthorizationAction(tool model.Tool) (string, bool) {
+	backendKind := strings.ToLower(strings.TrimSpace(tool.BackendKind))
+	if backendKind != "" && backendKind != "http" {
+		return "", false
+	}
+	switch strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)) {
+	case "GET":
+		return "read", true
+	case "POST", "PUT", "PATCH":
+		return "write", true
+	case "DELETE":
+		return "destructive", true
+	default:
+		// Published HTTP tools should already contain a canonical supported
+		// method. Treat a corrupted or legacy value as maximally sensitive so
+		// it cannot be paired with a weaker authorization point.
+		return "destructive", true
+	}
+}
+
 func (s *Service) SetIntegrationToolBindings(ctx context.Context, integrationID string, selections []ToolRevisionSelection, actor Actor) ([]model.IntegrationToolBinding, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.store.Integration(ctx, deployment.ID, integrationID); err != nil {
+	integration, err := s.store.Integration(ctx, deployment.ID, integrationID)
+	if err != nil {
 		return nil, err
 	}
 	catalog, err := s.authorizationCatalog()
@@ -345,6 +360,9 @@ func (s *Service) SetIntegrationToolBindings(ctx context.Context, integrationID 
 		if err != nil {
 			return nil, err
 		}
+		if err := validateToolBindingOwnership(tool, integration); err != nil {
+			return nil, err
+		}
 		if tool.State != "published" || tool.UpstreamDrifted || selection.Revision != tool.Revision {
 			return nil, fmt.Errorf("tool %s must reference its exact non-drifted published revision", tool.Namespace+"."+tool.Name)
 		}
@@ -357,6 +375,9 @@ func (s *Service) SetIntegrationToolBindings(ctx context.Context, integrationID 
 		}
 		if point.State != "active" {
 			return nil, fmt.Errorf("authorization point %s must be active before it can authorize a tool", point.Key)
+		}
+		if minimumAction, isHTTP := minimumHTTPAuthorizationAction(tool); isHTTP && authorizationActionRank(point.ActionType) < authorizationActionRank(minimumAction) {
+			return nil, fmt.Errorf("authorization point %s action %s is weaker than the minimum %s action required by %s tool %s", point.Key, point.ActionType, minimumAction, strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)), tool.Namespace+"."+tool.Name)
 		}
 		bindings = append(bindings, model.IntegrationToolBinding{IntegrationID: integrationID, ToolID: tool.ID, ToolRevision: selection.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision, Tool: &tool, AuthorizationPoint: &point, CreatedBy: actor.ID})
 	}

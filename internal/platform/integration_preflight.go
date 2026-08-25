@@ -80,7 +80,7 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 		return IntegrationPreflightResult{}, err
 	}
 	private := integration.Visibility != model.VisibilityPublic
-	checks := make([]IntegrationPreflightCheck, 0, 10)
+	checks := make([]IntegrationPreflightCheck, 0, 11)
 
 	documentationReady, apiReady := false, false
 	for _, resource := range integration.Resources {
@@ -96,8 +96,8 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 		}
 	}
 	checks = append(checks,
-		preflightCheck("documentation_revision", "Published documentation", "An exact reviewed documentation revision is in the candidate manifest.", "Attach an exact reviewed documentation revision.", "resources", documentationReady, private),
-		preflightCheck("api_contract_revision", "API contract", "An exact immutable API contract revision is in the candidate manifest.", "Attach an exact immutable API contract revision.", "resources", apiReady, private),
+		preflightCheck("documentation_revision", "Published documentation", "An exact reviewed documentation revision is in the candidate manifest.", "Attach an exact reviewed documentation revision.", "documentation", documentationReady, private),
+		preflightCheck("api_contract_revision", "API contract", "An exact immutable API contract revision is in the candidate manifest.", "Attach an exact immutable API contract revision.", "documentation", apiReady, private),
 	)
 
 	identityReady := false
@@ -106,19 +106,38 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 	} else if !errors.Is(providerErr, store.ErrNotFound) {
 		return IntegrationPreflightResult{}, providerErr
 	}
-	checks = append(checks, preflightCheck("customer_identity", "Customer identity", "Customer identity and delegated API origin are active.", "Configure an active customer identity provider and delegated API origin.", "authorization", identityReady, private))
+	checks = append(checks, preflightCheck("customer_identity", "Customer identity", "Customer identity and authorization API origin are active.", "Configure an active customer identity provider and authorization API origin.", "access", identityReady, private))
 
-	accessReady := len(integration.AccessConnections) > 0
-	for _, connectionID := range integration.AccessConnections {
-		connection, connectionErr := s.store.AccessConnection(ctx, deployment.ID, connectionID)
-		if connectionErr != nil || connection.State != "active" || connection.Revision < 1 || connection.Definition == nil || connection.Definition.ID != connection.AccessDefinitionID || connection.Definition.State != "active" || connection.Definition.Revision < 1 {
-			accessReady = false
-			if connectionErr != nil && !errors.Is(connectionErr, store.ErrNotFound) {
-				return IntegrationPreflightResult{}, connectionErr
-			}
+	toolBindings, err := s.store.IntegrationToolBindings(ctx, integration.ID)
+	if err != nil {
+		return IntegrationPreflightResult{}, err
+	}
+	runtimeAccessRequired := false
+	for _, binding := range toolBindings {
+		if binding.Tool != nil && binding.Tool.Scope == model.ToolScopeAPI && binding.Tool.OwnerIntegrationID == integration.ID && binding.Tool.RuntimeServiceConnectionID != "" {
+			runtimeAccessRequired = true
+			break
 		}
 	}
-	checks = append(checks, preflightCheck("service_connection", "Service connection", "Every selected service connection is active and exactly bound.", "Assign at least one active service connection and resolve every stale binding.", "access", accessReady, private))
+	serviceAccessReady := true
+	providerManagementReady := true
+	for _, validation := range status.Validations {
+		switch {
+		case validation.Code == "access_missing", strings.HasPrefix(validation.Code, "runtime_service_"):
+			serviceAccessReady = false
+		case strings.HasPrefix(validation.Code, "provider_management_"):
+			providerManagementReady = false
+		}
+	}
+	providerManagementConfigured := len(integration.AccessConnections) > 0
+	providerManagementFailMessage := "Optional provider-managed issuance and rotation is not configured."
+	if providerManagementConfigured {
+		providerManagementFailMessage = "Resolve every selected advanced provider-management connection."
+	}
+	checks = append(checks,
+		preflightCheck("service_access", "Service access", "Every selected API-owned runtime tool has a publish-ready service connection.", "Configure an API endpoint and active compatible credential for every selected runtime tool.", "access", serviceAccessReady, runtimeAccessRequired),
+		preflightCheck("provider_management_access", "Provider management", "Every selected provider-management connection resolves exactly.", providerManagementFailMessage, "access", providerManagementConfigured && providerManagementReady, false),
+	)
 
 	grants, err := s.store.GrantDefinitions(ctx, deployment.ID)
 	if err != nil {
@@ -134,12 +153,8 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 			authorizationReady = true
 		}
 	}
-	checks = append(checks, preflightCheck("authorization_point", "Authorization point", "At least one active authorization point with registered grants is pinned.", "Create an active authorization point using registered grants.", "authorization", authorizationReady, private))
+	checks = append(checks, preflightCheck("authorization_point", "Authorization point", "At least one active authorization point with registered grants is pinned.", "Create an active authorization point using registered grants.", "tools", authorizationReady, private))
 
-	toolBindings, err := s.store.IntegrationToolBindings(ctx, integration.ID)
-	if err != nil {
-		return IntegrationPreflightResult{}, err
-	}
 	toolsReady := len(toolBindings) > 0
 	for _, binding := range toolBindings {
 		if binding.Tool == nil || binding.Tool.ID != binding.ToolID || binding.Tool.State != "published" || binding.Tool.Revision != binding.ToolRevision || binding.Tool.UpstreamDrifted {
@@ -171,7 +186,7 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 			}
 		}
 	}
-	checks = append(checks, preflightCheck("published_recipe", "Published recipe", "Published guidance is scoped to this Integration.", "A published recipe is optional and can be added after the API manifest is ready.", "recipes", recipeReady, false))
+	checks = append(checks, preflightCheck("published_recipe", "Published recipe", "Published guidance is scoped to this Integration.", "A published recipe is optional and can be added after the API manifest is ready.", "overview", recipeReady, false))
 
 	packagesReady := true
 	packageFailures := make([]string, 0)
@@ -194,7 +209,7 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 	if len(packageFailures) > 0 {
 		packageFailMessage = strings.Join(packageFailures, " ")
 	}
-	checks = append(checks, preflightCheck("package_releases", "Packages", packagePassMessage, packageFailMessage, "resources", packagesReady, len(integration.Packages) > 0))
+	checks = append(checks, preflightCheck("package_releases", "Packages", packagePassMessage, packageFailMessage, "documentation", packagesReady, len(integration.Packages) > 0))
 
 	candidateReady := status.Ready
 	checks = append(checks, preflightCheck("candidate_integrity", "Candidate manifest", "The server reproduced the candidate manifest and all exact bindings are internally consistent.", "The candidate contains an unresolved or unsafe binding.", "overview", candidateReady, true))

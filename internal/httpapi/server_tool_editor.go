@@ -2,29 +2,54 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 )
 
 type toolEditorRequest struct {
-	Description         *string          `json:"description"`
-	InputSchema         *json.RawMessage `json:"input_schema"`
-	OutputSchema        *json.RawMessage `json:"output_schema"`
-	Endpoint            *string          `json:"endpoint"`
-	HTTPMethod          *string          `json:"http_method"`
-	AuthorizationPolicy *json.RawMessage `json:"authorization_policy"`
-	TimeoutMS           *int             `json:"timeout_ms"`
-	Revision            *int64           `json:"revision"`
+	Description                *string          `json:"description"`
+	InputSchema                *json.RawMessage `json:"input_schema"`
+	OutputSchema               *json.RawMessage `json:"output_schema"`
+	Endpoint                   *string          `json:"endpoint"`
+	RuntimeServiceConnectionID *string          `json:"runtime_service_connection_id"`
+	HTTPPath                   *string          `json:"http_path"`
+	HTTPMethod                 *string          `json:"http_method"`
+	UpstreamAuth               *json.RawMessage `json:"upstream_auth"`
+	Credential                 string           `json:"credential"`
+	RequestMapping             *json.RawMessage `json:"request_mapping"`
+	ResponseMapping            *json.RawMessage `json:"response_mapping"`
+	RequestExample             json.RawMessage  `json:"request_example"`
+	ResponseExample            json.RawMessage  `json:"response_example"`
+	AuthorizationPolicy        *json.RawMessage `json:"authorization_policy"`
+	TimeoutMS                  *int             `json:"timeout_ms"`
+	Revision                   *int64           `json:"revision"`
 }
 
 func adminTool(value model.Tool) map[string]any {
 	encoded, _ := json.Marshal(value)
 	result := make(map[string]any)
 	_ = json.Unmarshal(encoded, &result)
-	if value.BackendKind == "http" {
-		result["endpoint"] = value.BaseURL
+	if value.BackendKind == "http" && value.RuntimeServiceConnectionID != "" {
+		result["endpoint"] = ""
+		result["endpoint_managed_by_runtime_service"] = true
+	} else if value.BackendKind == "http" {
+		parsed, err := url.Parse(value.BaseURL)
+		if err != nil || parsed.Host == "" {
+			result["endpoint"] = ""
+			result["endpoint_requires_review"] = true
+		} else {
+			redacted := parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != ""
+			parsed.User, parsed.RawQuery, parsed.Fragment, parsed.RawFragment = nil, "", "", ""
+			parsed.ForceQuery = false
+			result["endpoint"] = parsed.String()
+			if redacted {
+				result["endpoint_requires_review"] = true
+			}
+		}
 	}
 	return result
 }
@@ -58,14 +83,41 @@ func (s *Server) toolEditorResource(w http.ResponseWriter, r *http.Request, prod
 			return
 		}
 		endpoint, method := "", ""
+		upstreamAuth, requestMapping, responseMapping := current.UpstreamAuth, current.RequestMapping, current.ResponseMapping
+		requestExample, responseExample := current.RequestExample, current.ResponseExample
 		if current.BackendKind == "http" {
-			if input.Endpoint == nil || input.HTTPMethod == nil {
+			if input.HTTPMethod == nil || current.RuntimeServiceConnectionID == "" && input.Endpoint == nil {
 				writeError(w, http.StatusBadRequest, "invalid_request", "endpoint and http_method are required for HTTP tools.", nil)
 				return
 			}
-			endpoint, method = *input.Endpoint, *input.HTTPMethod
+			method = *input.HTTPMethod
+			if input.Endpoint != nil {
+				endpoint = *input.Endpoint
+			}
+			if input.UpstreamAuth != nil {
+				upstreamAuth = *input.UpstreamAuth
+			}
+			if input.RequestMapping != nil {
+				requestMapping = *input.RequestMapping
+			}
+			if input.ResponseMapping != nil {
+				responseMapping = *input.ResponseMapping
+			}
 		}
-		value, err := s.service.UpdateTool(r.Context(), productID, toolID, platform.ToolInput{OrganisationID: current.OrganisationID, ProductID: productID, Namespace: current.Namespace, Name: current.Name, Description: *input.Description, InputSchema: *input.InputSchema, OutputSchema: *input.OutputSchema, Endpoint: endpoint, HTTPMethod: method, AuthorizationPolicy: *input.AuthorizationPolicy, TimeoutMS: *input.TimeoutMS}, *input.Revision, actor(r))
+		if len(input.RequestExample) > 0 {
+			requestExample = input.RequestExample
+		}
+		if len(input.ResponseExample) > 0 {
+			responseExample = input.ResponseExample
+		}
+		runtimeConnectionID, httpPath := current.RuntimeServiceConnectionID, current.HTTPPath
+		if input.RuntimeServiceConnectionID != nil {
+			runtimeConnectionID = *input.RuntimeServiceConnectionID
+		}
+		if input.HTTPPath != nil {
+			httpPath = *input.HTTPPath
+		}
+		value, err := s.service.UpdateTool(r.Context(), productID, toolID, platform.ToolInput{OrganisationID: current.OrganisationID, ProductID: productID, Scope: current.Scope, OwnerIntegrationID: current.OwnerIntegrationID, RuntimeServiceConnectionID: runtimeConnectionID, HTTPPath: httpPath, Namespace: current.Namespace, Name: current.Name, Description: *input.Description, InputSchema: *input.InputSchema, OutputSchema: *input.OutputSchema, Endpoint: endpoint, HTTPMethod: method, UpstreamAuth: upstreamAuth, Credential: input.Credential, RequestMapping: requestMapping, ResponseMapping: responseMapping, RequestExample: requestExample, ResponseExample: responseExample, AuthorizationPolicy: *input.AuthorizationPolicy, TimeoutMS: *input.TimeoutMS}, *input.Revision, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -79,15 +131,25 @@ func (s *Server) toolEditorResource(w http.ResponseWriter, r *http.Request, prod
 
 func (s *Server) cloneTool(w http.ResponseWriter, r *http.Request, productID, toolID string) {
 	var input struct {
-		Namespace string `json:"namespace"`
-		Name      string `json:"name"`
+		Namespace  string `json:"namespace"`
+		Name       string `json:"name"`
+		Credential string `json:"credential"`
+		Revision   *int64 `json:"revision"`
 	}
 	if err := decodeJSON(r.Body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	value, err := s.service.CloneTool(r.Context(), productID, toolID, platform.ToolCloneInput{Namespace: input.Namespace, Name: input.Name}, actor(r))
+	if input.Revision == nil || *input.Revision < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision is required and must be a positive integer.", nil)
+		return
+	}
+	value, err := s.service.CloneTool(r.Context(), productID, toolID, platform.ToolCloneInput{Namespace: input.Namespace, Name: input.Name, Credential: input.Credential, Revision: *input.Revision}, actor(r))
 	if err != nil {
+		if errors.Is(err, platform.ErrToolCloneRevisionStale) {
+			writeError(w, http.StatusConflict, "revision_conflict", "The source tool changed. Refresh and try again.", nil)
+			return
+		}
 		s.creationError(w, err)
 		return
 	}

@@ -2,11 +2,17 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
+
+func memoryToolSecretBound(secret model.Secret, organisationID, connectionID string) bool {
+	return secret.OrganisationID == organisationID && secret.Purpose == "tool_upstream" && strings.HasPrefix(secret.Name, "tool-connection-"+connectionID+"-")
+}
 
 func (m *Memory) GrantDefinitions(_ context.Context, deploymentID string) ([]model.GrantDefinition, error) {
 	m.mu.RLock()
@@ -156,9 +162,17 @@ func (m *Memory) IntegrationToolBindings(_ context.Context, integrationID string
 
 func (m *Memory) SaveIntegrationToolBindings(ctx context.Context, integrationID string, values []model.IntegrationToolBinding) ([]model.IntegrationToolBinding, error) {
 	m.mu.Lock()
-	if _, ok := m.integrations[integrationID]; !ok {
+	integration, ok := m.integrations[integrationID]
+	if !ok {
 		m.mu.Unlock()
 		return nil, ErrNotFound
+	}
+	for _, value := range values {
+		tool, exists := m.tools[integration.DeploymentID][value.ToolID]
+		if !exists || !toolMayBindIntegration(tool, integration) {
+			m.mu.Unlock()
+			return nil, ErrConflict
+		}
 	}
 	now := time.Now().UTC()
 	links := make(map[string]model.IntegrationToolBinding, len(values))
@@ -182,10 +196,28 @@ func (m *Memory) UpdateTool(_ context.Context, value model.Tool, expected int64)
 	if current.Revision != expected || current.State != "draft" {
 		return model.Tool{}, ErrConflict
 	}
+	if current.OrganisationID != value.OrganisationID || current.BackendKind != value.BackendKind || current.APIConnectionID != value.APIConnectionID || current.Scope != value.Scope || current.OwnerIntegrationID != value.OwnerIntegrationID || current.RuntimeServiceConnectionID != value.RuntimeServiceConnectionID {
+		return model.Tool{}, ErrConflict
+	}
+	if current.BackendKind == "http" && current.RuntimeServiceConnectionID == "" {
+		if value.CredentialID != "" {
+			secret, exists := m.secrets[value.CredentialID]
+			if !exists || !memoryToolSecretBound(secret, current.OrganisationID, current.APIConnectionID) {
+				return model.Tool{}, ErrConflict
+			}
+		}
+		if current.CredentialID != "" && current.CredentialID != value.CredentialID {
+			secret, exists := m.secrets[current.CredentialID]
+			if !exists || !memoryToolSecretBound(secret, current.OrganisationID, current.APIConnectionID) {
+				return model.Tool{}, ErrConflict
+			}
+			delete(m.secrets, current.CredentialID)
+		}
+	}
 	value.State, value.Revision = current.State, current.Revision+1
 	value.CreatedAt, value.UpdatedAt = current.CreatedAt, time.Now().UTC()
 	m.tools[value.ProductID][value.ID] = cloneTool(value)
-	return cloneTool(value), nil
+	return m.enrichToolRuntimeTargetsLocked(value), nil
 }
 
 func (m *Memory) RetireTool(_ context.Context, productID, id string, expected int64) (model.Tool, error) {
@@ -200,6 +232,17 @@ func (m *Memory) RetireTool(_ context.Context, productID, id string, expected in
 	}
 	if current.Revision != expected {
 		return model.Tool{}, ErrConflict
+	}
+	if current.CredentialID != "" {
+		secret, exists := m.secrets[current.CredentialID]
+		if !exists || !memoryToolSecretBound(secret, current.OrganisationID, current.APIConnectionID) {
+			return model.Tool{}, ErrConflict
+		}
+		delete(m.secrets, current.CredentialID)
+	}
+	current.CredentialID, current.CredentialFingerprint, current.CredentialPresent = "", "", false
+	if current.BackendKind == "http" {
+		current.UpstreamAuth = json.RawMessage(`{"type":"none"}`)
 	}
 	current.State, current.Revision, current.UpdatedAt = "retired", current.Revision+1, time.Now().UTC()
 	m.tools[productID][id] = cloneTool(current)

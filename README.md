@@ -12,6 +12,8 @@ The public contracts are deliberately small:
 
 Each integration contract is independently deployable and independently code-generatable. A vendor can generate a server stub for the contract it implements; DokoSoko does not require a package to expose an API. If a client library or other package helps consumers use that API, DokoSoko can catalogue bounded metadata for an exact externally hosted release and embed that metadata in an Integration manifest. The registry remains the delivery system; package metadata never becomes a runtime endpoint or per-operation hook.
 
+The widget is an in-product assistant, not an MCP onboarding screen. A trusted customer backend may attach a small current-view snapshot when it creates the authenticated session—for example, `profile` plus display-ready Plan and Account status facts. The assistant answers from that context and reviewed product knowledge immediately. Opaque customer identifiers never enter model context, and MCP is suggested only when the question indicates a useful automation path.
+
 Runnable reference implementations live under `examples/`. Start with the complete [Go backend integration](examples/go-backend-integration/README.md), which demonstrates authenticated, retry-safe support delivery without requiring an SDK.
 
 ## Customer identity integration (optional)
@@ -92,6 +94,8 @@ go run ./cmd/dokosoko
 ```
 
 The integrated service listens on `http://localhost:8080` by default and serves `dist/client`. For disposable development only, set `DOKOSOKO_DEV_MEMORY=true`. Demo bearer tokens additionally require `DOKOSOKO_ALLOW_DEMO_TOKENS=true`.
+
+The experimental embedded widget is unavailable by default. `DOKOSOKO_WIDGETS_ENABLED=true` restores its console surfaces and runtime routes without changing or deleting stored widget configuration.
 
 For the UI development server:
 

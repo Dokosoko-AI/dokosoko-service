@@ -141,7 +141,7 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.CloneTool(context.Background(), "prod_acme", published.ID, platform.ToolCloneInput{Namespace: "support_copy", Name: "incidents_create"}, platform.Actor{ID: "root"}); err == nil || !strings.Contains(err.Error(), "MCP tools cannot be cloned") {
+	if _, err := service.CloneTool(context.Background(), "prod_acme", published.ID, platform.ToolCloneInput{Namespace: "support_copy", Name: "incidents_create", Revision: published.Revision}, platform.Actor{ID: "root"}); err == nil || !strings.Contains(err.Error(), "MCP tools cannot be cloned") {
 		t.Fatalf("imported MCP clone error = %v", err)
 	}
 	runtime := tools.NewRuntime(memory, nil, nil)

@@ -114,6 +114,28 @@ type ProductContext struct {
 	InstallationID   string `json:"installation_id,omitempty"`
 }
 
+// ProviderContext identifies DokoSoko at the vendor-neutral support-delivery
+// boundary without requiring the receiver to understand DokoSoko's catalog.
+type ProviderContext struct {
+	Key     string `json:"key"`
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+// ResourceContext is the provider-neutral identity of a deployment or related
+// API that was active when the customer confirmed the report.
+type ResourceContext struct {
+	Type           string `json:"type"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	VersionID      string `json:"version_id,omitempty"`
+	Version        string `json:"version,omitempty"`
+	EnvironmentID  string `json:"environment_id,omitempty"`
+	InstallationID string `json:"installation_id,omitempty"`
+	State          string `json:"state,omitempty"`
+	Revision       int64  `json:"revision,omitempty"`
+}
+
 // IntegrationContext is resolved by DokoSoko, never trusted from agent-authored
 // diagnostic text. It pins support submissions to the API family/version and
 // immutable Integration revision that were active at submission time.
@@ -128,17 +150,38 @@ type IntegrationContext struct {
 	Snapshot      json.RawMessage `json:"snapshot,omitempty"`
 }
 
+// DokoSokoExtension contains catalog details that only the DokoSoko adapter
+// profile understands. Receivers may preserve it as opaque JSON.
+type DokoSokoExtension struct {
+	ManifestHash    string              `json:"manifest_hash,omitempty"`
+	CatalogRevision int64               `json:"catalog_revision,omitempty"`
+	SelectionSource string              `json:"selection_source,omitempty"`
+	Integration     *IntegrationContext `json:"integration,omitempty"`
+}
+
+type EnvelopeExtensions struct {
+	DokoSoko DokoSokoExtension `json:"dokosoko"`
+}
+
 type Envelope struct {
-	SchemaVersion string              `json:"schema_version"`
-	Kind          string              `json:"kind"`
-	Bug           *BugInput           `json:"bug,omitempty"`
-	Feedback      *FeedbackInput      `json:"feedback,omitempty"`
-	Reporter      ReporterContext     `json:"reporter"`
-	Product       ProductContext      `json:"product"`
-	Integration   *IntegrationContext `json:"integration,omitempty"`
-	Source        string              `json:"source"`
-	ConfirmedAt   time.Time           `json:"confirmed_at"`
-	RequestID     string              `json:"request_id"`
+	SchemaVersion    string              `json:"schema_version"`
+	Kind             string              `json:"kind"`
+	Bug              *BugInput           `json:"bug,omitempty"`
+	Feedback         *FeedbackInput      `json:"feedback,omitempty"`
+	Reporter         ReporterContext     `json:"reporter"`
+	Provider         ProviderContext     `json:"provider"`
+	Resource         ResourceContext     `json:"resource"`
+	RelatedResources []ResourceContext   `json:"related_resources,omitempty"`
+	Channel          string              `json:"channel"`
+	Extensions       *EnvelopeExtensions `json:"extensions,omitempty"`
+	ConfirmedAt      time.Time           `json:"confirmed_at"`
+	RequestID        string              `json:"request_id"`
+
+	// Legacy fields are decoded only so already-encrypted development records
+	// remain readable. New envelopes never populate or deliver them.
+	LegacyProduct     *ProductContext     `json:"product,omitempty"`
+	LegacyIntegration *IntegrationContext `json:"integration,omitempty"`
+	LegacySource      string              `json:"source,omitempty"`
 }
 
 type SubmissionView struct {
@@ -460,7 +503,36 @@ func (s *Service) envelope(kind string, submit SubmitContext, allowContact bool)
 	if allowContact {
 		reporter.DisplayName, reporter.Email = submit.Principal.DisplayName, submit.Principal.Email
 	}
-	return Envelope{SchemaVersion: "2026-08-20", Kind: kind, Reporter: reporter, Product: submit.Product, Integration: submit.Integration, Source: "private_mcp", ConfirmedAt: s.now(), RequestID: submit.RequestID}
+	resource := ResourceContext{Type: "deployment", ID: submit.Product.ProductID, Name: submit.Product.ProductName, VersionID: submit.Product.ProductVersionID, Version: submit.Product.ProductVersion, EnvironmentID: submit.Product.EnvironmentID, InstallationID: submit.Product.InstallationID}
+	related := make([]ResourceContext, 0, 1)
+	if submit.Integration != nil {
+		related = append(related, ResourceContext{Type: "api", ID: submit.Integration.IntegrationID, Name: submit.Integration.DisplayName, Version: submit.Integration.VersionKey, State: submit.Integration.Lifecycle, Revision: submit.Integration.Revision})
+	}
+	extensions := &EnvelopeExtensions{DokoSoko: DokoSokoExtension{ManifestHash: submit.Product.ManifestHash, CatalogRevision: submit.Product.CatalogRevision, SelectionSource: submit.Product.SelectionSource, Integration: submit.Integration}}
+	return Envelope{SchemaVersion: "2026-08-25", Kind: kind, Reporter: reporter, Provider: ProviderContext{Key: "dokosoko", Name: "DokoSoko"}, Resource: resource, RelatedResources: related, Channel: "private_mcp", Extensions: extensions, ConfirmedAt: s.now(), RequestID: submit.RequestID}
+}
+
+func envelopeProduct(envelope Envelope) ProductContext {
+	if envelope.Resource.ID != "" {
+		product := ProductContext{ProductID: envelope.Resource.ID, ProductName: envelope.Resource.Name, ProductVersionID: envelope.Resource.VersionID, ProductVersion: envelope.Resource.Version, EnvironmentID: envelope.Resource.EnvironmentID, InstallationID: envelope.Resource.InstallationID}
+		if envelope.Extensions != nil {
+			product.ManifestHash = envelope.Extensions.DokoSoko.ManifestHash
+			product.CatalogRevision = envelope.Extensions.DokoSoko.CatalogRevision
+			product.SelectionSource = envelope.Extensions.DokoSoko.SelectionSource
+		}
+		return product
+	}
+	if envelope.LegacyProduct != nil {
+		return *envelope.LegacyProduct
+	}
+	return ProductContext{}
+}
+
+func envelopeIntegration(envelope Envelope) *IntegrationContext {
+	if envelope.Extensions != nil && envelope.Extensions.DokoSoko.Integration != nil {
+		return envelope.Extensions.DokoSoko.Integration
+	}
+	return envelope.LegacyIntegration
 }
 
 func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope Envelope, actorPseudonym string) (SubmissionView, error) {
@@ -486,20 +558,22 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	if err != nil {
 		return SubmissionView{}, err
 	}
+	product := envelopeProduct(envelope)
+	integration := envelopeIntegration(envelope)
 	integrationID := ""
 	integrationSnapshot := json.RawMessage(`{}`)
-	if envelope.Integration != nil {
-		integrationID = envelope.Integration.IntegrationID
-		integrationSnapshot, _ = json.Marshal(envelope.Integration)
+	if integration != nil {
+		integrationID = integration.IntegrationID
+		integrationSnapshot, _ = json.Marshal(integration)
 	}
-	digest := sha256.Sum256([]byte(envelope.Product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
+	digest := sha256.Sum256([]byte(product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
 	now := s.now()
 	state := "held"
 	var next *time.Time
 	if deliveryCredentialID != "" {
 		state, next = "pending", &now
 	}
-	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: organisationID, ProductID: envelope.Product.ProductID, IntegrationID: integrationID, IntegrationSnapshot: integrationSnapshot, SupportRouteID: supportRouteID, Kind: envelope.Kind, State: state, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], PayloadCiphertext: encrypted.Ciphertext, PayloadNonce: encrypted.Nonce, PayloadKeyVersion: encrypted.KeyVersion, PayloadFingerprint: encrypted.Fingerprint, NextAttemptAt: next, ExpiresAt: now.AddDate(0, 0, retentionDays)})
+	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: organisationID, ProductID: product.ProductID, IntegrationID: integrationID, IntegrationSnapshot: integrationSnapshot, SupportRouteID: supportRouteID, Kind: envelope.Kind, State: state, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], PayloadCiphertext: encrypted.Ciphertext, PayloadNonce: encrypted.Nonce, PayloadKeyVersion: encrypted.KeyVersion, PayloadFingerprint: encrypted.Fingerprint, NextAttemptAt: next, ExpiresAt: now.AddDate(0, 0, retentionDays)})
 	if err != nil {
 		return SubmissionView{}, err
 	}
@@ -507,11 +581,13 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 }
 
 func (s *Service) submissionRoute(ctx context.Context, envelope Envelope) (organisationID, routeID string, retentionDays int, enabled bool, deliveryCredentialID string, err error) {
+	product := envelopeProduct(envelope)
+	integration := envelopeIntegration(envelope)
 	integrationID := ""
-	if envelope.Integration != nil {
-		integrationID = envelope.Integration.IntegrationID
+	if integration != nil {
+		integrationID = integration.IntegrationID
 	}
-	route, routeErr := s.store.SupportRouteForIntegration(ctx, envelope.Product.ProductID, integrationID)
+	route, routeErr := s.store.SupportRouteForIntegration(ctx, product.ProductID, integrationID)
 	if routeErr != nil {
 		if errors.Is(routeErr, store.ErrNotFound) {
 			err = ErrNotConfigured
@@ -526,7 +602,7 @@ func (s *Service) submissionRoute(ctx context.Context, envelope Envelope) (organ
 		enabled = route.FeedbackEnabled
 	}
 	if enabled && route.State == "active" && route.BackendConnectionID != "" {
-		connection, connectionErr := s.store.BackendConnection(ctx, envelope.Product.ProductID, route.BackendConnectionID)
+		connection, connectionErr := s.store.BackendConnection(ctx, product.ProductID, route.BackendConnectionID)
 		if connectionErr == nil && connection.State == "active" {
 			deliveryCredentialID = connection.CredentialSecretID
 		}
@@ -559,7 +635,7 @@ func (s *Service) view(value model.ReportSubmission) (SubmissionView, error) {
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	view := SubmissionView{ID: value.ID, SupportRouteID: value.SupportRouteID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
+	view := SubmissionView{ID: value.ID, SupportRouteID: value.SupportRouteID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelopeProduct(envelope), TrustedIntegration: envelopeIntegration(envelope)}
 	if envelope.Bug != nil {
 		view.Summary, view.RelatedTool = envelope.Bug.Summary, envelope.Bug.RelatedTool
 		encoded, _ := json.Marshal(envelope.Bug)
@@ -684,7 +760,7 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Idempotency-Key", value.ID)
-	request.Header.Set("X-DokoSoko-Request-ID", requestID())
+	request.Header.Set("X-External-Request-ID", requestID())
 	client, err := identity.SafeOutboundClient(ctx, parsed, s.Client, s.Resolver)
 	if err != nil {
 		s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))

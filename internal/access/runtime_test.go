@@ -31,6 +31,10 @@ func response(body string) *http.Response {
 }
 
 func accessFixture(t *testing.T, cardinality, credentialScope string, doer doerFunc, resolver resolverFunc) (*accessruntime.Runtime, *store.Memory, model.Integration, model.AccessConnection) {
+	return accessFixtureAtOrigin(t, cardinality, credentialScope, "https://provider.example", doer, resolver)
+}
+
+func accessFixtureAtOrigin(t *testing.T, cardinality, credentialScope, origin string, doer doerFunc, resolver resolverFunc) (*accessruntime.Runtime, *store.Memory, model.Integration, model.AccessConnection) {
 	t.Helper()
 	ctx := context.Background()
 	memory := store.NewMemory()
@@ -48,7 +52,7 @@ func accessFixture(t *testing.T, cardinality, credentialScope string, doer doerF
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := service.CreateAccessConnection(ctx, platform.AccessConnectionInput{AccessDefinitionID: definition.ID, EnvironmentID: "env_prod", Name: "Acme production", BaseURL: "https://provider.example", ManagementSecret: "management-secret", IntegrationIDs: []string{integration.ID}}, platform.Actor{ID: "root"})
+	connection, err := service.CreateAccessConnection(ctx, platform.AccessConnectionInput{AccessDefinitionID: definition.ID, EnvironmentID: "env_prod", Name: "Acme production", BaseURL: origin, ManagementSecret: "management-secret", IntegrationIDs: []string{integration.ID}}, platform.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,5 +169,35 @@ func TestAccessRuntimeRejectsPrivateDestinationResolution(t *testing.T) {
 	_, err := runtime.IssueCredential(context.Background(), "prod_acme", connection.ID, accessruntime.CredentialRequest{IntegrationID: integration.ID, EnvironmentID: "env_prod", IdempotencyKey: "unsafe-credential-0001"}, accessruntime.Principal{Subject: "issuer|subject", Grants: map[string]bool{"developer.pro": true}})
 	if err != accessruntime.ErrUnsafeDestination {
 		t.Fatalf("unsafe destination error = %v", err)
+	}
+}
+
+func TestAccessRuntimeAllowsOnlyExplicitLocalDevelopmentDestination(t *testing.T) {
+	doer := doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Scheme != "http" || request.URL.Host != "api.complicatedauth.localhost:38080" {
+			t.Fatalf("local destination = %s", request.URL)
+		}
+		switch request.URL.Path {
+		case "/v1/authorize":
+			return response(`{"allowed":true}`), nil
+		case "/v1/credentials":
+			return response(`{"credential_id":"local-key","credential":"local-one-time-key"}`), nil
+		default:
+			t.Fatalf("unexpected local provider operation: %s", request.URL.Path)
+			return nil, nil
+		}
+	})
+	runtime, _, integration, connection := accessFixtureAtOrigin(t, "one", "connection", "http://api.complicatedauth.localhost:38080", doer, resolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("192.168.65.2")}, nil
+	}))
+	request := accessruntime.CredentialRequest{IntegrationID: integration.ID, EnvironmentID: "env_prod", Scopes: []string{}, IdempotencyKey: "local-credential-0001"}
+	principal := accessruntime.Principal{Subject: "issuer|subject", Grants: map[string]bool{"developer.pro": true}}
+	if _, err := runtime.IssueCredential(context.Background(), "prod_acme", connection.ID, request, principal); err != accessruntime.ErrUnsafeDestination {
+		t.Fatalf("unlisted local destination error = %v", err)
+	}
+	runtime.SetPrivateLocalhostHosts([]string{"api.complicatedauth.localhost:38080", "api.complicatedauth.localhost.example:38080"})
+	issued, err := runtime.IssueCredential(context.Background(), "prod_acme", connection.ID, request, principal)
+	if err != nil || issued.Credential.ExternalID != "local-key" {
+		t.Fatalf("explicit local destination issue = %#v, err = %v", issued, err)
 	}
 }

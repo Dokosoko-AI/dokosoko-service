@@ -27,10 +27,14 @@ func (authorizationResolver) LookupIP(context.Context, string, string) ([]net.IP
 	return []net.IP{net.ParseIP("93.184.216.34")}, nil
 }
 
-type authorizationDoer struct{ calls int }
+type authorizationDoer struct {
+	calls           int
+	idempotencyKeys []string
+}
 
 func (d *authorizationDoer) Do(request *http.Request) (*http.Response, error) {
 	d.calls++
+	d.idempotencyKeys = append(d.idempotencyKeys, request.Header.Get("Idempotency-Key"))
 	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ready":true}`)), Request: request}, nil
 }
 
@@ -41,7 +45,8 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.SaveIdentityProvider(ctx, identity.ProviderConfig{ID: "idp_runtime", OrganisationID: "org_acme", DeploymentID: "prod_acme", Issuer: "https://id.vendor.example", ClientID: "vendor-client", DelegatedAPIOrigin: "https://api.vendor.example", State: "active"}); err != nil {
+	provider, err := memory.SaveIdentityProvider(ctx, identity.ProviderConfig{ID: "idp_runtime", OrganisationID: "org_acme", DeploymentID: "prod_acme", Issuer: "https://id.vendor.example", ClientID: "vendor-client", DelegatedAPIOrigin: "https://api.vendor.example", State: "active"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	account, err := memory.ResolveCustomerAccount(ctx, identity.CustomerAccount{ID: "account_runtime", OrganisationID: "org_acme", ProductID: "prod_acme", Issuer: "https://id.vendor.example", ExternalID: "customer-a", State: "active", LastAuthenticatedAt: time.Now().UTC()})
@@ -60,7 +65,7 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 		t.Helper()
 		digest := sha256.Sum256([]byte(raw))
 		now := time.Now().UTC()
-		if err := memory.CreateAccessToken(ctx, identity.AccessToken{Digest: digest[:], ProductID: "prod_acme", ClientID: "mcp-client", Resource: "https://dokosoko.example/mcp", Issuer: "https://id.vendor.example", Subject: "user-a", CustomerAccountID: account.ID, ExternalCustomerID: account.ExternalID, Grants: grants, AccessEvaluationID: "evaluation-1", AccessEvaluatedAt: evaluatedAt, PolicyVersion: "policy-1", UpstreamAccessSecretID: secretID, Scopes: []string{"mcp:private"}, ExpiresAt: now.Add(time.Hour), CreatedAt: now}); err != nil {
+		if err := memory.CreateAccessToken(ctx, identity.AccessToken{Digest: digest[:], ProductID: "prod_acme", ProviderRevision: provider.Revision, ClientID: "mcp-client", Resource: "https://dokosoko.example/mcp", Issuer: "https://id.vendor.example", Subject: "user-a", CustomerAccountID: account.ID, ExternalCustomerID: account.ExternalID, Grants: grants, AccessEvaluationID: "evaluation-1", AccessEvaluatedAt: evaluatedAt, PolicyVersion: "policy-1", UpstreamAccessSecretID: secretID, Scopes: []string{"mcp:private"}, ExpiresAt: now.Add(time.Hour), CreatedAt: now}); err != nil {
 			t.Fatal(err)
 		}
 		return "doko_at_" + raw
@@ -79,11 +84,11 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	point, err := service.SaveAuthorizationPoint(ctx, integration.ID, "", platform.AuthorizationPointInput{Key: "platform.readiness.check", Name: "Check readiness", Description: "Check runtime readiness.", ActionType: "read", RequiredGrants: []string{grant.Key}, ConfirmationRequired: true, DecisionTTLSeconds: 30, State: "active"}, actor)
+	point, err := service.SaveAuthorizationPoint(ctx, integration.ID, "", platform.AuthorizationPointInput{Key: "platform.readiness.check", Name: "Check readiness", Description: "Check runtime readiness.", ActionType: "write", RequiredGrants: []string{grant.Key}, ConfirmationRequired: true, DecisionTTLSeconds: 30, State: "active"}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_runtime_ready", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "platform", Name: "check_readiness", Description: "Check readiness.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ready":{"type":"boolean"}},"required":["ready"]}`), BaseURL: "https://api.vendor.example/v1/ready", HTTPMethod: "GET", AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http"})
+	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_runtime_ready", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "platform", Name: "check_readiness", Description: "Check readiness.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ready":{"type":"boolean"}},"required":["ready"]}`), BaseURL: "https://api.vendor.example/v1/ready", HTTPMethod: http.MethodPost, AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false,"idempotency_required":true}`), TimeoutMS: 5000, BackendKind: "http"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,24 +111,47 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", IdentityBroker: broker, ToolRuntime: runtime})
 
 	listed := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"name":"platform.check_readiness"`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/authorizationPointRevision":1`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/confirmationRequired":true`) {
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"name":"common.check_readiness"`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/authorizationPointRevision":1`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/confirmationRequired":true`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/confirmationChallengeMetaField":"confirmation_challenge"`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/idempotencyKeyRequired":true`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/idempotencyKeyMetaField":"idempotency_key"`) {
 		t.Fatalf("fresh exact discovery = %d: %s", listed.Code, listed.Body.String())
 	}
 	for name, token := range map[string]string{"missing grant": missingGrantToken, "stale decision": staleToken} {
 		t.Run(name, func(t *testing.T) {
 			response := request(t, handler, http.MethodPost, "/mcp", token, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
-			if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"name":"platform.check_readiness"`) {
+			if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"name":"common.check_readiness"`) {
 				t.Fatalf("denied discovery = %d: %s", response.Code, response.Body.String())
 			}
 		})
 	}
-	unconfirmed := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{}}}`)
-	if unconfirmed.Code != http.StatusOK || !strings.Contains(unconfirmed.Body.String(), "denied by policy") || doer.calls != 0 {
+	unconfirmed := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"idempotency_key":"stable-mcp-call-001"}}}`)
+	if unconfirmed.Code != http.StatusOK || !strings.Contains(unconfirmed.Body.String(), `"retry_metadata_field":"params._meta.confirmation_challenge"`) || !strings.Contains(unconfirmed.Body.String(), "does not independently prove that a human approved") || doer.calls != 0 {
 		t.Fatalf("unconfirmed call = %d calls=%d: %s", unconfirmed.Code, doer.calls, unconfirmed.Body.String())
 	}
-	confirmed := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"confirmed":true}}}`)
-	if confirmed.Code != http.StatusOK || !strings.Contains(confirmed.Body.String(), `"ready":true`) || doer.calls != 1 {
+	var confirmationEnvelope struct {
+		Error struct {
+			Data struct {
+				Challenge string `json:"confirmation_challenge"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(unconfirmed.Body.Bytes(), &confirmationEnvelope); err != nil || confirmationEnvelope.Error.Data.Challenge == "" {
+		t.Fatalf("confirmation challenge was not returned: err=%v body=%s", err, unconfirmed.Body.String())
+	}
+	rawBoolean := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"confirmed":true,"idempotency_key":"stable-mcp-call-001"}}}`)
+	if rawBoolean.Code != http.StatusOK || !strings.Contains(rawBoolean.Body.String(), `"confirmation_challenge"`) || strings.Contains(rawBoolean.Body.String(), `"ready":true`) || doer.calls != 0 {
+		t.Fatalf("raw confirmation boolean was sufficient: calls=%d body=%s", doer.calls, rawBoolean.Body.String())
+	}
+	confirmedBody := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"confirmed":true,"confirmation_challenge":"` + confirmationEnvelope.Error.Data.Challenge + `","idempotency_key":"stable-mcp-call-001"}}}`
+	confirmed := request(t, handler, http.MethodPost, "/mcp", freshToken, confirmedBody)
+	if confirmed.Code != http.StatusOK || !strings.Contains(confirmed.Body.String(), `"ready":true`) || doer.calls != 1 || len(doer.idempotencyKeys) != 1 || !strings.HasPrefix(doer.idempotencyKeys[0], "doko_") || doer.idempotencyKeys[0] == "stable-mcp-call-001" {
 		t.Fatalf("confirmed call = %d calls=%d: %s", confirmed.Code, doer.calls, confirmed.Body.String())
+	}
+	replayed := request(t, handler, http.MethodPost, "/mcp", freshToken, confirmedBody)
+	if replayed.Code != http.StatusOK || !strings.Contains(replayed.Body.String(), "already used") || doer.calls != 1 {
+		t.Fatalf("confirmation challenge replay was not denied: calls=%d body=%s", doer.calls, replayed.Body.String())
+	}
+	missingIdempotency := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"confirmed":true}}}`)
+	if missingIdempotency.Code != http.StatusOK || !strings.Contains(missingIdempotency.Body.String(), "params._meta.idempotency_key") || doer.calls != 1 {
+		t.Fatalf("missing idempotency call = %d calls=%d: %s", missingIdempotency.Code, doer.calls, missingIdempotency.Body.String())
 	}
 
 	point, err = service.SaveAuthorizationPoint(ctx, integration.ID, point.ID, platform.AuthorizationPointInput{Key: point.Key, Name: point.Name, Description: point.Description, ActionType: point.ActionType, RequiredGrants: point.RequiredGrants, ConfirmationRequired: point.ConfirmationRequired, DecisionTTLSeconds: point.DecisionTTLSeconds, State: "deprecated", Revision: point.Revision}, actor)
@@ -131,7 +159,7 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	afterChange := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{}}`)
-	if afterChange.Code != http.StatusOK || strings.Contains(afterChange.Body.String(), `"name":"platform.check_readiness"`) {
+	if afterChange.Code != http.StatusOK || strings.Contains(afterChange.Body.String(), `"name":"common.check_readiness"`) {
 		t.Fatalf("changed point remained discoverable = %d: %s", afterChange.Code, afterChange.Body.String())
 	}
 	afterChangeCall := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"confirmed":true}}}`)
@@ -147,7 +175,8 @@ func TestPrivateMCPScopesManagedToolsToPinnedCustomerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := memory.SaveIdentityProvider(ctx, identity.ProviderConfig{ID: "idp_customer_scope", OrganisationID: "org_acme", DeploymentID: "prod_acme", Issuer: "https://id.vendor.example", ClientID: "vendor-client", DelegatedAPIOrigin: "https://api.vendor.example", State: "active"}); err != nil {
+	provider, err := memory.SaveIdentityProvider(ctx, identity.ProviderConfig{ID: "idp_customer_scope", OrganisationID: "org_acme", DeploymentID: "prod_acme", Issuer: "https://id.vendor.example", ClientID: "vendor-client", DelegatedAPIOrigin: "https://api.vendor.example", State: "active"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	secretID := "secret_customer_scope"
@@ -232,7 +261,7 @@ func TestPrivateMCPScopesManagedToolsToPinnedCustomerIntegration(t *testing.T) {
 		}
 		digest := sha256.Sum256([]byte(raw))
 		now := time.Now().UTC()
-		if tokenErr := memory.CreateAccessToken(ctx, identity.AccessToken{Digest: digest[:], ProductID: "prod_acme", ClientID: "mcp-client", Resource: "https://dokosoko.example/mcp", Issuer: "https://id.vendor.example", Subject: "user-" + externalID, CustomerAccountID: account.ID, ExternalCustomerID: account.ExternalID, Grants: map[string]bool{}, AccessEvaluationID: "evaluation-" + externalID, AccessEvaluatedAt: now, PolicyVersion: "policy-1", UpstreamAccessSecretID: secretID, Scopes: []string{"mcp:private"}, ExpiresAt: now.Add(time.Hour), CreatedAt: now}); tokenErr != nil {
+		if tokenErr := memory.CreateAccessToken(ctx, identity.AccessToken{Digest: digest[:], ProductID: "prod_acme", ProviderRevision: provider.Revision, ClientID: "mcp-client", Resource: "https://dokosoko.example/mcp", Issuer: "https://id.vendor.example", Subject: "user-" + externalID, CustomerAccountID: account.ID, ExternalCustomerID: account.ExternalID, Grants: map[string]bool{}, AccessEvaluationID: "evaluation-" + externalID, AccessEvaluatedAt: now, PolicyVersion: "policy-1", UpstreamAccessSecretID: secretID, Scopes: []string{"mcp:private"}, ExpiresAt: now.Add(time.Hour), CreatedAt: now}); tokenErr != nil {
 			t.Fatal(tokenErr)
 		}
 		return "doko_at_" + raw

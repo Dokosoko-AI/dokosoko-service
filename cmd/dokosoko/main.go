@@ -91,14 +91,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure secret vault: %w", err)
 	}
+	platformService := platform.NewWithVault(persistence, vault)
 	toolProxy := toolruntime.NewRuntime(persistence, nil, nil)
+	toolProxy.SetCredentialResolver(platformService)
+	toolProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
 	mcpBridge := mcpbridge.New(persistence, vault, baseURL, nil, nil)
 	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil, nil)
 	reportingService := reporting.New(persistence, vault)
 	toolProxy.SetMCPExecutor(mcpBridge)
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
 	accessProxy := accessruntime.New(persistence, vault, nil, nil)
-	platformService := platform.NewWithVault(persistence, vault)
+	accessProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
 	if err := platformService.ConfigureEnvironmentAI(ctx, platform.AIEnvironmentConfig{
 		Provider: os.Getenv("DOKOSOKO_AI_PROVIDER"),
 		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
@@ -113,11 +116,13 @@ func run() error {
 	handler := httpapi.NewWithOptions(platformService, httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
 		UploadDirectory: uploadDirectory, UploadMaxBytes: uploadMaxBytes,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
+		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), WidgetsEnabled: boolEnv("DOKOSOKO_WIDGETS_ENABLED"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
 	})
-	workerCtx, stopReporting := context.WithCancel(context.Background())
-	defer stopReporting()
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
 	go reportingService.Run(workerCtx, 30*time.Second)
+	go platformService.RunToolTestRetentionJanitor(workerCtx, platform.DefaultToolTestRetentionInterval)
+	go platformService.RunIdentityOAuthRetentionJanitor(workerCtx, platform.DefaultIdentityOAuthRetentionInterval)
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("DokoSoko listening on %s", address)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

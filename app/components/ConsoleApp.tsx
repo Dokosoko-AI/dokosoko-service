@@ -39,14 +39,24 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAnalytics, APIAuditEvent, APIAuthorizationPoint, APIAuthorizationSimulation, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIGrantDefinition, APIIdentity, APIIntegration, APIIntegrationAnalysis, APIIntegrationPackageBinding, APIIntegrationPreflight, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APIIntegrationToolBinding, APIMCPCatalog, APIMCPConnection, APIPackageArtifact, APIPackageRelease, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIRecipe, APIRecipeReference, APIResourceSet, APISourcePublication, APISourceReview, APISupportRoute, APISupportSubmission, APITool, APIToolDryRun, APIUser, APIVisibility, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, api } from "../lib/api";
-import { ConsoleRoute, EntityKind, INTEGRATION_RESOURCE_TABS, INTEGRATION_TABS, IntegrationResourceTab, IntegrationTab, SETTINGS_TABS, Section, SettingsTab, entityPath, integrationPath, parseConsolePath, routeForSection, sectionPath, settingsPath } from "../lib/console-routes";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAnalytics, APIAuditEvent, APIAuthorizationPoint, APIBackendConnection, APICustomerAccount, APIDeployment, APIEnvironment, APIError, APIGrantDefinition, APIIdentity, APIIntegration, APIIntegrationAnalysis, APIIntegrationPackageBinding, APIIntegrationPreflight, APIIntegrationPublishStatus, APIIntegrationRevision, APIIntegrationRun, APIIntegrationToolBinding, APIMCPCatalog, APIMCPConnection, APIPackageArtifact, APIPackageRelease, APIProduct, APIProductBuild, APIProductBuildInput, APIProductDefinition, APIProductInstallation, APIProductVersion, APIProductVersionDiff, APIProductVersionImpact, APIProductVersionPin, APIProductVersionPinHistory, APIRecipe, APIRecipeReference, APIResourceSet, APIRuntimeSetup, APISourcePublication, APISourceReview, APISupportRoute, APISupportSubmission, APITool, APIToolBuilderProposal, APIToolDryRun, APIToolTestAnalysis, APIToolTestAnalysisMessage, APIToolTestAnalysisProposal, APIToolTestRun, APIUser, APIVisibility, APIWidget, APIWidgetInput, APIWidgetSecret, APIWidgetSession, Distribution, SetupEnrollment, TOOL_TEST_ANALYSIS_CHAT_LIMITS, api, boundedToolTestAnalysisHistory, toolTestAnalysisEvidenceHash, toolTestAnalysisEvidencePreview } from "../lib/api";
+import { ConsoleRoute, EntityKind, INTEGRATION_RESOURCE_TABS, IntegrationResourceTab, IntegrationTab, SETTINGS_TABS, Section, SettingsTab, entityPath, integrationPath, integrationToolBuilderPath, integrationValidationPath, parseConsolePath, routeForSection, sectionPath, settingsPath, toolBuilderPath } from "../lib/console-routes";
+import { versionedResponseIsCurrent } from "../lib/tool-builder-safety";
 import { Badge, Button, Dialog, Switch } from "./core/control";
 import { Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./core";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader, SectionHeader, SegmentedControl, ViewStack } from "./core/layout";
 import { ThemeToggle } from "./ThemeToggle";
+import { OIDCIdentitySetup } from "./OIDCIdentitySetup";
+import { ToolBuilderView } from "./ToolBuilderView";
+import { WidgetPreviewLauncher } from "./WidgetPreviewLauncher";
+import { IntegrationAgentGuide } from "./integrations/IntegrationAgentGuide";
+import { IntegrationNavigation } from "./integrations/IntegrationNavigation";
+import { IntegrationQuickStart } from "./integrations/IntegrationQuickStart";
+import { IntegrationRuntimeAccess } from "./integrations/IntegrationRuntimeAccess";
+import { IntegrationToolBuilderRoute } from "./integrations/IntegrationToolBuilderRoute";
+import { partitionIntegrationTools, toolCanAttachToIntegration, toolIsCommon, toolIsOwnedByIntegration } from "./integrations/tool-scope";
 
-type NavigationGroup = "apis" | "tools" | "recipes" | "agent-access" | "activity";
+type NavigationGroup = "apis" | "identity" | "tools" | "recipes" | "agent-access" | "activity";
 type Visibility = "private" | "public";
 type AIWorkload = APIAIWorkloadProfile["workload"];
 type SourceKind = "website" | "openapi" | "git" | "upload";
@@ -140,6 +150,30 @@ type Source = {
   latestPublication?: APISourcePublication;
 };
 
+type DocumentationAttachmentResult = {
+  attached: boolean;
+  resourceSetName: string;
+  revision: number;
+};
+
+function sourcePublicationManifestEntry(source: Source, publication: APISourcePublication): Record<string, unknown> {
+  return {
+    source_publication_id: publication.id,
+    source_id: source.id,
+    revision: publication.revision,
+    content_hash: publication.content_hash,
+    name: source.name,
+  };
+}
+
+function manifestIncludesSourcePublication(manifest: Array<Record<string, unknown>> | undefined, publicationID: string) {
+  return Boolean(manifest?.some((entry) => entry.source_publication_id === publicationID));
+}
+
+function integrationIncludesSourcePublication(integration: APIIntegration, publicationID: string) {
+  return Boolean(integration.resources?.some((link) => link.kind === "documentation" && manifestIncludesSourcePublication(link.resolved_revision?.manifest, publicationID)));
+}
+
 type PendingPublication = {
   kind: "source";
   id: string;
@@ -155,6 +189,7 @@ const navigation: Array<{
   sections: Array<{ id: Section; label: string }>;
 }> = [
   { id: "apis", label: "APIs", icon: Sparkles, defaultSection: "product", sections: [{ id: "product", label: "APIs" }] },
+  { id: "identity", label: "Identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", label: "Customer sign-in" }] },
   { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }] },
   { id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes", sections: [{ id: "recipes", label: "Recipes" }] },
   { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }, { id: "widgets", label: "Widgets" }] },
@@ -330,7 +365,14 @@ function deploymentAsLegacyProduct(value: APIDeployment): APIProduct {
   return { id: value.id, organisation_id: value.organisation_id, name: value.name, slug: value.slug, description: value.description, default_version_policy: value.default_release_policy, catalog_revision: value.catalog_revision, require_promotion_approval: value.require_promotion_approval, public_mcp_enabled: value.public_mcp_enabled, revision: value.revision };
 }
 
+function parseAvailableConsolePath(path: string, widgetsEnabled: boolean): ConsoleRoute {
+  const route = parseConsolePath(path);
+  const isWidgetRoute = (route.kind === "section" && route.section === "widgets") || (route.kind === "entity" && route.entity === "widget");
+  return !widgetsEnabled && isWidgetRoute ? { kind: "not-found", section: "product", path: route.path } : route;
+}
+
 export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { currentUser?: APIUser | null; currentDeployment?: APIDeployment | null; onLogout?: () => void | Promise<void> }) {
+	const widgetsEnabled = Boolean(currentDeployment?.features?.widgets);
 	const [product, setProduct] = useState<APIProduct>(deploymentAsLegacyProduct(currentDeployment ?? fixtureDeployment));
 	const [integrations, setIntegrations] = useState<APIIntegration[]>([]);
 	const [widgets, setWidgets] = useState<APIWidget[]>([]);
@@ -340,8 +382,13 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	const [backendConnections, setBackendConnections] = useState<APIBackendConnection[]>([]);
 	const [accessInstances, setAccessInstances] = useState<APIAccessInstance[]>([]);
 	const [accessCredentials, setAccessCredentials] = useState<APIAccessCredential[]>([]);
-	const [supportRoutes, setSupportRoutes] = useState<APISupportRoute[]>([]);
+  const [supportRoutes, setSupportRoutes] = useState<APISupportRoute[]>([]);
   const [consoleRoute, setConsoleRoute] = useState<ConsoleRoute>(() => routeForSection("product"));
+  const consoleRouteRef = useRef(consoleRoute);
+  const toolBuilderDirtyRef = useRef(false);
+  const handleToolBuilderDirtyChange = useCallback((dirty: boolean) => {
+    toolBuilderDirtyRef.current = dirty;
+  }, []);
   const section = consoleRoute.section;
   const settingsTab: SettingsTab = consoleRoute.kind === "section" && consoleRoute.section === "settings" ? consoleRoute.settingsTab ?? "overview" : "overview";
   const [productDefinition, setProductDefinition] = useState<APIProductDefinition | null>(fixtureDefinition);
@@ -352,6 +399,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [productBuilderInputs, setProductBuilderInputs] = useState("");
   const [sources, setSources] = useState(initialSources);
   const [tools, setTools] = useState(initialTools);
+  const [grantDefinitions, setGrantDefinitions] = useState<APIGrantDefinition[]>([]);
+  const [toolBuilderSelection, setToolBuilderSelection] = useState<{ uid: string; tool: APITool | null; failed: boolean } | null>(null);
+  const [toolBuilderLoadAttempt, setToolBuilderLoadAttempt] = useState(0);
+  const [toolBuilderSeed, setToolBuilderSeed] = useState<{ toolID: string; revision: number; proposal: APIToolBuilderProposal } | null>(null);
   const [mcpConnections, setMCPConnections] = useState<APIMCPConnection[]>(fixtureMCPConnections);
   const [mcpConnectionOpen, setMCPConnectionOpen] = useState(false);
   const [mcpImportOpen, setMCPImportOpen] = useState(false);
@@ -399,37 +450,15 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const [sourceReviewSelection, setSourceReviewSelection] = useState<string[]>([]);
   const [sourceReviewAcknowledged, setSourceReviewAcknowledged] = useState(false);
   const [sourceReviewBusy, setSourceReviewBusy] = useState(false);
-  const [addToolOpen, setAddToolOpen] = useState(false);
-  const [toolNamespace, setToolNamespace] = useState("access");
-  const [toolName, setToolName] = useState("");
-  const [toolDescription, setToolDescription] = useState("");
-  const [toolMethod, setToolMethod] = useState("POST");
-  const [toolEndpoint, setToolEndpoint] = useState("");
-  const [toolGrants, setToolGrants] = useState("");
-  const [toolRisk, setToolRisk] = useState<"low" | "medium" | "high" | "critical">("medium");
-  const [toolConfirmationRequired, setToolConfirmationRequired] = useState(false);
-  const [toolIdempotencyRequired, setToolIdempotencyRequired] = useState(false);
-  const [toolInputSchema, setToolInputSchema] = useState(`{"type":"object","additionalProperties":false,"properties":{},"required":[]}`);
-  const [toolOutputSchema, setToolOutputSchema] = useState(`{"type":"object","additionalProperties":false,"properties":{}}`);
-	  const [toolBusy, setToolBusy] = useState(false);
+	const [sourceReviewAttachIntegrationID, setSourceReviewAttachIntegrationID] = useState("");
 	  const [analytics, setAnalytics] = useState<APIAnalytics | null>(null);
-	  const [identityConfig, setIdentityConfig] = useState<APIIdentity | null>(null);
+		  const [identityConfig, setIdentityConfig] = useState<APIIdentity | null>(null);
+		  const [identityLoading, setIdentityLoading] = useState(true);
+		  const [identityLoadError, setIdentityLoadError] = useState("");
 	  const [reportSubmissions, setReportSubmissions] = useState<APISupportSubmission[]>([]);
 	  const [reportDetail, setReportDetail] = useState<APISupportSubmission | null>(null);
 	  const [reportDetailBusy, setReportDetailBusy] = useState(false);
 	  const [rootUsers, setRootUsers] = useState<APIUser[]>(currentUser ? [currentUser] : []);
-	  const [identityOpen, setIdentityOpen] = useState(false);
-	  const [identityBusy, setIdentityBusy] = useState(false);
-	  const [idpIssuer, setIDPIssuer] = useState("");
-	  const [idpClientID, setIDPClientID] = useState("");
-	  const [idpClientSecret, setIDPClientSecret] = useState("");
-	  const [idpScopes, setIDPScopes] = useState("openid, profile, email");
-	  const [idpAudience, setIDPAudience] = useState("");
-	  const [idpOAuthResource, setIDPOAuthResource] = useState("");
-	  const [idpOrganisationClaim, setIDPOrganisationClaim] = useState("org_id");
-	  const [idpInstallationClaim, setIDPInstallationClaim] = useState("installation_id");
-	  const [delegatedAPIOrigin, setDelegatedAPIOrigin] = useState("");
-	  const [identityState, setIdentityState] = useState<APIIdentity["state"]>("active");
 	  const [rootOpen, setRootOpen] = useState(false);
 	  const [rootBusy, setRootBusy] = useState(false);
 	  const [rootEmail, setRootEmail] = useState("");
@@ -477,7 +506,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const [requirePromotionApproval, setRequirePromotionApproval] = useState(product.require_promotion_approval);
 	  const [productVersions, setProductVersions] = useState<APIProductVersion[]>(fixtureProductVersions);
 	  const [productVersionPins, setProductVersionPins] = useState<APIProductVersionPin[]>(fixtureProductPins);
-	  const [customerAccounts, setCustomerAccounts] = useState<APICustomerAccount[]>(fixtureCustomerAccounts);
+	  const [customerAccountLoad, setCustomerAccountLoad] = useState<{ productID: string; status: "loading" | "ready" | "unavailable"; items: APICustomerAccount[]; hasMore: boolean }>({ productID: product.id, status: "loading", items: [], hasMore: false });
+	  const customerAccounts = customerAccountLoad.productID === product.id ? customerAccountLoad.items : [];
+	  const customerAccountsStatus = customerAccountLoad.productID === product.id ? customerAccountLoad.status : "loading";
+	  const customerAccountsHaveMore = customerAccountLoad.productID === product.id && customerAccountLoad.hasMore;
 	  const [productInstallations, setProductInstallations] = useState<APIProductInstallation[]>(fixtureInstallations);
 	  const [pinHistory, setPinHistory] = useState<APIProductVersionPinHistory[]>([]);
 	  const [newProductVersion, setNewProductVersion] = useState("");
@@ -505,25 +537,72 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  const [installationExternalID, setInstallationExternalID] = useState("");
 	  const [installationCustomerID, setInstallationCustomerID] = useState("");
 	  const [installationEnvironmentID, setInstallationEnvironmentID] = useState(fixtureEnvironment.id);
+  const toolBuilderUID = consoleRoute.kind === "tool-builder" ? consoleRoute.uid : undefined;
 
-  useEffect(() => {
+	  useEffect(() => {
+	    let cancelled = false;
+	    const fixturePreview = process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("preview") === "fixtures";
+	    const accountRequest = fixturePreview ? Promise.resolve({ items: fixtureCustomerAccounts, has_more: false }) : api.customerAccounts(product.id);
+	    accountRequest.then((page) => {
+	      if (!cancelled) setCustomerAccountLoad({ productID: product.id, status: "ready", items: page.items, hasMore: page.has_more });
+	    }).catch(() => {
+	      if (!cancelled) setCustomerAccountLoad({ productID: product.id, status: "unavailable", items: [], hasMore: false });
+	    });
+	    return () => { cancelled = true; };
+	  }, [product.id]);
+
+	  useEffect(() => {
     const fixturePreview = process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("preview") === "fixtures";
     if (fixturePreview) document.documentElement.dataset.preview = "fixtures";
     return () => { delete document.documentElement.dataset.preview; };
   }, []);
 
   useEffect(() => {
+    consoleRouteRef.current = consoleRoute;
+  }, [consoleRoute]);
+
+  useEffect(() => {
     const syncRoute = () => {
-      const next = parseConsolePath(window.location.pathname);
+      const current = consoleRouteRef.current;
+      const next = parseAvailableConsolePath(window.location.pathname, widgetsEnabled);
+      if (!confirmToolBuilderNavigation(next.path)) {
+        window.history.pushState(null, "", routeURL(current.path));
+        return;
+      }
+      if (current.path !== next.path) toolBuilderDirtyRef.current = false;
       if (next.kind !== "not-found" && window.location.pathname !== next.path) {
         window.history.replaceState(null, "", `${next.path}${window.location.search}${window.location.hash}`);
       }
+      if (next.kind !== "tool-builder") setToolBuilderSeed(null);
+      consoleRouteRef.current = next;
       setConsoleRoute(next);
     };
     syncRoute();
     window.addEventListener("popstate", syncRoute);
     return () => window.removeEventListener("popstate", syncRoute);
-  }, []);
+  }, [widgetsEnabled]);
+
+  useEffect(() => {
+    if (consoleRoute.kind !== "tool-builder") return;
+    let cancelled = false;
+    api.grantDefinitions().then((values) => {
+      if (!cancelled) setGrantDefinitions(values);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [consoleRoute.kind, consoleRoute.path]);
+
+  useEffect(() => {
+    if (!toolBuilderUID) return;
+    let cancelled = false;
+    api.tool(product.id, toolBuilderUID).then((value) => {
+      if (cancelled) return;
+      setToolBuilderSelection({ uid: toolBuilderUID, tool: value, failed: false });
+    }).catch(() => {
+      if (cancelled) return;
+      setToolBuilderSelection({ uid: toolBuilderUID, tool: null, failed: true });
+    });
+    return () => { cancelled = true; };
+  }, [product.id, toolBuilderUID, toolBuilderLoadAttempt]);
 
   useEffect(() => {
     if (
@@ -584,17 +663,21 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       // The standalone static preview intentionally keeps its local fixture. In the
       // service deployment, same-origin session authentication hydrates live state.
 	    });
-	    api.analytics(product.id).then((value) => { if (!cancelled) setAnalytics(value); }).catch(() => {});
-	    api.identity().then((value) => {
-	      if (cancelled) return;
-	      setIdentityConfig(value);
-	      setIDPIssuer(value.issuer); setIDPClientID(value.client_id); setIDPScopes(value.scopes.join(", ")); setIDPAudience(value.audience ?? ""); setIDPOAuthResource(value.oauth_resource ?? ""); setIDPOrganisationClaim(value.organisation_claim); setIDPInstallationClaim(value.installation_claim); setDelegatedAPIOrigin(value.delegated_api_origin); setIdentityState(value.state);
-	    }).catch(() => {});
+		    api.analytics(product.id).then((value) => { if (!cancelled) setAnalytics(value); }).catch(() => {});
+		    api.identity().then((value) => {
+		      if (cancelled) return;
+		      setIdentityConfig(value);
+		      setIdentityLoadError("");
+		    }).catch((error) => {
+		      if (!cancelled) setIdentityLoadError(error instanceof APIError ? error.message : "Identity settings could not be loaded.");
+		    }).finally(() => {
+		      if (!cancelled) setIdentityLoading(false);
+		    });
 	    api.supportSubmissions().then((submissions) => {
 	      if (!cancelled) setReportSubmissions(submissions);
 	    }).catch(() => {});
 	    api.rootUsers().then((value) => { if (!cancelled) setRootUsers(value); }).catch(() => {});
-	    Promise.all([api.integrations(), api.widgets(), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]).then(async ([integrationValues, widgetValues, setValues, definitionValues, connectionValues, backendValues, routeValues]) => {
+	    Promise.all([api.integrations(), widgetsEnabled ? api.widgets() : Promise.resolve([] as APIWidget[]), api.resourceSets(), api.accessDefinitions(), api.accessConnections(), api.backendConnections(), api.supportRoutes()]).then(async ([integrationValues, widgetValues, setValues, definitionValues, connectionValues, backendValues, routeValues]) => {
 	      if (cancelled) return;
 	      setIntegrations(integrationValues); setWidgets(widgetValues); setResourceSets(setValues); setAccessDefinitions(definitionValues); setAccessConnections(connectionValues); setBackendConnections(backendValues); setSupportRoutes(routeValues);
 	      const instanceGroups = await Promise.all(connectionValues.map((connection) => api.accessInstances(connection.id).catch(() => [])));
@@ -607,7 +690,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	    api.productBuilds(product.id).then((values) => { if (!cancelled) setLatestProductBuild(values[0] ?? null); }).catch(() => {});
 	    api.productVersions(product.id).then((values) => { if (!cancelled) { setProductVersions(values); setPinVersionID(values.find((value) => value.is_latest)?.id ?? values[0]?.id ?? ""); } }).catch(() => {});
 	    api.productVersionPins(product.id).then((values) => { if (!cancelled) setProductVersionPins(values); }).catch(() => {});
-	    Promise.all([api.productInstallations(product.id), api.productVersionPinHistory(product.id), api.customerAccounts(product.id)]).then(([installationValues, historyValues, accountValues]) => { if (!cancelled) { setProductInstallations(installationValues); setPinHistory(historyValues); setCustomerAccounts(accountValues); } }).catch(() => {});
+	    Promise.all([api.productInstallations(product.id), api.productVersionPinHistory(product.id)]).then(([installationValues, historyValues]) => { if (!cancelled) { setProductInstallations(installationValues); setPinHistory(historyValues); } }).catch(() => {});
 	    Promise.all([api.environments(product.id), api.integrationRuns(product.id), api.auditEvents(product.organisation_id)]).then(([environmentValues, runValues, eventValues]) => {
 	      if (cancelled) return;
 	      setEnvironments(environmentValues);
@@ -616,7 +699,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	      setAuditEvents(eventValues);
 	    }).catch(() => {});
     return () => { cancelled = true; };
-  }, [product.id, product.organisation_id]);
+  }, [product.id, product.organisation_id, widgetsEnabled]);
 
   const publicSources = sources.filter((item) => item.visibility === "public");
   const publicResourceCount = publicSources.length;
@@ -653,6 +736,77 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     setTools(toolValues);
     const eventValues = await api.auditEvents(product.organisation_id).catch(() => null);
     if (eventValues) setAuditEvents(eventValues);
+  }
+
+  async function refreshToolsAfterBuilderSave(savedTool: APITool) {
+    setTools((items) => [...items.filter((item) => item.id !== savedTool.id), savedTool]);
+    await refreshTools().catch(() => {});
+  }
+
+  async function updateCustomerAccountState(account: APICustomerAccount, state: APICustomerAccount["state"]): Promise<boolean> {
+    const productID = product.id;
+    try {
+      const updated = await api.updateCustomerAccount(productID, account.id, state, account.revision);
+      setCustomerAccountLoad((current) => current.productID === productID ? { ...current, status: "ready", items: current.items.map((item) => item.id === updated.id ? updated : item) } : current);
+      showToast(state === "suspended" ? `${account.external_id} is suspended.` : `${account.external_id} can sign in again.`);
+      return true;
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "Customer access could not be changed.");
+      return false;
+    }
+  }
+
+  async function loadMoreCustomerAccounts(): Promise<boolean> {
+    const productID = product.id;
+    const cursor = customerAccountLoad.productID === productID && customerAccountLoad.status === "ready" && customerAccountLoad.hasMore ? customerAccountLoad.items.at(-1)?.id ?? "" : "";
+    if (!cursor) return false;
+    try {
+      const page = await api.customerAccounts(productID, cursor);
+      setCustomerAccountLoad((current) => {
+        if (current.productID !== productID) return current;
+        const known = new Set(current.items.map((item) => item.id));
+        return { ...current, items: [...current.items, ...page.items.filter((item) => !known.has(item.id))], hasMore: page.has_more };
+      });
+      return true;
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : "More customer accounts could not be loaded.");
+      return false;
+    }
+  }
+
+  function reviewToolTestProposal(target: APITool, proposal: APIToolTestAnalysisProposal) {
+    if (target.backend_kind === "mcp" || target.state !== "draft") {
+      showToast("Create an independent HTTP draft before reviewing this proposal in Builder.");
+      return;
+    }
+    if (target.id === proposal.base_tool_id && target.revision !== proposal.base_revision) {
+      showToast("The tool revision changed after analysis. Run a new live test before reviewing proposed changes.");
+      return;
+    }
+    const seededDraft = {
+      ...proposal.draft,
+      namespace: target.namespace,
+      name: target.name,
+      endpoint: target.endpoint ?? "",
+      upstream_auth: target.upstream_auth ?? proposal.draft.upstream_auth,
+      request_example: target.request_example,
+      response_example: target.response_example,
+      credential_present: Boolean(target.credential_present),
+    };
+    setToolBuilderSelection({ uid: target.id, tool: target, failed: false });
+    setToolBuilderSeed({
+      toolID: target.id,
+      revision: target.revision,
+      proposal: {
+        proposal_id: proposal.proposal_id,
+        summary: "Suggested from consented sanitized live-test evidence. Accept or reject each field; nothing has been saved or published.",
+        valid: proposal.valid,
+        draft: seededDraft,
+        changes: proposal.changes,
+        findings: proposal.findings,
+      },
+    });
+    navigateToPath(toolBuilderPath(target.id));
   }
 
   function openProductCatalog() {
@@ -1052,7 +1206,38 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	}
   }
 
-  async function publishSource(source: Source) {
+  async function attachReviewedSourcePublication(integrationID: string, source: Source, publication: APISourcePublication): Promise<DocumentationAttachmentResult> {
+	const [{ integration }, documentationSets] = await Promise.all([api.integration(integrationID), api.resourceSets("documentation")]);
+	if (integrationIncludesSourcePublication(integration, publication.id)) {
+	  const current = integration.resources?.find((link) => link.kind === "documentation" && manifestIncludesSourcePublication(link.resolved_revision?.manifest, publication.id));
+	  return { attached: false, resourceSetName: current?.name ?? source.name, revision: current?.resolved_revision?.revision ?? publication.revision };
+	}
+
+	const attachedSetIDs = new Set(integration.resources?.map((link) => link.resource_set_id) ?? []);
+	let resource = documentationSets.find((set) => !attachedSetIDs.has(set.id) && manifestIncludesSourcePublication(set.latest_revision?.manifest, publication.id));
+	if (!resource) {
+	  resource = await api.createResourceSet({
+		kind: "documentation",
+		name: `${integration.display_name} · ${source.name}`.slice(0, 120),
+		description: `Reviewed ${source.name} documentation for ${integration.display_name}.`,
+		manifest: [sourcePublicationManifestEntry(source, publication)],
+	  });
+	}
+	const revisionID = resource.latest_revision?.id;
+	if (!revisionID) throw new Error("The reviewed documentation set has no immutable revision to pin.");
+	await api.attachResourceSet(integration.id, resource.id, revisionID);
+	await refreshCatalog();
+	return { attached: true, resourceSetName: resource.name, revision: resource.latest_revision?.revision ?? publication.revision };
+  }
+
+  function closeSourceReview() {
+	setSourceReview(null);
+	setSourceReviewSelection([]);
+	setSourceReviewAcknowledged(false);
+	setSourceReviewAttachIntegrationID("");
+  }
+
+  async function publishSource(source: Source, attachIntegrationID = "") {
 	if (!apiConnected) {
 	  showToast("Generation review is available in the live console.");
 	  return;
@@ -1064,7 +1249,9 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	  setSourceReview(review);
 	  setSourceReviewSelection(safe);
 	  setSourceReviewAcknowledged(false);
+	  setSourceReviewAttachIntegrationID(attachIntegrationID);
 	} catch (error) {
+	  setSourceReviewAttachIntegrationID("");
 	  showToast(error instanceof APIError ? error.message : "Could not load this crawl generation for review.");
 	} finally {
 	  setSourceReviewBusy(false);
@@ -1076,43 +1263,38 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	setSourceReviewBusy(true);
 	try {
 	  const result = await api.publishSource(product.id, sourceReview.source.id, { revision: sourceReview.source.revision, crawl_job_id: sourceReview.crawl_job.id, document_ids: sourceReviewSelection, acknowledge_reviewed: true });
+	  const source = sources.find((item) => item.id === result.source.id) ?? {
+		id: result.source.id,
+		name: result.source.name,
+		kind: result.source.kind,
+		location: result.source.location,
+		visibility: result.source.visibility,
+		published: result.source.published,
+		quarantined: result.source.quarantined,
+		crawlState: "synced" as const,
+		pages: result.publication.document_count,
+		lastCrawl: result.publication.published_at,
+		revision: result.source.revision,
+	  };
 	  setSources((items) => items.map((item) => item.id === result.source.id ? { ...item, published: result.source.published, quarantined: result.source.quarantined, revision: result.source.revision, crawlState: "synced", latestPublication: result.publication } : item));
-	  setSourceReview(null);
-	  setSourceReviewSelection([]);
-	  setSourceReviewAcknowledged(false);
-	  showToast(`${result.source.name} generation r${result.publication.revision} was atomically published.`);
+	  let message = `${result.source.name} generation r${result.publication.revision} was atomically published.`;
+	  if (sourceReviewAttachIntegrationID) {
+		try {
+		  const attachment = await attachReviewedSourcePublication(sourceReviewAttachIntegrationID, source, result.publication);
+		  message = attachment.attached
+			? `${message} Revision ${attachment.revision} was pinned to the API.`
+			: `${message} That exact revision was already attached.`;
+		} catch (error) {
+		  message = `${message} Attachment still needs attention: ${error instanceof APIError || error instanceof Error ? error.message : "the reviewed set could not be attached"}`;
+		}
+	  }
+	  closeSourceReview();
+	  showToast(message);
 	} catch (error) {
 	  showToast(error instanceof APIError ? error.message : "Could not publish this reviewed generation.");
 	} finally {
 	  setSourceReviewBusy(false);
 	}
-  }
-
-  const newToolNamespaceValid = /^[a-z][a-z0-9_]{0,63}$/.test(toolNamespace.trim());
-  const newToolNameValid = /^[a-z][a-z0-9_]{0,63}$/.test(toolName.trim());
-  const newToolIdentityValid = newToolNamespaceValid && newToolNameValid;
-
-  async function createTool() {
-    if (!newToolIdentityValid) {
-      showToast("Tool namespace and name must be lower-case identifiers.");
-      return;
-    }
-    setToolBusy(true);
-    try {
-      const inputSchema = JSON.parse(toolInputSchema) as Record<string, unknown>;
-      const outputSchema = JSON.parse(toolOutputSchema) as Record<string, unknown>;
-      const authorizationPolicy = { required_grants: toolGrants.split(/[,\s]+/).map((value) => value.trim()).filter(Boolean), confirmation_required: toolConfirmationRequired || toolRisk === "critical", risk: toolRisk, idempotency_required: toolIdempotencyRequired };
-      const created = apiConnected ? await api.createTool(product.id, { organisation_id: product.organisation_id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, endpoint: toolEndpoint, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 }) : { id: `tool_${Date.now()}`, organisation_id: product.organisation_id, product_id: product.id, namespace: toolNamespace, name: toolName, description: toolDescription, input_schema: inputSchema, output_schema: outputSchema, state: "draft" as const, revision: 1, http_method: toolMethod, authorization_policy: authorizationPolicy, timeout_ms: 10000 };
-      setTools((items) => [...items, created as APITool]);
-      setAddToolOpen(false);
-      setToolName(""); setToolDescription(""); setToolEndpoint(""); setToolGrants(""); setToolRisk("medium"); setToolConfirmationRequired(false); setToolIdempotencyRequired(false);
-      navigateToPath(entityPath("tool", created.id));
-      showToast(`${created.namespace}.${created.name} was saved as a draft.`);
-    } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Schema or tool configuration is invalid.");
-    } finally {
-      setToolBusy(false);
-    }
   }
 
   function fixtureCatalog(connection: APIMCPConnection): APIMCPCatalog {
@@ -1212,34 +1394,6 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
       showToast(error instanceof APIError ? error.message : "Could not import the selected MCP tools.");
     } finally {
       setMCPBusy(false);
-    }
-  }
-
-  async function saveIdentity() {
-    setIdentityBusy(true);
-    try {
-      const input = {
-        issuer: idpIssuer,
-        client_id: idpClientID,
-        client_secret: idpClientSecret,
-        scopes: idpScopes.split(",").map((value) => value.trim()).filter(Boolean),
-        audience: idpAudience,
-		oauth_resource: idpOAuthResource,
-		organisation_claim: idpOrganisationClaim,
-		installation_claim: idpInstallationClaim,
-		delegated_api_origin: delegatedAPIOrigin,
-		state: identityState,
-        revision: identityConfig?.revision ?? 0,
-      };
-      const value = apiConnected ? await api.configureIdentity(input) : { id: "idp_preview", organisation_id: product.organisation_id, deployment_id: product.id, ...input } as APIIdentity;
-      setIdentityConfig(value);
-      setIDPClientSecret("");
-      setIdentityOpen(false);
-      showToast("Customer identity integration is configured.");
-    } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not configure vendor identity.");
-    } finally {
-      setIdentityBusy(false);
     }
   }
 
@@ -1397,10 +1551,10 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	    }
 	  }
 
-	  async function createRecipe(prompt: string): Promise<APIRecipe | null> {
+	  async function createRecipe(prompt: string, integrationID: string): Promise<APIRecipe | null> {
 	    setRecipeBusy(true);
 	    try {
-	      const value = await api.createRecipe(product.id, prompt);
+	      const value = await api.createRecipe(product.id, prompt, integrationID);
 	      setRecipes((items) => [value, ...items.filter((item) => item.id !== value.id)]);
 	      api.analyses(product.id).then(setAnalyses).catch(() => {});
 	      showToast("Recipe draft created from current product evidence.");
@@ -1439,6 +1593,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 	    } finally {
 	      setRecipeBusy(false);
 	    }
+	  }
+
+	  async function generateIntegrationAgentGuide(integrationID: string) {
+		const analysis = await api.analyseIntegration(product.id, integrationID);
+		setAnalyses((items) => [analysis, ...items.filter((item) => item.id !== analysis.id)]);
+		return analysis;
 	  }
 
 	  async function reworkRecipe(recipe: APIRecipe, instruction: string) {
@@ -1605,9 +1765,21 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
   const publicAgentSetupURL = distribution?.agent_setup?.public.url ?? "/agent-setup/public/prompt.md";
   const privateAgentSetupURL = distribution?.agent_setup?.private.url ?? "/agent-setup/private/prompt.md";
   const publicAgentSetup = distribution?.agent_setup?.public ?? { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, publicAgentSetupURL, "public"), contains_secret: false as const };
-  const privateAgentSetup = distribution?.agent_setup?.private ?? { available: identityConfig?.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, privateAgentSetupURL, "private"), contains_secret: false as const };
+  const privateAgentSetup = distribution?.agent_setup?.private ?? { available: identityConfig?.configured === true && identityConfig.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, privateAgentSetupURL, "private"), contains_secret: false as const };
   const mcpConnectionReady = Boolean(mcpName.trim() && mcpNamespace.trim() && mcpEndpoint.trim() && (mcpAuthMode !== "service" || mcpCredential.trim()) && (mcpAuthMode !== "delegated_oauth" || (mcpOAuthClientID.trim() && mcpOAuthClientSecret.trim() && mcpOAuthIssuer.trim() && mcpAuthorizationURL.trim() && mcpTokenURL.trim())));
   const activeNavigation = navigation.find((item) => item.sections.some((candidate) => candidate.id === section));
+  const selectedToolBuilderTool = toolBuilderUID && toolBuilderSelection?.uid === toolBuilderUID ? toolBuilderSelection.tool : null;
+  const toolBuilderLoadFailed = Boolean(toolBuilderUID && toolBuilderSelection?.uid === toolBuilderUID && toolBuilderSelection.failed);
+  const activeToolBuilderSeed = selectedToolBuilderTool && toolBuilderSeed?.toolID === selectedToolBuilderTool.id && toolBuilderSeed.revision === selectedToolBuilderTool.revision ? toolBuilderSeed.proposal : null;
+  const toolBuilderIntegrationID = consoleRoute.kind === "tool-builder" ? consoleRoute.integrationID ?? selectedToolBuilderTool?.owner_integration_id : undefined;
+  const toolBuilderIntegration = toolBuilderIntegrationID ? integrations.find((integration) => integration.id === toolBuilderIntegrationID) : undefined;
+  const toolBuilderContent = consoleRoute.kind !== "tool-builder" ? null
+    : consoleRoute.uid && !selectedToolBuilderTool && !toolBuilderLoadFailed ? <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon"><RefreshCw /></span><div><h1>Loading HTTP tool draft</h1><p>Loading the complete endpoint, authentication policy, mappings, and examples…</p></div></section>
+    : consoleRoute.uid && toolBuilderLoadFailed ? <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>Complete HTTP tool draft unavailable</h1><p>The complete redacted contract could not be loaded. Catalog summary data is never used as an editable fallback.</p></div><span className="heading-actions"><Button outline onClick={() => { setToolBuilderSelection(null); setToolBuilderLoadAttempt((value) => value + 1); }}><RefreshCw data-slot="icon" />Retry</Button><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></span></section>
+    : consoleRoute.uid && (!selectedToolBuilderTool || selectedToolBuilderTool.backend_kind === "mcp") ? <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>HTTP tool draft unavailable</h1><p>This tool does not exist or is managed through an MCP connection.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>
+    : toolBuilderIntegrationID && !toolBuilderIntegration ? <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>Owning API unavailable</h1><p>This API-owned tool cannot be edited without its exact API context.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>
+    : toolBuilderIntegration ? <IntegrationToolBuilderRoute key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}:${activeToolBuilderSeed?.proposal_id ?? "manual"}`} integration={toolBuilderIntegration} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={refreshToolsAfterBuilderSave} onDirtyChange={handleToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />
+    : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}:${activeToolBuilderSeed?.proposal_id ?? "manual"}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={refreshToolsAfterBuilderSave} onDirtyChange={handleToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useMemo<EntityDetail | null>(() => {
     if (consoleRoute.kind !== "entity") return null;
     const date = (value?: string) => value ? new Date(value).toLocaleString() : "—";
@@ -1681,13 +1853,24 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     return `${path}${preview}`;
   }
 
+  function confirmToolBuilderNavigation(nextPath: string) {
+    const current = consoleRouteRef.current;
+    if (!toolBuilderDirtyRef.current || current.kind !== "tool-builder" || current.path === nextPath) return true;
+    return window.confirm("Discard your unsaved tool changes?");
+  }
+
   function navigateToPath(path: string, replace = false) {
-    const next = parseConsolePath(path);
+    const next = parseAvailableConsolePath(path, widgetsEnabled);
+    const current = consoleRouteRef.current;
+    if (!confirmToolBuilderNavigation(next.path)) return;
+    if (current.path !== next.path) toolBuilderDirtyRef.current = false;
+    if (next.kind !== "tool-builder") setToolBuilderSeed(null);
     if (typeof window !== "undefined") {
       const method = replace ? "replaceState" : "pushState";
       if (window.location.pathname !== next.path || replace) window.history[method](null, "", routeURL(next.path));
       window.scrollTo({ top: 0, behavior: "auto" });
     }
+    consoleRouteRef.current = next;
     setConsoleRoute(next);
 	requestAnimationFrame(() => document.getElementById("main-content")?.focus());
   }
@@ -1704,6 +1887,12 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
     const destination = navigation.find((item) => item.id === group);
     if (destination) navigateToSection(destination.defaultSection);
   }
+
+  const workspaceClass = consoleRoute.kind === "tool-builder"
+    ? "workspace-wide"
+    : section === "identity" || section === "settings"
+      ? "workspace-compact"
+      : "workspace-default";
 
   return (
     <div className="app-shell">
@@ -1723,18 +1912,20 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </div>
       </aside>
 
-      <main id="main-content" tabIndex={-1}>
+      <main id="main-content" className={workspaceClass} tabIndex={-1}>
         <header className="topbar">
-          <div className="product-switcher"><span className="product-logo">{product.name.slice(0, 1).toUpperCase()}</span><span><small>Deployment</small><strong>{product.name}</strong></span></div>
-          <select className="mobile-navigation" aria-label="Console section" value={section === "settings" ? "settings" : activeNavigation?.id ?? "apis"} onChange={(event) => navigateToGroup(event.target.value as NavigationGroup | "settings")}>
-            {navigation.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            <option value="settings">Settings</option>
-          </select>
-          <div className="topbar-actions"><div className="mobile-theme-toggle"><ThemeToggle /></div></div>
+          <div className="topbar-inner">
+            <div className="product-switcher"><span className="product-logo">{product.name.slice(0, 1).toUpperCase()}</span><span><small>Deployment</small><strong>{product.name}</strong></span></div>
+            <select className="mobile-navigation" aria-label="Console section" value={section === "settings" ? "settings" : activeNavigation?.id ?? "apis"} onChange={(event) => navigateToGroup(event.target.value as NavigationGroup | "settings")}>
+              {navigation.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              <option value="settings">Settings</option>
+            </select>
+            <div className="topbar-actions"><div className="mobile-theme-toggle"><ThemeToggle /></div></div>
+          </div>
         </header>
 
         <div className="content"><ViewStack>
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} activeResourceTab={consoleRoute.integrationResourceTab ?? "documentation"} recipeBusy={recipeBusy} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onGenerateRecipes={generateRecipesFromEvidence} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} assistantAvailable={aiProfiles.some((profile) => profile.workload === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("assistant"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "resource-set" ? <ResourceSetDetailView resource={resourceSets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "tool" ? <ToolDetailView key={`${consoleRoute.uid}:${tools.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} productID={product.id} tool={tools.find((item) => item.id === consoleRoute.uid) ?? null} connections={mcpConnections} integrations={integrations} auditEvents={auditEvents} onChanged={refreshTools} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
+          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} /> : consoleRoute.kind === "tool-builder" ? toolBuilderContent : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView integrations={integrations} analyses={analyses} tools={tools} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} identity={identityConfig} distribution={distribution} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} activeResourceTab={consoleRoute.integrationResourceTab ?? "documentation"} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onAttachPublishedSource={attachReviewedSourcePublication} onGenerateAgentGuide={generateIntegrationAgentGuide} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? <WidgetDetailView key={`${consoleRoute.uid}:${widgets.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} widget={widgets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} recipes={recipes} assistantAvailable={aiProfiles.some((profile) => profile.workload === "assistant" && profile.enabled)} busy={widgetBusy} onUpdate={updateWidget} onSetState={setWidgetState} onRotateSecret={rotateWidgetSecret} onConfigureAssistant={() => { navigateToPath(settingsPath("ai")); openLLMProfile("assistant"); }} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "resource-set" ? <ResourceSetDetailView resource={resourceSets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" && consoleRoute.entity === "tool" ? <ToolDetailView key={`${consoleRoute.uid}:${tools.find((item) => item.id === consoleRoute.uid)?.revision ?? 0}`} productID={product.id} tool={tools.find((item) => item.id === consoleRoute.uid) ?? null} connections={mcpConnections} integrations={integrations} auditEvents={auditEvents} onChanged={refreshTools} onReviewProposal={reviewToolTestProposal} onMessage={showToast} onNavigate={navigateToPath} /> : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} /> : <>
           {section === "distribution" && (
             <DistributionView
               enabled={publicMCPEnabled}
@@ -1748,24 +1939,30 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
               tenantName={product.name}
               publicAgentSetup={publicAgentSetup}
               privateAgentSetup={privateAgentSetup}
-              onConfigureIdentity={() => navigateToSection("settings")}
+              onConfigureIdentity={() => navigateToSection("identity")}
+              customerAccounts={customerAccounts}
+              customerAccountsStatus={customerAccountsStatus}
+              customerAccountsHaveMore={customerAccountsHaveMore}
+              onUpdateCustomerAccount={updateCustomerAccountState}
+              onLoadMoreCustomerAccounts={loadMoreCustomerAccounts}
               onOpenSources={() => navigateToSection("sources")}
+              widgetsEnabled={widgetsEnabled}
               widgetCount={widgets.length}
               onOpenWidgets={() => navigateToSection("widgets")}
             />
           )}
-          {section === "widgets" && <WidgetsView widgets={widgets} integrations={integrations} onCreate={() => setWidgetCreateOpen(true)} onNavigate={navigateToPath} />}
-          {section === "product" && <IntegrationsView integrations={integrations} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} tools={tools} identity={identityConfig} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onGenerateRecipes={generateRecipesFromEvidence} recipeBusy={recipeBusy} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
-          {section === "recipes" && <RecipesView analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={createRecipe} onEdit={editRecipe} onRework={reworkRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
+          {widgetsEnabled && section === "widgets" && <WidgetsView widgets={widgets} integrations={integrations} onCreate={() => setWidgetCreateOpen(true)} onNavigate={navigateToPath} />}
+          {section === "product" && <IntegrationsView integrations={integrations} analyses={analyses} tools={tools} resourceSets={resourceSets} sources={sources} supportRoutes={supportRoutes} connections={accessConnections} identity={identityConfig} distribution={distribution} onBuild={() => setProductBuilderOpen(true)} onAddSource={() => setAddSourceOpen(true)} onCrawlSource={crawlSource} onPublishSource={publishSource} onAttachPublishedSource={attachReviewedSourcePublication} onGenerateAgentGuide={generateIntegrationAgentGuide} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
+				{section === "identity" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} onChanged={setIdentityConfig} onMessage={showToast} />}
+          {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={createRecipe} onGenerate={() => generateRecipesFromEvidence()} onEdit={editRecipe} onRework={reworkRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
-          {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} onAdd={() => setAddToolOpen(true)} onNavigate={navigateToPath} />}
+          {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} onNavigate={navigateToPath} />}
           {section === "releases" && <ConnectorReleasesView versions={productVersions} integrations={integrations} onConfigure={openProductCatalog} onNavigate={navigateToPath} />}
           {section === "runs" && <ActivityHubView runs={integrationRuns} environments={environments} submissions={reportSubmissions} events={auditEvents} analytics={analytics} supportRoutes={supportRoutes} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} onView={openSupportSubmission} onRetry={createSupportDeliveryAttempt} onNavigate={navigateToPath} />}
           {section === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} backendConnections={backendConnections} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
-          {section === "settings" && settingsTab === "overview" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} customerAccounts={customerAccounts} identity={identityConfig} aiProfiles={aiProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onConfigureIdentity={() => setIdentityOpen(true)} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
-          {section === "settings" && settingsTab === "identity" && <CustomerIdentitySettingsView customerAccounts={customerAccounts} identity={identityConfig} onConfigure={() => setIdentityOpen(true)} onNavigate={navigateToPath} />}
+          {section === "settings" && settingsTab === "overview" && <SettingsView product={product} versions={productVersions} pins={productVersionPins} aiProfiles={aiProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onConfigureProduct={openProductCatalog} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
           {section === "settings" && settingsTab === "connections" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} settingsTab="connections" onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "settings" && settingsTab === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} backendConnections={backendConnections} settingsTab="reporting" onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "settings" && settingsTab === "storage" && <StorageSettingsView onNavigate={navigateToPath} />}
@@ -1939,12 +2136,13 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
 
       <Dialog
         open={Boolean(sourceReview)}
-        onClose={(open) => { if (!open && !sourceReviewBusy) { setSourceReview(null); setSourceReviewSelection([]); setSourceReviewAcknowledged(false); } }}
+		onClose={(open) => { if (!open && !sourceReviewBusy) closeSourceReview(); }}
         title={`Review ${sourceReview?.source.name ?? "documentation"}`}
-        description="Approve the exact completed crawl generation and only the immutable pages that should be available to Integrations."
-        actions={<><Button outline disabled={sourceReviewBusy} onClick={() => setSourceReview(null)}>Cancel</Button><Button color="indigo" disabled={sourceReviewBusy || Boolean(sourceReview?.publication) || Boolean(sourceReview?.source.quarantined) || !sourceReviewAcknowledged || sourceReviewSelection.length === 0} onClick={confirmSourcePublication}>{sourceReviewBusy ? "Publishing…" : "Publish reviewed generation"}</Button></>}
+		description={sourceReviewAttachIntegrationID ? "Approve the exact crawl generation. DokoSoko will publish the selected immutable pages, create or reuse a reviewed documentation set, and pin its exact revision to this API." : "Approve the exact completed crawl generation and only the immutable pages that should be available to APIs."}
+		actions={<><Button outline disabled={sourceReviewBusy} onClick={closeSourceReview}>Cancel</Button><Button color="indigo" disabled={sourceReviewBusy || Boolean(sourceReview?.publication) || Boolean(sourceReview?.source.quarantined) || !sourceReviewAcknowledged || sourceReviewSelection.length === 0} onClick={confirmSourcePublication}>{sourceReviewBusy ? "Publishing…" : sourceReviewAttachIntegrationID ? "Publish & attach" : "Publish reviewed generation"}</Button></>}
       >
         {sourceReview && <div className="mcp-import-review">
+		  {sourceReviewAttachIntegrationID && <div className="private-default-note"><LockKeyhole />Only the reviewed publication is attached, and the API receives a pin to its exact immutable resource-set revision.</div>}
           <div className="import-summary"><Badge color={sourceReview.publication ? "green" : "amber"}>{sourceReview.publication ? `Published r${sourceReview.publication.revision}` : "Needs review"}</Badge><code>{sourceReview.crawl_job.id}</code><span>{sourceReview.documents.length} fetched · {sourceReview.crawl_job.changed_count} changed</span></div>
           <div className="catalog-list">{sourceReview.documents.map((document) => {
             const safe = (document.state === "validated" || document.state === "published") && document.injection_indicators.length === 0;
@@ -2013,35 +2211,6 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
           <p>Anonymous requests are rate-limited and logged as aggregate security events. You can turn this endpoint off immediately.</p>
           <Confirmation checked={acknowledged} onChange={setAcknowledged}>I understand Public MCP is authentication-less and exposes public resources anonymously.</Confirmation>
         </WarningContent>
-      </Dialog>
-
-      <Dialog
-        open={addToolOpen}
-        onClose={setAddToolOpen}
-        title="Create HTTP tool"
-        description="Create one reusable deployment capability. APIs can attach the published tool later."
-        actions={<><Button outline onClick={() => setAddToolOpen(false)}>Cancel</Button><Button color="indigo" disabled={toolBusy || !newToolIdentityValid || !toolDescription.trim() || !toolEndpoint.trim()} onClick={createTool}>{toolBusy ? "Validating…" : "Save draft"}</Button></>}
-      >
-	    <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(toolNamespace) && !newToolNamespaceValid} aria-describedby="new-tool-identity-guidance" value={toolNamespace} onChange={(event) => setToolNamespace(event.target.value)} placeholder="platform" /></label><label className="auth-field"><span>Tool name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(toolName) && !newToolNameValid} aria-describedby="new-tool-identity-guidance" value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="check_readiness" /></label></div><small id="new-tool-identity-guidance">Namespace and name use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small><label className="auth-field"><span>Purpose</span><input value={toolDescription} onChange={(event) => setToolDescription(event.target.value)} placeholder="Describe one action for an agent." /></label><div className="two-fields"><label className="auth-field"><span>Method</span><select value={toolMethod} onChange={(event) => { const method = event.target.value; setToolMethod(method); if (method === "GET") setToolRisk("low"); else if (method === "DELETE") { setToolRisk("critical"); setToolConfirmationRequired(true); } else if (toolRisk === "low" || toolRisk === "critical") setToolRisk("medium"); }}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="auth-field"><span>Fixed endpoint</span><input type="url" value={toolEndpoint} onChange={(event) => setToolEndpoint(event.target.value)} placeholder="https://api.vendor.com/v1/action" /><small>Must use the configured delegated API origin. Agents cannot alter the host or authorization header.</small></label></div><label className="auth-field"><span>Required grants</span><input value={toolGrants} onChange={(event) => setToolGrants(event.target.value)} placeholder="platform.readiness developer.pro" /><small>Registered grant keys separated by spaces or commas.</small></label><div className="two-fields"><label className="auth-field"><span>Risk</span><select value={toolRisk} onChange={(event) => { const risk = event.target.value as typeof toolRisk; setToolRisk(risk); if (risk === "critical") setToolConfirmationRequired(true); }}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label><label className="compact-check"><input type="checkbox" disabled={toolRisk === "critical"} checked={toolConfirmationRequired || toolRisk === "critical"} onChange={(event) => setToolConfirmationRequired(event.target.checked)} /><span>Require explicit confirmation</span></label></div><label className="compact-check"><input type="checkbox" checked={toolIdempotencyRequired} onChange={(event) => setToolIdempotencyRequired(event.target.checked)} /><span>Require idempotency metadata for mutation calls</span></label><details className="inline-advanced"><summary>Contract schemas</summary><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea className="code-input" value={toolInputSchema} onChange={(event) => setToolInputSchema(event.target.value)} spellCheck={false} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea className="code-input" value={toolOutputSchema} onChange={(event) => setToolOutputSchema(event.target.value)} spellCheck={false} /></label></div></details></div>
-      </Dialog>
-
-      <Dialog
-        open={identityOpen}
-        onClose={setIdentityOpen}
-        title="Customer identity integration"
-        description="Optional OIDC and delegated-user API configuration. Backend delivery credentials are managed separately."
-        actions={<><Button outline onClick={() => setIdentityOpen(false)}>Cancel</Button><Button color="indigo" disabled={identityBusy || !idpIssuer.trim() || !idpClientID.trim() || (!identityConfig && !idpClientSecret.trim()) || !delegatedAPIOrigin.trim()} onClick={saveIdentity}>{identityBusy ? "Verifying…" : "Save identity"}</Button></>}
-      >
-        <div className="auth-form compact-form">
-          <label className="auth-field"><span>OIDC issuer</span><input type="url" value={idpIssuer} onChange={(event) => setIDPIssuer(event.target.value)} placeholder="https://identity.vendor.com" /></label>
-          <div className="two-fields"><label className="auth-field"><span>OIDC client ID</span><input value={idpClientID} onChange={(event) => setIDPClientID(event.target.value)} /></label><label className="auth-field"><span>{identityConfig ? "Rotate client secret (optional)" : "OIDC client secret"}</span><input type="password" autoComplete="off" value={idpClientSecret} onChange={(event) => setIDPClientSecret(event.target.value)} /></label></div>
-          <label className="auth-field"><span>Scopes</span><input value={idpScopes} onChange={(event) => setIDPScopes(event.target.value)} /></label>
-		  <div className="two-fields"><label className="auth-field"><span>Audience (optional)</span><input value={idpAudience} onChange={(event) => setIDPAudience(event.target.value)} /></label><label className="auth-field"><span>OAuth resource (optional)</span><input type="url" value={idpOAuthResource} onChange={(event) => setIDPOAuthResource(event.target.value)} /></label></div>
-		  <label className="auth-field"><span>Organisation claim</span><input value={idpOrganisationClaim} onChange={(event) => setIDPOrganisationClaim(event.target.value)} /></label>
-		  <label className="auth-field"><span>Installation claim (optional)</span><input value={idpInstallationClaim} onChange={(event) => setIDPInstallationClaim(event.target.value)} placeholder="installation_id" /><small>When present, this authenticated claim must select a registered installation for the resolved customer account.</small></label>
-          <div className="two-fields"><label className="auth-field"><span>Delegated API origin</span><input type="url" value={delegatedAPIOrigin} onChange={(event) => setDelegatedAPIOrigin(event.target.value)} placeholder="https://customer-api.vendor.com" /><small>Used only with the customer&apos;s delegated token for access evaluation and tools.</small></label><label className="auth-field"><span>State</span><select value={identityState} onChange={(event) => setIdentityState(event.target.value as APIIdentity["state"])}><option value="active">Active</option><option value="disabled">Disabled</option></select></label></div>
-          <div className="private-default-note"><ShieldCheck />OIDC creates durable customer accounts from the configured organisation claim. Access is evaluated through the fixed vendor API contract, and tool calls use the developer&apos;s delegated token.</div>
-        </div>
       </Dialog>
 
 	  <Dialog
@@ -2113,6 +2282,7 @@ export function ConsoleApp({ currentUser, currentDeployment, onLogout }: { curre
         </div>
       </Dialog>
 
+      {widgetsEnabled && <WidgetPreviewLauncher widgets={widgets} currentWidgetID={consoleRoute.kind === "entity" && consoleRoute.entity === "widget" ? consoleRoute.uid : undefined} onOpenWidgets={() => navigateToSection("widgets")} />}
       {toast && <div className="toast" role="status"><Check />{toast}</div>}
     </div>
   );
@@ -2161,7 +2331,7 @@ function ResourceSetDetailView({ resource, integrations, onNavigate }: { resourc
   if (!resource) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Resource set unavailable</h1><p>This resource set does not exist or is still loading.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
   const owners = resourceSetIntegrations(resource, integrations);
   const resourceTab: IntegrationResourceTab = resource.kind === "api" ? "contracts" : "documentation";
-  const backPath = owners.length === 1 ? integrationPath(owners[0].id, "resources", resourceTab) : sectionPath("product");
+  const backPath = owners.length === 1 ? integrationPath(owners[0].id, "documentation", resourceTab) : sectionPath("product");
   const backLabel = owners.length === 1 ? owners[0].display_name : "APIs";
   const revision = resource.latest_revision;
   const entries = revision?.manifest ?? [];
@@ -2182,7 +2352,7 @@ function ResourceSetDetailView({ resource, integrations, onNavigate }: { resourc
         <details className="advanced-details inline-advanced"><summary>View revision JSON</summary><pre className="entity-contract-json">{JSON.stringify(entries, null, 2)}</pre></details>
       </section>
       <aside className="entity-workspace-rail">
-        <section className="panel entity-related-panel"><PanelHeader title="Used by APIs" description="Open the exact API workspace tab that attaches this set." />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "resources", resourceTab)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><Badge color={integration.lifecycle === "active" ? "green" : "zinc"}>{integration.lifecycle}</Badge><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">This set is not attached to an API.</div>}</section>
+        <section className="panel entity-related-panel"><PanelHeader title="Used by APIs" description="Open the exact API workspace tab that attaches this set." />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "documentation", resourceTab)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><Badge color={integration.lifecycle === "active" ? "green" : "zinc"}>{integration.lifecycle}</Badge><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">This set is not attached to an API.</div>}</section>
         <section className="panel entity-detail-panel"><PanelHeader title="Revision identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Resource set ID</dt><dd>{resource.id}</dd></div><div><dt>Content hash</dt><dd>{revision?.content_hash || "—"}</dd></div><div><dt>Revision ID</dt><dd>{revision?.id || "—"}</dd></div><div><dt>Attachment policy</dt><dd>Explicit only</dd></div></dl></section>
       </aside>
     </div>
@@ -2201,7 +2371,148 @@ const TOOL_DETAIL_TABS: Array<{ id: ToolDetailTab; label: string }> = [
   { id: "history", label: "History" },
 ];
 
-function ToolDetailView({ productID, tool, connections, integrations, auditEvents, onChanged, onMessage, onNavigate }: { productID: string; tool: APITool | null; connections: APIMCPConnection[]; integrations: APIIntegration[]; auditEvents: APIAuditEvent[]; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+const toolUpstreamAuthCopy: Record<NonNullable<APITool["upstream_auth"]>["type"], { label: string; description: string; credentialRequired: boolean }> = {
+  delegated_oauth: { label: "Delegated OAuth", description: "During an authorized end-user execution, the caller's delegated OAuth token is forwarded to the fixed endpoint and is never stored on the tool. Administrator live tests cannot accept that user token.", credentialRequired: false },
+  none: { label: "No authentication", description: "No upstream credential is added to the request.", credentialRequired: false },
+  bearer: { label: "Bearer token", description: "An encrypted bearer token is injected server-side.", credentialRequired: true },
+  authorization_scheme: { label: "Authorization scheme", description: "An encrypted credential is combined with the configured fixed vendor scheme server-side.", credentialRequired: true },
+  api_key_header: { label: "API key header", description: "An encrypted API key is injected into the configured fixed header.", credentialRequired: true },
+  api_key_query: { label: "API key query parameter", description: "An encrypted API key is injected into the configured fixed query parameter.", credentialRequired: true },
+  basic: { label: "HTTP Basic", description: "An encrypted password is combined with the configured username server-side.", credentialRequired: true },
+  oauth_client_credentials: { label: "OAuth client credentials", description: "An encrypted client secret is exchanged at the fixed token URL server-side.", credentialRequired: true },
+  custom_header: { label: "Custom secret header", description: "An encrypted value is injected into the configured fixed header.", credentialRequired: true },
+};
+
+function toolJSON(value: unknown, fallback: string) {
+  if (value === undefined) return fallback;
+  return JSON.stringify(value, null, 2) ?? fallback;
+}
+
+function parseToolTestArguments(value: string): Record<string, unknown> {
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON arguments must be an object.");
+  return parsed as Record<string, unknown>;
+}
+
+function validToolTestIdempotencyKey(value: string) {
+  return /^[\x21-\x7E]{16,200}$/.test(value);
+}
+
+function ToolLiveTestEvidence({ run }: { run: APIToolTestRun }) {
+  const succeeded = run.outcome === "success";
+  return <div className={`tool-live-test-evidence ${succeeded ? "passed" : "failed"}`}>
+    <div className="tool-live-test-heading" role="status" aria-live="polite"><span><strong>{succeeded ? "Live test completed" : "Live test found an issue"}</strong><small>{run.tool_name} · exact revision {run.tool_revision} · {run.method} · {run.authentication_type}</small></span><Badge color={succeeded ? "green" : "red"}>{run.outcome}</Badge></div>
+    <dl className="compact-metrics tool-live-test-metrics">
+      <div className="compact-metric"><dt>Phase</dt><dd><strong>{run.phase}</strong><small>{run.network_call_performed ? "Upstream called" : "Stopped before network"}</small></dd></div>
+      <div className="compact-metric"><dt>HTTP status</dt><dd><strong>{run.upstream_status_code ?? "—"}</strong><small>{run.upstream_status_code ? "Sanitized upstream status" : "No upstream response"}</small></dd></div>
+      <div className="compact-metric"><dt>Response size</dt><dd><strong>{run.response_bytes === undefined ? "—" : `${run.response_bytes} B`}</strong><small>Body value discarded</small></dd></div>
+      <div className="compact-metric"><dt>Duration</dt><dd><strong>{run.duration_ms} ms</strong><small>Server observed</small></dd></div>
+    </dl>
+    <div className="private-default-note"><ShieldCheck />Only structural evidence is retained. Raw bodies, headers, field values, and credentials are never returned or displayed.</div>
+    <div className="tool-test-shapes">
+      <section aria-labelledby={`tool-test-request-${run.id}`}><h3 id={`tool-test-request-${run.id}`}>Request shape</h3><pre>{JSON.stringify(run.request_shape, null, 2)}</pre></section>
+      <section aria-labelledby={`tool-test-response-${run.id}`}><h3 id={`tool-test-response-${run.id}`}>Response shape</h3>{run.response_shape ? <pre>{JSON.stringify(run.response_shape, null, 2)}</pre> : <p>No response shape was retained.</p>}</section>
+    </div>
+    <section className="tool-test-findings" aria-labelledby={`tool-test-findings-${run.id}`}><h3 id={`tool-test-findings-${run.id}`}>Findings</h3>{run.findings.length > 0 ? run.findings.map((finding, index) => <div className="publish-validation" key={`${finding.phase}:${finding.code}:${index}`}><span>{succeeded ? <ShieldCheck /> : <TriangleAlert />}</span><span><strong>{finding.code}</strong><small>{finding.phase} · {finding.message}{finding.instance_path ? ` · instance ${finding.instance_path}` : ""}{finding.schema_path ? ` · schema ${finding.schema_path}` : ""}</small></span></div>) : <div className="empty-row">No structural or policy findings.</div>}</section>
+    <footer><code>{run.id}</code><span>Created {new Date(run.created_at).toLocaleString()} · evidence expires {new Date(run.expires_at).toLocaleString()}</span></footer>
+  </div>;
+}
+
+function ToolLiveTestAnalysis({ run, tool, onOpenBuilder, onClone, onMessage }: { run: APIToolTestRun; tool: APITool; onOpenBuilder: (proposal: APIToolTestAnalysisProposal) => void; onClone: (proposal: APIToolTestAnalysisProposal) => void; onMessage: (message: string) => void }) {
+  const [evidenceHash, setEvidenceHash] = useState("");
+  const [hashError, setHashError] = useState("");
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [consentGranted, setConsentGranted] = useState(false);
+  const [question, setQuestion] = useState("What does this sanitized evidence show, and should the non-secret contract change?");
+  const [transcript, setTranscript] = useState<APIToolTestAnalysisMessage[]>([]);
+  const [analysis, setAnalysis] = useState<APIToolTestAnalysis | null>(null);
+  const [analysisError, setAnalysisError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [expired] = useState(() => Date.parse(run.expires_at) <= Date.now());
+  const preview = toolTestAnalysisEvidencePreview(run);
+  const questionBytes = useMemo(() => new TextEncoder().encode(question.trim()).byteLength, [question]);
+  const questionProblem = questionBytes > TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes ? `Keep the question within ${TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes.toLocaleString()} UTF-8 bytes.` : "";
+
+  useEffect(() => {
+    let cancelled = false;
+    toolTestAnalysisEvidenceHash(run).then((value) => { if (!cancelled) setEvidenceHash(value); }).catch(() => { if (!cancelled) setHashError("The server evidence binding is missing or invalid."); });
+    return () => { cancelled = true; };
+  }, [run]);
+
+  async function sendAnalysis(explicitConsent = consentGranted) {
+    const latestQuestion = question.trim();
+    if (!explicitConsent || !evidenceHash || !latestQuestion || expired || busy) return;
+    if (questionProblem) {
+      setAnalysisError(questionProblem);
+      onMessage(questionProblem);
+      return;
+    }
+    setBusy(true);
+    setAnalysisError("");
+    try {
+      const result = await api.analyseToolTestRun(tool.product_id, tool.id, run.id, {
+        revision: run.tool_revision,
+        evidence_hash: evidenceHash,
+        consent_to_analysis_provider: true,
+        question: latestQuestion,
+        history: transcript,
+      });
+      if (result.evidence_hash !== evidenceHash || result.tool_revision !== run.tool_revision || !result.advisory) throw new Error("The Analysis response was not bound to this exact evidence and revision.");
+      if (result.proposal && (result.proposal.base_tool_id !== tool.id || result.proposal.base_revision !== run.tool_revision || result.proposal.requires_clone !== (tool.state === "published"))) throw new Error("The proposed changes were not bound to this exact tool revision and review boundary.");
+      setAnalysis(result);
+      setTranscript((messages) => boundedToolTestAnalysisHistory([...messages, { role: "user", content: latestQuestion }, { role: "assistant", content: result.reply }]));
+      setQuestion("");
+      onMessage(result.proposal ? "Analysis returned a locally validated proposal for human review." : "Analysis replied from the consented sanitized evidence.");
+    } catch (error) {
+      const message = unavailableConsoleCapability(error) ? "Live-test analysis is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "The sanitized evidence could not be analysed.";
+      setAnalysisError(message);
+      onMessage(message);
+    } finally { setBusy(false); }
+  }
+
+  const reviewConsent = () => {
+    setConsentChecked(false);
+    setConsentOpen(true);
+  };
+  const acceptConsentAndSend = () => {
+    if (!consentChecked) return;
+    setConsentGranted(true);
+    setConsentOpen(false);
+    void sendAnalysis(true);
+  };
+  const proposal = analysis?.proposal;
+
+  return <section className="tool-test-analysis" aria-labelledby={`tool-test-analysis-${run.id}`}>
+    <header><span className="settings-icon"><Sparkles /></span><span><strong id={`tool-test-analysis-${run.id}`}>Ask Analysis about this run</strong><small>Advisory only · exact revision {run.tool_revision} · evidence expires {new Date(run.expires_at).toLocaleString()}</small></span><Badge color="violet">Optional AI</Badge></header>
+    <p className="tool-test-analysis-intro">Nothing is shared until you review this boundary and explicitly consent. The server durably records that consent, binds the call to the current Analysis provider, and never fails this evidence over to a backup provider. The provider can reply or suggest a complete candidate, but it cannot save, publish, clone, bind, or call anything.</p>
+    <div className="tool-test-analysis-boundary">
+      <section><h3>Sent after consent</h3><ul><li>Shapes containing only schema-declared property names, JSON types, and array lengths; status, timing, byte count, and bounded finding codes</li><li>Structural non-secret contract: schemas without annotations or literal enum/const values; value-free enum cardinality and const-presence markers; mappings, policy, method, timeout, and authentication type</li><li>Your latest question and bounded user/assistant history</li></ul></section>
+      <section><h3>Never sent</h3><ul><li>Raw values or bodies, response content, request arguments, examples, stored descriptions, or schema annotations/literal values</li><li>Unexpected upstream property names, diagnostic paths, headers, credentials, nonces, auth configuration, or credential-presence state</li><li>Destination origin, literal path, query, evidence hash, tool/run/product IDs, actor, or request ID</li></ul></section>
+    </div>
+    <div className="tool-test-analysis-hash"><span>Evidence preview hash · browser/server binding only</span>{evidenceHash ? <code>{evidenceHash}</code> : <small>{hashError || "Checking server-computed SHA-256 binding…"}</small>}</div>
+    <details className="tool-test-analysis-preview"><summary>Review the exact sanitized evidence preview</summary><pre>{JSON.stringify(preview, null, 2)}</pre></details>
+    {expired && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Evidence expired</strong><small>Run a new exact-revision live test before requesting provider analysis.</small></span></div>}
+    {transcript.length > 0 && <div className="tool-test-analysis-transcript" aria-live="polite">{transcript.map((message, index) => <article className={message.role} key={`${message.role}:${index}`}><span>{message.role === "assistant" ? <Sparkles /> : <MessageSquareText />}</span><div><strong>{message.role === "assistant" ? "Analysis" : "You"}</strong><p>{message.content}</p></div></article>)}</div>}
+    <label className="auth-field tool-test-analysis-question" htmlFor={`tool-test-analysis-question-${run.id}`}><span>{transcript.length > 0 ? "Follow-up question" : "Question for Analysis"}</span><textarea id={`tool-test-analysis-question-${run.id}`} maxLength={TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes} value={question} aria-invalid={Boolean(questionProblem)} aria-describedby={`tool-test-analysis-question-guidance-${run.id}${questionProblem ? ` tool-test-analysis-question-error-${run.id}` : ""}`} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about the retained shapes, findings, or non-secret contract…" /><small id={`tool-test-analysis-question-guidance-${run.id}`}>{questionBytes}/{TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes} UTF-8 bytes. Do not include secrets, raw values, destination URLs, nonces, or internal IDs.</small>{questionProblem && <small className="error" id={`tool-test-analysis-question-error-${run.id}`} role="alert">{questionProblem}</small>}</label>
+    {consentGranted && <label className="tool-test-analysis-consent"><input type="checkbox" checked={consentGranted} onChange={(event) => setConsentGranted(event.target.checked)} /><span>I continue to consent to sending the provider projection described above and each bounded chat turn to the configured Analysis provider.</span></label>}
+    {analysisError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Analysis unavailable</strong><small>{analysisError}</small></span></div>}
+    <div className="tool-test-analysis-actions"><Button outline disabled={busy || expired || !evidenceHash || !question.trim() || Boolean(questionProblem)} onClick={consentGranted ? () => { void sendAnalysis(); } : reviewConsent}>{busy ? "Analysing…" : consentGranted ? transcript.length > 0 ? "Send follow-up" : "Ask Analysis" : "Review consent & ask"}</Button><small>{consentGranted ? "Consent applies only to this browser-held conversation, exact evidence hash, and exact configured provider; no backup receives it." : "The configured provider is contacted only after the consent dialog is accepted and durably recorded."}</small></div>
+    {analysis && <div className="tool-test-analysis-result">
+      <div className="analysis-summary"><span className="settings-icon"><Sparkles /></span><span><strong>Advisory reply</strong><small>{analysis.reply}</small></span><Badge color={analysis.provider_outcome === "succeeded" ? "green" : "amber"}>{analysis.provider_outcome}</Badge></div>
+      {analysis.findings.length > 0 && <section className="tool-test-analysis-findings"><h3>Advisory findings</h3>{analysis.findings.map((finding, index) => <div className="publish-validation" key={`${finding.code}:${index}`}><span><TriangleAlert /></span><span><strong>{finding.code}</strong><small>{finding.message}{finding.suggestion ? ` · ${finding.suggestion}` : ""}</small></span></div>)}</section>}
+      {proposal && <section className="tool-test-analysis-proposal"><div className="tool-test-analysis-proposal-heading"><span><strong>Reviewable contract proposal</strong><small>Bound to tool revision {proposal.base_revision} · {proposal.changes.length} changed top-level field{proposal.changes.length === 1 ? "" : "s"} · never applied automatically</small></span><Badge color={proposal.valid ? "green" : "red"}>{proposal.valid ? "Locally valid" : "Needs review"}</Badge></div>
+        {proposal.changes.length > 0 ? <ul>{proposal.changes.map((change) => <li key={change.field}><span><code>{change.field}</code>{change.security_sensitive && <Badge color="amber">Security-sensitive</Badge>}</span><small>{change.rationale || "Review this proposed field change."}</small></li>)}</ul> : <div className="empty-row">The provider returned the unchanged exact-revision contract.</div>}
+        {proposal.findings.length > 0 && <div className="tool-test-analysis-proposal-findings">{proposal.findings.map((finding, index) => <div className="publish-validation" key={`${finding.code}:${index}`}><span>{finding.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{finding.code}</strong><small>{finding.message}</small></span></div>)}</div>}
+        <details className="tool-test-analysis-proposed-draft"><summary>Review the complete locally validated proposal</summary><pre>{JSON.stringify(proposal.draft, null, 2)}</pre></details>
+        <footer>{proposal.requires_clone || tool.state === "published" ? <><div className="private-default-note"><LockKeyhole />Published revisions are immutable. This proposal cannot be applied in place; clone the tool first, then review changes in the new draft without copying credentials.</div><Button outline onClick={() => onClone(proposal)}>Clone & review proposal</Button></> : <><div className="private-default-note"><ShieldCheck />This proposal has not changed the draft. Open the exact base revision in Builder to accept or reject each suggested field before saving.</div><Button outline onClick={() => onOpenBuilder(proposal)}>Open Builder to review</Button></>}</footer>
+      </section>}
+    </div>}
+    <Dialog open={consentOpen} onClose={setConsentOpen} title="Send sanitized evidence to Analysis?" description="Your configured Analysis provider is an external processing boundary. Review exactly what crosses it for this run; this evidence will not fail over to a backup provider." actions={<><Button outline onClick={() => setConsentOpen(false)}>Cancel</Button><Button color="indigo" disabled={!consentChecked || !evidenceHash || !question.trim() || Boolean(questionProblem) || expired || busy} onClick={acceptConsentAndSend}>Consent & ask Analysis</Button></>}><div className="tool-test-analysis-consent-dialog"><div className="private-default-note"><ShieldCheck />The server recomputes <code>{evidenceHash || "the pending SHA-256 hash"}</code>, enforces this tool/run/revision and expiry, durably records the consented provider call, and rejects stale or changed provider bindings.</div><p>Only schema-declared property names, JSON types, array lengths, value-free literal-constraint markers, bounded metrics/finding codes, the structural non-secret contract, latest question, and bounded transcript are sent. Unexpected upstream property names, diagnostic paths, raw or literal values/bodies, headers, credentials, destinations, examples, actors, and internal IDs remain excluded.</p><label><input type="checkbox" checked={consentChecked} onChange={(event) => setConsentChecked(event.target.checked)} /><span>I explicitly consent to send this sanitized evidence and bounded conversation to the current configured Analysis provider only, with no backup-provider fallback.</span></label></div></Dialog>
+  </section>;
+}
+
+function ToolDetailView({ productID, tool, connections, integrations, auditEvents, onChanged, onReviewProposal, onMessage, onNavigate }: { productID: string; tool: APITool | null; connections: APIMCPConnection[]; integrations: APIIntegration[]; auditEvents: APIAuditEvent[]; onChanged: () => Promise<void>; onReviewProposal: (tool: APITool, proposal: APIToolTestAnalysisProposal) => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const initialPolicy = tool ? toolPolicy(tool) : { requiredGrants: [], confirmationRequired: false, risk: "low", idempotencyRequired: false };
   const initialRisk = initialPolicy.risk === "medium" || initialPolicy.risk === "high" || initialPolicy.risk === "critical" ? initialPolicy.risk : "low";
   const toolID = tool?.id;
@@ -2211,8 +2522,8 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
   const [activeTab, setActiveTab] = useState<ToolDetailTab>("overview");
   const [usages, setUsages] = useState<Array<{ integration: APIIntegration; binding: APIIntegrationToolBinding }>>([]);
   const [usageStatus, setUsageStatus] = useState<"loading" | "ready" | "partial">("loading");
+  const [runtimeSetup, setRuntimeSetup] = useState<APIRuntimeSetup | null>(null);
   const [busy, setBusy] = useState(false);
-  const [dirty, setDirty] = useState(false);
   const [description, setDescription] = useState(tool?.description ?? "");
   const [endpoint, setEndpoint] = useState(tool?.endpoint ?? "");
   const [method, setMethod] = useState(tool?.http_method ?? "POST");
@@ -2225,9 +2536,25 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
   const [timeout, setTimeoutValue] = useState(String(tool?.timeout_ms ?? 10000));
   const [testInput, setTestInput] = useState("{}");
   const [testResult, setTestResult] = useState<APIToolDryRun | null>(null);
+  const [contractCheckBusy, setContractCheckBusy] = useState(false);
+  const [contractCheckError, setContractCheckError] = useState("");
+  const [validatedTestInput, setValidatedTestInput] = useState<string | null>(null);
+  const [liveTestResult, setLiveTestResult] = useState<APIToolTestRun | null>(null);
+  const [liveTestError, setLiveTestError] = useState("");
+  const [liveTestBusy, setLiveTestBusy] = useState(false);
+  const [testIdempotencyKey, setTestIdempotencyKey] = useState("");
+  const [testConfirmationOpen, setTestConfirmationOpen] = useState(false);
+  const [testConfirmationName, setTestConfirmationName] = useState("");
+  const [testSideEffectsAcknowledged, setTestSideEffectsAcknowledged] = useState(false);
+  const [pendingTestArguments, setPendingTestArguments] = useState<Record<string, unknown> | null>(null);
+  const testFormVersionRef = useRef(0);
+  const pendingTestVersionRef = useRef(0);
+  const pendingTestIdempotencyKeyRef = useRef("");
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneNamespace, setCloneNamespace] = useState("");
   const [cloneName, setCloneName] = useState("");
+  const [cloneCredential, setCloneCredential] = useState("");
+  const [pendingCloneProposal, setPendingCloneProposal] = useState<APIToolTestAnalysisProposal | null>(null);
   const [retireOpen, setRetireOpen] = useState(false);
   const cloneIdentityValid = /^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim()) && /^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim());
 
@@ -2250,7 +2577,18 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
       setTimeoutValue(String(value.timeout_ms));
       setTestInput("{}");
       setTestResult(null);
-      setDirty(false);
+      setContractCheckError("");
+      setValidatedTestInput(null);
+      setLiveTestResult(null);
+      setLiveTestError("");
+      setTestIdempotencyKey("");
+      setTestConfirmationOpen(false);
+      setTestConfirmationName("");
+      setTestSideEffectsAcknowledged(false);
+      setPendingTestArguments(null);
+      testFormVersionRef.current += 1;
+      pendingTestVersionRef.current = 0;
+      pendingTestIdempotencyKeyRef.current = "";
       setDetailStatus("ready");
     }).catch(() => {
 	  if (!cancelled) setDetailStatus("error");
@@ -2272,42 +2610,67 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
     return () => { cancelled = true; };
   }, [toolID, integrations]);
 
+  useEffect(() => {
+    const integrationID = activeTool?.owner_integration_id;
+    if (!integrationID || !activeTool?.runtime_service_connection_id) return;
+    let cancelled = false;
+    void api.integrationRuntimeSetup(integrationID).then((value) => {
+      if (!cancelled) setRuntimeSetup(value);
+    }).catch(() => {
+      if (!cancelled) setRuntimeSetup(null);
+    });
+    return () => { cancelled = true; };
+  }, [activeTool?.owner_integration_id, activeTool?.runtime_service_connection_id]);
+
   if (!toolID) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Tool unavailable</h1><p>This tool could not be found in the deployment catalog.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>;
   if (!activeTool) return <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon">{detailStatus === "loading" ? <RefreshCw /> : <TriangleAlert />}</span><div><h1>{detailStatus === "loading" ? "Loading tool" : "Tool details unavailable"}</h1><p>{detailStatus === "loading" ? "Loading the complete contract and fixed execution target…" : "The complete tool contract could not be loaded. No editing or lifecycle action is available."}</p></div>{detailStatus === "error" ? <Button outline onClick={() => { setActiveTool(null); setDetailStatus("loading"); setDetailLoadAttempt((value) => value + 1); }}>Retry</Button> : <ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink>}</section>;
 
   const currentTool = activeTool;
-  const canEdit = currentTool.state === "draft";
+  const apiOwned = activeTool.scope === "api" && Boolean(activeTool.owner_integration_id);
+  const owningIntegration = apiOwned ? integrations.find((integration) => integration.id === activeTool.owner_integration_id) : undefined;
+  const runtimeConnection = activeTool.runtime_service_connection_id ? runtimeSetup?.service_connections.find((candidate) => candidate.id === activeTool.runtime_service_connection_id) : undefined;
+  const runtimeRevision = runtimeConnection?.current_revisions?.find((candidate) => candidate.current && runtimeSetup?.environments.find((environment) => environment.id === candidate.environment_id)?.is_production) ?? runtimeConnection?.current_revisions?.find((candidate) => candidate.current);
+  const runtimeAuthentication = runtimeRevision ? toolUpstreamAuthCopy[runtimeRevision.authentication_type] ?? toolUpstreamAuthCopy.none : null;
   const connection = activeTool.mcp_connection_id ? connections.find((item) => item.id === activeTool.mcp_connection_id) : null;
+  const upstreamAuthType = activeTool.upstream_auth?.type ?? "delegated_oauth";
+  const upstreamAuth = toolUpstreamAuthCopy[upstreamAuthType] ?? toolUpstreamAuthCopy.delegated_oauth;
+  const credentialStatus = activeTool.credential_present ? "Stored" : upstreamAuth.credentialRequired ? "Missing" : upstreamAuthType === "delegated_oauth" ? "Caller token; not stored" : "Not required";
+  const cloneCredentialLabel = upstreamAuthType === "basic" ? "Password" : upstreamAuthType === "oauth_client_credentials" ? "Client secret" : upstreamAuthType === "bearer" ? "Bearer token" : "Secret value";
+  const requestMappingEntries = Object.entries(activeTool.request_mapping?.parameter_locations ?? {});
+  const requestMappingSummary = requestMappingEntries.length > 0 ? `${requestMappingEntries.length} explicit parameter mapping${requestMappingEntries.length === 1 ? "" : "s"}` : `Default ${method.toUpperCase() === "GET" ? "query" : "body"} mapping`;
+  const responseMappingSummary = activeTool.response_mapping?.result_path ? `Result at ${activeTool.response_mapping.result_path}` : "Entire response document";
   const currentPolicy = toolPolicy(activeTool);
+  const fullToolName = `${activeTool.namespace}.${activeTool.name}`;
+  const normalizedTestMethod = method.toUpperCase();
+  const mutationTest = normalizedTestMethod !== "GET";
+  const effectiveAuthenticationType = runtimeRevision?.authentication_type ?? upstreamAuthType;
+  const tokenExchangeTest = effectiveAuthenticationType === "oauth_client_credentials";
+  const delegatedOAuthLiveTest = effectiveAuthenticationType === "delegated_oauth";
+  const liveTestUnsupported = activeTool.backend_kind === "mcp";
+  const contractCheckPassed = Boolean(testResult?.valid && testResult.network_call_performed === false && testResult.revision === currentTool.revision && validatedTestInput === testInput);
+  const testConfirmationRequired = mutationTest || currentPolicy.confirmationRequired;
+  const testIdempotencyRequired = mutationTest && currentPolicy.idempotencyRequired;
+  const testIdempotencyValid = !testIdempotencyRequired || validToolTestIdempotencyKey(testIdempotencyKey);
+  const liveTestLimitation = activeTool.backend_kind === "mcp"
+      ? "Imported MCP tools must be exercised through their reviewed MCP connection and a private MCP test client."
+      : delegatedOAuthLiveTest
+        ? "Administrator live tests cannot accept an end-user delegated OAuth token. Stage 2 is disabled here and no upstream request will be made; exercise this tool through an authenticated end-user flow."
+      : mutationTest && !currentPolicy.idempotencyRequired
+        ? "Mutation live tests require idempotency metadata in the stored policy. Clone or edit this contract in Builder and enable idempotency before making a real upstream call."
+      : !activeTool.runtime_service_connection_id && upstreamAuth.credentialRequired && !activeTool.credential_present
+          ? "Add the required encrypted upstream credential in the tool builder before making a live call."
+          : !contractCheckPassed
+            ? "Run a successful Contract check for these exact arguments and revision first."
+            : "";
   const toolEvents = auditEvents.filter((event) => event.target_type === "tool" && event.target_id === activeTool.id).sort((left, right) => right.created_at.localeCompare(left.created_at));
   const riskColor = risk === "critical" ? "red" : risk === "high" ? "amber" : risk === "medium" ? "violet" : "zinc";
-  const markDirty = () => setDirty(true);
   const refreshAfterMutation = async () => { try { await onChanged(); return true; } catch { return false; } };
-  const draftPayload = () => ({ description: description.trim(), endpoint: endpoint.trim(), http_method: method, input_schema: JSON.parse(inputSchema), output_schema: JSON.parse(outputSchema), authorization_policy: { ...currentTool.authorization_policy, required_grants: grants.split(/[,\s]+/).filter(Boolean), confirmation_required: confirmationRequired || risk === "critical", risk, idempotency_required: idempotencyRequired }, timeout_ms: Number(timeout), revision: currentTool.revision });
-
-  async function saveToolDraft() {
-    if (!canEdit) return;
-    setBusy(true);
-    try {
-      const updated = await api.updateTool(productID, currentTool.id, draftPayload());
-      setActiveTool(updated);
-      setDirty(false);
-      const refreshed = await refreshAfterMutation();
-      onMessage(`${updated.namespace}.${updated.name} draft saved.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
-    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool editing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Tool draft could not be saved."); } finally { setBusy(false); }
-  }
 
   async function publishToolRevision() {
-    if (!canEdit) return;
+    if (currentTool.state !== "draft") return;
     setBusy(true);
     try {
-      let target: APITool = currentTool;
-      if (dirty) {
-        target = await api.updateTool(productID, currentTool.id, draftPayload());
-        setActiveTool(target);
-        setDirty(false);
-      }
-      const published = await api.publishTool(productID, target.id, target.revision);
+      const published = await api.publishTool(productID, currentTool.id, currentTool.revision);
       setActiveTool(published);
       const refreshed = await refreshAfterMutation();
       onMessage(`${published.namespace}.${published.name} published and available for API binding.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
@@ -2315,17 +2678,127 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
   }
 
   async function dryRunTool() {
-    setBusy(true);
+    const requestVersion = testFormVersionRef.current;
+    const inputSnapshot = testInput;
+    setContractCheckBusy(true);
     setTestResult(null);
+    setValidatedTestInput(null);
+    setContractCheckError("");
+    setLiveTestResult(null);
+    setLiveTestError("");
     try {
-      if (dirty && canEdit) {
-        onMessage("Save the draft before testing its persisted contract.");
+      const argumentsObject = parseToolTestArguments(inputSnapshot);
+      const result = await api.dryRunTool(productID, currentTool.id, argumentsObject);
+      if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
+        onMessage("Contract-check result discarded because the visible test inputs changed while it was running.");
         return;
       }
-      const result = await api.dryRunTool(productID, currentTool.id, JSON.parse(testInput));
       setTestResult(result);
-      onMessage(result.valid && !result.network_call_performed ? "Tool contract validation passed without a network call." : "Tool contract validation returned a controlled failure.");
-    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool testing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Tool test could not run."); } finally { setBusy(false); }
+      if (result.valid && !result.network_call_performed && result.revision === currentTool.revision) {
+        setValidatedTestInput(inputSnapshot);
+        onMessage("Contract check passed without a network call.");
+        return;
+      }
+      setContractCheckError("The persisted contract did not pass exact-revision validation.");
+      onMessage("Contract check returned a controlled failure without calling the upstream API.");
+    } catch (error) {
+      if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
+        onMessage("Contract-check result discarded because the visible test inputs changed while it was running.");
+        return;
+      }
+      const message = unavailableConsoleCapability(error) ? "Contract checking is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Contract check could not run.";
+      setContractCheckError(message);
+      onMessage(message);
+    } finally { setContractCheckBusy(false); }
+  }
+
+  async function executeLiveToolTest(argumentsObject: Record<string, unknown>, requestVersion: number, idempotencyKey: string, confirmationNonce = "") {
+    const result = await api.runToolTest(productID, currentTool.id, {
+      revision: currentTool.revision,
+      arguments: argumentsObject,
+      ...(confirmationNonce ? { confirmation_nonce: confirmationNonce } : {}),
+      ...(testIdempotencyRequired ? { idempotency_key: idempotencyKey } : {}),
+    });
+    if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
+      onMessage("Live-test result retained by the server but hidden here because the visible test inputs changed while it was running.");
+      return false;
+    }
+    setLiveTestResult(result);
+    onMessage(result.outcome === "success" ? "Live upstream test completed with sanitized evidence." : `Live upstream test stopped safely during ${result.phase}.`);
+    return true;
+  }
+
+  async function beginLiveToolTest() {
+    setLiveTestError("");
+    setLiveTestResult(null);
+    if (liveTestLimitation) {
+      setLiveTestError(liveTestLimitation);
+      return;
+    }
+    if (!testIdempotencyValid) {
+      setLiveTestError("Enter an idempotency key containing 16–200 visible ASCII characters.");
+      return;
+    }
+    let argumentsObject: Record<string, unknown>;
+    try { argumentsObject = parseToolTestArguments(testInput); }
+    catch (error) { setLiveTestError(error instanceof Error ? error.message : "JSON arguments are invalid."); return; }
+    const requestVersion = testFormVersionRef.current;
+    const idempotencyKey = testIdempotencyKey;
+    if (testConfirmationRequired) {
+      setPendingTestArguments(argumentsObject);
+      pendingTestVersionRef.current = requestVersion;
+      pendingTestIdempotencyKeyRef.current = idempotencyKey;
+      setTestConfirmationName("");
+      setTestSideEffectsAcknowledged(false);
+      setTestConfirmationOpen(true);
+      return;
+    }
+    setLiveTestBusy(true);
+    try { await executeLiveToolTest(argumentsObject, requestVersion, idempotencyKey); }
+    catch (error) {
+      const message = unavailableConsoleCapability(error) ? "Live upstream testing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Live upstream test could not run.";
+      setLiveTestError(message);
+      onMessage(message);
+    } finally { setLiveTestBusy(false); }
+  }
+
+  async function confirmAndRunLiveToolTest() {
+    if (!pendingTestArguments || testConfirmationName !== fullToolName || !testSideEffectsAcknowledged || !testIdempotencyValid) return;
+    const requestVersion = pendingTestVersionRef.current;
+    const idempotencyKey = pendingTestIdempotencyKeyRef.current;
+    if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
+      setTestConfirmationOpen(false);
+      setPendingTestArguments(null);
+      pendingTestVersionRef.current = 0;
+      pendingTestIdempotencyKeyRef.current = "";
+      setLiveTestError("The visible test inputs changed. Run a new Contract check before requesting confirmation again.");
+      return;
+    }
+    setLiveTestBusy(true);
+    setLiveTestError("");
+    setLiveTestResult(null);
+    try {
+      const confirmation = await api.createToolTestConfirmation(productID, currentTool.id, {
+        revision: currentTool.revision,
+        arguments: pendingTestArguments,
+        typed_tool_name: testConfirmationName,
+        acknowledge_side_effects: testSideEffectsAcknowledged,
+      });
+      if (confirmation.tool_id !== currentTool.id || confirmation.tool_revision !== currentTool.revision) throw new Error("The server did not bind confirmation to this exact tool revision.");
+      await executeLiveToolTest(pendingTestArguments, requestVersion, idempotencyKey, confirmation.confirmation_nonce);
+      setTestConfirmationOpen(false);
+      setPendingTestArguments(null);
+      pendingTestVersionRef.current = 0;
+      pendingTestIdempotencyKeyRef.current = "";
+    } catch (error) {
+      const message = unavailableConsoleCapability(error) ? "Live upstream testing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Live upstream test could not run.";
+      setLiveTestError(message);
+      setTestConfirmationOpen(false);
+      setPendingTestArguments(null);
+      pendingTestVersionRef.current = 0;
+      pendingTestIdempotencyKeyRef.current = "";
+      onMessage(message);
+    } finally { setLiveTestBusy(false); }
   }
 
   function handleToolTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
@@ -2339,7 +2812,7 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
     requestAnimationFrame(() => document.getElementById(`tool-tab-${nextTab.id}`)?.focus());
   }
 
-  function openCloneTool() {
+  function openCloneTool(proposal: APIToolTestAnalysisProposal | null = null) {
 	if (currentTool.backend_kind === "mcp") {
 	  onMessage("Imported MCP tools are updated through their upstream connection and cannot be cloned.");
 	  return;
@@ -2347,17 +2820,23 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
     const suffix = "_next";
     setCloneNamespace(currentTool.namespace);
     setCloneName(`${currentTool.name.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`);
+    setCloneCredential("");
+    setPendingCloneProposal(proposal);
     setCloneOpen(true);
   }
 
   async function cloneTool() {
     setBusy(true);
     try {
-      const cloned = await api.cloneTool(productID, currentTool.id, cloneNamespace.trim(), cloneName.trim());
+      const cloned = await api.cloneTool(productID, currentTool.id, currentTool.revision, cloneNamespace.trim(), cloneName.trim(), cloneCredential);
       const refreshed = await refreshAfterMutation();
+      const proposalToReview = pendingCloneProposal;
       setCloneOpen(false);
-      onMessage(`${cloned.namespace}.${cloned.name} created as an independent draft.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
-      onNavigate(entityPath("tool", cloned.id));
+      setCloneCredential("");
+      setPendingCloneProposal(null);
+      onMessage(`${cloned.namespace}.${cloned.name} created as an independent draft.${proposalToReview ? " The live-test proposal is ready for per-field review in Builder." : ""}${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
+      if (proposalToReview) onReviewProposal(cloned, proposalToReview);
+      else onNavigate(entityPath("tool", cloned.id));
     } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool cloning is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be cloned."); } finally { setBusy(false); }
   }
 
@@ -2374,34 +2853,97 @@ function ToolDetailView({ productID, tool, connections, integrations, auditEvent
 
   const readiness = [
     { label: "Agent contract", ready: Boolean(activeTool.description && Object.keys(activeTool.input_schema).length && Object.keys(activeTool.output_schema).length) },
-    { label: "Fixed execution target", ready: activeTool.backend_kind === "mcp" ? Boolean(connection && activeTool.upstream_tool_name) : Boolean(activeTool.endpoint) },
+    { label: activeTool.runtime_service_connection_id ? "API service connection" : "Fixed execution target", ready: activeTool.backend_kind === "mcp" ? Boolean(connection && activeTool.upstream_tool_name) : activeTool.runtime_service_connection_id ? Boolean(activeTool.http_path && runtimeConnection) : Boolean(activeTool.endpoint) },
     { label: "Safety policy", ready: ["low", "medium", "high", "critical"].includes(currentPolicy.risk ?? "low") },
     { label: "Published for managed binding", ready: activeTool.state === "published" && !activeTool.upstream_drifted },
   ];
 
   return <>
-    <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All tools</ConsoleLink><Badge color={activeTool.backend_kind === "mcp" ? "violet" : "zinc"}>{activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"}</Badge></div>
-    <PageHeading eyebrow="Deployment tool" title={`${activeTool.namespace}.${activeTool.name}`} action={<span className="heading-actions">{activeTool.state === "draft" && <><Button outline disabled={busy || !dirty} onClick={saveToolDraft}>{busy ? "Saving…" : "Save draft"}</Button><Button color="indigo" disabled={busy || activeTool.upstream_drifted} onClick={publishToolRevision}>Publish tool</Button></>}{activeTool.state === "published" && <>{activeTool.backend_kind !== "mcp" && <Button outline disabled={busy} onClick={openCloneTool}><Copy data-slot="icon" />Clone as new tool</Button>}{activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">Review connection</ConsoleLink>}<Button outline disabled={busy} onClick={() => setRetireOpen(true)}>Retire</Button></>}{activeTool.state === "retired" && <Badge color="zinc">Retired</Badge>}</span>} />
+    <div className="entity-breadcrumb"><ConsoleLink path={owningIntegration ? integrationPath(owningIntegration.id, "tools") : sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{owningIntegration ? `${owningIntegration.display_name} tools` : "Common tools"}</ConsoleLink><Badge color={apiOwned ? "violet" : activeTool.backend_kind === "mcp" ? "violet" : "zinc"}>{apiOwned ? "API scoped" : activeTool.backend_kind === "mcp" ? "MCP" : "Common HTTP"}</Badge></div>
+    <PageHeading eyebrow={owningIntegration ? `${owningIntegration.display_name} API tool` : "Common deployment tool"} title={`${activeTool.namespace}.${activeTool.name}`} action={<span className="heading-actions">{activeTool.state === "draft" && <>{activeTool.backend_kind !== "mcp" ? <Button outline disabled={busy} onClick={() => onNavigate(toolBuilderPath(activeTool.id))}><Wrench data-slot="icon" />Edit in builder</Button> : connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">Review connection</ConsoleLink>}<Button color="indigo" disabled={busy || activeTool.upstream_drifted} onClick={publishToolRevision}>Publish tool</Button></>}{activeTool.state === "published" && <>{activeTool.backend_kind !== "mcp" && (owningIntegration ? <Button outline disabled={busy} onClick={() => onNavigate(integrationToolBuilderPath(owningIntegration.id))}><Plus data-slot="icon" />Create another API tool</Button> : <Button outline disabled={busy} onClick={() => openCloneTool()}><Copy data-slot="icon" />Clone as new tool</Button>)}{activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">Review connection</ConsoleLink>}<Button outline disabled={busy} onClick={() => setRetireOpen(true)}>Retire</Button></>}{activeTool.state === "retired" && <Badge color="zinc">Retired</Badge>}</span>} />
     <div className="page-tabs" role="tablist" aria-label="Tool sections">{TOOL_DETAIL_TABS.map((tab) => <button type="button" role="tab" id={`tool-tab-${tab.id}`} aria-controls={`tool-panel-${tab.id}`} aria-selected={activeTab === tab.id} tabIndex={activeTab === tab.id ? 0 : -1} key={tab.id} className={`page-tab ${activeTab === tab.id ? "active" : ""}`} onKeyDown={handleToolTabKeyDown} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</div>
 
     {activeTab === "overview" && <div className="tool-detail-section" role="tabpanel" id="tool-panel-overview" aria-labelledby="tool-tab-overview" tabIndex={0}>
       <dl className="compact-metrics tool-detail-metrics"><div className="compact-metric"><dt>State</dt><dd><strong>{activeTool.state}</strong><small>revision {activeTool.revision}</small></dd></div><div className="compact-metric"><dt>Backend</dt><dd><strong>{activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"}</strong><small>{activeTool.backend_kind === "mcp" ? activeTool.upstream_tool_name || "Upstream tool" : `${activeTool.http_method} request`}</small></dd></div><div className="compact-metric"><dt>Risk</dt><dd><strong>{currentPolicy.risk ?? "low"}</strong><small>{currentPolicy.confirmationRequired ? "Confirmation required" : "No confirmation"}</small></dd></div><div className="compact-metric"><dt>Current config</dt><dd><strong>{usageStatus === "loading" ? "…" : usages.length}</strong><small>API binding{usages.length === 1 ? "" : "s"}</small></dd></div></dl>
-      <div className="entity-workspace-grid"><section className="panel"><PanelHeader title="Readiness" description="A published tool becomes eligible for a managed API to attach; publication alone does not select it for that API." />{readiness.map((item) => <div className="integration-health-check" key={item.label}><span className={`health-icon ${item.ready ? "ready" : ""}`}>{item.ready ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{item.label}</strong><small>{item.ready ? "Ready" : "Action required"}</small></span><Badge color={item.ready ? "green" : "amber"}>{item.ready ? "Ready" : "Review"}</Badge></div>)}</section><aside className="entity-workspace-rail"><section className="panel entity-policy-panel"><PanelHeader title="Delivery boundary" /><div className="entity-policy-check"><span className="ready"><ShieldCheck /></span><span><strong>Private MCP</strong><small>{activeTool.state === "published" ? "Managed API discovery requires an exact tool and authorization binding." : "Publish before managed APIs can bind this tool."}</small></span></div><div className="entity-policy-check"><span className="neutral"><Bot /></span><span><strong>Widget</strong><small>Catalog explanation only; execution requires an authorized Private MCP client.</small></span></div></section><section className="panel entity-detail-panel"><PanelHeader title="Identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Tool ID</dt><dd>{activeTool.id}</dd></div><div><dt>Revision</dt><dd>{activeTool.revision}</dd></div><div><dt>Drift</dt><dd>{activeTool.upstream_drifted ? "Detected" : "None"}</dd></div><div><dt>Lifecycle</dt><dd>{activeTool.state}</dd></div></dl></section></aside></div>
+      <div className="entity-workspace-grid"><section className="panel"><PanelHeader title="Readiness" description={apiOwned ? "This definition remains owned by one API and inherits its environment-specific execution boundary." : "A published common tool becomes eligible for a managed API to attach; publication alone does not select it for that API."} />{readiness.map((item) => <div className="integration-health-check" key={item.label}><span className={`health-icon ${item.ready ? "ready" : ""}`}>{item.ready ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{item.label}</strong><small>{item.ready ? "Ready" : "Action required"}</small></span><Badge color={item.ready ? "green" : "amber"}>{item.ready ? "Ready" : "Review"}</Badge></div>)}</section><aside className="entity-workspace-rail"><section className="panel entity-policy-panel"><PanelHeader title="Delivery boundary" /><div className="entity-policy-check"><span className="ready"><ShieldCheck /></span><span><strong>Private MCP</strong><small>{activeTool.state === "published" ? "Managed API discovery requires an exact tool and authorization binding." : "Publish before managed APIs can bind this tool."}</small></span></div><div className="entity-policy-check"><span className="neutral"><Bot /></span><span><strong>Widget</strong><small>Catalog explanation only; execution requires an authorized Private MCP client.</small></span></div></section><section className="panel entity-detail-panel"><PanelHeader title="Identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Tool ID</dt><dd>{activeTool.id}</dd></div><div><dt>Scope</dt><dd>{owningIntegration?.display_name ?? "Common"}</dd></div><div><dt>Revision</dt><dd>{activeTool.revision}</dd></div><div><dt>Drift</dt><dd>{activeTool.upstream_drifted ? "Detected" : "None"}</dd></div><div><dt>Lifecycle</dt><dd>{activeTool.state}</dd></div></dl></section></aside></div>
     </div>}
 
-    {activeTab === "contract" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-contract" aria-labelledby="tool-tab-contract" tabIndex={0}><PanelHeader title="Agent contract" description="The name is stable. Published tools are immutable; cloning creates a new HTTP tool identity." action={dirty && <Badge color="amber">Unsaved</Badge>} /><label className="auth-field"><span>Purpose</span><textarea readOnly={!canEdit} value={description} onChange={(event) => { setDescription(event.target.value); markDirty(); }} /></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea spellCheck={false} readOnly={!canEdit} value={inputSchema} onChange={(event) => { setInputSchema(event.target.value); markDirty(); }} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea spellCheck={false} readOnly={!canEdit} value={outputSchema} onChange={(event) => { setOutputSchema(event.target.value); markDirty(); }} /></label></div></section>}
+    {activeTab === "contract" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-contract" aria-labelledby="tool-tab-contract" tabIndex={0}><PanelHeader title="Agent contract" description="Read-only exact revision. Use the Tool Builder to change an HTTP draft; published tools remain immutable." /><label className="auth-field"><span>Purpose</span><textarea readOnly value={description} /></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea spellCheck={false} readOnly value={inputSchema} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea spellCheck={false} readOnly value={outputSchema} /></label></div></section>}
 
-    {activeTab === "execution" && <div className="entity-workspace-grid" role="tabpanel" id="tool-panel-execution" aria-labelledby="tool-tab-execution" tabIndex={0}><section className="panel tool-editor-page"><PanelHeader title="Execution" description="The destination is fixed before publication and cannot be supplied by an agent." /><div className="two-fields"><label className="auth-field"><span>Backend</span><input value={activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"} readOnly /></label><label className="auth-field"><span>Timeout (ms)</span><input readOnly={!canEdit} type="number" min={100} max={60000} value={timeout} onChange={(event) => { setTimeoutValue(event.target.value); markDirty(); }} /></label></div>{activeTool.backend_kind !== "mcp" ? <><div className="two-fields"><label className="auth-field"><span>Method</span>{canEdit ? <select value={method} onChange={(event) => { setMethod(event.target.value); markDirty(); }}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => <option key={value}>{value}</option>)}</select> : <input value={method} readOnly />}</label><label className="auth-field"><span>Fixed endpoint</span><input readOnly={!canEdit} type="url" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); markDirty(); }} /></label></div><div className="private-default-note"><LockKeyhole />The authenticated customer&apos;s delegated vendor token is forwarded only to this configured origin.</div></> : <dl className="entity-detail-grid"><div><dt>Upstream tool</dt><dd>{activeTool.upstream_tool_name}</dd></div><div><dt>Schema hash</dt><dd>{activeTool.upstream_schema_hash}</dd></div></dl>}</section><aside className="entity-workspace-rail">{connection ? <section className="panel entity-related-panel"><PanelHeader title="Connection" /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section> : <section className="panel entity-detail-panel"><PanelHeader title="Connection model" /><p className="entity-panel-copy">HTTP tools use the deployment&apos;s delegated API origin. Credentials are never stored on the tool.</p></section>}</aside></div>}
+    {activeTab === "execution" && <div className="entity-workspace-grid" role="tabpanel" id="tool-panel-execution" aria-labelledby="tool-tab-execution" tabIndex={0}>
+      <section className="panel tool-editor-page">
+        <PanelHeader title="Execution" description="The destination, authentication mode, and request mappings are fixed before publication and cannot be supplied by an agent." />
+        <div className="two-fields"><label className="auth-field"><span>Backend</span><input value={activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"} readOnly /></label><label className="auth-field"><span>Timeout (ms)</span><input readOnly type="number" value={timeout} /></label></div>
+        {activeTool.backend_kind !== "mcp" ? activeTool.runtime_service_connection_id ? <>
+          <div className="two-fields"><label className="auth-field"><span>Method</span><input value={method} readOnly /></label><label className="auth-field"><span>Relative path</span><input readOnly value={activeTool.http_path ?? ""} /></label></div>
+          <div className="private-default-note"><LockKeyhole />The service host, authentication, and encrypted credential are inherited from this API&apos;s Access configuration. This tool stores no independent destination or secret.</div>
+          <dl className="entity-detail-grid compact-detail-grid">
+            <div><dt>Service connection</dt><dd>{runtimeConnection?.name ?? "Loading saved connection…"}</dd></div>
+            <div><dt>Connection ID</dt><dd>{activeTool.runtime_service_connection_id}</dd></div>
+            <div><dt>Authentication</dt><dd>{runtimeAuthentication?.label ?? "Inherited from API"}</dd></div>
+            <div><dt>Request mapping</dt><dd>{requestMappingSummary}</dd></div>
+            <div><dt>Response mapping</dt><dd>{responseMappingSummary}</dd></div>
+          </dl>
+          <details className="advanced-details inline-advanced"><summary>Mappings and examples</summary><div className="two-fields tool-schema-fields">
+            <label className="auth-field"><span>Request mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_mapping ?? { parameter_locations: {} }, "Not configured")} spellCheck={false} /></label>
+            <label className="auth-field"><span>Response mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_mapping ?? {}, "Not configured")} spellCheck={false} /></label>
+            <label className="auth-field"><span>Request example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_example, "Not configured")} spellCheck={false} /></label>
+            <label className="auth-field"><span>Response example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_example, "Not configured")} spellCheck={false} /></label>
+          </div></details>
+        </> : <>
+          <div className="two-fields"><label className="auth-field"><span>Method</span><input value={method} readOnly /></label><label className="auth-field"><span>Fixed endpoint</span><input readOnly type="url" value={endpoint} /></label></div>
+          <div className="private-default-note"><LockKeyhole />{upstreamAuth.description} Agents cannot read stored credentials or change the configured destination.</div>
+          <dl className="entity-detail-grid compact-detail-grid">
+            <div><dt>Upstream authentication</dt><dd>{upstreamAuth.label}</dd></div>
+            <div><dt>Credential</dt><dd>{credentialStatus}</dd></div>
+            <div><dt>Request mapping</dt><dd>{requestMappingSummary}</dd></div>
+            <div><dt>Response mapping</dt><dd>{responseMappingSummary}</dd></div>
+          </dl>
+          <details className="advanced-details inline-advanced"><summary>Authentication, mappings, and examples</summary><div className="two-fields tool-schema-fields">
+            <label className="auth-field"><span>Upstream authentication</span><textarea className="code-input" readOnly value={toolJSON(activeTool.upstream_auth ?? { type: upstreamAuthType }, "Not configured")} spellCheck={false} /><small>Non-secret configuration only. Stored credential material is never returned.</small></label>
+            <label className="auth-field"><span>Request mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_mapping ?? { parameter_locations: {} }, "Not configured")} spellCheck={false} /></label>
+            <label className="auth-field"><span>Response mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_mapping ?? {}, "Not configured")} spellCheck={false} /></label>
+            <label className="auth-field"><span>Request example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_example, "Not configured")} spellCheck={false} /></label>
+            <label className="auth-field"><span>Response example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_example, "Not configured")} spellCheck={false} /></label>
+          </div></details>
+        </> : <dl className="entity-detail-grid"><div><dt>Upstream tool</dt><dd>{activeTool.upstream_tool_name}</dd></div><div><dt>Schema hash</dt><dd>{activeTool.upstream_schema_hash}</dd></div></dl>}
+      </section>
+      <aside className="entity-workspace-rail">{connection ? <section className="panel entity-related-panel"><PanelHeader title="Connection" /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section> : activeTool.runtime_service_connection_id && owningIntegration ? <section className="panel entity-related-panel"><PanelHeader title="API service access" /><ConsoleLink path={integrationPath(owningIntegration.id, "access")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><KeyRound /></span><span><strong>{runtimeConnection?.name ?? "Service connection"}</strong><small>Endpoint and credential managed in Access</small></span><ChevronRight /></ConsoleLink></section> : <section className="panel entity-detail-panel"><PanelHeader title={activeTool.backend_kind === "mcp" ? "Connection model" : "HTTP security boundary"} /><p className="entity-panel-copy">{activeTool.backend_kind === "mcp" ? "This imported tool uses its reviewed MCP connection." : `${upstreamAuth.label} is applied server-side at execution time. Tool responses expose only whether a required encrypted credential is present.`}</p></section>}</aside>
+    </div>}
 
-    {activeTab === "authorization" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-authorization" aria-labelledby="tool-tab-authorization" tabIndex={0}><PanelHeader title="Baseline authorization" description="An API authorization point may add stricter requirements but cannot weaken this policy." action={<Badge color={riskColor}>{risk} risk</Badge>} /><label className="auth-field"><span>Required registered grants</span><input readOnly={!canEdit} value={grants} onChange={(event) => { setGrants(event.target.value); markDirty(); }} placeholder="customers.read, invoices.write" /></label><div className="two-fields"><label className="auth-field"><span>Risk</span>{canEdit ? <select value={risk} onChange={(event) => { const next = event.target.value as typeof risk; setRisk(next); if (next === "critical") setConfirmationRequired(true); markDirty(); }}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select> : <input value={risk} readOnly />}</label>{canEdit && <label className="compact-check"><input disabled={risk === "critical"} type="checkbox" checked={confirmationRequired || risk === "critical"} onChange={(event) => { setConfirmationRequired(event.target.checked); markDirty(); }} /><span>Require explicit user confirmation</span></label>}</div>{canEdit ? <label className="compact-check"><input type="checkbox" checked={idempotencyRequired} onChange={(event) => { setIdempotencyRequired(event.target.checked); markDirty(); }} /><span>Require idempotency metadata for mutation calls</span></label> : <dl className="entity-detail-grid compact-detail-grid readonly-policy"><div><dt>Explicit confirmation</dt><dd>{confirmationRequired || risk === "critical" ? "Required" : "Not required"}</dd></div><div><dt>Idempotency metadata</dt><dd>{idempotencyRequired ? "Required" : "Not required"}</dd></div></dl>}{currentPolicy.requiredGrants.length > 0 && <div className="entity-grant-list">{currentPolicy.requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div>}</section>}
+    {activeTab === "authorization" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-authorization" aria-labelledby="tool-tab-authorization" tabIndex={0}><PanelHeader title="Baseline authorization" description="Read-only exact revision. An API authorization point may add stricter requirements but cannot weaken this policy." action={<Badge color={riskColor}>{risk} risk</Badge>} /><label className="auth-field"><span>Required registered grants</span><input readOnly value={grants} placeholder="No registered grants" /></label><div className="two-fields"><label className="auth-field"><span>Risk</span><input value={risk} readOnly /></label></div><dl className="entity-detail-grid compact-detail-grid readonly-policy"><div><dt>Explicit confirmation</dt><dd>{confirmationRequired || risk === "critical" ? "Required" : "Not required"}</dd></div><div><dt>Idempotency metadata</dt><dd>{idempotencyRequired ? "Required" : "Not required"}</dd></div></dl>{currentPolicy.requiredGrants.length > 0 && <div className="entity-grant-list">{currentPolicy.requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div>}</section>}
 
-    {activeTab === "tests" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-tests" aria-labelledby="tool-tab-tests" tabIndex={0}><PanelHeader title="Contract validation" description="Validates arguments against the persisted input schema, fixed destination and normalized policy. It performs no network or output validation." action={<Button outline disabled={busy || dirty} onClick={dryRunTool}>{busy ? "Checking…" : "Run validation"}</Button>} />{dirty && <div className="capability-unavailable"><TriangleAlert /><span><strong>Save this draft first.</strong><small>Validation always runs against the persisted revision shown in the header.</small></span></div>}<label className="auth-field"><span>JSON arguments</span><textarea spellCheck={false} value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label>{testResult && <pre role="status" aria-live="polite" className={`tool-test-result ${testResult.valid && !testResult.network_call_performed ? "passed" : "failed"}`}>{JSON.stringify(testResult, null, 2)}</pre>}</section>}
+    {activeTab === "tests" && <div className="tool-tests-workspace" role="tabpanel" id="tool-panel-tests" aria-labelledby="tool-tab-tests" tabIndex={0}>
+      <section className="panel tool-editor-page tool-test-stage">
+        <PanelHeader title="Contract check" description="Stage 1 · Validate the arguments, schema, fixed destination, and policy for this exact persisted revision. No network call is made." action={<Button outline disabled={busy || contractCheckBusy || liveTestBusy} onClick={dryRunTool}>{contractCheckBusy ? "Checking…" : "Run Contract check"}</Button>} />
+        <label className="auth-field" htmlFor="tool-test-arguments"><span>JSON arguments</span><textarea id="tool-test-arguments" className="code-input" spellCheck={false} value={testInput} disabled={contractCheckBusy || liveTestBusy || testConfirmationOpen} onChange={(event) => { testFormVersionRef.current += 1; setTestInput(event.target.value); setTestResult(null); setValidatedTestInput(null); setContractCheckError(""); setLiveTestResult(null); setLiveTestError(""); }} /><small>Changing these arguments invalidates the Contract check and any prior live-test evidence.</small></label>
+        {contractCheckError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Contract check did not pass</strong><small>{contractCheckError}</small></span></div>}
+        {testResult && <pre role="status" aria-live="polite" className={`tool-test-result ${contractCheckPassed ? "passed" : "failed"}`}>{JSON.stringify(testResult, null, 2)}</pre>}
+      </section>
 
-    {activeTab === "usage" && <section className="panel" role="tabpanel" id="tool-panel-usage" aria-labelledby="tool-tab-usage" tabIndex={0}><PanelHeader title="Current API configuration" description="Each current API draft pins an exact published tool revision and one exact authorization-point revision. Published snapshots are not counted here." action={<Badge color="violet">{usageStatus === "loading" ? "…" : usages.length}</Badge>} />{usageStatus === "partial" && <div className="capability-unavailable"><TriangleAlert /><span><strong>Some API bindings could not be loaded.</strong><small>The list below may be incomplete.</small></span></div>}{usages.map(({ integration, binding }) => { const point = binding.authorization_point; const current = binding.tool_revision === activeTool.revision && activeTool.state === "published" && !activeTool.upstream_drifted && Boolean(point && point.state === "active" && point.revision === binding.authorization_point_revision); return <ConsoleLink key={`${integration.id}:${binding.tool_revision}`} path={integrationPath(integration.id, "tools")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key} · tool r{binding.tool_revision} · authorization r{binding.authorization_point_revision}</small></span><Badge color={current ? "green" : "red"}>{current ? "Current" : "Stale / unresolved"}</Badge><ChevronRight /></ConsoleLink>; })}{usageStatus === "loading" && <div className="empty-row">Loading current API bindings…</div>}{usageStatus === "ready" && usages.length === 0 && <div className="empty-row">No current API configuration binds this tool.</div>}</section>}
+      <section className="panel tool-editor-page tool-test-stage" aria-busy={liveTestBusy}>
+        <PanelHeader title="Live upstream test" description={delegatedOAuthLiveTest ? "Stage 2 · Unavailable for Delegated OAuth. Administrator live tests do not accept an end-user token, and no upstream request will be made." : `Stage 2 · ${testConfirmationRequired ? mutationTest ? "Review side effects, confirm the exact revision, then call" : "Review the explicit policy confirmation, then call" : "Call"} the fixed upstream endpoint only after the Contract check passes${tokenExchangeTest ? "; client-credentials authentication may first call its fixed token endpoint" : ""}.`} action={!liveTestUnsupported && <Button color="indigo" disabled={busy || contractCheckBusy || liveTestBusy || Boolean(liveTestLimitation) || !testIdempotencyValid} onClick={beginLiveToolTest}>{liveTestBusy ? "Running live test…" : delegatedOAuthLiveTest ? "Live test unavailable" : testConfirmationRequired ? "Review & run live test" : "Run live upstream test"}</Button>} />
+        {liveTestLimitation && <div className="capability-unavailable"><TriangleAlert /><span><strong>Live test unavailable</strong><small>{liveTestLimitation}</small></span></div>}
+        {testIdempotencyRequired && !liveTestUnsupported && !delegatedOAuthLiveTest && <label className="auth-field" htmlFor="tool-test-idempotency-key"><span>Idempotency key</span><input id="tool-test-idempotency-key" autoComplete="off" minLength={16} maxLength={200} disabled={liveTestBusy || testConfirmationOpen} aria-invalid={Boolean(testIdempotencyKey) && !testIdempotencyValid} aria-describedby="tool-test-idempotency-guidance" value={testIdempotencyKey} onChange={(event) => { testFormVersionRef.current += 1; setTestIdempotencyKey(event.target.value); setLiveTestResult(null); setLiveTestError(""); }} /><small id="tool-test-idempotency-guidance">Required for every mutation live test. Use 16–200 visible ASCII characters; the value is forwarded through the server&apos;s idempotency boundary and is not included in retained evidence.</small></label>}
+        {liveTestError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Live upstream test could not complete</strong><small>{liveTestError}</small></span></div>}
+        {!liveTestResult && !liveTestError && !liveTestLimitation && <div className="private-default-note"><ShieldCheck />The server retains only status, timing, byte count, structural shapes, and sanitized findings. It discards raw request and response bodies, headers, scalar values, and credentials.</div>}
+        {liveTestResult && <><ToolLiveTestEvidence run={liveTestResult} /><ToolLiveTestAnalysis key={liveTestResult.id} run={liveTestResult} tool={activeTool} onOpenBuilder={(proposal) => onReviewProposal(activeTool, proposal)} onClone={(proposal) => openCloneTool(proposal)} onMessage={onMessage} /></>}
+      </section>
+    </div>}
+
+    {activeTab === "usage" && <section className="panel" role="tabpanel" id="tool-panel-usage" aria-labelledby="tool-tab-usage" tabIndex={0}><PanelHeader title="Current API configuration" description="Each current API draft pins an exact published tool revision and one exact authorization-point revision. Published snapshots are not counted here." action={<Badge color="violet">{usageStatus === "loading" ? "…" : usages.length}</Badge>} />{usageStatus === "partial" && <div className="capability-unavailable"><TriangleAlert /><span><strong>Some API bindings could not be loaded.</strong><small>The list below may be incomplete.</small></span></div>}{usages.map(({ integration, binding }) => { const point = binding.authorization_point; const current = binding.tool_revision === activeTool.revision && activeTool.state === "published" && !activeTool.upstream_drifted && Boolean(point && point.state === "active" && point.revision === binding.authorization_point_revision); return <ConsoleLink key={`${integration.id}:${binding.tool_revision}`} path={integrationPath(integration.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key} · tool r{binding.tool_revision} · authorization r{binding.authorization_point_revision}</small></span><Badge color={current ? "green" : "red"}>{current ? "Current" : "Stale / unresolved"}</Badge><ChevronRight /></ConsoleLink>; })}{usageStatus === "loading" && <div className="empty-row">Loading current API bindings…</div>}{usageStatus === "ready" && usages.length === 0 && <div className="empty-row">No current API configuration binds this tool.</div>}</section>}
 
     {activeTab === "history" && <section className="panel" role="tabpanel" id="tool-panel-history" aria-labelledby="tool-tab-history" tabIndex={0}><PanelHeader title="Tool activity" description="Append-only administrative and execution events loaded for this tool. Same-identity contract revision editing is not enabled yet." action={<ConsoleLink path={sectionPath("runs")} onNavigate={onNavigate} className="entity-back-link">Open activity</ConsoleLink>} />{toolEvents.map((event) => <div className="lease-row" key={event.id}><span><strong>{event.action}</strong><small>{event.actor_id || "system"} · {event.request_id || "no request ID"}</small></span><time>{new Date(event.created_at).toLocaleString()}</time></div>)}{toolEvents.length === 0 && <div className="empty-row">No loaded activity for this tool.</div>}</section>}
 
-    {activeTool.backend_kind !== "mcp" && <Dialog open={cloneOpen} onClose={setCloneOpen} title="Clone as a new tool" description="This service does not yet create a new revision under the same identity. Choose a distinct lower-case namespace and name for the independent draft." actions={<><Button outline onClick={() => setCloneOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !cloneIdentityValid} onClick={cloneTool}>{busy ? "Cloning…" : "Create draft"}</Button></>}><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneNamespace) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>Name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneName) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div><small id="clone-tool-identity-guidance">Use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small></Dialog>}
+    {testConfirmationRequired && !liveTestUnsupported && !delegatedOAuthLiveTest && <Dialog open={testConfirmationOpen} onClose={(open) => { if (liveTestBusy) return; setTestConfirmationOpen(open); if (!open) { setPendingTestArguments(null); pendingTestVersionRef.current = 0; pendingTestIdempotencyKeyRef.current = ""; setTestConfirmationName(""); setTestSideEffectsAcknowledged(false); } }} title={`Confirm live ${normalizedTestMethod} test`} description={mutationTest ? `This will make a real ${normalizedTestMethod} request for ${fullToolName} revision ${currentTool.revision}${tokenExchangeTest ? " after a client-credentials token exchange when no cached token is available" : ""}. It may create, change, or delete upstream data.` : `This will make a real ${normalizedTestMethod} request for ${fullToolName} revision ${currentTool.revision}${tokenExchangeTest ? " after a client-credentials token exchange when no cached token is available" : ""}. Its stored policy requires explicit confirmation even for this read.`} actions={<><Button outline disabled={liveTestBusy} onClick={() => { setTestConfirmationOpen(false); setPendingTestArguments(null); pendingTestVersionRef.current = 0; pendingTestIdempotencyKeyRef.current = ""; setTestConfirmationName(""); setTestSideEffectsAcknowledged(false); }}>Cancel</Button><Button color="red" disabled={liveTestBusy || !pendingTestArguments || testConfirmationName !== fullToolName || !testSideEffectsAcknowledged || !testIdempotencyValid} onClick={confirmAndRunLiveToolTest}>{liveTestBusy ? "Confirming & running…" : "Confirm & run now"}</Button></>}>
+      <div className="auth-form compact-form">
+        <div className="capability-unavailable"><TriangleAlert /><span><strong>This is not a simulation.</strong><small>{mutationTest ? `The fixed action endpoint will receive one real request using its configured server-side authentication${tokenExchangeTest ? "; the fixed token endpoint may also receive one client-credentials exchange" : ""}.` : `The policy requires you to confirm this real read request to the fixed upstream endpoint${tokenExchangeTest ? "; the fixed token endpoint may also receive one client-credentials exchange" : ""}.`}</small></span></div>
+        <label className="auth-field" htmlFor="tool-test-confirm-name"><span>Type the full tool name</span><input id="tool-test-confirm-name" autoComplete="off" aria-invalid={Boolean(testConfirmationName) && testConfirmationName !== fullToolName} aria-describedby="tool-test-confirm-name-guidance" value={testConfirmationName} onChange={(event) => setTestConfirmationName(event.target.value)} /><small id="tool-test-confirm-name-guidance">Type <code>{fullToolName}</code> exactly to confirm revision {currentTool.revision}.</small></label>
+        <label className="compact-check"><input type="checkbox" checked={testSideEffectsAcknowledged} onChange={(event) => setTestSideEffectsAcknowledged(event.target.checked)} /><span>{mutationTest ? `I understand this test can cause real upstream side effects${tokenExchangeTest ? " and may perform a real token exchange" : ""}.` : `I understand this test sends a real upstream request under the stored confirmation policy${tokenExchangeTest ? " and may perform a real token exchange" : ""}.`}</span></label>
+        <div className="private-default-note"><LockKeyhole />Confirmation creates a short-lived, single-use nonce bound to this exact revision and arguments. DokoSoko uses it immediately and never exposes it in the evidence.</div>
+      </div>
+    </Dialog>}
+    {activeTool.backend_kind !== "mcp" && !apiOwned && <Dialog open={cloneOpen} onClose={(open) => { setCloneOpen(open); if (!open) { setCloneCredential(""); setPendingCloneProposal(null); } }} title="Clone as a new tool" description={pendingCloneProposal ? "Choose a distinct lower-case identity. The independent draft will open in Builder with the live-test proposal ready for per-field review; nothing is applied automatically." : "Choose a distinct lower-case identity. Stored credentials are never copied into the independent draft."} actions={<><Button outline onClick={() => { setCloneOpen(false); setCloneCredential(""); setPendingCloneProposal(null); }}>Cancel</Button><Button color="indigo" disabled={busy || !cloneIdentityValid || (upstreamAuth.credentialRequired && !cloneCredential)} onClick={cloneTool}>{busy ? "Cloning…" : pendingCloneProposal ? "Create draft & review" : "Create draft"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneNamespace) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>Name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneName) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div><small id="clone-tool-identity-guidance">Use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small>{upstreamAuth.credentialRequired && <label className="auth-field"><span>{cloneCredentialLabel}</span><input type="password" autoComplete="new-password" value={cloneCredential} onChange={(event) => setCloneCredential(event.target.value)} /><small>Required for {upstreamAuth.label}. Enter a new value because the source credential is never copied.</small></label>}<div className="private-default-note"><KeyRound />The clone receives the non-secret contract only. Delegated OAuth and unauthenticated tools do not require a stored credential. {pendingCloneProposal ? "The proposal remains an in-memory review seed and is not saved with the clone." : ""}</div></div></Dialog>}
     <Dialog open={retireOpen} onClose={setRetireOpen} title={`Retire ${activeTool.namespace}.${activeTool.name}?`} description="Retirement removes the tool from discovery and prevents new bindings. API drafts using it must remove their binding before publication." actions={<><Button outline onClick={() => setRetireOpen(false)}>Cancel</Button><Button color="red" disabled={busy} onClick={retireTool}>{busy ? "Retiring…" : "Retire tool"}</Button></>}><div className="private-default-note"><TriangleAlert />This changes the deployment catalogue immediately. Existing published API snapshots remain audit evidence.</div></Dialog>
   </>;
 }
@@ -2433,7 +2975,7 @@ function WidgetsView({ widgets, integrations, onCreate, onNavigate }: { widgets:
   </>;
 }
 
-function WidgetDetailView({ widget, integrations, assistantAvailable, busy, onUpdate, onSetState, onRotateSecret, onConfigureAssistant, onMessage, onNavigate }: { widget: APIWidget | null; integrations: APIIntegration[]; assistantAvailable: boolean; busy: boolean; onUpdate: (widget: APIWidget, input: APIWidgetInput) => Promise<APIWidget | null>; onSetState: (widget: APIWidget, state: "active" | "disabled") => Promise<APIWidget | null>; onRotateSecret: (widget: APIWidget) => void | Promise<void>; onConfigureAssistant: () => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function WidgetDetailView({ widget, integrations, recipes, assistantAvailable, busy, onUpdate, onSetState, onRotateSecret, onConfigureAssistant, onMessage, onNavigate }: { widget: APIWidget | null; integrations: APIIntegration[]; recipes: APIRecipe[]; assistantAvailable: boolean; busy: boolean; onUpdate: (widget: APIWidget, input: APIWidgetInput) => Promise<APIWidget | null>; onSetState: (widget: APIWidget, state: "active" | "disabled") => Promise<APIWidget | null>; onRotateSecret: (widget: APIWidget) => void | Promise<void>; onConfigureAssistant: () => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const [name, setName] = useState(widget?.name ?? "");
   const [origins, setOrigins] = useState(widget?.allowed_origins.join("\n") ?? "");
   const [integrationIDs, setIntegrationIDs] = useState<string[]>(widget?.integration_ids ?? []);
@@ -2468,10 +3010,19 @@ function WidgetDetailView({ widget, integrations, assistantAvailable, busy, onUp
   const dirty = JSON.stringify(input) !== JSON.stringify(persistedInput);
   const activeSecrets = secrets.filter((secret) => !secret.revoked_at);
   const activeSessions = sessions.filter((session) => !session.revoked_at && new Date(session.expires_at).getTime() > securityObservedAt);
+  const scopedGuidance = recipes.filter((recipe) => recipe.dependencies.some((dependency) => (dependency.kind === "integration" || dependency.kind === "integration_scope") && input.integration_ids.includes(dependency.resource_id)));
+  const availableGuidance = scopedGuidance.filter((recipe) => recipe.state === "published" && !recipe.needs_attention);
+  const guidanceCount = widget.state === "active" ? widget.knowledge_bindings.length : availableGuidance.length;
+  const guidanceNeedsReview = scopedGuidance.some((recipe) => recipe.needs_attention || recipe.state === "outdated");
+  const guidanceChanged = widget.state === "active" && availableGuidance.length > 0 && JSON.stringify(availableGuidance.map((recipe) => `${recipe.id}:${recipe.current_revision_id}`).sort()) !== JSON.stringify(widget.knowledge_bindings.map((binding) => `${binding.recipe_id}:${binding.recipe_revision_id}`).sort());
   const frontendSnippet = `import { mountWidget } from "@dokosoko/widget";\n\nmountWidget({\n  widgetId: "${widget.id}",\n  getToken: async () => {\n    const response = await fetch("/api/dokosoko/widget-token", {\n      method: "POST",\n      credentials: "same-origin",\n    });\n    if (!response.ok) throw new Error("Sign in required");\n    return response.json();\n  },\n});`;
-  const backendSnippet = `import DokoSokoWidgetBackend from "@dokosoko/widget-backend";\n\nconst dokosoko = new DokoSokoWidgetBackend({\n  widgetSecret: process.env.DOKOSOKO_WIDGET_SECRET!,\n});\n\nexport async function POST(request: Request) {\n  const user = await requireAuthenticatedUser(request);\n  const token = await dokosoko.widgetSessions.create({\n    widgetId: "${widget.id}",\n    userId: user.id,\n    organizationId: user.organizationId,\n    origin: new URL(request.url).origin,\n  }, { idempotencyKey: crypto.randomUUID() });\n\n  return Response.json(token, {\n    headers: { "cache-control": "no-store" },\n  });\n}`;
+  const backendSnippet = `import DokoSokoWidgetBackend from "@dokosoko/widget-backend";\n\nconst dokosoko = new DokoSokoWidgetBackend({\n  widgetSecret: process.env.DOKOSOKO_WIDGET_SECRET!,\n});\n\nexport async function POST(request: Request) {\n  const user = await requireAuthenticatedUser(request);\n  const token = await dokosoko.widgetSessions.create({\n    widgetId: "${widget.id}",\n    userId: user.id,\n    organizationId: user.organizationId,\n    context: {\n      view: "profile",\n      title: "Your profile",\n      facts: [\n        { label: "Plan", value: user.planName },\n        { label: "Account status", value: user.statusLabel },\n      ],\n    },\n    origin: new URL(request.url).origin,\n  }, { idempotencyKey: crypto.randomUUID() });\n\n  return Response.json(token, {\n    headers: { "cache-control": "no-store" },\n  });\n}`;
   const save = () => onUpdate(widget, input);
   const activate = async () => {
+    const saved = dirty ? await onUpdate(widget, input) : widget;
+    if (saved) await onSetState(saved, "active");
+  };
+  const refreshGuidance = async () => {
     const saved = dirty ? await onUpdate(widget, input) : widget;
     if (saved) await onSetState(saved, "active");
   };
@@ -2492,18 +3043,19 @@ function WidgetDetailView({ widget, integrations, assistantAvailable, busy, onUp
   };
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("widgets")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to widgets</ConsoleLink><code>/widget/{widget.id}</code></div>
-    <PageHeading eyebrow="Authenticated widget" title={widget.name} action={widget.state === "active" ? <Button outline disabled={busy} onClick={() => onSetState(widget, "disabled")}>Disable</Button> : !assistantAvailable ? <Button outline onClick={onConfigureAssistant}>Configure assistant</Button> : <Button color="indigo" disabled={busy || !input.name || input.allowed_origins.length === 0 || input.integration_ids.length === 0} onClick={activate}>{busy ? "Saving…" : dirty ? "Save and activate" : "Activate widget"}</Button>} />
+    <PageHeading eyebrow="Authenticated widget" title={widget.name} action={widget.state === "active" ? <>{guidanceNeedsReview ? <Button outline onClick={() => onNavigate(sectionPath("recipes"))}>Review guidance</Button> : guidanceChanged && <Button outline disabled={busy} onClick={refreshGuidance}>Refresh guidance</Button>}<Button outline disabled={busy} onClick={() => onSetState(widget, "disabled")}>Disable</Button></> : !assistantAvailable ? <Button outline onClick={onConfigureAssistant}>Configure assistant</Button> : <Button color="indigo" disabled={busy || !input.name || input.allowed_origins.length === 0 || input.integration_ids.length === 0} onClick={activate}>{busy ? "Saving…" : dirty ? "Save and activate" : "Activate widget"}</Button>} />
     <div className="widget-status-line"><Badge color={widget.state === "active" ? "green" : widget.state === "disabled" ? "red" : "zinc"}>{widget.state}</Badge><code>{widget.id}</code><span>Revision {widget.revision}</span></div>
     <ol className="widget-setup-steps">
       <li className={input.allowed_origins.length ? "complete" : ""}><span>{input.allowed_origins.length ? <Check /> : "1"}</span><div><strong>Allow your application</strong><small>{input.allowed_origins.length ? `${input.allowed_origins.length} exact origin${input.allowed_origins.length === 1 ? "" : "s"}` : "Add the domains that may embed this widget."}</small></div></li>
       <li className="complete"><span><Check /></span><div><strong>Authenticate users</strong><small>A server-only widget secret was created. Use it only through the backend SDK.</small></div></li>
       <li className={input.integration_ids.length ? "complete" : ""}><span>{input.integration_ids.length ? <Check /> : "3"}</span><div><strong>Connect APIs</strong><small>{input.integration_ids.length ? `${input.integration_ids.length} API${input.integration_ids.length === 1 ? "" : "s"} allowed` : "No API access is granted by default."}</small></div></li>
-      <li className={assistantAvailable ? "complete" : ""}><span>{assistantAvailable ? <Check /> : "4"}</span><div><strong>Connect assistant</strong><small>{assistantAvailable ? "The hardened assistant model is ready." : "Configure an assistant model in Settings."}</small></div></li>
-      <li className={widget.state === "active" ? "complete" : ""}><span>{widget.state === "active" ? <Check /> : "5"}</span><div><strong>Go live</strong><small>{widget.state === "active" ? "New authenticated sessions are accepted." : "Activate after the installation is ready."}</small></div></li>
+      <li className={guidanceNeedsReview ? "attention" : guidanceCount ? "complete" : ""}><span>{guidanceNeedsReview ? <TriangleAlert /> : guidanceCount ? <Check /> : "4"}</span><div><strong>{guidanceNeedsReview ? "Review guidance" : "Publish guidance"}</strong><small>{guidanceNeedsReview ? `${guidanceCount || scopedGuidance.length} setup recipe${(guidanceCount || scopedGuidance.length) === 1 ? "" : "s"} changed after publication. Review it before refreshing this widget.` : guidanceCount ? `${guidanceCount} setup recipe${guidanceCount === 1 ? "" : "s"} ${widget.state === "active" ? "pinned" : "ready to pin"}` : "Publish a setup recipe for an allowed API."}</small></div></li>
+      <li className={assistantAvailable ? "complete" : ""}><span>{assistantAvailable ? <Check /> : "5"}</span><div><strong>Connect assistant</strong><small>{assistantAvailable ? "The grounded assistant runtime is ready." : "Configure an assistant model in Settings."}</small></div></li>
+      <li className={widget.state === "active" ? "complete" : ""}><span>{widget.state === "active" ? <Check /> : "6"}</span><div><strong>Go live</strong><small>{widget.state === "active" ? "New authenticated sessions are accepted." : "Activate after testing the complete answer path."}</small></div></li>
     </ol>
     <section className="panel widget-settings-panel"><PanelHeader title="Access and appearance" action={<Button color="indigo" disabled={busy || !dirty || !input.name || input.allowed_origins.length === 0 || (widget.state === "active" && input.integration_ids.length === 0)} onClick={save}>Save changes</Button>} /><div className="widget-settings-grid"><div className="auth-form compact-form"><label className="auth-field"><span>Name</span><input value={name} maxLength={120} onChange={(event) => setName(event.target.value)} /></label><label className="auth-field"><span>Allowed origins</span><textarea value={origins} onChange={(event) => setOrigins(event.target.value)} /><small>Exact origins only; one per line.</small></label><fieldset className="widget-api-picker"><legend>Allowed APIs</legend>{integrations.filter((integration) => integration.lifecycle === "active").map((integration) => <label key={integration.id}><input aria-label={`Allow ${integration.display_name}`} type="checkbox" checked={integrationIDs.includes(integration.id)} onChange={(event) => setIntegrationIDs((values) => event.target.checked ? [...values, integration.id] : values.filter((id) => id !== integration.id))} /><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span></label>)}{integrations.filter((integration) => integration.lifecycle === "active").length === 0 && <p className="empty-picker">Publish an API before activating this widget.</p>}</fieldset></div><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Theme</span><select value={theme} onChange={(event) => setTheme(event.target.value as typeof theme)}><option value="auto">Automatic</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label className="auth-field"><span>Accent</span><input value={accent} placeholder="#5b5cf0" onChange={(event) => setAccent(event.target.value)} /></label></div><label className="auth-field"><span>Greeting</span><input value={greeting} placeholder="How can I help?" maxLength={160} onChange={(event) => setGreeting(event.target.value)} /></label><div className="widget-live-preview" style={{ "--widget-accent": accent || "#5b5cf0" } as React.CSSProperties}><span>D</span><div><strong>{name || "Customer assistant"}</strong><small>{greeting || "How can I help?"}</small></div></div></div></div></section>
     <section className="panel widget-install-panel"><PanelHeader title="Install" /><div className="install-snippets"><article><div><strong>1. Browser</strong><CopyButton text={frontendSnippet} label="Copy browser code" onCopied={() => onMessage("Browser code copied.")} /></div><pre>{frontendSnippet}</pre></article><article><div><strong>2. Backend</strong><CopyButton text={backendSnippet} label="Copy backend code" onCopied={() => onMessage("Backend code copied.")} /></div><pre>{backendSnippet}</pre></article></div></section>
-    <section className="panel widget-security-panel"><PanelHeader title="Security" action={<Button outline disabled={busy} onClick={rotateSecret}>Create new secret</Button>} /><div className="widget-security-grid"><article><div className="widget-security-title"><KeyRound /><span><strong>Backend secrets</strong><small>{activeSecrets.length} active</small></span></div><div className="widget-security-list">{secrets.map((secret) => <div key={secret.id}><span><code>••••{secret.fingerprint}</code><small>{secret.last_used_at ? `Last used ${new Date(secret.last_used_at).toLocaleString()}` : `Created ${new Date(secret.created_at).toLocaleString()}`}</small></span>{secret.revoked_at ? <Badge color="zinc">Revoked</Badge> : <Button outline disabled={busy || activeSecrets.length < 2} onClick={() => revokeSecret(secret)}>Revoke</Button>}</div>)}{secrets.length === 0 && <p className="empty-picker">Credential metadata is unavailable.</p>}</div></article><article><div className="widget-security-title"><ShieldCheck /><span><strong>Recent sessions</strong><small>{activeSessions.length} active</small></span></div><div className="widget-security-list">{sessions.slice(0, 8).map((session) => { const expired = new Date(session.expires_at).getTime() <= securityObservedAt; return <div key={session.id}><span><strong>{session.user_id}</strong><small>{widgetOriginLabel(session.origin)} · expires {new Date(session.expires_at).toLocaleString()}</small></span>{session.revoked_at || expired ? <Badge color="zinc">{session.revoked_at ? "Revoked" : "Expired"}</Badge> : <Button outline disabled={busy} onClick={() => revokeSession(session)}>Revoke</Button>}</div>; })}{sessions.length === 0 && <p className="empty-picker">No customer sessions yet.</p>}</div></article></div></section>
+    <section className="panel widget-security-panel"><PanelHeader title="Security" action={<Button outline disabled={busy} onClick={rotateSecret}>Create new secret</Button>} /><div className="widget-security-grid"><article><div className="widget-security-title"><KeyRound /><span><strong>Backend secrets</strong><small>{activeSecrets.length} active</small></span></div><div className="widget-security-list">{secrets.map((secret) => <div key={secret.id}><span><code>••••{secret.fingerprint}</code><small>{secret.last_used_at ? `Last used ${new Date(secret.last_used_at).toLocaleString()}` : `Created ${new Date(secret.created_at).toLocaleString()}`}</small></span>{secret.revoked_at ? <Badge color="zinc">Revoked</Badge> : <Button outline disabled={busy || activeSecrets.length < 2} onClick={() => revokeSecret(secret)}>Revoke</Button>}</div>)}{secrets.length === 0 && <p className="empty-picker">Credential metadata is unavailable.</p>}</div></article><article><div className="widget-security-title"><ShieldCheck /><span><strong>Recent sessions</strong><small>{activeSessions.length} active</small></span></div><div className="widget-security-list">{sessions.slice(0, 8).map((session) => { const expired = new Date(session.expires_at).getTime() <= securityObservedAt; const preview = session.kind === "admin_preview"; return <div key={session.id}><span><strong>{preview ? "Admin preview" : session.user_id}</strong><small>{preview ? "Preview" : "Customer"} · {widgetOriginLabel(session.origin)} · expires {new Date(session.expires_at).toLocaleString()}</small></span>{session.revoked_at || expired ? <Badge color="zinc">{session.revoked_at ? "Revoked" : "Expired"}</Badge> : <Button outline disabled={busy} onClick={() => revokeSession(session)}>Revoke</Button>}</div>; })}{sessions.length === 0 && <p className="empty-picker">No widget sessions yet.</p>}</div></article></div></section>
   </>;
 }
 
@@ -2520,7 +3072,13 @@ function DistributionView({
   publicAgentSetup,
   privateAgentSetup,
   onConfigureIdentity,
+  customerAccounts,
+  customerAccountsStatus,
+  customerAccountsHaveMore,
+  onUpdateCustomerAccount,
+  onLoadMoreCustomerAccounts,
   onOpenSources,
+  widgetsEnabled,
   widgetCount,
   onOpenWidgets,
 }: {
@@ -2536,7 +3094,13 @@ function DistributionView({
   publicAgentSetup: Distribution["agent_setup"]["public"];
   privateAgentSetup: Distribution["agent_setup"]["private"];
   onConfigureIdentity: () => void;
+  customerAccounts: APICustomerAccount[];
+  customerAccountsStatus: "loading" | "ready" | "unavailable";
+  customerAccountsHaveMore: boolean;
+  onUpdateCustomerAccount: (account: APICustomerAccount, state: APICustomerAccount["state"]) => Promise<boolean>;
+  onLoadMoreCustomerAccounts: () => Promise<boolean>;
   onOpenSources: () => void;
+  widgetsEnabled: boolean;
   widgetCount: number;
   onOpenWidgets: () => void;
 }) {
@@ -2555,6 +3119,8 @@ function DistributionView({
       </div>
     </section>
 
+    <CustomerAccessPanel accounts={customerAccounts} status={customerAccountsStatus} hasMore={customerAccountsHaveMore} onUpdate={onUpdateCustomerAccount} onLoadMore={onLoadMoreCustomerAccounts} />
+
     <section className="section-block">
       <SectionHeader title="Resource visibility" action={<Button outline onClick={onOpenSources}>Manage sources</Button>} />
       <SegmentedControl label="Filter resources" items={[{ id: "all", label: "All" }, { id: "public", label: "Public" }, { id: "private", label: "Private" }]} value={resourceFilter} onChange={setResourceFilter} />
@@ -2570,8 +3136,49 @@ function DistributionView({
       </DataTable>
     </section>
 
-    <section className="section-block widget-channel-card"><span className="icon-tile"><MessageSquareText /></span><div><h2>Embedded widgets</h2><p>Authenticated assistants for customer applications. Each widget has its own origins, server secret, and API allow-list.</p></div><Badge color={widgetCount > 0 ? "violet" : "zinc"}>{widgetCount}</Badge><Button outline onClick={onOpenWidgets}>{widgetCount > 0 ? "Manage widgets" : "Create widget"}<ChevronRight data-slot="icon" /></Button></section>
+    {widgetsEnabled && <section className="section-block widget-channel-card"><span className="icon-tile"><MessageSquareText /></span><div><h2>Embedded widgets</h2><p>Authenticated assistants for customer applications. Each widget has its own origins, server secret, and API allow-list.</p></div><Badge color={widgetCount > 0 ? "violet" : "zinc"}>{widgetCount}</Badge><Button outline onClick={onOpenWidgets}>{widgetCount > 0 ? "Manage widgets" : "Create widget"}<ChevronRight data-slot="icon" /></Button></section>}
   </>;
+}
+
+function CustomerAccessPanel({ accounts, status, hasMore, onUpdate, onLoadMore }: { accounts: APICustomerAccount[]; status: "loading" | "ready" | "unavailable"; hasMore: boolean; onUpdate: (account: APICustomerAccount, state: APICustomerAccount["state"]) => Promise<boolean>; onLoadMore: () => Promise<boolean> }) {
+  const [pendingSuspension, setPendingSuspension] = useState<string | null>(null);
+  const [busyAccount, setBusyAccount] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  async function updateAccount(account: APICustomerAccount, state: APICustomerAccount["state"]) {
+    setBusyAccount(account.id);
+    try {
+      if (await onUpdate(account, state)) setPendingSuspension(null);
+    } finally {
+      setBusyAccount(null);
+    }
+  }
+
+  async function loadMore() {
+    setLoadingMore(true);
+    try {
+      await onLoadMore();
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  return <section className="panel customer-access-panel">
+    <PanelHeader title="Customer access" description="Suspend a compromised customer account without changing the shared OIDC connection." action={status === "ready" ? <Badge color="zinc">{hasMore ? `${accounts.length} loaded` : `${accounts.length} account${accounts.length === 1 ? "" : "s"}`}</Badge> : undefined} />
+    {status === "loading" && <div className="customer-access-state" aria-live="polite"><RefreshCw /><span><strong>Loading customer accounts</strong><small>Suspension controls stay unavailable until live account state is verified.</small></span></div>}
+    {status === "unavailable" && <div className="customer-access-state unavailable" role="status"><TriangleAlert /><span><strong>Customer accounts unavailable</strong><small>Live account state could not be verified. No suspension controls are shown; reload the page to try again.</small></span></div>}
+    {status === "ready" && accounts.length === 0 && <div className="customer-access-empty"><Users /><span><strong>No customer accounts yet</strong><small>Accounts appear after the first successful customer sign-in.</small></span></div>}
+    {status === "ready" && accounts.length > 0 && <div className="customer-access-list">{accounts.map((account) => {
+      const confirming = pendingSuspension === account.id;
+      const busy = busyAccount === account.id;
+      return <article className="customer-access-row" key={account.id}>
+        <span className="customer-access-identity"><strong>{account.external_id}</strong><small>Issuer {account.issuer} · Last sign-in {account.last_authenticated_at ? new Date(account.last_authenticated_at).toLocaleString() : "never"}</small></span>
+        <Badge color={account.state === "active" ? "green" : "red"}>{account.state === "active" ? "Active" : "Suspended"}</Badge>
+        {account.state === "active" ? confirming ? null : <Button outline disabled={busyAccount !== null} onClick={() => setPendingSuspension(account.id)}>Suspend</Button> : <Button outline disabled={busyAccount !== null} onClick={() => void updateAccount(account, "active")}>{busy ? "Reactivating…" : "Reactivate"}</Button>}
+        {confirming && <div className="customer-access-confirm" role="alert"><TriangleAlert /><span><strong>Suspend {account.external_id}?</strong><small>New sign-ins and existing customer access will fail closed immediately.</small></span><span className="heading-actions"><Button outline disabled={busy} onClick={() => setPendingSuspension(null)}>Cancel</Button><Button color="red" disabled={busy} onClick={() => void updateAccount(account, "suspended")}>{busy ? "Suspending…" : "Suspend customer"}</Button></span></div>}
+      </article>;
+    })}{hasMore && <div className="customer-access-more"><Button outline disabled={loadingMore || busyAccount !== null} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more"}</Button></div>}</div>}
+  </section>;
 }
 
 function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity }: { kind: "public" | "private"; tenantName: string; setup: Distribution["agent_setup"]["public"]; onCopied: (label: string) => void; onConfigureIdentity: () => void }) {
@@ -2675,6 +3282,8 @@ function IntegrationSwitcher({ integrations, integration, activeTab, activeResou
 type IntegrationWorkspaceViewProps = {
   integration: APIIntegration | null;
   integrations: APIIntegration[];
+  analyses: APIIntegrationAnalysis[];
+  tools: APITool[];
   activeTab: IntegrationTab;
   activeResourceTab: IntegrationResourceTab;
   loading: boolean;
@@ -2685,12 +3294,7 @@ type IntegrationWorkspaceViewProps = {
   sources: Source[];
   connections: APIAccessConnection[];
   supportRoutes: APISupportRoute[];
-  tools: APITool[];
-  analyses: APIIntegrationAnalysis[];
-  recipes: APIRecipe[];
   distribution: Distribution | null;
-  widgets: APIWidget[];
-  recipeBusy: boolean;
   busy: boolean;
   onEdit: (integration: APIIntegration) => void;
   onPublish: (integration: APIIntegration) => void;
@@ -2698,19 +3302,22 @@ type IntegrationWorkspaceViewProps = {
   onCreateResource: () => void;
   onAddSource: () => void;
   onCrawlSource: (sourceID: string) => void;
-  onPublishSource: (source: Source) => void;
-  onGenerateRecipes: (integrationID?: string) => void;
+  onPublishSource: (source: Source, attachIntegrationID?: string) => void;
+  onAttachPublishedSource: (integration: APIIntegration, source: Source) => Promise<void>;
+  onGenerateAgentGuide: (integrationID: string) => Promise<APIIntegrationAnalysis>;
   onEditResource: (resource: APIResourceSet) => void;
   onDuplicateResource: (resource: APIResourceSet) => void;
   onDetachResource: (integrationID: string, resourceSetID: string) => void;
   onManageAccess: (integration: APIIntegration) => void;
   onManageSupport: (integration: APIIntegration) => void;
   onInspectRevision: (revision: APIIntegrationRevision) => void;
+  onRuntimeChanged: () => void | Promise<void>;
   onMessage: (message: string) => void;
   onNavigate: (path: string) => void;
 };
 
-function IntegrationWorkspaceView({ integration, integrations, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, connections, supportRoutes, tools, analyses, recipes, distribution, widgets, recipeBusy, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onGenerateRecipes, onEditResource, onDuplicateResource, onDetachResource, onManageAccess, onManageSupport, onInspectRevision, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
+function IntegrationWorkspaceView({ integration, integrations, analyses, tools, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, connections, supportRoutes, distribution, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateAgentGuide, onEditResource, onDuplicateResource, onDetachResource, onManageAccess, onManageSupport, onInspectRevision, onRuntimeChanged, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
+  const [guideBusy, setGuideBusy] = useState(false);
   if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">API</p><h1>Loading API…</h1><p>Retrieving its configuration and published history.</p></div></section>;
   if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">API</p><h1>API unavailable</h1><p>This API is not available in the current deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 
@@ -2720,18 +3327,17 @@ function IntegrationWorkspaceView({ integration, integrations, activeTab, active
   const documentationResources = attachedResources.filter((resource) => resource.kind === "documentation");
   const contractResources = attachedResources.filter((resource) => resource.kind === "api");
   const sortedRevisions = [...revisions].sort((left, right) => right.revision - left.revision);
-  const relevantWidgets = widgets.filter((widget) => widget.integration_ids.includes(integration.id));
-  const integrationAnalyses = analyses.filter((analysis) => analysisMatchesIntegration(analysis, integration.id));
-  const integrationRecipes = recipes.filter((recipe) => recipeMatchesIntegration(recipe, integration.id));
+  const agentGuideAnalysis = analyses
+    .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, integration.id))
+    .sort((left, right) => Date.parse(right.completed_at ?? right.created_at) - Date.parse(left.completed_at ?? left.created_at))[0];
   const publishValidationCodes = new Set(publishStatus?.validations.map((validation) => validation.code) ?? []);
-  const setupSteps: Array<{ label: string; detail: string; ready: boolean; tab: IntegrationTab; resourceTab?: IntegrationResourceTab }> = [
-    { label: "Documentation", detail: "Ingest, review, publish and attach trusted documentation.", ready: documentationResources.length > 0 && sources.some((source) => source.published && !source.quarantined), tab: "resources", resourceTab: "documentation" },
-    { label: "API contracts", detail: "Attach at least one immutable API contract revision.", ready: contractResources.length > 0, tab: "resources", resourceTab: "contracts" },
-    { label: "Authorization", detail: "Activate a declarative point backed by registered grants.", ready: Boolean(publishStatus && !publishValidationCodes.has("authorization_missing")), tab: "authorization" },
-    { label: "Tools", detail: "Bind at least one exact reviewed tool revision to this API.", ready: Boolean(publishStatus && !publishValidationCodes.has("tools_missing")), tab: "tools" },
-    { label: "Recipes", detail: "Publish at least one evidence-grounded developer recipe.", ready: integrationRecipes.some((recipe) => recipe.state === "published"), tab: "recipes" },
-    { label: "Delivery", detail: "Review MCP, widget and support delivery channels.", ready: Boolean(distribution?.private_mcp_endpoint && supportRoute), tab: "delivery" },
-    { label: "Acceptance", detail: "Run the vendor-neutral setup preflight before publication.", ready: Boolean(publishStatus?.ready), tab: "test" },
+  const setupSteps: Array<{ label: string; detail: string; ready: boolean; path: string }> = [
+    { label: "Choose service access", detail: "Select an active service connection for this API.", ready: Boolean(publishStatus && !publishValidationCodes.has("access_missing")), path: integrationPath(integration.id, "access") },
+    { label: "Add trusted documentation", detail: "Attach an exact reviewed documentation revision.", ready: documentationResources.length > 0, path: integrationPath(integration.id, "documentation", "documentation") },
+    { label: "Attach the API contract", detail: "Pin the reviewed API reference agents should follow.", ready: contractResources.length > 0, path: integrationPath(integration.id, "documentation", "contracts") },
+    { label: "Configure customer access", detail: "Activate customer identity and define this API's action policy.", ready: Boolean(identity?.configured && identity.state === "active" && publishStatus && !publishValidationCodes.has("authorization_missing")), path: integrationPath(integration.id, "access") },
+    { label: "Expose tools", detail: "Attach reviewed API-owned or common tools to this API.", ready: Boolean(publishStatus && !publishValidationCodes.has("tools_missing")), path: integrationPath(integration.id, "tools") },
+    { label: "Validate configuration", detail: "Review the server preflight and acceptance scenarios.", ready: Boolean(publishStatus?.ready), path: integrationPath(integration.id, "test") },
   ];
   const setupValidationCodes = new Set(["resources_missing", "authorization_missing", "tools_missing", "access_missing", "support_inherited"]);
   const actionableValidations = publishStatus?.validations.filter((validation) => !setupValidationCodes.has(validation.code)) ?? [];
@@ -2739,6 +3345,20 @@ function IntegrationWorkspaceView({ integration, integrations, activeTab, active
   const canPublish = Boolean(publishStatus?.ready && hasChanges);
   const resourceLabel = (kind: APIResourceSet["kind"]) => kind === "api" ? "API contract" : "documentation";
   const setupComplete = setupSteps.filter((step) => step.ready).length;
+  const validationPath = (tab: string) => integrationValidationPath(integration.id, tab);
+  const integrationID = integration.id;
+
+  async function generateAgentGuide() {
+	setGuideBusy(true);
+	try {
+	  const analysis = await onGenerateAgentGuide(integrationID);
+	  onMessage(analysis.generated_by === "ai_assisted" ? "Agent guide generated from this API's reviewed evidence." : "Agent guide generated deterministically; configure an analysis model for AI-assisted refinement.");
+	} catch (error) {
+	  onMessage(error instanceof APIError || error instanceof Error ? error.message : "The agent guide could not be generated.");
+	} finally {
+	  setGuideBusy(false);
+	}
+  }
 
   const renderResourceRows = (resources: typeof attachedResources) => <>
     {resources.map((resource) => {
@@ -2752,20 +3372,27 @@ function IntegrationWorkspaceView({ integration, integrations, activeTab, active
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All APIs</ConsoleLink></div>
     <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} activeResourceTab={activeResourceTab} onNavigate={onNavigate} />
     <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} action={<span className="heading-actions"><Button outline onClick={() => onEdit(integration)}>Edit</Button>{!publishStatus ? <span className="published-state checking"><RefreshCw />Checking…</span> : canPublish ? <Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish</Button> : hasChanges && !publishStatus.ready ? <Badge color="amber">Setup required</Badge> : <span className="published-state"><CheckCircle2 />Published</span>}</span>} />
-    <PageTabs label={`${integration.display_name} sections`}>{INTEGRATION_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, tab.id)} onNavigate={onNavigate} className={`page-tab ${activeTab === tab.id ? "active" : ""}`} ariaCurrent={activeTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
+    <IntegrationNavigation integrationID={integration.id} integrationName={integration.display_name} activeTab={activeTab} onNavigate={onNavigate} />
 
-    {activeTab === "overview" && <div className="integration-tab-content">
-      <div className="api-status-bar"><span><span className={`status-dot${publishStatus ? "" : " checking"}`} /><strong>{!publishStatus ? "Checking status" : publishStatus.ready ? hasChanges ? "Ready to publish" : "Published" : "Needs setup"}</strong><small>{!publishStatus ? "Loading the latest publication state…" : `${setupComplete}/${setupSteps.length} onboarding gates complete${hasChanges ? ` · ${publishStatus.changes.length} unpublished change${publishStatus.changes.length === 1 ? "" : "s"}` : ""}`}</small></span><Badge color={integration.lifecycle === "active" ? "green" : integration.lifecycle === "deprecated" ? "amber" : "zinc"}>{integration.lifecycle}</Badge></div>
-      <section className="panel onboarding-checklist"><PanelHeader title="Standard setup" description="Complete each vendor-neutral gate, then publish one immutable API snapshot." action={<Badge color={setupComplete === setupSteps.length ? "green" : "violet"}>{setupComplete}/{setupSteps.length}</Badge>} />{setupSteps.map((step, index) => <ConsoleLink key={step.label} path={integrationPath(integration.id, step.tab, step.resourceTab)} onNavigate={onNavigate} className="integration-health-check"><span className={`health-icon ${step.ready ? "ready" : ""}`}>{step.ready ? <CheckCircle2 /> : <span className="step-number">{index + 1}</span>}</span><span><strong>{step.label}</strong><small>{step.detail}</small></span><Badge color={step.ready ? "green" : "zinc"}>{step.ready ? "Ready" : "Setup"}</Badge><ChevronRight /></ConsoleLink>)}{actionableValidations.map((validation) => <ConsoleLink key={validation.code} path={integrationPath(integration.id, validation.tab === "resources" ? "resources" : validation.tab === "access" || validation.tab === "authorization" ? "authorization" : "overview")} onNavigate={onNavigate} className={`publish-validation ${validation.level}`}><span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{validation.level === "error" ? "Resolve before publishing" : "Review before publishing"}</strong><small>{validation.message}</small></span><ChevronRight /></ConsoleLink>)}</section>
-      <section className="panel"><PanelHeader title="Bug reports & feedback" action={<Button outline onClick={() => onManageSupport(integration)}>{supportRoute ? "Change" : "Configure"}</Button>} />{supportRoute ? <div className="support-route-summary"><span className="settings-icon"><Bug /></span><span><strong>{supportRoute.name}</strong><small>{supportRoute.is_default ? "Uses the deployment default" : "Configured for this API"} · {supportRoute.retention_days}-day encrypted retention</small></span><Badge color={supportRoute.state === "active" ? "green" : "zinc"}>{supportRoute.bug_reports_enabled || supportRoute.feedback_enabled ? "Available" : "Off"}</Badge></div> : <div className="empty-row">Not configured. Reports remain unavailable until you choose a policy.</div>}</section>
-      <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "resources")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Documentation, contracts, SDKs and packages.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={integrationPath(integration.id, "authorization")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Authorization</strong><small>{identity?.state === "active" ? "Delegated identity active" : identity ? "Identity disabled" : "Identity not configured"}</small></span><ChevronRight /></ConsoleLink></div>
-      <details className="panel advanced-details"><summary>Advanced details</summary><dl className="entity-detail-grid"><div><dt>API ID</dt><dd>{integration.id}</dd></div><div><dt>Family</dt><dd>{integration.family_key}</dd></div><div><dt>Version</dt><dd>{integration.version_key}</dd></div><div><dt>Draft revision</dt><dd>{integration.revision}</dd></div><div><dt>Replacement</dt><dd>{integration.replacement_integration_id ?? "—"}</dd></div><div><dt>Sunset</dt><dd>{integration.sunset_at ? new Date(integration.sunset_at).toLocaleDateString() : "—"}</dd></div></dl></details>
-    </div>}
+    {activeTab === "overview" && <IntegrationQuickStart
+      lifecycle={integration.lifecycle}
+      status={!publishStatus ? "checking" : publishStatus.ready ? hasChanges ? "ready" : "published" : "setup"}
+      statusDetail={!publishStatus ? "Loading the latest publication state…" : `${setupComplete}/${setupSteps.length} setup steps ready${hasChanges ? ` · ${publishStatus.changes.length} unpublished change${publishStatus.changes.length === 1 ? "" : "s"}` : ""}`}
+      steps={setupSteps}
+      validations={actionableValidations.map((validation) => ({ ...validation, path: validationPath(validation.tab) }))}
+      onNavigate={onNavigate}
+      advanced={<>
+        <section className="panel"><PanelHeader title="Bug reports & feedback" action={<Button outline onClick={() => onManageSupport(integration)}>{supportRoute ? "Change" : "Configure"}</Button>} />{supportRoute ? <div className="support-route-summary"><span className="settings-icon"><Bug /></span><span><strong>{supportRoute.name}</strong><small>{supportRoute.is_default ? "Uses the deployment default" : "Configured for this API"} · {supportRoute.retention_days}-day encrypted retention</small></span><Badge color={supportRoute.state === "active" ? "green" : "zinc"}>{supportRoute.bug_reports_enabled || supportRoute.feedback_enabled ? "Available" : "Off"}</Badge></div> : <div className="empty-row">Not configured. Reports remain unavailable until you choose a policy.</div>}</section>
+        <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "documentation")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Documentation</strong><small>Agent guide, API reference, sources and packages.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("identity")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Customer identity</strong><small>{identity?.configured && identity.state === "active" ? "OIDC customer sign-in active" : identity?.configured ? "OIDC draft not active" : "OIDC not configured"}</small></span><ChevronRight /></ConsoleLink></div>
+        <section className="panel"><PanelHeader title="API details" /><dl className="entity-detail-grid"><div><dt>API ID</dt><dd>{integration.id}</dd></div><div><dt>Family</dt><dd>{integration.family_key}</dd></div><div><dt>Version</dt><dd>{integration.version_key}</dd></div><div><dt>Draft revision</dt><dd>{integration.revision}</dd></div><div><dt>Replacement</dt><dd>{integration.replacement_integration_id ?? "—"}</dd></div><div><dt>Sunset</dt><dd>{integration.sunset_at ? new Date(integration.sunset_at).toLocaleDateString() : "—"}</dd></div></dl></section>
+      </>}
+    />}
 
-    {activeTab === "resources" && <div className="integration-tab-content">
-      <PageTabs label="Resource types">{INTEGRATION_RESOURCE_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, "resources", tab.id)} onNavigate={onNavigate} className={`page-tab resource-subtab ${activeResourceTab === tab.id ? "active" : ""}`} ariaCurrent={activeResourceTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
+    {activeTab === "documentation" && <div className="integration-tab-content">
+      <PageTabs label="Documentation areas">{INTEGRATION_RESOURCE_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, "documentation", tab.id)} onNavigate={onNavigate} className={`page-tab resource-subtab ${activeResourceTab === tab.id ? "active" : ""}`} ariaCurrent={activeResourceTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
       {activeResourceTab === "documentation" && <>
-        <section className="panel"><PanelHeader title="Documentation ingestion" description="Deployment sources are reusable; attach a reviewed resource revision to this API." action={<span className="heading-actions"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="entity-back-link">All documentation</ConsoleLink><Button onClick={onAddSource}><Plus data-slot="icon" />Add source</Button></span>} />{sources.map((source) => <div className="provider-row documentation-source-row" key={source.id}><span className="settings-icon"><BookOpen /></span><span><EntityLink entity="source" uid={source.id} onNavigate={onNavigate} className="entity-link"><strong>{source.name}</strong></EntityLink><small>{source.kind} · {source.location}</small></span><span className="tool-badges"><Badge color={source.quarantined || source.crawlState === "failed" ? "red" : source.crawlState === "synced" ? "green" : "amber"}>{source.quarantined ? "quarantined" : source.crawlState === "synced" ? `published r${source.latestPublication?.revision ?? 1}` : source.crawlState}</Badge><Badge color={source.visibility === "public" ? "blue" : "zinc"}>{source.visibility}</Badge></span><span className="table-actions">{source.crawlState !== "queued" && source.crawlState !== "running" && <Button outline onClick={() => onCrawlSource(source.id)}>Crawl</Button>}{source.crawlState === "review" && <Button onClick={() => onPublishSource(source)}>{source.quarantined ? "Inspect" : "Review"}</Button>}</span></div>)}{sources.length === 0 && <div className="empty-row">No documentation source has been ingested.</div>}</section>
+        <IntegrationAgentGuide analysis={agentGuideAnalysis} canGenerate={attachedResources.length > 0} busy={guideBusy} onGenerate={generateAgentGuide} />
+        <section className="panel"><PanelHeader title="Documentation ingestion" description="Deployment sources are reusable; attach a reviewed resource revision to this API." action={<span className="heading-actions"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="entity-back-link">All documentation</ConsoleLink><Button onClick={onAddSource}><Plus data-slot="icon" />Add source</Button></span>} />{sources.map((source) => { const publicationAttached = Boolean(source.latestPublication && integrationIncludesSourcePublication(integration, source.latestPublication.id)); return <div className="provider-row documentation-source-row" key={source.id}><span className="settings-icon"><BookOpen /></span><span><EntityLink entity="source" uid={source.id} onNavigate={onNavigate} className="entity-link"><strong>{source.name}</strong></EntityLink><small>{source.kind} · {source.location}</small></span><span className="tool-badges"><Badge color={source.quarantined || source.crawlState === "failed" ? "red" : source.crawlState === "synced" ? "green" : "amber"}>{source.quarantined ? "quarantined" : source.crawlState === "synced" ? `published r${source.latestPublication?.revision ?? 1}` : source.crawlState}</Badge><Badge color={source.visibility === "public" ? "blue" : "zinc"}>{source.visibility}</Badge></span><span className="table-actions">{source.crawlState !== "queued" && source.crawlState !== "running" && <Button outline disabled={busy} onClick={() => onCrawlSource(source.id)}>Crawl</Button>}{source.crawlState === "review" && <Button disabled={busy} onClick={() => onPublishSource(source, integration.id)}>{source.quarantined ? "Inspect" : "Review & attach"}</Button>}{source.crawlState === "synced" && source.latestPublication && (publicationAttached ? <Button outline disabled><Check data-slot="icon" />Attached</Button> : <Button disabled={busy} onClick={() => void onAttachPublishedSource(integration, source)}>Attach to API</Button>)}</span></div>; })}{sources.length === 0 && <div className="empty-row">No documentation source has been ingested.</div>}</section>
         <section className="panel"><PanelHeader title="Attached documentation" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create set</Button><Button onClick={() => onAttach(integration, "documentation")}>Attach reviewed set</Button></span>} />{renderResourceRows(documentationResources)}</section>
       </>}
       {activeResourceTab === "contracts" && <>
@@ -2775,13 +3402,17 @@ function IntegrationWorkspaceView({ integration, integrations, activeTab, active
       {activeResourceTab === "packages" && <IntegrationPackagesWorkspace integration={integration} onMessage={onMessage} />}
     </div>}
 
-    {activeTab === "authorization" && <IntegrationAuthorizationWorkspace integration={integration} identity={identity} connections={integrationConnections} tools={tools} onManageAccess={() => onManageAccess(integration)} onMessage={onMessage} onNavigate={onNavigate} />}
+    {activeTab === "access" && <div className="integration-tab-content">
+      <IntegrationRuntimeAccess integration={integration} key={integration.id} onMessage={onMessage} onNavigate={onNavigate} onChanged={onRuntimeChanged} />
+      <section className="panel">
+        <PanelHeader title="Customer authorization" description="This API inherits customer sign-in from the deployment and applies an action policy to each exposed tool." action={<ConsoleLink path={sectionPath("identity")} onNavigate={onNavigate} className="entity-back-link">Open Identity</ConsoleLink>} />
+        <div className="support-route-summary"><span className="settings-icon"><ShieldCheck /></span><span><strong>{identity?.configured && identity.state === "active" ? "Central customer identity is active" : "Customer identity needs setup"}</strong><small>{identity?.configured && identity.state === "active" ? "Review tool permissions below before publishing executable actions." : "Connect and test the deployment OIDC provider before enabling private agent access."}</small></span><Badge color={identity?.configured && identity.state === "active" ? "green" : "amber"}>{identity?.configured && identity.state === "active" ? "Active" : "Setup"}</Badge></div>
+      </section>
+      <AuthorizationPolicyWorkspace integration={integration} onMessage={onMessage} />
+      <details className="panel advanced-details"><summary>Managed credential lifecycle — Advanced</summary><div className="advanced-details-body"><PanelHeader title="Provider management connections" description="Optional provider-owned issuance, rotation, and revocation. These are separate from the runtime API credential above." action={<Button outline onClick={() => onManageAccess(integration)}>Choose managed connections</Button>} />{integrationConnections.map((connection) => <div className="provider-row integration-connection-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.definition?.name ?? "Managed credential service"}{connection.region ? ` · ${connection.region}` : ""}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge></div>)}{integrationConnections.length === 0 && <div className="empty-row">No managed credential provider is attached. Most API-key integrations do not need one.</div>}</div></details>
+    </div>}
 
-    {activeTab === "tools" && <IntegrationToolsWorkspace key={integration.id} integration={integration} tools={tools} onMessage={onMessage} onNavigate={onNavigate} />}
-
-    {activeTab === "recipes" && <IntegrationRecipesWorkspace analyses={integrationAnalyses} recipes={integrationRecipes} busy={recipeBusy} onGenerate={() => onGenerateRecipes(integration.id)} onNavigate={onNavigate} />}
-
-    {activeTab === "delivery" && <IntegrationDeliveryWorkspace integration={integration} identity={identity} distribution={distribution} supportRoute={supportRoute} widgets={relevantWidgets} onManageSupport={() => onManageSupport(integration)} onNavigate={onNavigate} />}
+    {activeTab === "tools" && <div className="integration-tab-content"><IntegrationToolsWorkspace integration={integration} tools={tools} providerManagementConnections={integrationConnections} onMessage={onMessage} onNavigate={onNavigate} /></div>}
 
     {activeTab === "test" && <IntegrationTestWorkspace key={`${integration.id}:${publishStatus?.current_manifest_hash ?? ""}`} integration={integration} distribution={distribution} onNavigate={onNavigate} />}
 
@@ -3176,7 +3807,11 @@ function toolPolicy(tool: APITool) {
   };
 }
 
-function IntegrationAuthorizationWorkspace({ integration, identity, connections, tools, onManageAccess, onMessage, onNavigate }: { integration: APIIntegration; identity: APIIdentity | null; connections: APIAccessConnection[]; tools: APITool[]; onManageAccess: () => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function toolStateLabel(tool: APITool) {
+  return `${tool.state[0].toUpperCase()}${tool.state.slice(1)}: Rev ${tool.revision}`;
+}
+
+function AuthorizationPolicyWorkspace({ integration, onMessage }: { integration: APIIntegration; onMessage: (message: string) => void }) {
   const [definitions, setDefinitions] = useState<APIGrantDefinition[]>([]);
   const [points, setPoints] = useState<APIAuthorizationPoint[]>([]);
   const [catalogUnavailable, setCatalogUnavailable] = useState(false);
@@ -3198,30 +3833,23 @@ function IntegrationAuthorizationWorkspace({ integration, identity, connections,
   const [pointConfirmation, setPointConfirmation] = useState(false);
   const [pointTTL, setPointTTL] = useState("300");
   const [pointState, setPointState] = useState<APIAuthorizationPoint["state"]>("draft");
-  const [selectedPointID, setSelectedPointID] = useState("");
-  const [suppliedGrants, setSuppliedGrants] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [simulation, setSimulation] = useState<APIAuthorizationSimulation | null>(null);
-  const [simulationSource, setSimulationSource] = useState<"server" | "configuration-only">("server");
-  const [simulating, setSimulating] = useState(false);
+  const integrationID = integration.id;
 
   const loadAuthorization = useCallback(async () => {
-    const [definitionResult, pointResult] = await Promise.allSettled([api.grantDefinitions(), api.authorizationPoints(integration.id)]);
+    setPoints([]);
+    const pointRequest = integrationID ? api.authorizationPoints(integrationID) : Promise.resolve([] as APIAuthorizationPoint[]);
+    const [definitionResult, pointResult] = await Promise.allSettled([api.grantDefinitions(), pointRequest]);
     if (definitionResult.status === "fulfilled") setDefinitions(definitionResult.value);
-    if (pointResult.status === "fulfilled") {
-      setPoints(pointResult.value);
-      setSelectedPointID((current) => current && pointResult.value.some((point) => point.id === current) ? current : pointResult.value[0]?.id ?? "");
-    }
+    if (pointResult.status === "fulfilled") setPoints(pointResult.value);
     const unavailable = (definitionResult.status === "rejected" && unavailableConsoleCapability(definitionResult.reason)) || (pointResult.status === "rejected" && unavailableConsoleCapability(pointResult.reason));
     setCatalogUnavailable(unavailable);
-  }, [integration.id]);
+  }, [integrationID]);
 
   useEffect(() => {
     const task = window.setTimeout(() => { void loadAuthorization(); }, 0);
     return () => window.clearTimeout(task);
   }, [loadAuthorization]);
 
-  const selectedPoint = points.find((point) => point.id === selectedPointID) ?? points[0];
   const registeredKeys = new Set(definitions.filter((definition) => definition.state === "active").map((definition) => definition.key));
 
   function openGrant(value?: APIGrantDefinition) {
@@ -3246,40 +3874,19 @@ function IntegrationAuthorizationWorkspace({ integration, identity, connections,
     try {
       const input = { key: pointKey.trim(), name: pointName.trim(), description: pointDescription.trim(), action_type: pointAction, required_grants: pointGrants, confirmation_required: pointAction === "destructive" ? true : pointConfirmation, decision_ttl_seconds: Number(pointTTL), state: pointState };
       if (editingPoint) await api.updateAuthorizationPoint(integration.id, editingPoint.id, { ...input, revision: editingPoint.revision }); else await api.createAuthorizationPoint(integration.id, input);
-      await loadAuthorization(); setPointOpen(false); onMessage(editingPoint ? "Authorization point updated." : "Authorization point created.");
-    } catch (error) { onMessage(error instanceof APIError ? error.message : "Authorization point could not be saved."); } finally { setBusy(false); }
+      await loadAuthorization(); setPointOpen(false); onMessage(editingPoint ? "Action policy updated." : "Action policy created.");
+    } catch (error) { onMessage(error instanceof APIError ? error.message : "Action policy could not be saved."); } finally { setBusy(false); }
   }
 
-  async function simulate() {
-    if (!selectedPoint) return;
-    setSimulating(true);
-    const granted = suppliedGrants.split(/[\s,]+/).map((value) => value.trim()).filter(Boolean);
-    try {
-      setSimulation(await api.simulateAuthorizationPoint(integration.id, selectedPoint.id, granted, confirmed));
-      setSimulationSource("server");
-    } catch (error) {
-      if (!unavailableConsoleCapability(error)) { onMessage(error instanceof APIError ? error.message : "Authorization policy could not be simulated."); setSimulating(false); return; }
-      const missing = selectedPoint.required_grants.filter((grant) => !granted.includes(grant));
-      const confirmationMissing = selectedPoint.confirmation_required && !confirmed;
-      setSimulation({ authorization_point_id: selectedPoint.id, allowed: selectedPoint.state === "active" && missing.length === 0 && !confirmationMissing, missing_grants: missing, confirmation_required: selectedPoint.confirmation_required, confirmation_missing: confirmationMissing, explanation: "Local comparison only; this does not prove live vendor access.", simulation_only: true });
-      setSimulationSource("configuration-only");
-    } finally { setSimulating(false); }
-  }
-
-  return <div className="integration-tab-content">
-    <div className="notice"><ShieldCheck /><span><strong>One authorization vocabulary: grants.</strong> Declarative points have no URL or secret. Runtime identity resolves live vendor access through the fixed fail-closed evaluation contract.</span></div>
-    {catalogUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Authorization catalogue unavailable.</strong><small>Existing tool policies remain visible, but grant and point changes cannot be saved by this deployment.</small></span></div>}
-    <div className="integration-two-column">
-      <section className="panel"><PanelHeader title="Customer identity" action={<ConsoleLink path={settingsPath("identity")} onNavigate={onNavigate} className="entity-back-link">Configure identity</ConsoleLink>} />{identity ? <div className="provider-row"><span className="settings-icon"><Users /></span><span><strong>{identity.issuer}</strong><small>Resource {identity.oauth_resource || "not set"} · claim {identity.organisation_claim}</small></span><Badge color={identity.state === "active" ? "green" : "amber"}>{identity.state}</Badge></div> : <div className="empty-row">Customer OIDC has not been configured.</div>}</section>
-      <section className="panel"><PanelHeader title="Service connections" description="Reusable environment and credential boundaries for this API." action={<Button onClick={onManageAccess}>Choose connections</Button>} />{connections.map((connection) => <div className="provider-row integration-connection-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{connection.definition?.name ?? "Service connection"}{connection.region ? ` · ${connection.region}` : ""}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge></div>)}{connections.length === 0 && <div className="empty-row">No service connection is attached to this API.</div>}<ConsoleLink path={sectionPath("projects")} onNavigate={onNavigate} className="panel-footer-link">Manage reusable access definitions and connections <ChevronRight /></ConsoleLink></section>
-    </div>
-    <section className="panel"><PanelHeader title="Grant registry" description="Deployment-owned vocabulary that vendor evaluations may return and policies may require. A definition never grants access." action={<span className="heading-actions"><Badge color="violet">{definitions.length} grants</Badge><Button disabled={catalogUnavailable} onClick={() => openGrant()}><Plus data-slot="icon" />Register grant</Button></span>} />{definitions.map((definition) => <div className="provider-row grant-definition-row" key={definition.id}><span className="settings-icon"><KeyRound /></span><span><strong>{definition.display_name}</strong><small><code>{definition.key}</code> · {definition.description || "No description"}</small></span><span className="tool-badges"><Badge color={definition.risk === "critical" || definition.risk === "high" ? "red" : definition.risk === "medium" ? "amber" : "zinc"}>{definition.risk}</Badge><Badge color={definition.state === "active" ? "green" : "zinc"}>{definition.state}</Badge></span><Button outline onClick={() => openGrant(definition)}>Edit</Button></div>)}{definitions.length === 0 && <div className="empty-row">No grant has been registered yet.</div>}</section>
-    <section className="panel"><PanelHeader title="Authorization points" description="Map named API actions to registered grants, risk behavior, confirmation and bounded decision caching." action={<Button disabled={catalogUnavailable || definitions.every((definition) => definition.state !== "active")} onClick={() => openPoint()}><Plus data-slot="icon" />Add point</Button>} />{points.map((point) => <div className="provider-row authorization-point-row" key={point.id}><span className="settings-icon"><ShieldCheck /></span><span><strong>{point.name}</strong><small><code>{point.key}</code> · {point.required_grants.join(", ") || "no grants"} · TTL {point.decision_ttl_seconds}s</small></span><span className="tool-badges"><Badge color={point.action_type === "destructive" ? "red" : point.action_type === "write" ? "amber" : "blue"}>{point.action_type}</Badge>{point.confirmation_required && <Badge color="violet">confirmation</Badge>}<Badge color={point.state === "active" ? "green" : "zinc"}>{point.state}</Badge></span><Button outline onClick={() => openPoint(point)}>Edit</Button></div>)}{points.length === 0 && <div className="empty-row">No authorization point has been configured for this API.</div>}</section>
-    <section className="panel"><PanelHeader title="Policy simulator" description="Server-side configuration preflight only. It never calls the vendor access-evaluation contract or grants runtime access." action={<Badge color="zinc">Simulation only</Badge>} />{points.length > 0 ? <div className="authorization-simulator"><div className="two-fields"><label className="auth-field"><span>Authorization point</span><select value={selectedPoint?.id ?? ""} onChange={(event) => { setSelectedPointID(event.target.value); setSimulation(null); }}>{points.map((point) => <option value={point.id} key={point.id}>{point.name} · {point.key}</option>)}</select></label><label className="auth-field"><span>Hypothetical granted grants</span><input value={suppliedGrants} onChange={(event) => { setSuppliedGrants(event.target.value); setSimulation(null); }} placeholder="customers.read, invoices.write" /></label></div><label className="compact-check"><input type="checkbox" checked={confirmed} onChange={(event) => { setConfirmed(event.target.checked); setSimulation(null); }} /><span>Simulate explicit confirmation for this exact action</span></label><div className="simulator-actions"><Button disabled={simulating || !selectedPoint} onClick={simulate}>{simulating ? "Evaluating…" : "Simulate policy"}</Button>{selectedPoint && <small>Requires {selectedPoint.required_grants.join(", ") || "no grants"}{selectedPoint.confirmation_required ? " and confirmation" : ""}. State must be active.</small>}</div>{simulation && <div className={`simulation-result ${simulation.allowed ? "allowed" : "denied"}`}><span>{simulation.allowed ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{simulation.allowed ? "Would pass configured policy" : "Would be denied"}</strong><small>{simulation.explanation}{simulation.missing_grants.length ? ` Missing: ${simulation.missing_grants.join(", ")}.` : ""}</small></span><Badge color={simulationSource === "server" ? "green" : "zinc"}>{simulationSource === "server" ? "Server simulation" : "Configuration only"}</Badge></div>}</div> : <div className="empty-row">Create an authorization point before simulating policy.</div>}</section>
-    <details className="panel advanced-details"><summary>Tool policy coverage</summary>{tools.map((tool) => { const policy = toolPolicy(tool); const missing = policy.requiredGrants.filter((grant) => !registeredKeys.has(grant)); return <div className="lease-row" key={tool.id}><span><strong>{tool.namespace}.{tool.name}</strong><small>{policy.requiredGrants.join(", ") || "No required grants"}</small></span><Badge color={missing.length ? "red" : "green"}>{missing.length ? `${missing.length} unregistered` : "registered"}</Badge></div>; })}{tools.length === 0 && <div className="empty-row">No tool policies exist yet.</div>}</details>
+  return <>
+    <SectionHeader title="Action policies" description={`Define the exact actions and grants ${integration.display_name} tools require.`} />
+    <div className="notice authorization-policy-notice"><ShieldCheck /><span><strong>Policies do not authenticate customers.</strong> The configured identity provider resolves the customer first; these exact grant requirements narrow which published tools the customer may call.</span></div>
+    {catalogUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Authorization catalogue unavailable.</strong><small>Existing tool policies remain visible, but grant and action-policy changes cannot be saved by this deployment.</small></span></div>}
+    <section className="panel"><PanelHeader title="API action policies" description="Each tool binding pins one exact active policy revision so publication and runtime checks fail closed." action={<Button disabled={catalogUnavailable || definitions.every((definition) => definition.state !== "active")} onClick={() => openPoint()}><Plus data-slot="icon" />Add policy</Button>} />{points.map((point) => <div className="provider-row authorization-point-row" key={point.id}><span className="settings-icon"><ShieldCheck /></span><span><strong>{point.name}</strong><small><code>{point.key}</code> · {point.required_grants.join(", ") || "no grants"} · TTL {point.decision_ttl_seconds}s</small></span><span className="tool-badges"><Badge color={point.action_type === "destructive" ? "red" : point.action_type === "write" ? "amber" : "blue"}>{point.action_type}</Badge>{point.confirmation_required && <Badge color="violet">confirmation</Badge>}<Badge color={point.state === "active" ? "green" : "zinc"}>{point.state}</Badge></span><Button outline onClick={() => openPoint(point)}>Edit</Button></div>)}{points.length === 0 && <div className="empty-row">No action policy has been configured for {integration.display_name}. Register a grant in Advanced, then add the first policy.</div>}</section>
+    <details className="panel advanced-details"><summary>Deployment grant registry — Advanced</summary><div className="advanced-details-body"><PanelHeader title="Grant registry" description="Deployment-owned names that your authorization API may return. Registering a name never grants access." action={<span className="heading-actions"><Badge color="violet">{definitions.length} grants</Badge><Button disabled={catalogUnavailable} onClick={() => openGrant()}><Plus data-slot="icon" />Register grant</Button></span>} />{definitions.map((definition) => <div className="provider-row grant-definition-row" key={definition.id}><span className="settings-icon"><KeyRound /></span><span><strong>{definition.display_name}</strong><small><code>{definition.key}</code> · {definition.description || "No description"}</small></span><span className="tool-badges"><Badge color={definition.risk === "critical" || definition.risk === "high" ? "red" : definition.risk === "medium" ? "amber" : "zinc"}>{definition.risk}</Badge><Badge color={definition.state === "active" ? "green" : "zinc"}>{definition.state}</Badge></span><Button outline onClick={() => openGrant(definition)}>Edit</Button></div>)}{definitions.length === 0 && <div className="empty-row">Register the first grant returned by your authorization API.</div>}</div></details>
     <Dialog open={grantOpen} onClose={setGrantOpen} title={editingGrant ? "Edit grant definition" : "Register grant"} description="Grant keys are stable contract identifiers. Editing never grants a user access." actions={<><Button outline onClick={() => setGrantOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !grantKey.trim() || !grantName.trim()} onClick={saveGrant}>{busy ? "Saving…" : "Save grant"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Grant key</span><input disabled={Boolean(editingGrant)} value={grantKey} onChange={(event) => setGrantKey(event.target.value)} placeholder="customers.read" /></label><label className="auth-field"><span>Display name</span><input value={grantName} onChange={(event) => setGrantName(event.target.value)} placeholder="Read customers" /></label><label className="auth-field"><span>Description</span><textarea value={grantDescription} onChange={(event) => setGrantDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Risk</span><select value={grantRisk} onChange={(event) => setGrantRisk(event.target.value as APIGrantDefinition["risk"])}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label><label className="auth-field"><span>State</span><select value={grantState} onChange={(event) => setGrantState(event.target.value as APIGrantDefinition["state"])}><option value="active">Active</option><option value="deprecated">Deprecated</option></select></label></div></div></Dialog>
-    <Dialog open={pointOpen} onClose={setPointOpen} title={editingPoint ? "Edit authorization point" : "Add authorization point"} description="Configure a declarative action policy. There is deliberately no hook URL or credential field." actions={<><Button outline onClick={() => setPointOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !pointKey.trim() || !pointName.trim() || pointGrants.some((grant) => !registeredKeys.has(grant))} onClick={savePoint}>{busy ? "Saving…" : "Save point"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Point key</span><input disabled={Boolean(editingPoint)} value={pointKey} onChange={(event) => setPointKey(event.target.value)} placeholder="customers.read" /></label><label className="auth-field"><span>Name</span><input value={pointName} onChange={(event) => setPointName(event.target.value)} placeholder="Read customer" /></label></div><label className="auth-field"><span>Description</span><textarea value={pointDescription} onChange={(event) => setPointDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Action type</span><select value={pointAction} onChange={(event) => { const value = event.target.value as APIAuthorizationPoint["action_type"]; setPointAction(value); if (value === "destructive") setPointConfirmation(true); }}><option value="read">Read</option><option value="write">Write</option><option value="destructive">Destructive</option></select></label><label className="auth-field"><span>Decision TTL (seconds)</span><input type="number" min={0} max={3600} value={pointTTL} onChange={(event) => setPointTTL(event.target.value)} /></label></div><fieldset className="catalog-settings-section"><legend>Required registered grants</legend>{definitions.map((definition) => { const selected = pointGrants.includes(definition.key); return <label className="compact-check" key={definition.id}><input type="checkbox" disabled={definition.state !== "active" && !selected} checked={selected} onChange={() => setPointGrants((current) => current.includes(definition.key) ? current.filter((key) => key !== definition.key) : [...current, definition.key])} /><span>{definition.display_name}<small>{definition.key} · {definition.risk}{definition.state === "deprecated" ? " · deprecated (remove before saving)" : ""}</small></span></label>; })}</fieldset><label className="compact-check"><input type="checkbox" disabled={pointAction === "destructive"} checked={pointConfirmation || pointAction === "destructive"} onChange={(event) => setPointConfirmation(event.target.checked)} /><span>Require explicit confirmation for this action</span></label><label className="auth-field"><span>State</span><select value={pointState} onChange={(event) => setPointState(event.target.value as APIAuthorizationPoint["state"])}><option value="draft">Draft</option><option value="active">Active</option><option value="deprecated">Deprecated</option></select></label></div></Dialog>
-  </div>;
+    <Dialog open={pointOpen} onClose={setPointOpen} title={editingPoint ? "Edit action policy" : "Add action policy"} description="Configure a declarative API action policy. There is deliberately no hook URL or credential field." actions={<><Button outline onClick={() => setPointOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !pointKey.trim() || !pointName.trim() || pointGrants.some((grant) => !registeredKeys.has(grant))} onClick={savePoint}>{busy ? "Saving…" : "Save policy"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Policy key</span><input disabled={Boolean(editingPoint)} value={pointKey} onChange={(event) => setPointKey(event.target.value)} placeholder="customers.read" /></label><label className="auth-field"><span>Name</span><input value={pointName} onChange={(event) => setPointName(event.target.value)} placeholder="Read customer" /></label></div><label className="auth-field"><span>Description</span><textarea value={pointDescription} onChange={(event) => setPointDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>Action type</span><select value={pointAction} onChange={(event) => { const value = event.target.value as APIAuthorizationPoint["action_type"]; setPointAction(value); if (value === "destructive") setPointConfirmation(true); }}><option value="read">Read</option><option value="write">Write</option><option value="destructive">Destructive</option></select></label><label className="auth-field"><span>Decision TTL (seconds)</span><input type="number" min={0} max={3600} value={pointTTL} onChange={(event) => setPointTTL(event.target.value)} /></label></div><fieldset className="catalog-settings-section"><legend>Required registered grants</legend>{definitions.map((definition) => { const selected = pointGrants.includes(definition.key); return <label className="compact-check" key={definition.id}><input type="checkbox" disabled={definition.state !== "active" && !selected} checked={selected} onChange={() => setPointGrants((current) => current.includes(definition.key) ? current.filter((key) => key !== definition.key) : [...current, definition.key])} /><span>{definition.display_name}<small>{definition.key} · {definition.risk}{definition.state === "deprecated" ? " · deprecated (remove before saving)" : ""}</small></span></label>; })}</fieldset><label className="compact-check"><input type="checkbox" disabled={pointAction === "destructive"} checked={pointConfirmation || pointAction === "destructive"} onChange={(event) => setPointConfirmation(event.target.checked)} /><span>Require explicit confirmation for this action</span></label><label className="auth-field"><span>State</span><select value={pointState} onChange={(event) => setPointState(event.target.value as APIAuthorizationPoint["state"])}><option value="draft">Draft</option><option value="active">Active</option><option value="deprecated">Deprecated</option></select></label></div></Dialog>
+  </>;
 }
 
 type IntegrationToolBindingSelection = { revision: number; authorizationPointID: string; authorizationPointRevision: number };
@@ -3288,7 +3895,7 @@ function integrationToolBindingSelectionSignature(selection: Record<string, Inte
   return JSON.stringify(Object.entries(selection).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }: { integration: APIIntegration; tools: APITool[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+function IntegrationToolsWorkspace({ integration, tools, providerManagementConnections, onMessage, onNavigate }: { integration: APIIntegration; tools: APITool[]; providerManagementConnections: APIAccessConnection[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const [bindings, setBindings] = useState<APIIntegrationToolBinding[]>([]);
   const [authorizationPoints, setAuthorizationPoints] = useState<APIAuthorizationPoint[]>([]);
   const [bindingSelection, setBindingSelection] = useState<Record<string, IntegrationToolBindingSelection>>({});
@@ -3302,7 +3909,7 @@ function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }
   const [attachPointID, setAttachPointID] = useState("");
 
   const activePoints = authorizationPoints.filter((point) => point.state === "active");
-  const availableTools = tools.filter((tool) => tool.state === "published" && !tool.upstream_drifted && !bindingSelection[tool.id]);
+  const availableTools = tools.filter((tool) => tool.state === "published" && !tool.upstream_drifted && !bindingSelection[tool.id] && toolCanAttachToIntegration(tool, integration.id));
   const dirty = savedSignature !== null && integrationToolBindingSelectionSignature(bindingSelection) !== savedSignature;
 
   useEffect(() => {
@@ -3334,8 +3941,8 @@ function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }
     setLoadAttempt((value) => value + 1);
   }
 
-  function openAttachDialog() {
-    const defaultTool = availableTools[0];
+  function openAttachDialog(toolID?: string) {
+    const defaultTool = availableTools.find((tool) => tool.id === toolID) ?? availableTools[0];
     const defaultPoint = activePoints[0];
     setAttachToolID(defaultTool?.id ?? "");
     setAttachPointID(defaultPoint?.id ?? "");
@@ -3343,7 +3950,7 @@ function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }
   }
 
   function attachTool() {
-    const tool = tools.find((candidate) => candidate.id === attachToolID && candidate.state === "published" && !candidate.upstream_drifted);
+    const tool = tools.find((candidate) => candidate.id === attachToolID && candidate.state === "published" && !candidate.upstream_drifted && toolCanAttachToIntegration(candidate, integration.id));
     const point = activePoints.find((candidate) => candidate.id === attachPointID);
     if (!tool || !point) return;
     setBindingSelection((current) => ({ ...current, [tool.id]: { revision: tool.revision, authorizationPointID: point.id, authorizationPointRevision: point.revision } }));
@@ -3372,10 +3979,10 @@ function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }
   function resolveBinding(toolID: string, selection: IntegrationToolBindingSelection) {
     const tool = tools.find((candidate) => candidate.id === toolID) ?? bindings.find((binding) => binding.tool_id === toolID)?.tool;
     const point = authorizationPoints.find((candidate) => candidate.id === selection.authorizationPointID);
-    const toolCurrent = Boolean(tool && tool.state === "published" && !tool.upstream_drifted && tool.revision === selection.revision);
+    const toolCurrent = Boolean(tool && tool.state === "published" && !tool.upstream_drifted && tool.revision === selection.revision && toolCanAttachToIntegration(tool, integration.id));
     const pointCurrent = Boolean(point && point.state === "active" && point.revision === selection.authorizationPointRevision);
     const issues = [
-      !tool ? "tool missing" : tool.state !== "published" ? `tool ${tool.state}` : tool.upstream_drifted ? "schema drift" : tool.revision !== selection.revision ? `tool is now r${tool.revision}` : "",
+      !tool ? "tool missing" : !toolCanAttachToIntegration(tool, integration.id) ? "owned by another API" : tool.state !== "published" ? `tool ${tool.state}` : tool.upstream_drifted ? "schema drift" : tool.revision !== selection.revision ? `tool is now r${tool.revision}` : "",
       !point ? "authorization point missing" : point.state !== "active" ? `authorization ${point.state}` : point.revision !== selection.authorizationPointRevision ? `authorization is now r${point.revision}` : "",
     ].filter(Boolean);
     return { tool, point, current: toolCurrent && pointCurrent, issues };
@@ -3397,57 +4004,75 @@ function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }
 
   const selectedBindings = Object.entries(bindingSelection);
   const staleBindingCount = selectedBindings.filter(([toolID, selection]) => !resolveBinding(toolID, selection).current).length;
+  const boundToolIDs = new Set(selectedBindings.map(([toolID]) => toolID));
+  const toolGroups = partitionIntegrationTools(tools, boundToolIDs, integration.id);
+  const apiOwnedToolIDs = new Set(toolGroups.apiOwned.map((tool) => tool.id));
+  const commonToolIDs = new Set(toolGroups.attachedCommon.map((tool) => tool.id));
+  const apiOwnedBindings = selectedBindings.filter(([toolID]) => apiOwnedToolIDs.has(toolID));
+  const commonBindings = selectedBindings.filter(([toolID]) => commonToolIDs.has(toolID));
+  const invalidBindings = selectedBindings.filter(([toolID]) => !apiOwnedToolIDs.has(toolID) && !commonToolIDs.has(toolID));
+  const unboundAPITools = toolGroups.apiOwned.filter((tool) => !boundToolIDs.has(tool.id));
+  const availableAPITools = availableTools.filter((tool) => toolIsOwnedByIntegration(tool, integration.id));
+  const availableCommonTools = availableTools.filter(toolIsCommon);
+  const reviewedDocumentation = integration.resources?.find((resource) => resource.kind === "documentation" && Boolean(resource.resolved_revision));
+  const apiAdminConnection = providerManagementConnections.find((connection) => {
+    if (connection.state !== "active") return false;
+    const operationKeys = Object.keys(connection.definition?.operations ?? {}).map((key) => key.toLowerCase());
+    return operationKeys.some((key) => /(credential|api[_-]?key)/.test(key) && /(create|issue|rotate|revoke)/.test(key));
+  });
+  const configuredAdminConnection = providerManagementConnections.find((connection) => connection.state === "active");
+  const configuredEnvironmentVariable = typeof apiAdminConnection?.config.environment_variable === "string" ? apiAdminConnection.config.environment_variable : "";
+  const familyEnvironmentVariable = `${integration.family_key.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").replace(/_API$/, "") || "SERVICE"}_API_KEY`;
+  const adminEnvironmentVariable = configuredEnvironmentVariable === "SERVICE_API_KEY" || apiAdminConnection?.config.credential_scope === "shared" || apiAdminConnection?.config.shared === true ? "SERVICE_API_KEY" : familyEnvironmentVariable;
+
+  const renderBindingRows = (entries: Array<[string, IntegrationToolBindingSelection]>) => entries.map(([toolID, selection]) => {
+    const resolution = resolveBinding(toolID, selection);
+    const tool = resolution.tool;
+    const pointCurrent = resolution.point?.state === "active" && resolution.point.revision === selection.authorizationPointRevision;
+    return <div className={`integration-tool-binding-row ${resolution.current ? "" : "stale"}`} key={toolID}>
+      <span className="settings-icon">{tool?.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span>
+      <span className="integration-tool-binding-main">{tool ? <EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink> : <strong>{toolID}</strong>}<small>pinned tool revision {selection.revision}{tool ? ` · ${tool.backend_kind === "mcp" ? "MCP" : tool.http_method}` : ""}</small></span>
+      <label className="tool-binding-action"><span className="sr-only">Authorization point for {tool ? `${tool.namespace}.${tool.name}` : toolID}</span><select disabled={bindingsLoading || bindingBusy} aria-label={`Authorization point for ${tool ? `${tool.namespace}.${tool.name}` : toolID}`} value={pointCurrent ? selection.authorizationPointID : ""} onChange={(event) => selectAuthorizationPoint(toolID, event.target.value)}>{!pointCurrent && <option value="" disabled>Choose a current authorization point</option>}{activePoints.map((point) => <option key={point.id} value={point.id}>{point.name} · r{point.revision}</option>)}</select><small>pinned authorization revision {selection.authorizationPointRevision}</small></label>
+      <span className="tool-badges"><Badge color={resolution.current ? "green" : "red"}>{resolution.current ? "Current" : "Stale / unresolved"}</Badge>{tool?.upstream_drifted && <Badge color="red">schema drift</Badge>}<small className="binding-issue">{resolution.issues.join(" · ")}</small></span>
+      <span className="binding-row-actions">{tool && tool.state === "published" && !tool.upstream_drifted && tool.revision !== selection.revision && <Button outline disabled={bindingsLoading || bindingBusy} onClick={() => selectCurrentToolRevision(toolID, tool.revision)}>Use r{tool.revision}</Button>}<Button outline disabled={bindingsLoading || bindingBusy} aria-label={`Remove ${tool ? `${tool.namespace}.${tool.name}` : toolID} from this API draft`} onClick={() => removeBinding(toolID)}>Remove</Button></span>
+    </div>;
+  });
 
   return <div className="integration-tab-content">
     {bindingsUnavailable && <div className="capability-unavailable"><TriangleAlert /><span><strong>Exact tool binding is unavailable.</strong><small>The current API bindings and authorization points could not be loaded. No changes can be saved.</small></span><Button outline onClick={retryBindings}>Retry</Button></div>}
-    {activePoints.length === 0 && !bindingsLoading && !bindingsUnavailable && <div className="capability-unavailable"><ShieldCheck /><span><strong>Create an active authorization point first.</strong><small>Every exposed tool must pin an exact authorization policy revision.</small></span><ConsoleLink path={integrationPath(integration.id, "authorization")} onNavigate={onNavigate} className="entity-back-link">Open Authorization</ConsoleLink></div>}
+    {activePoints.length === 0 && !bindingsLoading && !bindingsUnavailable && <div className="capability-unavailable"><ShieldCheck /><span><strong>Create an active action policy first.</strong><small>Every exposed tool must pin an exact authorization policy revision.</small></span><ConsoleLink path={integrationPath(integration.id, "access")} onNavigate={onNavigate} className="entity-back-link">Open Access</ConsoleLink></div>}
     <section className="panel integration-tool-bindings">
-      <PanelHeader title="Exposed tools" description="This API draft selects exact published tool and authorization-point revisions. Tool contracts are managed in the deployment catalog." action={<span className="heading-actions">{dirty && <Badge color="amber">Unsaved changes</Badge>}<ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Open Tools catalog</ConsoleLink><Button disabled={bindingsLoading || bindingBusy || bindingsUnavailable || activePoints.length === 0 || availableTools.length === 0} onClick={openAttachDialog}><Plus data-slot="icon" />Attach published tool</Button></span>} />
-      {selectedBindings.map(([toolID, selection]) => {
-        const resolution = resolveBinding(toolID, selection);
-        const tool = resolution.tool;
-        const pointCurrent = resolution.point?.state === "active" && resolution.point.revision === selection.authorizationPointRevision;
-        return <div className={`integration-tool-binding-row ${resolution.current ? "" : "stale"}`} key={toolID}>
-          <span className="settings-icon">{tool?.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span>
-          <span className="integration-tool-binding-main">{tool ? <EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink> : <strong>{toolID}</strong>}<small>pinned tool revision {selection.revision}{tool ? ` · ${tool.backend_kind === "mcp" ? "MCP" : tool.http_method}` : ""}</small></span>
-          <label className="tool-binding-action"><span className="sr-only">Authorization point for {tool ? `${tool.namespace}.${tool.name}` : toolID}</span><select disabled={bindingsLoading || bindingBusy} aria-label={`Authorization point for ${tool ? `${tool.namespace}.${tool.name}` : toolID}`} value={pointCurrent ? selection.authorizationPointID : ""} onChange={(event) => selectAuthorizationPoint(toolID, event.target.value)}>{!pointCurrent && <option value="" disabled>Choose a current authorization point</option>}{activePoints.map((point) => <option key={point.id} value={point.id}>{point.name} · r{point.revision}</option>)}</select><small>pinned authorization revision {selection.authorizationPointRevision}</small></label>
-          <span className="tool-badges"><Badge color={resolution.current ? "green" : "red"}>{resolution.current ? "Current" : "Stale / unresolved"}</Badge>{tool?.upstream_drifted && <Badge color="red">schema drift</Badge>}<small className="binding-issue">{resolution.issues.join(" · ")}</small></span>
-          <span className="binding-row-actions">{tool && tool.state === "published" && !tool.upstream_drifted && tool.revision !== selection.revision && <Button outline disabled={bindingsLoading || bindingBusy} onClick={() => selectCurrentToolRevision(toolID, tool.revision)}>Use r{tool.revision}</Button>}<Button outline disabled={bindingsLoading || bindingBusy} aria-label={`Remove ${tool ? `${tool.namespace}.${tool.name}` : toolID} from this API draft`} onClick={() => removeBinding(toolID)}>Remove</Button></span>
-        </div>;
-      })}
-      {bindingsLoading ? <div className="empty-row">Loading exact tool and authorization bindings…</div> : selectedBindings.length === 0 && <div className="empty-row"><span>No tools are exposed by this API draft. Attach a published deployment tool when this API needs an executable capability.</span></div>}
+      <PanelHeader title="Built-in tools" description="DokoSoko exposes these API-scoped capabilities automatically when their reviewed source configuration is ready. They are not custom Tool records and do not need manual attachment." />
+      <div className="provider-row"><span className="settings-icon"><BookOpen /></span><span><strong>Knowledge</strong><small><code>{integration.family_key}.knowledge.search</code> · {reviewedDocumentation ? `grounded in ${reviewedDocumentation.name}` : "requires attached reviewed documentation"}</small></span><Badge color={reviewedDocumentation ? "green" : "amber"}>{reviewedDocumentation ? "Automatic" : "Unavailable"}</Badge>{!reviewedDocumentation && <ConsoleLink path={integrationPath(integration.id, "documentation")} onNavigate={onNavigate} className="entity-back-link">Add documentation</ConsoleLink>}</div>
+      <div className="provider-row"><span className="settings-icon"><KeyRound /></span><span><strong>API Admin</strong><small>{apiAdminConnection ? `${apiAdminConnection.name} · returns ${adminEnvironmentVariable}` : configuredAdminConnection ? `${configuredAdminConnection.name} does not declare credential issue, rotate, or revoke operations` : "requires an active Advanced provider-management connection"}</small></span><Badge color={apiAdminConnection ? "green" : "amber"}>{apiAdminConnection ? "Automatic" : "Unavailable"}</Badge>{!apiAdminConnection && <ConsoleLink path={integrationPath(integration.id, "access")} onNavigate={onNavigate} className="entity-back-link">Open Access Advanced</ConsoleLink>}</div>
+    </section>
+    <section className="panel integration-tool-summary">
+      <PanelHeader title="Tools for this API" description="API-owned tools stay with this API. Common tools are reusable deployment capabilities attached here at an exact revision." action={<span className="heading-actions">{dirty && <Badge color="amber">Unsaved changes</Badge>}<ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Open common catalog</ConsoleLink><Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}><Plus data-slot="icon" />Create API tool</Button><Button disabled={bindingsLoading || bindingBusy || bindingsUnavailable || activePoints.length === 0 || availableTools.length === 0} onClick={() => openAttachDialog()}><Plus data-slot="icon" />Attach tool</Button></span>} />
+      <dl className="compact-metrics integration-tool-scope-summary"><div className="compact-metric"><dt>API owned</dt><dd><strong>{toolGroups.apiOwned.length}</strong><small>{apiOwnedBindings.length} attached</small></dd></div><div className="compact-metric"><dt>Common</dt><dd><strong>{commonBindings.length}</strong><small>attached here</small></dd></div><div className="compact-metric"><dt>Authorization</dt><dd><strong>{activePoints.length}</strong><small>active polic{activePoints.length === 1 ? "y" : "ies"}</small></dd></div></dl>
       <div className="panel-footer-actions"><small>{bindingsLoading ? "Loading current API configuration…" : `${selectedBindings.length} selected · ${bindings.length} currently saved${staleBindingCount > 0 ? ` · ${staleBindingCount} stale or unresolved` : ""}`}</small><Button id="save-api-bindings" disabled={bindingsLoading || bindingsUnavailable || bindingBusy || staleBindingCount > 0 || !dirty} onClick={saveBindings}>{bindingBusy ? "Saving…" : "Save API bindings"}</Button></div>
     </section>
+    <section className="panel integration-tool-bindings">
+      <PanelHeader title="API tools" description={`Definitions owned by ${integration.display_name}. They cannot be attached to another API.`} action={<span className="heading-actions"><Badge color="violet">{toolGroups.apiOwned.length} owned</Badge><Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}><Plus data-slot="icon" />Create API tool</Button></span>} />
+      {renderBindingRows(apiOwnedBindings)}
+      {unboundAPITools.map((tool) => <div className="provider-row api-owned-tool-row" key={tool.id}><span className="settings-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>Owned by this API · revision {tool.revision}</small></span><Badge color={tool.state === "published" && !tool.upstream_drifted ? "green" : tool.upstream_drifted ? "red" : "amber"}>{tool.upstream_drifted ? "Drifted" : tool.state}</Badge><Button outline disabled={bindingsLoading || bindingBusy || activePoints.length === 0 || !availableAPITools.some((candidate) => candidate.id === tool.id)} onClick={() => openAttachDialog(tool.id)}>Attach</Button></div>)}
+      {!bindingsLoading && toolGroups.apiOwned.length === 0 && <div className="empty-row">No tool definition is owned by this API. Common tools can still be attached below.</div>}
+      {bindingsLoading && <div className="empty-row">Loading API-owned tools…</div>}
+    </section>
+    <section className="panel integration-tool-bindings">
+      <PanelHeader title="Attached common tools" description="Reusable deployment tools explicitly attached to this API draft." action={<Button outline disabled={bindingsLoading || bindingBusy || bindingsUnavailable || activePoints.length === 0 || availableCommonTools.length === 0} onClick={() => openAttachDialog()}><Plus data-slot="icon" />Attach common tool</Button>} />
+      {renderBindingRows(commonBindings)}
+      {!bindingsLoading && commonBindings.length === 0 && <div className="empty-row">No common tool is attached to this API.</div>}
+      {bindingsLoading && <div className="empty-row">Loading common tool bindings…</div>}
+    </section>
+    {invalidBindings.length > 0 && <details className="panel advanced-details"><summary>Bindings that need review ({invalidBindings.length})</summary><div className="advanced-details-body integration-tool-bindings">{renderBindingRows(invalidBindings)}</div></details>}
     <Dialog open={attachOpen} onClose={setAttachOpen} title="Attach published tool" description="Choose one deployment tool and pin it to one active authorization-point revision for this API draft." actions={<><Button outline disabled={bindingBusy} onClick={() => setAttachOpen(false)}>Cancel</Button><Button color="indigo" disabled={bindingBusy || !attachToolID || !attachPointID} onClick={attachTool}>Attach tool</Button></>}>
       <div className="auth-form compact-form">
-        <label className="auth-field"><span>Published tool</span><select value={attachToolID} onChange={(event) => setAttachToolID(event.target.value)}><option value="" disabled>No eligible tool selected</option>{availableTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.namespace}.{tool.name} · r{tool.revision}</option>)}</select><small>Draft, retired and schema-drifted tools are not eligible.</small></label>
+        <label className="auth-field"><span>Published tool</span><select value={attachToolID} onChange={(event) => setAttachToolID(event.target.value)}><option value="" disabled>No eligible tool selected</option>{availableAPITools.length > 0 && <optgroup label="Owned by this API">{availableAPITools.map((tool) => <option key={tool.id} value={tool.id}>{tool.namespace}.{tool.name} · r{tool.revision}</option>)}</optgroup>}{availableCommonTools.length > 0 && <optgroup label="Common tools">{availableCommonTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.namespace}.{tool.name} · r{tool.revision}</option>)}</optgroup>}</select><small>Only common tools and tools owned by this API are eligible. Draft, retired, drifted, or foreign API tools fail closed.</small></label>
         <label className="auth-field"><span>Authorization point</span><select value={attachPointID} onChange={(event) => setAttachPointID(event.target.value)}><option value="" disabled>No active point selected</option>{activePoints.map((point) => <option key={point.id} value={point.id}>{point.name} · {point.action_type} · r{point.revision}</option>)}</select><small>The API pins this exact revision; later authorization changes make the binding stale until reviewed.</small></label>
       </div>
     </Dialog>
   </div>;
 }
-function IntegrationRecipesWorkspace({ analyses, recipes, busy, onGenerate, onNavigate }: { analyses: APIIntegrationAnalysis[]; recipes: APIRecipe[]; busy: boolean; onGenerate: () => void; onNavigate: (path: string) => void }) {
-  const latestAnalysis = [...analyses].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
-  const blockers = latestAnalysis?.unknowns.filter((unknown) => unknown.blocking && !unknown.answer?.trim()) ?? [];
-  return <div className="integration-tab-content">
-    <div className="notice"><Sparkles /><span><strong>Generated only from published evidence.</strong> Recipes cite exact documentation, contract, package and tool revisions; unsupported claims stay visible for review.</span></div>
-    <section className="panel"><PanelHeader title="Evidence analysis" description="Analyse the current deployment evidence, resolve blocking unknowns, then generate editable recipe drafts." action={<Button disabled={busy || blockers.length > 0} onClick={onGenerate}><Sparkles data-slot="icon" />{busy ? "Generating…" : latestAnalysis ? "Generate recipes" : "Analyse & generate"}</Button>} />{latestAnalysis ? <div className="analysis-summary"><span className="settings-icon"><Sparkles /></span><span><strong>{latestAnalysis.plan.summary || "Integration evidence analysed"}</strong><small>{latestAnalysis.evidence.length} evidence item{latestAnalysis.evidence.length === 1 ? "" : "s"} · {latestAnalysis.plan.endpoints.length} endpoint{latestAnalysis.plan.endpoints.length === 1 ? "" : "s"} · revision {latestAnalysis.revision}</small></span><Badge color={latestAnalysis.state === "review" ? "green" : latestAnalysis.state === "failed" ? "red" : "amber"}>{latestAnalysis.state}</Badge></div> : <div className="empty-row">No evidence analysis exists yet.</div>}{blockers.map((unknown) => <div className="publish-validation error" key={unknown.id}><span><XCircle /></span><span><strong>Blocking question</strong><small>{unknown.question} · {unknown.why}</small></span></div>)}</section>
-    <section className="panel"><PanelHeader title="Recipe review queue" description="Recipes are deployment-level reusable guidance and remain human-reviewed before MCP publication." action={<ConsoleLink path={sectionPath("recipes")} onNavigate={onNavigate} className="entity-back-link">Open full editor</ConsoleLink>} />{recipes.map((recipe) => <div className="provider-row" key={recipe.id}><span className="settings-icon"><BookOpen /></span><span><strong>{recipe.title}</strong><small>{recipe.outcome} · revision {recipe.revision}</small></span><span className="tool-badges">{recipe.needs_attention && <Badge color="red">attention</Badge>}<Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : recipe.state === "outdated" ? "red" : "amber"}>{recipe.state}</Badge></span></div>)}{recipes.length === 0 && <div className="empty-row">No recipe has been generated from the current evidence.</div>}<ConsoleLink path={sectionPath("recipes")} onNavigate={onNavigate} className="panel-footer-link">Review, edit, approve and publish recipes <ChevronRight /></ConsoleLink></section>
-  </div>;
-}
-
-function IntegrationDeliveryWorkspace({ integration, identity, distribution, supportRoute, widgets, onManageSupport, onNavigate }: { integration: APIIntegration; identity: APIIdentity | null; distribution: Distribution | null; supportRoute?: APISupportRoute; widgets: APIWidget[]; onManageSupport: () => void; onNavigate: (path: string) => void }) {
-  return <div className="integration-tab-content">
-    <div className="integration-delivery-grid">
-      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><LockKeyhole /></span><div><h2>Private MCP</h2><p>Authenticated discovery and execution with live vendor grants.</p></div><Badge color={identity?.state === "active" && distribution?.private_mcp_endpoint ? "green" : "amber"}>{identity?.state === "active" && distribution?.private_mcp_endpoint ? "Ready" : "Setup"}</Badge>{distribution?.private_mcp_endpoint && <code>{distribution.private_mcp_endpoint}</code>}{distribution?.agent_setup.private.available && <a className="panel-footer-link" href={distribution.agent_setup.private.url} target="_blank" rel="noreferrer">Open agent setup <ExternalLink /></a>}</section>
-      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><Globe2 /></span><div><h2>Public MCP</h2><p>Optional anonymous discovery for explicitly public evidence only.</p></div><Badge color={distribution?.product.public_mcp_enabled ? "green" : "zinc"}>{distribution?.product.public_mcp_enabled ? "Enabled" : "Off"}</Badge>{distribution?.public_mcp_endpoint && <code>{distribution.public_mcp_endpoint}</code>}<ConsoleLink path={sectionPath("distribution")} onNavigate={onNavigate} className="panel-footer-link">Configure agent access <ChevronRight /></ConsoleLink></section>
-      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><MessageSquareText /></span><div><h2>Widget</h2><p>Origin-bound customer assistant with this API explicitly allowlisted.</p></div><Badge color={widgets.some((widget) => widget.state === "active") ? "green" : widgets.length ? "amber" : "zinc"}>{widgets.some((widget) => widget.state === "active") ? "Active" : widgets.length ? "Draft" : "Not configured"}</Badge>{widgets.map((widget) => <ConsoleLink key={widget.id} path={entityPath("widget", widget.id)} onNavigate={onNavigate} className="delivery-linked-item"><strong>{widget.name}</strong><small>{widget.allowed_origins.join(", ")}</small><ChevronRight /></ConsoleLink>)}<ConsoleLink path={sectionPath("widgets")} onNavigate={onNavigate} className="panel-footer-link">Manage widgets <ChevronRight /></ConsoleLink></section>
-      <section className="panel delivery-channel-card"><span className="delivery-channel-icon"><Bug /></span><div><h2>Support delivery</h2><p>Consent, redaction, encrypted retention and bounded backend delivery.</p></div><Badge color={supportRoute?.state === "active" ? "green" : "amber"}>{supportRoute?.state === "active" ? "Ready" : "Setup"}</Badge>{supportRoute && <span className="delivery-linked-item"><strong>{supportRoute.name}</strong><small>{supportRoute.retention_days}-day retention · {supportRoute.bug_reports_enabled ? "bugs" : ""}{supportRoute.bug_reports_enabled && supportRoute.feedback_enabled ? " & " : ""}{supportRoute.feedback_enabled ? "feedback" : ""}</small></span>}<button type="button" className="panel-footer-link" onClick={onManageSupport}>{supportRoute ? "Change support policy" : "Configure support policy"} <ChevronRight /></button></section>
-    </div>
-    <section className="panel"><PanelHeader title="Channel scope" description="Every channel consumes the same immutable API snapshot; channels never redefine authorization." /><dl className="entity-detail-grid"><div><dt>API</dt><dd>{integration.display_name} {integration.version_key}</dd></div><div><dt>Visibility</dt><dd>{integration.visibility}</dd></div><div><dt>Private identity</dt><dd>{identity?.state ?? "not configured"}</dd></div><div><dt>Widgets</dt><dd>{widgets.length}</dd></div></dl></section>
-  </div>;
-}
-
 function IntegrationTestWorkspace({ integration, distribution, onNavigate }: { integration: APIIntegration; distribution: Distribution | null; onNavigate: (path: string) => void }) {
   const [preflight, setPreflight] = useState<APIIntegrationPreflight | null>(null);
   const [running, setRunning] = useState(false);
@@ -3464,7 +4089,7 @@ function IntegrationTestWorkspace({ integration, distribution, onNavigate }: { i
     } finally { setRunning(false); }
   }
 
-  const pathForTab = (tab: string) => tab === "resources" ? integrationPath(integration.id, "resources") : tab === "authorization" || tab === "access" ? integrationPath(integration.id, "authorization") : tab === "tools" ? integrationPath(integration.id, "tools") : tab === "recipes" ? integrationPath(integration.id, "recipes") : integrationPath(integration.id, "delivery");
+  const pathForTab = (tab: string) => integrationValidationPath(integration.id, tab);
   const requiredChecks = preflight?.checks.filter((check) => check.required) ?? [];
   const passed = requiredChecks.filter((check) => check.status === "pass").length;
   return <div className="integration-tab-content">
@@ -3476,31 +4101,29 @@ function IntegrationTestWorkspace({ integration, distribution, onNavigate }: { i
 
 type IntegrationsViewProps = {
   integrations: APIIntegration[];
+  analyses: APIIntegrationAnalysis[];
+  tools: APITool[];
   resourceSets: APIResourceSet[];
   sources: Source[];
   supportRoutes: APISupportRoute[];
   connections: APIAccessConnection[];
-  tools: APITool[];
   identity: APIIdentity | null;
-  analyses: APIIntegrationAnalysis[];
-  recipes: APIRecipe[];
   distribution: Distribution | null;
-  widgets: APIWidget[];
   selectedIntegrationID?: string;
   activeTab?: IntegrationTab;
   activeResourceTab?: IntegrationResourceTab;
-  recipeBusy: boolean;
   onBuild: () => void;
   onAddSource: () => void;
   onCrawlSource: (sourceID: string) => void;
-  onPublishSource: (source: Source) => void;
-  onGenerateRecipes: (integrationID?: string) => void;
+  onPublishSource: (source: Source, attachIntegrationID?: string) => void;
+  onAttachPublishedSource: (integrationID: string, source: Source, publication: APISourcePublication) => Promise<DocumentationAttachmentResult>;
+  onGenerateAgentGuide: (integrationID: string) => Promise<APIIntegrationAnalysis>;
   onChanged: () => Promise<void>;
   onMessage: (message: string) => void;
   onNavigate: (path: string) => void;
 };
 
-function IntegrationsView({ integrations, resourceSets, sources, supportRoutes, connections, tools, identity, analyses, recipes, distribution, widgets, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", recipeBusy, onBuild, onAddSource, onCrawlSource, onPublishSource, onGenerateRecipes, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
+function IntegrationsView({ integrations, analyses, tools, resourceSets, sources, supportRoutes, connections, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onBuild, onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateAgentGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
   const [query, setQuery] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
   const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
@@ -3680,6 +4303,20 @@ function IntegrationsView({ integrations, resourceSets, sources, supportRoutes, 
     try { await api.attachResourceSet(attachIntegration.id, resource.id, pinAttachedSet ? resource.latest_revision?.id ?? "" : ""); await onChanged(); await refreshSelectedIntegration(attachIntegration.id); setAttachIntegration(null); onMessage(pinAttachedSet ? "Resource revision pinned to API." : "Resource set attached and following latest."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Resource set could not be attached."); } finally { setBusy(false); }
   }
 
+  async function attachPublishedSource(integration: APIIntegration, source: Source) {
+	if (!source.latestPublication) return;
+	setBusy(true);
+	try {
+	  const result = await onAttachPublishedSource(integration.id, source, source.latestPublication);
+	  await refreshSelectedIntegration(integration.id);
+	  onMessage(result.attached ? `${source.name} r${source.latestPublication.revision} was pinned to this API.` : `${source.name} r${source.latestPublication.revision} is already attached.`);
+	} catch (error) {
+	  onMessage(error instanceof APIError || error instanceof Error ? error.message : "Reviewed documentation could not be attached.");
+	} finally {
+	  setBusy(false);
+	}
+  }
+
   async function detachResource(integrationID: string, setID: string) {
     setBusy(true);
     try { await api.detachResourceSet(integrationID, setID); await onChanged(); await refreshSelectedIntegration(integrationID); onMessage("Resource set detached from API."); } catch (error) { onMessage(error instanceof APIError ? error.message : "Resource set could not be detached."); } finally { setBusy(false); }
@@ -3709,7 +4346,7 @@ function IntegrationsView({ integrations, resourceSets, sources, supportRoutes, 
   ].map((entry) => [String(entry.source_publication_id), entry])).values());
 
   return <>
-    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} connections={connections} supportRoutes={supportRoutes} tools={tools} analyses={analyses} recipes={recipes} distribution={distribution} widgets={widgets} recipeBusy={recipeBusy} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onGenerateRecipes={onGenerateRecipes} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
+    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} connections={connections} supportRoutes={supportRoutes} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateAgentGuide={onGenerateAgentGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onManageAccess={openAccessDialog} onManageSupport={openSupportDialog} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} connections={connections} supportRoutes={supportRoutes} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onBuild={onBuild} onNavigate={onNavigate} />}
 
     <Dialog
       open={integrationOpen}
@@ -3736,7 +4373,7 @@ function IntegrationsView({ integrations, resourceSets, sources, supportRoutes, 
     <Dialog open={resourceOpen} onClose={setResourceOpen} title={editingSet ? `Create revision for ${editingSet.name}` : "Create reusable resource set"} description="Sets are reusable by explicit attachment. Each save creates immutable content." actions={<><Button outline onClick={() => setResourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !setName.trim() || (setKind === "documentation" && selectedSourcePublicationIDs.length === 0)} onClick={saveResourceSet}>{busy ? "Saving…" : editingSet ? "Create revision" : "Create set"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Kind</span><select disabled={Boolean(editingSet)} value={setKind} onChange={(event) => setSetKind(event.target.value as APIResourceSet["kind"])}><option value="documentation">Documentation</option><option value="api">API contract</option></select></label><label className="auth-field"><span>Name</span><input value={setName} onChange={(event) => setSetName(event.target.value)} /></label></div><label className="auth-field"><span>Description</span><textarea value={resourceDescription} onChange={(event) => setResourceDescription(event.target.value)} /></label>{setKind === "documentation" ? <div className="auth-field"><span>Reviewed source publications</span><div className="catalog-list">{documentationPublicationOptions.map((entry) => { const id = String(entry.source_publication_id); const selected = selectedSourcePublicationIDs.includes(id); return <label className="catalog-tool" key={id}><input type="checkbox" checked={selected} onChange={(event) => setSelectedSourcePublicationIDs((items) => event.target.checked ? [...items, id] : items.filter((value) => value !== id))} /><span className="check-box">{selected && <Check />}</span><span><strong>{String(entry.name ?? entry.source_id)}</strong><code>{id}</code><small>Publication r{String(entry.revision)} · {String(entry.content_hash)}</small></span><Badge color="green">reviewed</Badge></label>; })}{documentationPublicationOptions.length === 0 && <div className="empty-row">Publish a reviewed documentation generation before creating this set.</div>}</div><small>Each selection pins one immutable source-publication revision and content hash. Arbitrary JSON is not accepted for documentation.</small></div> : <label className="auth-field"><span>API contract manifest (JSON array)</span><textarea className="code-input" value={setManifest} onChange={(event) => setSetManifest(event.target.value)} spellCheck={false} /></label>}</div></Dialog>
     <Dialog open={Boolean(duplicateSet)} onClose={(open) => { if (!open) setDuplicateSet(null); }} title="Duplicate resource set" description="Creates an independent copy so later edits do not affect APIs using the original." actions={<><Button outline onClick={() => setDuplicateSet(null)}>Cancel</Button><Button color="indigo" disabled={busy || !duplicateName.trim()} onClick={duplicateResource}>Duplicate</Button></>}><label className="auth-field"><span>New set name</span><input value={duplicateName} onChange={(event) => setDuplicateName(event.target.value)} /></label></Dialog>
     <Dialog open={Boolean(attachIntegration)} onClose={(open) => { if (!open) setAttachIntegration(null); }} title={`Attach resources to ${attachIntegration?.display_name ?? "API"}`} description="Follow latest for deliberate sharing, or pin the current immutable revision." actions={<><Button outline onClick={() => setAttachIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy || !attachSetID} onClick={attachResource}>Attach</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Resource set</span><select value={attachSetID} onChange={(event) => setAttachSetID(event.target.value)}><option value="">Select a set</option>{resourceSets.filter((set) => (!attachKind || set.kind === attachKind) && !(attachIntegration?.resources ?? []).some((link) => link.resource_set_id === set.id)).map((set) => <option key={set.id} value={set.id}>{set.kind === "api" ? "API contract" : "documentation"} · {set.name}</option>)}</select></label><label className="compact-check"><input type="checkbox" checked={pinAttachedSet} onChange={(event) => setPinAttachedSet(event.target.checked)} /><span>Pin the current revision instead of following latest</span></label></div></Dialog>
-    <Dialog open={Boolean(accessIntegration)} onClose={(open) => { if (!open) setAccessIntegration(null); }} title={`Access for ${accessIntegration?.display_name ?? "API"}`} description="Choose the service connections this API may use. Credentials remain encrypted and are never copied into the API." actions={<><Button outline onClick={() => setAccessIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy} onClick={saveAccessConnections}>{busy ? "Saving…" : "Save connections"}</Button></>}><div className="auth-form compact-form"><fieldset className="catalog-settings-section"><legend>Allowed connections</legend>{connections.map((connection) => <label className="compact-check" key={connection.id}><input type="checkbox" aria-label={`Allow ${connection.name}`} checked={accessSelection.includes(connection.id)} onChange={() => setAccessSelection((values) => values.includes(connection.id) ? values.filter((id) => id !== connection.id) : [...values, connection.id])} /><span><strong>{connection.name}</strong><small>{connection.definition?.name ?? "Service connection"} · {connection.state}</small></span></label>)}{connections.length === 0 && <p className="dialog-empty-copy">No service connections exist yet. Create one in Settings, then return here.</p>}</fieldset></div></Dialog>
+    <Dialog open={Boolean(accessIntegration)} onClose={(open) => { if (!open) setAccessIntegration(null); }} title={`Managed credential endpoints — Advanced`} description={`Choose optional provider-management connections for ${accessIntegration?.display_name ?? "this API"}. Runtime service endpoints and API keys are configured separately in Access.`} actions={<><Button outline onClick={() => setAccessIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy} onClick={saveAccessConnections}>{busy ? "Saving…" : "Save provider connections"}</Button></>}><div className="auth-form compact-form"><fieldset className="catalog-settings-section"><legend>Provider management connections</legend>{connections.map((connection) => <label className="compact-check" key={connection.id}><input type="checkbox" aria-label={`Allow ${connection.name}`} checked={accessSelection.includes(connection.id)} onChange={() => setAccessSelection((values) => values.includes(connection.id) ? values.filter((id) => id !== connection.id) : [...values, connection.id])} /><span><strong>{connection.name}</strong><small>{connection.definition?.name ?? "Credential-management service"} · {connection.state}</small></span></label>)}{connections.length === 0 && <p className="dialog-empty-copy">No credential-management service exists yet. Create one in Settings, then return here.</p>}</fieldset></div></Dialog>
     <Dialog open={Boolean(supportIntegration)} onClose={(open) => { if (!open) setSupportIntegration(null); }} title={`Bug reports & feedback for ${supportIntegration?.display_name ?? "API"}`} description="Choose an API-specific policy, or inherit the deployment default." actions={<><Button outline onClick={() => setSupportIntegration(null)}>Cancel</Button><Button color="indigo" disabled={busy} onClick={saveSupportRoute}>{busy ? "Saving…" : "Save policy"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Reporting policy</span><select value={supportSelection} onChange={(event) => setSupportSelection(event.target.value)}><option value="">Inherit deployment default</option>{supportRoutes.filter((route) => !route.is_default && route.state === "active").map((route) => <option key={route.id} value={route.id}>{route.name} · {route.retention_days} days</option>)}</select><small>{supportRoutes.find((route) => route.is_default) ? `Current default: ${supportRoutes.find((route) => route.is_default)?.name}` : "No default policy exists. Configure one in Settings."}</small></label></div></Dialog>
     <Dialog open={Boolean(publishCandidate)} onClose={(open) => { if (!open) setPublishCandidate(null); }} title={`Publish ${publishCandidate?.display_name ?? "API"}`} description="Review what changed before creating a new immutable version." actions={<><Button outline onClick={() => setPublishCandidate(null)}>Cancel</Button><Button color="indigo" disabled={busy || !selectedPublishStatus?.ready || !selectedPublishStatus.has_changes} onClick={publishIntegration}>{busy ? "Publishing…" : "Publish"}</Button></>}><div className="publish-review">{selectedPublishStatus?.validations.map((validation) => <div key={validation.code} className={`publish-validation ${validation.level}`}><span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{validation.level}</strong><small>{validation.message}</small></span></div>)}<div className="publish-diff-list">{selectedPublishStatus?.changes.map((change) => <div className="publish-diff" key={change.field}><strong>{change.field}</strong><span><small>Published</small><code>{change.before === undefined ? "—" : JSON.stringify(change.before)}</code></span><ChevronRight /><span><small>Draft</small><code>{change.after === undefined ? "—" : JSON.stringify(change.after)}</code></span></div>)}</div><details className="advanced-details"><summary>Technical details</summary><code>{selectedPublishStatus?.current_manifest_hash ?? "—"}</code></details></div></Dialog>
     <Dialog open={Boolean(inspectedRevision)} onClose={(open) => { if (!open) setInspectedRevision(null); }} title={`Published version r${inspectedRevision?.revision ?? ""}`} description="This immutable technical snapshot is kept for audit and deterministic agent delivery." actions={<Button outline onClick={() => setInspectedRevision(null)}>Close</Button>}><div className="revision-inspector"><dl className="entity-detail-grid"><div><dt>Version ID</dt><dd>{inspectedRevision?.id}</dd></div><div><dt>State</dt><dd>{inspectedRevision?.state}</dd></div><div><dt>Published</dt><dd>{inspectedRevision ? new Date(inspectedRevision.published_at ?? inspectedRevision.created_at).toLocaleString() : "—"}</dd></div><div><dt>Published by</dt><dd>{inspectedRevision?.published_by || "—"}</dd></div><div><dt>Manifest hash</dt><dd><code>{inspectedRevision?.manifest_hash}</code></dd></div></dl><pre className="usage-contract"><code>{JSON.stringify(inspectedRevision?.snapshot ?? {}, null, 2)}</code></pre></div></Dialog>
@@ -3750,6 +4387,7 @@ function ConnectorReleasesView({ versions, integrations, onConfigure, onNavigate
 function AccessView({ definitions, connections, instances, credentials, integrations, environments, apiResourceSets, settingsTab, onChanged, onMessage, onNavigate }: { definitions: APIAccessDefinition[]; connections: APIAccessConnection[]; instances: APIAccessInstance[]; credentials: APIAccessCredential[]; integrations: APIIntegration[]; environments: APIEnvironment[]; apiResourceSets: APIResourceSet[]; settingsTab?: Extract<SettingsTab, "connections">; onChanged: () => Promise<void>; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const activeCredentials = credentials.filter((credential) => credential.state === "active" && (!credential.expires_at || new Date(credential.expires_at) > new Date())).length;
   const [definitionOpen, setDefinitionOpen] = useState(false);
+  const [editingDefinition, setEditingDefinition] = useState<APIAccessDefinition | null>(null);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [serviceKey, setServiceKey] = useState(""); const [serviceName, setServiceName] = useState("");
@@ -3761,9 +4399,25 @@ function AccessView({ definitions, connections, instances, credentials, integrat
   const [operations, setOperations] = useState('{\n  "required_grants": [],\n  "max_ttl_seconds": 3600,\n  "credential_storage_mode": "one_time",\n  "authorize": {"method": "POST", "path": "/v1/authorize"},\n  "credentials.create": {"method": "POST", "path": "/v1/credentials"},\n  "credentials.revoke": {"method": "POST", "path": "/v1/credentials/{credential_id}/revoke"}\n}');
   const [definitionID, setDefinitionID] = useState(""); const [connectionName, setConnectionName] = useState(""); const [environmentID, setEnvironmentID] = useState(""); const [region, setRegion] = useState(""); const [baseURL, setBaseURL] = useState(""); const [managementSecret, setManagementSecret] = useState(""); const [connectionConfig, setConnectionConfig] = useState("{}"); const [selectedIntegrations, setSelectedIntegrations] = useState<string[]>([]);
 
+  function openDefinition(definition?: APIAccessDefinition) {
+    setEditingDefinition(definition ?? null);
+    setServiceKey(definition?.service_key ?? "");
+    setServiceName(definition?.name ?? "");
+    setCardinality(definition?.instance_cardinality ?? "one");
+    setSingular(definition?.instance_label_singular ?? "account");
+    setPlural(definition?.instance_label_plural ?? "accounts");
+    setCredentialScope(definition?.credential_scope ?? "connection");
+    setManagementAuth(definition?.management_auth_type ?? "bearer");
+    setAPIResourceSetID(definition?.api_resource_set_id ?? "");
+    setOperations(definition ? JSON.stringify(definition.operations, null, 2) : '{\n  "required_grants": [],\n  "max_ttl_seconds": 3600,\n  "credential_storage_mode": "one_time",\n  "authorize": {"method": "POST", "path": "/v1/authorize"},\n  "credentials.create": {"method": "POST", "path": "/v1/credentials"},\n  "credentials.revoke": {"method": "POST", "path": "/v1/credentials/{credential_id}/revoke"}\n}');
+    setDefinitionOpen(true);
+  }
+
+  function closeDefinition() { setDefinitionOpen(false); setEditingDefinition(null); }
+
   async function saveDefinition() {
     setBusy(true);
-    try { const parsed = JSON.parse(operations) as Record<string, unknown>; await api.createAccessDefinition({ service_key: serviceKey, name: serviceName, instance_cardinality: cardinality, instance_label_singular: singular, instance_label_plural: plural, credential_scope: cardinality === "one" ? "connection" : credentialScope, management_auth_type: managementAuth, api_resource_set_id: apiResourceSetID || undefined, operations: parsed }); await onChanged(); setDefinitionOpen(false); onMessage("Provider access definition created."); } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "Access definition could not be created."); } finally { setBusy(false); }
+    try { const parsed = JSON.parse(operations) as Record<string, unknown>; if (editingDefinition) { await api.updateAccessDefinition(editingDefinition.id, { name: serviceName, instance_label_singular: singular, instance_label_plural: plural, api_resource_set_id: apiResourceSetID || undefined, operations: parsed, revision: editingDefinition.revision }); } else { await api.createAccessDefinition({ service_key: serviceKey, name: serviceName, instance_cardinality: cardinality, instance_label_singular: singular, instance_label_plural: plural, credential_scope: cardinality === "one" ? "connection" : credentialScope, management_auth_type: managementAuth, api_resource_set_id: apiResourceSetID || undefined, operations: parsed }); } await onChanged(); closeDefinition(); onMessage(editingDefinition ? "Provider service type revision saved. Existing connections kept their encrypted credentials." : "Provider access definition created."); } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "Access definition could not be saved."); } finally { setBusy(false); }
   }
 
   async function saveConnection() {
@@ -3777,8 +4431,8 @@ function AccessView({ definitions, connections, instances, credentials, integrat
     <PageHeading eyebrow={settingsTab ? "Settings" : "Shared configuration"} title="Service connections" action={<Button onClick={() => { setDefinitionID(definitions[0]?.id ?? ""); setEnvironmentID(environments[0]?.id ?? ""); setConnectionOpen(true); }}><KeyRound data-slot="icon" />Connect service</Button>} />
     {settingsTab && <SettingsTabs active={settingsTab} onNavigate={onNavigate} />}
     <section className="panel"><PanelHeader title="Connections" />{connections.map((connection) => { const definition = connection.definition ?? definitions.find((item) => item.id === connection.access_definition_id); const connectionInstances = instances.filter((item) => item.access_connection_id === connection.id); const connectionCredentials = credentials.filter((item) => item.access_connection_id === connection.id); const labels = (connection.integration_ids ?? []).map((id) => integrations.find((item) => item.id === id)).filter(Boolean).map((item) => `${item!.display_name} ${item!.version_key}`).join(", "); return <div className="provider-row" key={connection.id}><span className="settings-icon"><KeyRound /></span><span><EntityLink entity="access-connection" uid={connection.id} onNavigate={onNavigate} className="entity-link"><strong>{connection.name}</strong></EntityLink><small>{definition?.name ?? "Service"} · {labels || "No API attached"}</small></span><Badge color={connection.state === "active" ? "green" : "amber"}>{connection.state}</Badge><span><strong>{definition?.instance_cardinality === "many" ? connectionInstances.length : "1"} {definition?.instance_cardinality === "many" ? definition.instance_label_plural : definition?.instance_label_singular ?? "instance"}</strong><small>{connectionCredentials.length} credential record{connectionCredentials.length === 1 ? "" : "s"}</small></span></div>; })}{connections.length === 0 && <div className="empty-row">No service connections yet. Connect a vendor service to make it available to APIs.</div>}</section>
-    <details className="panel advanced-details"><summary>Advanced service setup</summary><div className="advanced-details-body"><PanelHeader title="Service types" action={<Button outline onClick={() => setDefinitionOpen(true)}><Plus data-slot="icon" />New service type</Button>} />{definitions.map((definition) => <div className="lease-row" key={definition.id}><span><EntityLink entity="access-definition" uid={definition.id} onNavigate={onNavigate} className="entity-link"><strong>{definition.name}</strong></EntityLink><small>{definition.instance_cardinality === "many" ? `Multiple ${definition.instance_label_plural}` : `Single ${definition.instance_label_singular}`}</small></span><Badge color={definition.state === "active" ? "green" : "zinc"}>{definition.state}</Badge></div>)}{definitions.length === 0 && <div className="empty-row">No service types are configured.</div>}<PanelHeader className="advanced-subheading" title="Credential records" description="Fingerprints and lifecycle only. Plaintext credentials are never listed." action={<Badge color="violet">{activeCredentials} active</Badge>} />{credentials.slice(0, 12).map((credential) => <div className="lease-row" key={credential.id}><span><strong>{credential.scopes.join(", ") || "Default scope"}</strong><small>{credential.secret_fingerprint.slice(0, 18)}… · {credential.storage_mode}</small></span><Badge color={credential.state === "active" ? "green" : "zinc"}>{credential.state}</Badge></div>)}{credentials.length === 0 && <div className="empty-row">No credential records yet.</div>}</div></details>
-  <Dialog open={definitionOpen} onClose={setDefinitionOpen} title="Create service type" description="The provider contract declares cardinality and credential scope; end users do not choose mono versus multi." actions={<><Button outline onClick={() => setDefinitionOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !serviceKey.trim() || !serviceName.trim() || !singular.trim() || !plural.trim()} onClick={saveDefinition}>{busy ? "Saving…" : "Create service type"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Service key</span><input value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="auth0" /></label><label className="auth-field"><span>Name</span><input value={serviceName} onChange={(event) => setServiceName(event.target.value)} placeholder="Auth0 Management API" /></label></div><div className="two-fields"><label className="auth-field"><span>Provider instances</span><select value={cardinality} onChange={(event) => { const value = event.target.value as typeof cardinality; setCardinality(value); if (value === "one") setCredentialScope("connection"); }}><option value="one">One fixed instance</option><option value="many">Multiple provider resources</option></select></label><label className="auth-field"><span>Credential scope</span><select disabled={cardinality === "one"} value={credentialScope} onChange={(event) => setCredentialScope(event.target.value as typeof credentialScope)}><option value="connection">Connection</option><option value="instance">Provider resource</option></select></label></div><div className="two-fields"><label className="auth-field"><span>Singular label</span><input value={singular} onChange={(event) => setSingular(event.target.value)} placeholder="tenant" /></label><label className="auth-field"><span>Plural label</span><input value={plural} onChange={(event) => setPlural(event.target.value)} placeholder="tenants" /></label></div><div className="two-fields"><label className="auth-field"><span>Management authentication</span><select value={managementAuth} onChange={(event) => setManagementAuth(event.target.value as typeof managementAuth)}><option value="bearer">Bearer token</option><option value="api_key">API key</option><option value="oauth2_client_credentials">OAuth2 client credentials</option><option value="none">None</option></select></label><label className="auth-field"><span>API contract set</span><select value={apiResourceSetID} onChange={(event) => setAPIResourceSetID(event.target.value)}><option value="">None</option>{apiResourceSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select></label></div><label className="auth-field"><span>Operations (JSON)</span><textarea className="code-input" value={operations} onChange={(event) => setOperations(event.target.value)} spellCheck={false} /></label></div></Dialog>
+    <details className="panel advanced-details"><summary>Advanced service setup</summary><div className="advanced-details-body"><PanelHeader title="Service types" action={<Button outline onClick={() => openDefinition()}><Plus data-slot="icon" />New service type</Button>} />{definitions.map((definition) => <div className="lease-row" key={definition.id}><span><EntityLink entity="access-definition" uid={definition.id} onNavigate={onNavigate} className="entity-link"><strong>{definition.name}</strong></EntityLink><small>{definition.instance_cardinality === "many" ? `Multiple ${definition.instance_label_plural}` : `Single ${definition.instance_label_singular}`} · revision {definition.revision}</small></span><span className="heading-actions"><Badge color={definition.state === "active" ? "green" : "zinc"}>{definition.state}</Badge><Button outline onClick={() => openDefinition(definition)}>Edit</Button></span></div>)}{definitions.length === 0 && <div className="empty-row">No service types are configured.</div>}<PanelHeader className="advanced-subheading" title="Credential records" description="Fingerprints and lifecycle only. Plaintext credentials are never listed." action={<Badge color="violet">{activeCredentials} active</Badge>} />{credentials.slice(0, 12).map((credential) => <div className="lease-row" key={credential.id}><span><strong>{credential.scopes.join(", ") || "Default scope"}</strong><small>{credential.secret_fingerprint.slice(0, 18)}… · {credential.storage_mode}</small></span><Badge color={credential.state === "active" ? "green" : "zinc"}>{credential.state}</Badge></div>)}{credentials.length === 0 && <div className="empty-row">No credential records yet.</div>}</div></details>
+  <Dialog open={definitionOpen} onClose={(open) => { if (!open) closeDefinition(); }} title={editingDefinition ? `Revise ${editingDefinition.name}` : "Create service type"} description={editingDefinition ? "Update the contract and operations without replacing connections or encrypted credentials. Identity and authentication fields are locked." : "The provider contract declares cardinality and credential scope; end users do not choose mono versus multi."} actions={<><Button outline onClick={closeDefinition}>Cancel</Button><Button color="indigo" disabled={busy || !serviceKey.trim() || !serviceName.trim() || !singular.trim() || !plural.trim()} onClick={saveDefinition}>{busy ? "Saving…" : editingDefinition ? "Save revision" : "Create service type"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Service key</span><input disabled={Boolean(editingDefinition)} value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="projecthub" /></label><label className="auth-field"><span>Name</span><input value={serviceName} onChange={(event) => setServiceName(event.target.value)} placeholder="ProjectHub Management API" /></label></div><div className="two-fields"><label className="auth-field"><span>Provider instances</span><select disabled={Boolean(editingDefinition)} value={cardinality} onChange={(event) => { const value = event.target.value as typeof cardinality; setCardinality(value); if (value === "one") setCredentialScope("connection"); }}><option value="one">One fixed instance</option><option value="many">Multiple provider resources</option></select></label><label className="auth-field"><span>Credential scope</span><select disabled={Boolean(editingDefinition) || cardinality === "one"} value={credentialScope} onChange={(event) => setCredentialScope(event.target.value as typeof credentialScope)}><option value="connection">Connection</option><option value="instance">Provider resource</option></select></label></div><div className="two-fields"><label className="auth-field"><span>Singular label</span><input value={singular} onChange={(event) => setSingular(event.target.value)} placeholder="workspace" /></label><label className="auth-field"><span>Plural label</span><input value={plural} onChange={(event) => setPlural(event.target.value)} placeholder="workspaces" /></label></div><div className="two-fields"><label className="auth-field"><span>Management authentication</span><select disabled={Boolean(editingDefinition)} value={managementAuth} onChange={(event) => setManagementAuth(event.target.value as typeof managementAuth)}><option value="bearer">Bearer token</option><option value="api_key">API key</option><option value="oauth2_client_credentials">OAuth2 client credentials</option><option value="none">None</option></select></label><label className="auth-field"><span>API contract set</span><select value={apiResourceSetID} onChange={(event) => setAPIResourceSetID(event.target.value)}><option value="">None</option>{apiResourceSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select></label></div><label className="auth-field"><span>Operations (JSON)</span><textarea className="code-input" value={operations} onChange={(event) => setOperations(event.target.value)} spellCheck={false} /></label></div></Dialog>
   <Dialog open={connectionOpen} onClose={setConnectionOpen} title="Connect vendor service" description="Credentials are encrypted server-side. The fixed HTTPS destination is validated again for every operation." actions={<><Button outline onClick={() => setConnectionOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !definitionID || !connectionName.trim() || !baseURL.trim() || selectedIntegrations.length === 0} onClick={saveConnection}>{busy ? "Connecting…" : "Connect service"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Service type</span><select value={definitionID} onChange={(event) => setDefinitionID(event.target.value)}><option value="">Select definition</option>{definitions.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}</option>)}</select></label><label className="auth-field"><span>Connection name</span><input value={connectionName} onChange={(event) => setConnectionName(event.target.value)} /></label></div><div className="two-fields"><label className="auth-field"><span>Environment</span><select value={environmentID} onChange={(event) => setEnvironmentID(event.target.value)}><option value="">All environments</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select></label><label className="auth-field"><span>Region</span><input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="us-east-1" /></label></div><label className="auth-field"><span>Fixed HTTPS base URL</span><input type="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="https://management.example.com" /></label><label className="auth-field"><span>Management credential</span><input type="password" autoComplete="off" value={managementSecret} onChange={(event) => setManagementSecret(event.target.value)} /></label><fieldset className="catalog-settings-section"><legend>Allowed APIs</legend>{integrations.map((integration) => <label className="compact-check" key={integration.id}><input type="checkbox" checked={selectedIntegrations.includes(integration.id)} onChange={() => toggleIntegration(integration.id)} /><span>{integration.display_name} {integration.version_key}</span></label>)}</fieldset><label className="auth-field"><span>Connection configuration (JSON)</span><textarea className="code-input" value={connectionConfig} onChange={(event) => setConnectionConfig(event.target.value)} spellCheck={false} /></label></div></Dialog>
   </>;
 }
@@ -3891,7 +4545,7 @@ function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect, onNavi
 
 type ToolCatalogFilter = "all" | "published" | "draft" | "drifted" | "retired";
 
-function ToolsView({ tools, integrations, connections, onAdd, onNavigate }: { tools: APITool[]; integrations: APIIntegration[]; connections: APIMCPConnection[]; onAdd: () => void; onNavigate: (path: string) => void }) {
+function ToolsView({ tools, integrations, connections, onNavigate }: { tools: APITool[]; integrations: APIIntegration[]; connections: APIMCPConnection[]; onNavigate: (path: string) => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ToolCatalogFilter>("all");
   const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
@@ -3912,8 +4566,9 @@ function ToolsView({ tools, integrations, connections, onAdd, onNavigate }: { to
     return () => { cancelled = true; };
   }, [integrations]);
 
+  const commonTools = tools.filter(toolIsCommon);
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleTools = tools.filter((tool) => {
+  const visibleTools = commonTools.filter((tool) => {
     const matchesQuery = !normalizedQuery || `${tool.namespace}.${tool.name} ${tool.description} ${tool.backend_kind ?? "http"} ${tool.upstream_tool_name ?? ""}`.toLowerCase().includes(normalizedQuery);
     const matchesFilter = filter === "all" || filter === "drifted" ? filter === "all" || Boolean(tool.upstream_drifted) : tool.state === filter;
     return matchesQuery && matchesFilter;
@@ -3921,10 +4576,10 @@ function ToolsView({ tools, integrations, connections, onAdd, onNavigate }: { to
   const connectionName = (tool: APITool) => connections.find((connection) => connection.id === tool.mcp_connection_id)?.name ?? "MCP upstream";
 
   return <>
-    <PageHeading eyebrow="Capabilities" title="Tools" description="Create reusable agent-facing contracts once, then bind exact published revisions to the APIs that expose them." action={<span className="heading-actions"><Button outline onClick={() => onNavigate(sectionPath("connections"))}><Share2 data-slot="icon" />Import from MCP</Button><Button color="indigo" onClick={onAdd}><Plus data-slot="icon" />Create tool</Button></span>} />
+    <PageHeading eyebrow="Capabilities" title="Common tools" description="Create reusable deployment capabilities once, then attach exact published revisions to the APIs that expose them. API-owned tools live only inside their API workspace." action={<span className="heading-actions"><Button outline onClick={() => onNavigate(sectionPath("connections"))}><Share2 data-slot="icon" />Import from MCP</Button><Button color="indigo" onClick={() => onNavigate(toolBuilderPath())}><Plus data-slot="icon" />Create common tool</Button></span>} />
     <ToolsWorkspaceTabs active="catalog" onNavigate={onNavigate} />
-    <dl className="compact-metrics tool-catalog-metrics"><div className="compact-metric"><dt>Total</dt><dd><strong>{tools.length}</strong><small>deployment tools</small></dd></div><div className="compact-metric"><dt>Published</dt><dd><strong>{tools.filter((tool) => tool.state === "published").length}</strong><small>eligible to bind</small></dd></div><div className="compact-metric"><dt>Drafts</dt><dd><strong>{tools.filter((tool) => tool.state === "draft").length}</strong><small>editable contracts</small></dd></div><div className="compact-metric"><dt>Drifted</dt><dd><strong>{tools.filter((tool) => tool.upstream_drifted).length}</strong><small>blocked upstreams</small></dd></div></dl>
-    <div className="table-toolbar tool-catalog-toolbar"><label className="table-search"><Search /><span className="sr-only">Search tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools" /></label><SegmentedControl label="Filter tools" items={[{ id: "all", label: "All", count: tools.length }, { id: "published", label: "Published", count: tools.filter((tool) => tool.state === "published").length }, { id: "draft", label: "Drafts", count: tools.filter((tool) => tool.state === "draft").length }, { id: "drifted", label: "Drifted", count: tools.filter((tool) => tool.upstream_drifted).length }, { id: "retired", label: "Retired", count: tools.filter((tool) => tool.state === "retired").length }]} value={filter} onChange={setFilter} /></div>
+    <dl className="compact-metrics tool-catalog-metrics"><div className="compact-metric"><dt>Total</dt><dd><strong>{commonTools.length}</strong><small>common tools</small></dd></div><div className="compact-metric"><dt>Published</dt><dd><strong>{commonTools.filter((tool) => tool.state === "published").length}</strong><small>eligible to bind</small></dd></div><div className="compact-metric"><dt>Drafts</dt><dd><strong>{commonTools.filter((tool) => tool.state === "draft").length}</strong><small>editable contracts</small></dd></div><div className="compact-metric"><dt>Drifted</dt><dd><strong>{commonTools.filter((tool) => tool.upstream_drifted).length}</strong><small>blocked upstreams</small></dd></div></dl>
+    <div className="table-toolbar tool-catalog-toolbar"><label className="table-search"><Search /><span className="sr-only">Search common tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search common tools" /></label><SegmentedControl label="Filter common tools" items={[{ id: "all", label: "All", count: commonTools.length }, { id: "published", label: "Published", count: commonTools.filter((tool) => tool.state === "published").length }, { id: "draft", label: "Drafts", count: commonTools.filter((tool) => tool.state === "draft").length }, { id: "drifted", label: "Drifted", count: commonTools.filter((tool) => tool.upstream_drifted).length }, { id: "retired", label: "Retired", count: commonTools.filter((tool) => tool.state === "retired").length }]} value={filter} onChange={setFilter} /></div>
     <span className="sr-only" role="status" aria-live="polite">{visibleTools.length} tool{visibleTools.length === 1 ? "" : "s"} shown.</span>
     <DataTable label="Deployment tools" className="tool-catalog-table">
       <DataTableHeader className="tool-catalog-columns"><span>Tool</span><span>Source</span><span>Risk &amp; access</span><span>State</span><span>Current APIs</span><span>Open</span></DataTableHeader>
@@ -3936,12 +4591,12 @@ function ToolsView({ tools, integrations, connections, onAdd, onNavigate }: { to
           <span className="resource-name tool-catalog-name"><span className="resource-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.description || "No purpose documented"}</small></span></span>
           <span><strong className="cell-value">{tool.backend_kind === "mcp" ? connectionName(tool) : "HTTP"}</strong><small className="cell-note">{tool.backend_kind === "mcp" ? tool.upstream_tool_name : `${tool.http_method} · fixed endpoint`}</small></span>
           <span className="tool-policy-cell"><span className="tool-badges"><Badge color={riskColor}>{risk} risk</Badge>{policy.confirmationRequired && <Badge color="amber">confirmation</Badge>}</span><small className="cell-note">{policy.requiredGrants.join(", ") || "No baseline grants"}</small></span>
-          <span className="tool-state-cell"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{tool.state}</Badge><small className="cell-note">revision {tool.revision}</small>{tool.upstream_drifted && <Badge color="red">schema drift</Badge>}</span>
+          <span className="tool-state-cell"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{toolStateLabel(tool)}</Badge>{tool.upstream_drifted && <Badge color="red">schema drift</Badge>}</span>
           <span><strong className="cell-value">{usageStatus === "loading" ? "…" : usageStatus === "partial" ? `≥${usageCounts[tool.id] ?? 0}` : usageCounts[tool.id] ?? 0}</strong><small className="cell-note">current API draft{(usageCounts[tool.id] ?? 0) === 1 ? "" : "s"}{usageStatus === "partial" ? " · partial" : ""}</small></span>
           <span className="table-open-cell"><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow" ariaLabel={`Open ${tool.namespace}.${tool.name}`}><ChevronRight /></ConsoleLink></span>
         </DataTableRow>;
       })}
-      {visibleTools.length === 0 && <DataTableEmpty columns={6}><div className="tool-catalog-empty"><span className="entity-missing-icon"><Wrench /></span><div><h2>{tools.length === 0 ? "No tools yet" : "No matching tools"}</h2><p>{tools.length === 0 ? "Create a fixed HTTP tool or import a reviewed MCP definition." : "Change the search or lifecycle filter."}</p></div>{tools.length === 0 && <Button color="indigo" onClick={onAdd}><Plus data-slot="icon" />Create tool</Button>}</div></DataTableEmpty>}
+      {visibleTools.length === 0 && <DataTableEmpty columns={6}><div className="tool-catalog-empty"><span className="entity-missing-icon"><Wrench /></span><div><h2>{commonTools.length === 0 ? "No common tools yet" : "No matching common tools"}</h2><p>{commonTools.length === 0 ? "Create a fixed HTTP tool or import a reviewed MCP definition for reuse across APIs." : "Change the search or lifecycle filter."}</p></div>{commonTools.length === 0 && <Button color="indigo" onClick={() => onNavigate(toolBuilderPath())}><Plus data-slot="icon" />Create common tool</Button>}</div></DataTableEmpty>}
     </DataTable>
   </>;
 }
@@ -3951,11 +4606,13 @@ function SettingsTabs({ active, onNavigate }: { active: SettingsTab; onNavigate:
   return <PageTabs label="Settings sections">{SETTINGS_TABS.map((tab) => <ConsoleLink key={tab.id} path={settingsPath(tab.id)} onNavigate={onNavigate} className={`page-tab ${active === tab.id ? "active" : ""}`} ariaCurrent={active === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>;
 }
 
-function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onApprove, onPublish }: {
+function RecipesView({ integrations, analyses, recipes, busy, onCreate, onGenerate, onEdit, onRework, onApprove, onPublish }: {
+  integrations: APIIntegration[];
   analyses: APIIntegrationAnalysis[];
   recipes: APIRecipe[];
   busy: boolean;
-  onCreate: (prompt: string) => Promise<APIRecipe | null>;
+  onCreate: (prompt: string, integrationID: string) => Promise<APIRecipe | null>;
+  onGenerate: () => void;
   onEdit: (recipe: APIRecipe, markdown: string, references: APIRecipeReference[], visibility: APIRecipe["visibility"]) => void;
   onRework: (recipe: APIRecipe, instruction: string) => void;
   onApprove: (recipe: APIRecipe) => void;
@@ -3963,6 +4620,7 @@ function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onAp
 }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [createIntegrationID, setCreateIntegrationID] = useState(integrations.length === 1 ? integrations[0].id : "");
   const [selectedID, setSelectedID] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [instructions, setInstructions] = useState<Record<string, string>>({});
@@ -3971,7 +4629,7 @@ function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onAp
   const selected = selectedID ? recipes.find((recipe) => recipe.id === selectedID) ?? null : null;
 
   async function createFromPrompt() {
-    const value = await onCreate(prompt.trim());
+    const value = await onCreate(prompt.trim(), createIntegrationID);
     if (!value) return;
     setPrompt("");
     setCreateOpen(false);
@@ -3980,7 +4638,7 @@ function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onAp
 
   if (!selected) {
     return <>
-      <PageHeading eyebrow="Developer guidance" title="Recipes" action={<Button onClick={() => setCreateOpen(true)}><Plus data-slot="icon" />Add recipe</Button>} />
+      <PageHeading eyebrow="Developer guidance" title="Recipes" action={<span className="heading-actions"><Button outline disabled={busy} onClick={onGenerate}><Sparkles data-slot="icon" />Refresh from evidence</Button><Button onClick={() => setCreateOpen(true)}><Plus data-slot="icon" />Add recipe</Button></span>} />
       <section className="panel recipe-library" aria-label="Recipes">
         {recipes.length > 0 ? <div className="recipe-library-list">
           {recipes.map((recipe) => <button type="button" className="recipe-library-row" key={recipe.id} onClick={() => setSelectedID(recipe.id)}>
@@ -4004,6 +4662,14 @@ function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onAp
         description="Describe what a developer should accomplish. AI will inspect the product evidence already connected to DokoSoko and create an editable draft."
         actions={<><Button outline onClick={() => setCreateOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !prompt.trim()} onClick={createFromPrompt}><Sparkles data-slot="icon" />{busy ? "Building…" : "Build recipe"}</Button></>}
       >
+        <label className="auth-field">
+          <span>API</span>
+          <select value={createIntegrationID} onChange={(event) => setCreateIntegrationID(event.target.value)}>
+            <option value="">Whole deployment</option>
+            {integrations.filter((integration) => integration.lifecycle !== "retired").map((integration) => <option value={integration.id} key={integration.id}>{integration.display_name} · {integration.version_key}</option>)}
+          </select>
+          <small>Select one API to ground names, documentation, access, and automatic tools in its published contract.</small>
+        </label>
         <label className="auth-field recipe-create-prompt">
           <span>What should this recipe help developers do?</span>
           <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="For example: Connect a customer’s Stripe account, sync invoices, and verify webhook delivery." />
@@ -4071,31 +4737,21 @@ function RecipesView({ analyses, recipes, busy, onCreate, onEdit, onRework, onAp
   </>;
 }
 
-function SettingsView({ product, versions, pins, customerAccounts, identity, aiProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onConfigureIdentity, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; customerAccounts: APICustomerAccount[]; identity: APIIdentity | null; aiProfiles: APIAIWorkloadProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onConfigureIdentity: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
+function SettingsView({ product, versions, pins, aiProfiles, rootUsers, currentUser, onDoctor, onConfigureProduct, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; versions: APIProductVersion[]; pins: APIProductVersionPin[]; aiProfiles: APIAIWorkloadProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onConfigureProduct: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
   const activeRoots = rootUsers.filter((user) => !user.revoked_at);
   return <>
     <PageHeading eyebrow="Settings" title="Settings" action={<Button outline onClick={onDoctor}><Activity data-slot="icon" />Run System Doctor</Button>} />
     <SettingsTabs active="overview" onNavigate={onNavigate} />
     <div className="settings-grid">
-      <button type="button" className="settings-button" aria-label="Open Customer identity settings" onClick={() => onNavigate(settingsPath("identity"))}><SettingsCard icon={<Users />} title="Customer identity (optional)" detail={identity ? `OIDC ${identity.state} · ${customerAccounts.length} account${customerAccounts.length === 1 ? "" : "s"}` : "Configure delegated customer identity only when private access is needed"} status={identity ? identity.state : "Optional"} /></button>
       <button type="button" className="settings-button" aria-label="Open Service connections settings" onClick={() => onNavigate(settingsPath("connections"))}><SettingsCard icon={<KeyRound />} title="Service connections" detail="Encrypted vendor credentials shared explicitly with APIs" status="Manage" /></button>
       <button type="button" className="settings-button" aria-label="Open Bug reports and feedback settings" onClick={() => onNavigate(settingsPath("reporting"))}><SettingsCard icon={<MessageSquareText />} title="Bug reports & feedback" detail="Consent-gated reporting policies and secure delivery endpoints" status="Manage" /></button>
       <button type="button" className="settings-button" aria-label="Open Database and storage settings" onClick={() => onNavigate(settingsPath("storage"))}><SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted local object storage" status="Healthy" /></button>
       <button type="button" className="settings-button" aria-label="Open AI providers settings" onClick={() => onNavigate(settingsPath("ai"))}><SettingsCard icon={<Bot />} title="AI providers" detail={`${aiProfiles.filter((profile) => profile.enabled).length} active workload${aiProfiles.filter((profile) => profile.enabled).length === 1 ? "" : "s"} · one credential per provider`} status="Manage" /></button>
       <button type="button" className="settings-button" aria-label="Open Root access settings" onClick={() => onNavigate(settingsPath("root"))}><SettingsCard icon={<ShieldCheck />} title="Root access" detail={`${activeRoots.length} MFA-protected administrator${activeRoots.length === 1 ? "" : "s"} · append-only audit`} status="Secure" /></button>
     </div>
-    <IdentityContractPanel customerAccounts={customerAccounts} identity={identity} onConfigure={onConfigureIdentity} />
     <details className="panel advanced-details"><summary>Advanced publishing</summary><div className="advanced-details-body"><PanelHeader title="Publishing snapshots" action={<Button outline onClick={onConfigureProduct}>Open advanced publishing</Button>} /><div className="activity-summary"><span>{versions.length} published snapshot{versions.length === 1 ? "" : "s"}</span><span>{pins.length} scoped pin{pins.length === 1 ? "" : "s"}</span><span>Default {product.default_version_policy.toUpperCase()}</span></div></div></details>
     <RootAccessPanel rootUsers={rootUsers} currentUser={currentUser} onAddRoot={onAddRoot} onRevokeRoot={onRevokeRoot} onNavigate={onNavigate} />
   </>;
-}
-
-function IdentityContractPanel({ customerAccounts, identity, onConfigure }: { customerAccounts: APICustomerAccount[]; identity: APIIdentity | null; onConfigure: () => void }) {
-  return <section className="panel identity-contract"><PanelHeader title="Customer identity contract" description="The optional OIDC organisation claim resolves to a durable internal account. Suspended accounts and a disabled identity provider fail closed immediately." action={<Button onClick={onConfigure}>{identity ? "Configure" : "Get started"}</Button>} /><div className="contract-grid"><span><small>Customer accounts</small><strong>{customerAccounts.length}</strong></span><span><small>Active</small><strong>{customerAccounts.filter((account) => account.state === "active").length}</strong></span><span><small>Access evaluation</small><strong>POST /v1/access/evaluations</strong></span><span><small>Tool identity</small><strong>Delegated user token</strong></span></div><details className="advanced-details inline-advanced"><summary>Identity and API details</summary><div className="contract-grid"><span><small>OIDC issuer</small><code>{identity?.issuer ?? "Not configured"}</code></span><span><small>Organisation claim</small><code>{identity?.organisation_claim || "Not configured"}</code></span><span><small>Installation claim</small><code>{identity?.installation_claim || "Not configured"}</code></span><span><small>Delegated API origin</small><code>{identity?.delegated_api_origin || "Not configured"}</code></span></div></details></section>;
-}
-
-function CustomerIdentitySettingsView({ customerAccounts, identity, onConfigure, onNavigate }: { customerAccounts: APICustomerAccount[]; identity: APIIdentity | null; onConfigure: () => void; onNavigate: (path: string) => void }) {
-  return <><PageHeading eyebrow="Settings" title="Customer identity" /><SettingsTabs active="identity" onNavigate={onNavigate} /><IdentityContractPanel customerAccounts={customerAccounts} identity={identity} onConfigure={onConfigure} /></>;
 }
 
 function RootAccessPanel({ rootUsers, currentUser, onAddRoot, onRevokeRoot, onNavigate }: { rootUsers: APIUser[]; currentUser: APIUser | null; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {

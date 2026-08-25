@@ -1,8 +1,8 @@
-export type Section = "product" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "settings";
+export type Section = "product" | "identity" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "settings";
 
-export type IntegrationTab = "overview" | "resources" | "authorization" | "tools" | "recipes" | "delivery" | "test" | "history";
+export type IntegrationTab = "overview" | "documentation" | "access" | "tools" | "test" | "history";
 export type IntegrationResourceTab = "documentation" | "contracts" | "packages";
-export type SettingsTab = "overview" | "identity" | "connections" | "reporting" | "storage" | "ai" | "root";
+export type SettingsTab = "overview" | "connections" | "reporting" | "storage" | "ai" | "root";
 
 export type EntityKind =
   | "integration"
@@ -23,20 +23,23 @@ export type EntityKind =
 
 export type ConsoleRoute =
   | { kind: "section"; section: Section; path: string; settingsTab?: SettingsTab }
+  | { kind: "tool-builder"; section: "tools"; uid?: string; integrationID?: string; path: string }
   | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; integrationResourceTab?: IntegrationResourceTab; path: string }
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
   | { kind: "not-found"; section: "product"; path: string };
 
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "resources", label: "Resources" },
-  { id: "authorization", label: "Authorization" },
+  { id: "overview", label: "Quick Start" },
+  { id: "documentation", label: "Documentation" },
+  { id: "access", label: "Access" },
   { id: "tools", label: "Tools" },
-  { id: "recipes", label: "Recipes" },
-  { id: "delivery", label: "Delivery" },
   { id: "test", label: "Test" },
   { id: "history", label: "History" },
 ];
+
+export const INTEGRATION_PRIMARY_TABS = INTEGRATION_TABS.filter(
+  (tab): tab is { id: Exclude<IntegrationTab, "history">; label: string } => tab.id !== "history",
+);
 
 export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; label: string }> = [
   { id: "documentation", label: "Documentation" },
@@ -46,7 +49,6 @@ export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; labe
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "overview", label: "Overview" },
-  { id: "identity", label: "Customer identity" },
   { id: "connections", label: "Service connections" },
   { id: "reporting", label: "Bug reports & feedback" },
   { id: "storage", label: "Database & storage" },
@@ -56,6 +58,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
 
 export const SECTION_PATHS: Record<Section, string> = {
   product: "/integrations",
+  identity: "/identity",
   recipes: "/recipes",
   sources: "/integrations/documentation",
   tools: "/tools",
@@ -107,11 +110,31 @@ export function entityPath(entity: EntityKind, uid: string): string {
   return `/${entity}/${encodeURIComponent(uid)}`;
 }
 
+export function toolBuilderPath(uid?: string): string {
+  return uid ? `/tools/new/${encodeURIComponent(uid)}` : "/tools/new";
+}
+
+export function integrationToolBuilderPath(integrationID: string): string {
+  return `/integration/${encodeURIComponent(integrationID)}/tools/new`;
+}
+
 export function integrationPath(uid: string, tab: IntegrationTab = "overview", resourceTab?: IntegrationResourceTab): string {
   const base = entityPath("integration", uid);
   if (tab === "overview") return base;
-  if (tab === "resources" && resourceTab && resourceTab !== "documentation") return `${base}/resources/${resourceTab}`;
+  if (tab === "documentation" && resourceTab && resourceTab !== "documentation") return `${base}/documentation/${resourceTab}`;
   return `${base}/${tab}`;
+}
+
+export function integrationValidationPath(uid: string, tab: string): string {
+  switch (tab) {
+    case "resources": return integrationPath(uid, "documentation");
+    case "authorization":
+    case "access": return integrationPath(uid, "access");
+    case "tools": return integrationPath(uid, "tools");
+    case "recipes": return sectionPath("recipes");
+    case "delivery": return sectionPath("distribution");
+    default: return integrationPath(uid);
+  }
 }
 
 export function routeForSection(section: Section): ConsoleRoute {
@@ -124,13 +147,33 @@ export function routeForEntity(entity: EntityKind, uid: string): ConsoleRoute {
 }
 
 export function routeForIntegration(uid: string, integrationTab: IntegrationTab = "overview", integrationResourceTab?: IntegrationResourceTab): ConsoleRoute {
-  const resourceTab = integrationTab === "resources" ? integrationResourceTab ?? "documentation" : undefined;
+  const resourceTab = integrationTab === "documentation" ? integrationResourceTab ?? "documentation" : undefined;
   return { kind: "entity", entity: "integration", uid, integrationTab, ...(resourceTab ? { integrationResourceTab: resourceTab } : {}), section: "product", path: integrationPath(uid, integrationTab, resourceTab) };
 }
 
 export function parseConsolePath(pathname: string): ConsoleRoute {
   const path = normalizePath(pathname);
 	if (path === "/") return routeForSection("product");
+
+  const toolBuilderMatch = path.match(/^\/tools\/new(?:\/([^/]+))?$/);
+  if (toolBuilderMatch) {
+    try {
+      const uid = toolBuilderMatch[1] ? decodeURIComponent(toolBuilderMatch[1]) : undefined;
+      return { kind: "tool-builder", section: "tools", ...(uid ? { uid } : {}), path: toolBuilderPath(uid) };
+    } catch {
+      return { kind: "not-found", section: "product", path };
+    }
+  }
+
+  const integrationToolBuilderMatch = path.match(/^\/integration\/([^/]+)\/tools\/new$/);
+  if (integrationToolBuilderMatch) {
+    try {
+      const integrationID = decodeURIComponent(integrationToolBuilderMatch[1]);
+      return { kind: "tool-builder", section: "tools", integrationID, path: integrationToolBuilderPath(integrationID) };
+    } catch {
+      return { kind: "not-found", section: "product", path };
+    }
+  }
 
   const settingsMatch = path.match(/^\/settings\/([^/]+)$/);
   if (settingsMatch) {
@@ -148,7 +191,7 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
     const tab = requestedTab as IntegrationTab;
     if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "product", path };
     const requestedResourceTab = integrationMatch[3];
-    if (requestedResourceTab && tab !== "resources") return { kind: "not-found", section: "product", path };
+    if (requestedResourceTab && tab !== "documentation") return { kind: "not-found", section: "product", path };
     const resourceTab = requestedResourceTab as IntegrationResourceTab | undefined;
     if (resourceTab && !INTEGRATION_RESOURCE_TABS.some((candidate) => candidate.id === resourceTab)) return { kind: "not-found", section: "product", path };
     try {

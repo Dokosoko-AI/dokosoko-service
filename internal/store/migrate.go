@@ -25,7 +25,11 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, directory string) error {
 			names = append(names, entry.Name())
 		}
 	}
-	sort.Strings(names)
+	// Two legacy migrations were released with the same sequence. The package
+	// transition must run before contract_v3 removes that legacy table. Keep the
+	// historical filenames and checksums immutable while preserving their
+	// original dependency order for fresh databases.
+	sort.SliceStable(names, func(i, j int) bool { return migrationNameBefore(names[i], names[j]) })
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -66,4 +70,14 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, directory string) error {
 		return fmt.Errorf("commit migrations: %w", err)
 	}
 	return nil
+}
+
+func migrationNameBefore(first, second string) bool {
+	if first == "0020_package_download_contract.sql" && second == "0020_contract_v3.sql" {
+		return true
+	}
+	if first == "0020_contract_v3.sql" && second == "0020_package_download_contract.sql" {
+		return false
+	}
+	return first < second
 }

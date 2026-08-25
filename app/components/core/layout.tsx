@@ -7,7 +7,7 @@ export function ViewStack({ children, className }: { children: ReactNode; classN
 }
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description?: string; action?: ReactNode }) {
-  return <header className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</header>;
+  return <header className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1 className="type-page-title">{title}</h1>{description && <p className="type-body-large">{description}</p>}</div>{action}</header>;
 }
 
 export function PageTabs({ label, children }: { label: string; children: ReactNode }) {
@@ -15,12 +15,12 @@ export function PageTabs({ label, children }: { label: string; children: ReactNo
 }
 
 export function SectionHeader({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
-  return <header className="section-heading"><div><h2>{title}</h2>{description && <p>{description}</p>}</div>{action}</header>;
+  return <header className="section-heading"><div><h2 className="type-section-title">{title}</h2>{description && <p className="type-body">{description}</p>}</div>{action}</header>;
 }
 
 export function PanelHeader({ title, description, action, level = 2, className }: { title: ReactNode; description?: ReactNode; action?: ReactNode; level?: 2 | 3; className?: string }) {
   const Heading = level === 3 ? "h3" : "h2";
-  return <header className={clsx("panel-heading", className)}><div><Heading>{title}</Heading>{description && <p>{description}</p>}</div>{action}</header>;
+  return <header className={clsx("panel-heading", className)}><div><Heading className="type-heading">{title}</Heading>{description && <p className="type-body">{description}</p>}</div>{action}</header>;
 }
 
 export function SegmentedControl<T extends string>({ label, items, value, onChange }: { label: string; items: ReadonlyArray<{ id: T; label: string; count?: number }>; value: T; onChange: (value: T) => void }) {

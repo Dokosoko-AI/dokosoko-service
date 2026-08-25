@@ -79,7 +79,56 @@ func newWidgetServer(t *testing.T) http.Handler {
 	if _, err := service.SaveLLMProfile(context.Background(), platform.LLMProfileInput{OrganisationID: "org_acme", ProductID: "prod_acme", Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "widget-assistant-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 512, DailyTokenBudget: 10000, Enabled: true}, platform.Actor{ID: "root"}); err != nil {
 		t.Fatal(err)
 	}
-	return httpapi.New(service, "https://dokosoko.example")
+	return httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, WidgetsEnabled: true})
+}
+
+func TestWidgetRoutesAreAbsentByDefault(t *testing.T) {
+	t.Parallel()
+	handler := newServer()
+	deployment := request(t, handler, http.MethodGet, "/api/v1/deployment", "doko_admin_demo", "")
+	if deployment.Code != http.StatusOK || !strings.Contains(deployment.Body.String(), `"features":{"widgets":false}`) {
+		t.Fatalf("disabled deployment capabilities = %d: %s", deployment.Code, deployment.Body.String())
+	}
+	for _, testCase := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/widgets"},
+		{method: http.MethodGet, path: "/v1/widgets/widget_demo/configuration"},
+		{method: http.MethodPost, path: "/v1/widget-sessions"},
+		{method: http.MethodPost, path: "/v1/widget-sessions/exchange"},
+		{method: http.MethodGet, path: "/v1/widget-session"},
+		{method: http.MethodPost, path: "/v1/widget-chat"},
+	} {
+		response := request(t, handler, testCase.method, testCase.path, "doko_admin_demo", `{}`)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want 404: %s", testCase.method, testCase.path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestDisabledWidgetRuntimeDoesNotFallThroughToStaticConsole(t *testing.T) {
+	t.Parallel()
+	uiDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(uiDirectory, "index.html"), []byte("<main>console</main>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.NewWithOptions(platform.New(store.NewMemory()), httpapi.Options{BaseURL: "https://dokosoko.example", UIDirectory: uiDirectory, AllowDemoTokens: true})
+	for _, testCase := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/v1/widgets/widget_demo/configuration"},
+		{method: http.MethodPost, path: "/v1/widget-sessions"},
+		{method: http.MethodPost, path: "/v1/widget-sessions/exchange"},
+		{method: http.MethodGet, path: "/v1/widget-session"},
+		{method: http.MethodPost, path: "/v1/widget-chat"},
+	} {
+		response := request(t, handler, testCase.method, testCase.path, "", `{}`)
+		if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "console") {
+			t.Fatalf("%s %s fell through to static console: status=%d body=%s", testCase.method, testCase.path, response.Code, response.Body.String())
+		}
+	}
 }
 
 func newProductionAuthServer(t *testing.T) http.Handler {
@@ -338,6 +387,17 @@ func TestIntegrationCatalogAccessAndSupportAdminFlow(t *testing.T) {
 	var definition model.AccessDefinition
 	if err := json.Unmarshal(w.Body.Bytes(), &definition); err != nil {
 		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPut, "/api/v1/access-definitions/"+definition.ID, "doko_admin_demo", `{"name":"Voice credential management","instance_label_singular":"tenant","instance_label_plural":"tenants","api_resource_set_id":"`+resourceSet.ID+`","operations":{"credentials.create":{"method":"POST","path":"/v1/credentials"}},"revision":1}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"revision":2`) || !strings.Contains(w.Body.String(), `"service_key":"voice-access"`) {
+		t.Fatalf("revise access definition status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &definition); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPut, "/api/v1/access-definitions/"+definition.ID, "doko_admin_demo", `{"name":"Stale","instance_label_singular":"tenant","instance_label_plural":"tenants","operations":{},"revision":1}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("stale access definition status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodPost, "/api/v1/access-connections", "doko_admin_demo", `{"access_definition_id":"`+definition.ID+`","environment_id":"env_prod","name":"Voice production","base_url":"https://provider.example","config":{},"integration_ids":["`+integration.ID+`"]}`)
 	if w.Code != http.StatusCreated {
@@ -956,6 +1016,10 @@ func TestAuthenticatedWidgetSessionIsOriginBoundSingleUseAndSecretSafe(t *testin
 	if !strings.HasPrefix(bootstrap.BootstrapToken, "doko_wbt_") {
 		t.Fatalf("invalid bootstrap: %s", w.Body.String())
 	}
+	invalidContext := request(t, handler, http.MethodPost, "/v1/widget-sessions", provisioned.Secret, `{"widgetId":"`+provisioned.Widget.ID+`","userId":"user-123","context":{"view":"profile","facts":[{"label":"Plan","value":"Pro"},{"label":"plan","value":"Duplicate"}]},"origin":"https://app.customer.example"}`)
+	if invalidContext.Code != http.StatusBadRequest {
+		t.Fatalf("invalid widget context status = %d, body = %s", invalidContext.Code, invalidContext.Body.String())
+	}
 
 	w = request(t, handler, http.MethodPost, "/v1/widget-sessions/exchange", "", `{"bootstrapToken":"`+bootstrap.BootstrapToken+`","origin":"https://evil.example"}`)
 	if w.Code != http.StatusForbidden {
@@ -969,7 +1033,7 @@ func TestAuthenticatedWidgetSessionIsOriginBoundSingleUseAndSecretSafe(t *testin
 
 	createIdempotentBootstrap := func() *httptest.ResponseRecorder {
 		t.Helper()
-		r := httptest.NewRequest(http.MethodPost, "/v1/widget-sessions", bytes.NewBufferString(`{"widgetId":"`+provisioned.Widget.ID+`","userId":"user-123","organizationId":"org-456","origin":"https://app.customer.example"}`))
+		r := httptest.NewRequest(http.MethodPost, "/v1/widget-sessions", bytes.NewBufferString(`{"widgetId":"`+provisioned.Widget.ID+`","userId":"user-123","organizationId":"org-456","context":{"view":"profile","title":"Your profile","facts":[{"label":"Plan","value":"Pro"},{"label":"Account status","value":"Active"}]},"origin":"https://app.customer.example"}`))
 		r.Header.Set("Authorization", "Bearer "+provisioned.Secret)
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Idempotency-Key", "login-session-123456")
@@ -997,11 +1061,11 @@ func TestAuthenticatedWidgetSessionIsOriginBoundSingleUseAndSecretSafe(t *testin
 		t.Fatal(err)
 	}
 	w = request(t, handler, http.MethodGet, "/v1/widget-session", session.SessionToken, "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"userId":"user-123"`) || !strings.Contains(w.Body.String(), integration.ID) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"userId":"user-123"`) || !strings.Contains(w.Body.String(), `"context":{"view":"profile","title":"Your profile","facts":[{"label":"Plan","value":"Pro"},{"label":"Account status","value":"Active"}]}`) || !strings.Contains(w.Body.String(), integration.ID) {
 		t.Fatalf("session status = %d, body = %s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodPost, "/v1/widget-chat", session.SessionToken, `{"message":"What can I access?"}`)
-	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/event-stream; charset=utf-8" || !strings.Contains(w.Body.String(), `{"text":"Widget"}`) || !strings.Contains(w.Body.String(), `{"text":" API."}`) || !strings.Contains(w.Body.String(), "[DONE]") {
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/event-stream; charset=utf-8" || !strings.Contains(w.Body.String(), `"type":"text_delta"`) || !strings.Contains(w.Body.String(), `"text":"Widget API."`) || !strings.Contains(w.Body.String(), "[DONE]") {
 		t.Fatalf("widget chat status = %d, headers=%v body=%s", w.Code, w.Header(), w.Body.String())
 	}
 
@@ -1010,7 +1074,7 @@ func TestAuthenticatedWidgetSessionIsOriginBoundSingleUseAndSecretSafe(t *testin
 		t.Fatalf("secret list leaked material: status=%d body=%s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodGet, "/api/v1/widgets/"+provisioned.Widget.ID+"/sessions", "doko_admin_demo", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), session.SessionID) || strings.Contains(w.Body.String(), session.SessionToken) || strings.Contains(w.Body.String(), "digest") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), session.SessionID) || strings.Contains(w.Body.String(), session.SessionToken) || strings.Contains(w.Body.String(), "digest") || strings.Contains(w.Body.String(), `"context"`) || strings.Contains(w.Body.String(), `"Plan"`) {
 		t.Fatalf("session list status = %d body=%s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodDelete, "/api/v1/widgets/"+provisioned.Widget.ID+"/sessions/"+session.SessionID, "doko_admin_demo", "")
@@ -1371,7 +1435,7 @@ func TestIdentityBackendAndVisibilityContractsAreIndependent(t *testing.T) {
 	handler := newCatalogServer(t)
 
 	identityResponse := request(t, handler, http.MethodGet, "/api/v1/identity-provider", "doko_admin_demo", "")
-	if identityResponse.Code != http.StatusOK || !strings.Contains(identityResponse.Body.String(), `"delegated_api_origin":"https://api.vendor.example"`) {
+	if identityResponse.Code != http.StatusOK || !strings.Contains(identityResponse.Body.String(), `"authorization_api_origin":"https://api.vendor.example"`) || strings.Contains(identityResponse.Body.String(), `"delegated_api_origin"`) {
 		t.Fatalf("identity provider status=%d body=%s", identityResponse.Code, identityResponse.Body.String())
 	}
 	legacyIdentity := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/identity", "doko_admin_demo", "")

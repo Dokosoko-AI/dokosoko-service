@@ -22,6 +22,7 @@ import (
 
 func TestRunExercisesProtocolAuthorizationAndConfirmation(t *testing.T) {
 	t.Parallel()
+	var confirmationUsed atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -72,9 +73,17 @@ func TestRunExercisesProtocolAuthorizationAndConfirmation(t *testing.T) {
 				writeTestRPC(w, request.ID, nil, &rpcError{Code: -32003, Message: "denied"})
 				return
 			}
-			if name == "confirmed.write" && meta["confirmed"] != true {
-				writeTestRPC(w, request.ID, nil, &rpcError{Code: -32003, Message: "confirmation required"})
-				return
+			if name == "confirmed.write" {
+				challenge, _ := meta["confirmation_challenge"].(string)
+				if meta["confirmed"] != true || challenge == "" {
+					data, _ := json.Marshal(map[string]any{"confirmation_required": true, "confirmation_challenge": "test_one_time_challenge", "retry_metadata_field": "params._meta.confirmation_challenge"})
+					writeTestRPC(w, request.ID, nil, &rpcError{Code: -32003, Message: "confirmation required", Data: data})
+					return
+				}
+				if challenge != "test_one_time_challenge" || !confirmationUsed.CompareAndSwap(false, true) {
+					writeTestRPC(w, request.ID, nil, &rpcError{Code: -32003, Message: "confirmation challenge invalid or replayed"})
+					return
+				}
 			}
 			writeTestRPC(w, request.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": "ok"}}}, nil)
 		default:
@@ -97,7 +106,7 @@ func TestRunExercisesProtocolAuthorizationAndConfirmation(t *testing.T) {
 		body, _ := json.MarshalIndent(report, "", "  ")
 		t.Fatalf("acceptance failed:\n%s", body)
 	}
-	for _, required := range []string{"server/discover", "resources/list", "resources/read: mcp://example/guide", "tools/list", "tools/call: safe.read", "authorization.grant.negative", "authorization.confirmation.negative", "authorization.confirmation.positive", "authorization.unauthenticated"} {
+	for _, required := range []string{"server/discover", "resources/list", "resources/read: mcp://example/guide", "tools/list", "tools/call: safe.read", "authorization.grant.negative", "authorization.confirmation.negative", "authorization.confirmation.positive", "authorization.confirmation.replay", "authorization.unauthenticated"} {
 		if !hasCheck(report, required, Pass) {
 			t.Errorf("missing passing check %q", required)
 		}

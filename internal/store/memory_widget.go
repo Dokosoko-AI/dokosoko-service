@@ -136,6 +136,9 @@ func (m *Memory) RevokeWidgetSecret(_ context.Context, widgetID, id string, now 
 func (m *Memory) CreateWidgetBootstrap(_ context.Context, value model.WidgetBootstrap) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if value.Kind == "" {
+		value.Kind = model.WidgetSessionKindCustomer
+	}
 	key := hex.EncodeToString(value.Digest)
 	if _, exists := m.widgetBootstraps[key]; exists {
 		return ErrConflict
@@ -171,6 +174,9 @@ func (m *Memory) ConsumeWidgetBootstrap(_ context.Context, digest []byte, now ti
 func (m *Memory) CreateWidgetSession(_ context.Context, value model.WidgetSession) (model.WidgetSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if value.Kind == "" {
+		value.Kind = model.WidgetSessionKindCustomer
+	}
 	key := hex.EncodeToString(value.Digest)
 	if _, exists := m.widgetSessions[key]; exists {
 		return model.WidgetSession{}, ErrConflict
@@ -219,6 +225,7 @@ func (m *Memory) RevokeWidgetSession(_ context.Context, widgetID, id string, now
 				value.RevokedAt = &now
 				m.widgetSessions[key] = value
 			}
+			delete(m.widgetAgentMessages, value.ID)
 			return value, nil
 		}
 	}
@@ -235,7 +242,63 @@ func (m *Memory) RevokeWidgetSessions(_ context.Context, widgetID string, now ti
 		if value.WidgetID == widgetID && value.RevokedAt == nil {
 			value.RevokedAt = &now
 			m.widgetSessions[key] = value
+			delete(m.widgetAgentMessages, value.ID)
 		}
+	}
+	return nil
+}
+
+func (m *Memory) WidgetAgentMessages(_ context.Context, sessionID string, limit int) ([]model.WidgetAgentMessage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	found := false
+	for _, session := range m.widgetSessions {
+		if session.ID == sessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	if limit < 1 {
+		return []model.WidgetAgentMessage{}, nil
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	values := m.widgetAgentMessages[sessionID]
+	if len(values) > limit {
+		values = values[len(values)-limit:]
+	}
+	return memoryClone(values), nil
+}
+
+func (m *Memory) AppendWidgetAgentMessages(_ context.Context, values []model.WidgetAgentMessage) error {
+	if len(values) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sessionID := values[0].SessionID
+	found := false
+	for _, session := range m.widgetSessions {
+		if session.ID == sessionID && session.RevokedAt == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	for _, value := range values {
+		if value.SessionID != sessionID {
+			return ErrConflict
+		}
+	}
+	m.widgetAgentMessages[sessionID] = append(m.widgetAgentMessages[sessionID], memoryClone(values)...)
+	if len(m.widgetAgentMessages[sessionID]) > 20 {
+		m.widgetAgentMessages[sessionID] = m.widgetAgentMessages[sessionID][len(m.widgetAgentMessages[sessionID])-20:]
 	}
 	return nil
 }

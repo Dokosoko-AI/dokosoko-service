@@ -13,6 +13,19 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
+type deploymentFeatures struct {
+	Widgets bool `json:"widgets"`
+}
+
+type deploymentResponse struct {
+	model.Deployment
+	Features deploymentFeatures `json:"features"`
+}
+
+func (s *Server) deploymentResponse(value model.Deployment) deploymentResponse {
+	return deploymentResponse{Deployment: value, Features: deploymentFeatures{Widgets: s.widgetsEnabled}}
+}
+
 func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -21,7 +34,7 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 			s.storeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, value)
+		writeJSON(w, http.StatusOK, s.deploymentResponse(value))
 	case http.MethodPost:
 		var input struct {
 			OrganisationID           string `json:"organisation_id"`
@@ -41,7 +54,7 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 			s.creationError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, value)
+		writeJSON(w, http.StatusCreated, s.deploymentResponse(value))
 	case http.MethodPatch:
 		var input struct {
 			Name                     string `json:"name"`
@@ -61,7 +74,7 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 			s.productCatalogError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, value)
+		writeJSON(w, http.StatusOK, s.deploymentResponse(value))
 	default:
 		w.Header().Set("Allow", "GET, POST, PATCH")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
@@ -412,6 +425,40 @@ func (s *Server) accessDefinitions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) accessDefinition(w http.ResponseWriter, r *http.Request, definitionID string) {
+	if r.Method != http.MethodPut {
+		w.Header().Set("Allow", "PUT")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+		return
+	}
+	var input struct {
+		Name                  string          `json:"name"`
+		InstanceLabelSingular string          `json:"instance_label_singular"`
+		InstanceLabelPlural   string          `json:"instance_label_plural"`
+		APIResourceSetID      string          `json:"api_resource_set_id"`
+		Operations            json.RawMessage `json:"operations"`
+		Revision              *int64          `json:"revision"`
+	}
+	if err := decodeJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	if input.Revision == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision is required.", nil)
+		return
+	}
+	value, err := s.service.UpdateAccessDefinition(r.Context(), definitionID, platform.AccessDefinitionInput{Name: input.Name, InstanceLabelSingular: input.InstanceLabelSingular, InstanceLabelPlural: input.InstanceLabelPlural, APIResourceSetID: input.APIResourceSetID, Operations: input.Operations}, *input.Revision, actor(r))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
+			s.storeError(w, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_access_definition", err.Error(), nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) accessConnections(w http.ResponseWriter, r *http.Request) {

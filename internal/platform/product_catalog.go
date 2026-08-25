@@ -469,7 +469,17 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		if snapshot.Tools != nil {
 			entry.Tools = make([]model.IntegrationManifestTool, 0, len(snapshot.Tools))
 			for _, tool := range snapshot.Tools {
-				entry.Tools = append(entry.Tools, model.IntegrationManifestTool{ToolID: tool.ToolID, ToolRevision: tool.ToolRevision, AuthorizationPointID: tool.AuthorizationPointID, AuthorizationPointRevision: tool.AuthorizationPointRevision, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: tool.ContentHash, UpstreamSchemaHash: tool.UpstreamSchemaHash})
+				entry.Tools = append(entry.Tools, model.IntegrationManifestTool{ToolID: tool.ToolID, ToolRevision: tool.ToolRevision, AuthorizationPointID: tool.AuthorizationPointID, AuthorizationPointRevision: tool.AuthorizationPointRevision, RuntimeServiceConnectionID: tool.RuntimeServiceConnectionID, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: tool.ContentHash, UpstreamSchemaHash: tool.UpstreamSchemaHash})
+			}
+		}
+		if snapshot.ServiceConnections != nil {
+			entry.ServiceConnections = make([]model.IntegrationManifestServiceConnection, 0, len(snapshot.ServiceConnections))
+			for _, connection := range snapshot.ServiceConnections {
+				manifestConnection := model.IntegrationManifestServiceConnection{ConnectionID: connection.ConnectionID, ConnectionRevision: connection.ConnectionRevision, Name: connection.Name, Description: connection.Description, State: connection.State, CurrentRevisions: make([]model.IntegrationManifestServiceConnectionRevision, 0, len(connection.CurrentRevisions))}
+				for _, revision := range connection.CurrentRevisions {
+					manifestConnection.CurrentRevisions = append(manifestConnection.CurrentRevisions, model.IntegrationManifestServiceConnectionRevision{RevisionID: revision.RevisionID, Revision: revision.Revision, EnvironmentID: revision.EnvironmentID, BaseURL: revision.BaseURL, AuthenticationType: revision.AuthenticationType, CredentialSetID: revision.CredentialSetID, AuthConfig: append(json.RawMessage(nil), revision.AuthConfig...), ContentHash: revision.ContentHash, Current: revision.Current, CredentialReady: revision.CredentialReady})
+				}
+				entry.ServiceConnections = append(entry.ServiceConnections, manifestConnection)
 			}
 		}
 		if snapshot.AccessConnections != nil {

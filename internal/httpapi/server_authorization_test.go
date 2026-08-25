@@ -49,15 +49,6 @@ func TestAuthorizationAndToolEditorHTTPFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deniedSimulation := request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/authorization-points/"+point.ID+"/simulate", "doko_admin_demo", `{"granted_grants":["billing.invoices.delete"],"confirmed":false}`)
-	if deniedSimulation.Code != http.StatusOK || !strings.Contains(deniedSimulation.Body.String(), `"allowed":false`) || !strings.Contains(deniedSimulation.Body.String(), `"confirmation_missing":true`) {
-		t.Fatalf("unconfirmed simulation = %d: %s", deniedSimulation.Code, deniedSimulation.Body.String())
-	}
-	allowedSimulation := request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/authorization-points/"+point.ID+"/simulate", "doko_admin_demo", `{"granted_grants":["billing.invoices.delete"],"confirmed":true}`)
-	if allowedSimulation.Code != http.StatusOK || !strings.Contains(allowedSimulation.Body.String(), `"allowed":true`) || !strings.Contains(allowedSimulation.Body.String(), `"simulation_only":true`) {
-		t.Fatalf("confirmed simulation = %d: %s", allowedSimulation.Code, allowedSimulation.Body.String())
-	}
-
 	createdTool := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools", "doko_admin_demo", `{"organisation_id":"org_acme","namespace":"billing","name":"delete_invoice","description":"Delete one invoice after explicit confirmation.","input_schema":{"type":"object","additionalProperties":false,"properties":{"invoice_id":{"type":"string"}},"required":["invoice_id"]},"output_schema":{"type":"object","additionalProperties":false,"properties":{"deleted":{"type":"boolean"}},"required":["deleted"]},"endpoint":"https://api.vendor.example/v1/invoices/delete","http_method":"POST","authorization_policy":{"required_grants":["billing.invoices.delete"],"confirmation_required":true,"risk":"critical","idempotency_required":true},"timeout_ms":5000}`)
 	if createdTool.Code != http.StatusCreated {
 		t.Fatalf("create tool = %d: %s", createdTool.Code, createdTool.Body.String())
@@ -149,7 +140,15 @@ func TestAuthorizationAndToolEditorHTTPFlow(t *testing.T) {
 		t.Fatalf("publish integration = %d: %s", publishedIntegration.Code, publishedIntegration.Body.String())
 	}
 
-	clonedTool := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools/"+tool.ID+"/clone", "doko_admin_demo", `{"namespace":"billing","name":"delete_invoice_v2"}`)
+	missingCloneRevision := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools/"+tool.ID+"/clone", "doko_admin_demo", `{"namespace":"billing","name":"delete_invoice_v2"}`)
+	if missingCloneRevision.Code != http.StatusBadRequest || !strings.Contains(missingCloneRevision.Body.String(), "revision is required") {
+		t.Fatalf("missing clone revision = %d: %s", missingCloneRevision.Code, missingCloneRevision.Body.String())
+	}
+	staleClone := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools/"+tool.ID+"/clone", "doko_admin_demo", `{"namespace":"billing","name":"delete_invoice_v2","revision":2}`)
+	if staleClone.Code != http.StatusConflict || !strings.Contains(staleClone.Body.String(), `"code":"revision_conflict"`) {
+		t.Fatalf("stale clone revision = %d: %s", staleClone.Code, staleClone.Body.String())
+	}
+	clonedTool := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools/"+tool.ID+"/clone", "doko_admin_demo", `{"namespace":"billing","name":"delete_invoice_v2","revision":3}`)
 	if clonedTool.Code != http.StatusCreated || !strings.Contains(clonedTool.Body.String(), `"state":"draft"`) || !strings.Contains(clonedTool.Body.String(), `"name":"delete_invoice_v2"`) {
 		t.Fatalf("clone tool = %d: %s", clonedTool.Code, clonedTool.Body.String())
 	}
@@ -265,27 +264,19 @@ func TestAuthorizationPatchRequiresCompleteReplacementWithoutMutation(t *testing
 	}
 }
 
-func TestToolPublicationRejectsUnknownGrantAsClientError(t *testing.T) {
+func TestToolCreationRejectsUnknownGrantAsClientError(t *testing.T) {
 	t.Parallel()
 	handler := newCatalogServer(t)
 	created := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools", "doko_admin_demo", `{"organisation_id":"org_acme","namespace":"billing","name":"list_invoices","description":"List invoices.","input_schema":{"type":"object","additionalProperties":false,"properties":{}},"output_schema":{"type":"object","additionalProperties":false,"properties":{}},"endpoint":"https://api.vendor.example/v1/invoices","http_method":"GET","authorization_policy":{"required_grants":["billing.invoices.read"],"confirmation_required":false},"timeout_ms":5000}`)
-	if created.Code != http.StatusCreated {
-		t.Fatalf("create tool = %d: %s", created.Code, created.Body.String())
-	}
-	var tool model.Tool
-	if err := json.Unmarshal(created.Body.Bytes(), &tool); err != nil {
-		t.Fatal(err)
-	}
-	published := request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/tools/"+tool.ID+"/publish", "doko_admin_demo", `{"revision":1}`)
-	if published.Code != http.StatusBadRequest || !strings.Contains(published.Body.String(), "register required grants") {
-		t.Fatalf("unknown grant publication = %d: %s", published.Code, published.Body.String())
+	if created.Code != http.StatusBadRequest || !strings.Contains(created.Body.String(), "unregistered_grant") {
+		t.Fatalf("unknown grant creation = %d: %s", created.Code, created.Body.String())
 	}
 	var failure struct {
 		Error struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(published.Body.Bytes(), &failure); err != nil {
+	if err := json.Unmarshal(created.Body.Bytes(), &failure); err != nil {
 		t.Fatal(err)
 	}
 	if failure.Error.Code != "invalid_resource" {

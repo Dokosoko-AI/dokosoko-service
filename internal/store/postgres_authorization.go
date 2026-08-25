@@ -129,12 +129,34 @@ func (p *Postgres) SaveIntegrationToolBindings(ctx context.Context, integrationI
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var integrationExists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM integrations WHERE id=$1)`, integrationID).Scan(&integrationExists); err != nil {
+		return nil, databaseError(err)
+	}
+	if !integrationExists {
+		return nil, ErrNotFound
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM integration_tool_bindings WHERE integration_id=$1`, integrationID); err != nil {
 		return nil, databaseError(err)
 	}
 	for _, value := range values {
-		if _, err := tx.Exec(ctx, `INSERT INTO integration_tool_bindings(integration_id,tool_id,tool_revision,authorization_point_id,authorization_point_revision,created_by) VALUES($1,$2,$3,$4,$5,$6)`, integrationID, value.ToolID, value.ToolRevision, value.AuthorizationPointID, value.AuthorizationPointRevision, value.CreatedBy); err != nil {
+		result, err := tx.Exec(ctx, `INSERT INTO integration_tool_bindings(integration_id,tool_id,tool_revision,authorization_point_id,authorization_point_revision,created_by)
+			SELECT integration.id,$2,$3,$4,$5,$6
+			FROM integrations integration
+			JOIN tool_definitions tool
+			  ON tool.id=$2
+			 AND tool.product_id=integration.deployment_id
+			 AND tool.organisation_id=integration.organisation_id
+			 AND (
+			      (tool.scope='common' AND tool.owner_integration_id IS NULL)
+			      OR (tool.scope='api' AND tool.owner_integration_id=integration.id)
+			 )
+			WHERE integration.id=$1`, integrationID, value.ToolID, value.ToolRevision, value.AuthorizationPointID, value.AuthorizationPointRevision, value.CreatedBy)
+		if err != nil {
 			return nil, databaseError(err)
+		}
+		if result.RowsAffected() != 1 {
+			return nil, ErrConflict
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -92,7 +92,6 @@ paths:
         "201": { description: Integration created., content: { application/json: { schema: { $ref: "#/components/schemas/Integration" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
-        "422": { $ref: "#/components/responses/Error" }
   /api/v1/integrations/{integration_id}:
     parameters:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
@@ -139,6 +138,105 @@ paths:
       responses:
         "200": { description: Server-backed candidate preflight., content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationPreflight" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/runtime-setup:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getIntegrationRuntimeSetup
+      description: Returns the shortest-path runtime Access setup for one API, including environments, service connections, and credential metadata. Credential values and internal vault identifiers are never returned.
+      responses:
+        "200": { description: Runtime Access setup with credential-redacted metadata., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeSetup" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: configureIntegrationRuntimeSetup
+      description: Configures one environment-specific service connection and either selects an existing eligible credential set or creates a dedicated/shared credential set in the same shortest-path request. Credential input is write-only and is never returned.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeSetupRequest" } } } }
+      responses:
+        "200": { description: Updated runtime Access setup with credential-redacted metadata., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeSetup" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/runtime-connections:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listIntegrationRuntimeServiceConnections
+      description: Lists the API-owned upstream service connections and their current immutable environment revisions.
+      responses:
+        "200": { description: Runtime service connections., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeServiceConnectionList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createIntegrationRuntimeServiceConnection
+      description: Creates or revises a named API-owned service connection. The destination is a credential-free HTTPS origin or localhost HTTP origin; secret material is referenced only through an eligible credential-set identifier.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeServiceConnectionRequest" } } } }
+      responses:
+        "201": { description: Created or revised runtime service connection., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeServiceConnection" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/runtime-service-connections/{connection_id}/check:
+    parameters:
+      - { name: connection_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: checkRuntimeServiceConnection
+      description: Performs a deterministic, value-free configuration check for one API-owned service connection. This does not send an unspecified network probe to the upstream service.
+      responses:
+        "200": { description: Credential-redacted service-connection readiness., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeServiceConnectionReadiness" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/integrations/{integration_id}/runtime-credential-sets:
+    parameters:
+      - { name: integration_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: createIntegrationRuntimeCredentialSet
+      description: Creates an encrypted dedicated or deliberately shared runtime credential set. The credential is accepted only through the write-only request field; responses expose lifecycle and fingerprint metadata only.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeCredentialSetRequest" } } } }
+      responses:
+        "201": { description: Credential-redacted runtime credential set., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeCredentialSet" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/runtime-credential-sets/{credential_set_id}:
+    parameters:
+      - { name: credential_set_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getRuntimeCredentialSet
+      description: Returns lifecycle, scope, usage-safe fingerprint, and version metadata for one credential set. Credential values and internal vault identifiers are never returned.
+      responses:
+        "200": { description: Credential-redacted runtime credential set., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeCredentialSet" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/runtime-credential-sets/{credential_set_id}/usage:
+    parameters:
+      - { name: credential_set_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getRuntimeCredentialUsage
+      description: Lists every service connection in the deployment whose current environment revision references this credential set.
+      responses:
+        "200": { description: Credential-set usage by runtime service connections., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeCredentialUsage" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/runtime-credential-sets/{credential_set_id}/rotate:
+    parameters:
+      - { name: credential_set_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: rotateRuntimeCredential
+      description: Stores and activates a new encrypted credential version while moving the prior active version into retiring state. The credential is write-only and is never returned.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RotateRuntimeCredentialRequest" } } } }
+      responses:
+        "200": { description: Credential-redacted runtime credential set after rotation., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeCredentialSet" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/runtime-credential-sets/{credential_set_id}/versions/{version_id}/revoke:
+    parameters:
+      - { name: credential_set_id, in: path, required: true, schema: { type: string } }
+      - { name: version_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: revokeRuntimeCredentialVersion
+      description: Revokes one exact credential version and returns only the credential set's updated redacted metadata. Repeating a completed revoke is idempotent.
+      responses:
+        "200": { description: Credential-redacted runtime credential set after revocation., content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeCredentialSet" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/integrations/{integration_id}/access-connections:
     parameters:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
@@ -204,18 +302,6 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
-  /api/v1/integrations/{integration_id}/authorization-points/{authorization_point_id}/simulate:
-    parameters:
-      - { name: integration_id, in: path, required: true, schema: { type: string } }
-      - { name: authorization_point_id, in: path, required: true, schema: { type: string } }
-    post:
-      operationId: simulateIntegrationAuthorizationPoint
-      description: Evaluates configured grants, state, and confirmation without granting access or calling a vendor system. The result is explicitly simulation-only.
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationSimulationRequest" } } } }
-      responses:
-        "200": { description: Non-authoritative policy simulation., content: { application/json: { schema: { $ref: "#/components/schemas/AuthorizationSimulation" } } } }
-        "400": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
   /api/v1/integrations/{integration_id}/tools:
     parameters:
       - { name: integration_id, in: path, required: true, schema: { type: string } }
@@ -1337,7 +1423,7 @@ paths:
               schema: { $ref: "#/components/schemas/ToolList" }
     post:
       operationId: createTool
-      description: Creates a draft one-call HTTP tool with JSON Schemas, a fixed HTTPS destination on the configured vendor API origin, and an authorization policy. Runtime calls use the authenticated customer's delegated vendor access token.
+      description: Creates a draft one-call HTTP tool with bounded JSON Schemas, a fixed credential-free destination, explicit request and response mappings, vendor-neutral upstream authentication, and an authorization policy. Public destinations use HTTPS on the default port. Local development destinations use HTTP on localhost, a localhost subdomain, 127.0.0.1, or ::1. Stored credentials are accepted only in the write-only credential field, encrypted immediately, and never returned.
       requestBody:
         required: true
         content:
@@ -1350,19 +1436,86 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Tool" }
         "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tool-builder/validate:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    post:
+      operationId: validateToolDraft
+      description: Deterministically normalizes and validates one non-secret HTTP tool draft. It does not resolve DNS, call the candidate endpoint, or call an AI provider. The nested credential_present value is ignored; credential presence is derived from the persisted base tool or credential_will_be_supplied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ToolDraftContext" }
+      responses:
+        "200": { description: Authoritative local validation result., content: { application/json: { schema: { $ref: "#/components/schemas/ToolDraftValidation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tool-builder/propose:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    post:
+      operationId: proposeToolDraft
+      description: Continues a bounded builder conversation with the configured Analysis AI workload. The assistant may ask a clarifying question with no changes or return a complete candidate draft; every modification remains a reviewable field diff. Chat history is caller-supplied context and is not persisted with the tool. AI assistance never saves, publishes, binds, tests, or calls a tool or candidate endpoint. The separate write-only credential field is excluded from provider payloads. Administrators must keep secrets out of every other message and draft field; common credential patterns are rejected, but arbitrary free text cannot be proven secret-free.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ToolDraftProposalInput" }
+      responses:
+        "200": { description: Reviewable AI proposal and deterministic findings., content: { application/json: { schema: { $ref: "#/components/schemas/ToolDraftProposal" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tool-builder/import:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    post:
+      operationId: importToolDraft
+      description: Parses pasted cURL, Postman Collection, or OpenAPI text into reviewable non-secret HTTP tool candidates. Import is local-only; openapi_url is recognized but rejected because this endpoint never fetches URLs. Embedded credential material is detected and excluded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ToolDraftImportInput" }
+      responses:
+        "200": { description: At most 50 imported candidates with deterministic findings., content: { application/json: { schema: { $ref: "#/components/schemas/ToolDraftImportResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tool-builder/analyse:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+    post:
+      operationId: analyseToolDraft
+      description: Runs authoritative deterministic validation and adds advisory warning or information findings from the configured Analysis AI workload when available. AI cannot remove or downgrade deterministic errors, and neither phase calls the candidate endpoint. Credential material is forbidden.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ToolDraftAnalysisInput" }
+      responses:
+        "200": { description: Combined deterministic and advisory analysis., content: { application/json: { schema: { $ref: "#/components/schemas/ToolDraftAnalysis" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/tools/{tool_id}:
     parameters:
       - $ref: "#/components/parameters/ProductID"
       - { name: tool_id, in: path, required: true, schema: { type: string } }
     get:
       operationId: getToolEditorResource
-      description: Returns the complete administrative tool contract. HTTP tools include their fixed credential-free endpoint; no credential material is returned.
+      description: Returns the complete administrative tool contract. HTTP tools include their fixed credential-free endpoint, non-secret upstream authentication, mappings, examples, and credential-presence bit; credential material is never returned.
       responses:
         "200": { description: Administrative tool editor representation., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
         "404": { $ref: "#/components/responses/Error" }
     put:
       operationId: replaceToolDraft
-      description: Replaces a draft tool contract using optimistic revision control. Published tools and their identity are immutable; clone a published tool to create a new editable draft.
+      description: Replaces a draft tool contract using optimistic revision control. The optional write-only credential rotates the encrypted upstream credential; omitting it preserves a compatible existing credential. Published tools and their identity are immutable; clone a published tool to create a new editable draft.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReplaceToolDraftRequest" } } } }
       responses:
         "200": { description: Updated draft tool., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
@@ -1375,7 +1528,7 @@ paths:
       - { name: tool_id, in: path, required: true, schema: { type: string } }
     post:
       operationId: cloneToolDraft
-      description: Copies a draft or published tool into a new editable draft with a new immutable namespace/name identity.
+      description: Copies one exact HTTP draft or published source revision into a new editable draft with a new immutable namespace/name identity. The required revision provides optimistic concurrency control; a stale source revision is rejected before credential storage. Credentials are never copied; authentication modes that require one must receive a new value through the write-only credential field.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CloneToolRequest" } } } }
       responses:
         "201": { description: Independent draft tool clone., content: { application/json: { schema: { $ref: "#/components/schemas/AdminTool" } } } }
@@ -1394,6 +1547,69 @@ paths:
         "200": { description: Network-free tool validation result., content: { application/json: { schema: { $ref: "#/components/schemas/ToolDryRun" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/test-confirmations:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: createToolTestConfirmation
+      description: Creates a five-minute, single-use confirmation for one exact HTTP tool revision and canonical argument hash when the method is non-GET or the stored authorization policy requires explicit confirmation. Mutation live tests are eligible only when idempotency metadata is required by the stored policy. The administrator must type the full tool name and acknowledge the real upstream request. The raw nonce is returned once and only its digest is retained.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestConfirmationRequest" } } } }
+      responses:
+        "201": { description: One-time exact-revision confirmation., content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestConfirmation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/test-runs:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listToolTestRuns
+      description: Lists unexpired, tenant- and tool-scoped sanitized evidence newest first. Raw requests, responses, headers, scalar values, credentials, destinations, actors, nonces, idempotency keys, and argument hashes are never returned.
+      responses:
+        "200": { description: Unexpired sanitized test evidence., content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestRunList" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: runToolLiveTest
+      description: Performs one exact-revision HTTP action test against the persisted fixed destination after deterministic validation. OAuth client-credentials authentication may first make one bounded request to its separately fixed token endpoint when no valid cached token exists; neither request is retried or redirected. A matching single-use confirmation and a policy-enforced idempotency key are required for every mutation live test. Before any outbound work the server durably records a sanitized execution intent; if the terminal outcome cannot be recorded after the request, the API returns tool_test_outcome_indeterminate and explicitly forbids retry. Delegated OAuth is not eligible for an administrator live upstream call because this route never accepts an end-user token; a direct request returns a controlled zero-network-call authorization finding. Only short-lived sanitized structural evidence is retained; raw bodies, headers, scalar values, credentials, destinations, actors, nonce material, and idempotency keys are discarded.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestRunRequest" } } } }
+      responses:
+        "201": { description: Short-lived sanitized evidence from the controlled live test., content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestRun" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/test-runs/{run_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getToolTestRun
+      description: Returns one exact unexpired sanitized run only when its tenant, product and tool scope match the route.
+      responses:
+        "200": { description: Exact short-lived sanitized run evidence., content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestRun" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/products/{product_id}/tools/{tool_id}/test-runs/{run_id}/analyse:
+    parameters:
+      - $ref: "#/components/parameters/ProductID"
+      - { name: tool_id, in: path, required: true, schema: { type: string } }
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: analyseToolTestRun
+      description: Contacts the exact configured Analysis provider only after an explicit true consent boolean, an exact server-recomputed evidence-hash match, and durable persistence of the consented provider-call intent. The provider binding is rechecked before disclosure and this consented workload never fails over to a backup provider. The provider receives value-free shapes projected to schema-declared property names, JSON types, and array lengths; bounded metrics and finding codes without diagnostic paths; a structural non-secret contract; the latest question; and bounded untrusted chat history. Contract schemas omit stored descriptions, annotations, examples/defaults/comments, enum/const literal values, patterns, and references; value-free markers may disclose only enum cardinality or const presence so the provider can reason about a supported constraint repair. Unexpected upstream property names are excluded. The provider never receives the evidence hash, raw request/response values or bodies, headers, credentials, nonce or actor data, destinations or query values, examples, or internal IDs. The response is advisory and may contain a complete locally validated proposal bound to the exact current base revision; it never saves, publishes, clones, binds, or calls the tested upstream. Published tools must be cloned before any proposed change is reviewed in Builder.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestAnalysisRequest" } } } }
+      responses:
+        "200": { description: Exact-evidence advisory reply and optional locally validated human-review proposal., content: { application/json: { schema: { $ref: "#/components/schemas/ToolTestAnalysis" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /api/v1/products/{product_id}/tools/{tool_id}/retire:
     parameters:
       - $ref: "#/components/parameters/ProductID"
@@ -1492,14 +1708,13 @@ paths:
       operationId: getIdentityProvider
       responses:
         "200":
-          description: Optional delegated customer identity provider configuration.
+          description: OIDC customer identity configuration, or an explicit unconfigured setup shape containing the exact callback URL.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IdentityProvider" }
-        "404": { $ref: "#/components/responses/Error" }
     put:
       operationId: replaceIdentityProvider
-      description: Replaces the optional delegated identity configuration. Disabling it immediately invalidates private customer authorization; it does not affect public discovery or backend delivery.
+      description: Saves a disabled OIDC draft. State is server-controlled; every save creates a new revision and immediately invalidates OAuth artifacts bound to older revisions.
       requestBody:
         required: true
         content:
@@ -1508,6 +1723,91 @@ paths:
       responses:
         "200":
           description: Identity provider configuration saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: disconnectIdentityProvider
+      description: Permanently disconnects a disabled OIDC configuration at one exact revision. Deletes the provider config, client credential, provider tests, and product OAuth artifacts with their delegated bearer secrets. Customer accounts and append-only audit history are intentionally preserved. Disable first so runtime access stops as a separate explicit action.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdentityProviderRevisionRequest" }
+      responses:
+        "200":
+          description: Clean explicit unconfigured setup shape.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/identity-provider/tests:
+    post:
+      operationId: beginIdentityProviderTest
+      description: Runs discovery and starts a real OIDC authorization-code test for one exact saved configuration revision. Active configurations may be re-tested without interrupting access. The callback verifies the confidential client, ID-token signature, issuer, audience, nonce, and configured customer claim without evaluating access, creating a customer account, or retaining tokens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdentityProviderRevisionRequest" }
+      responses:
+        "201":
+          description: Stored short-lived test transaction. Open authorization_url only when status is pending; discovery/setup failures are returned here as status failed with id and failure_code so the exact result remains inspectable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProviderTest" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/identity-provider/tests/{test_id}:
+    parameters:
+      - name: test_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getIdentityProviderTest
+      responses:
+        "200":
+          description: Current result of the short-lived test transaction.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProviderTest" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/identity-provider/activate:
+    post:
+      operationId: activateIdentityProvider
+      description: Activates a disabled revision only after the exact revision has a passing, unexpired OIDC test. Activation is itself a state change and advances the provider revision, while last_test truthfully retains the tested draft revision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActivateIdentityProviderRequest" }
+      responses:
+        "200":
+          description: Active identity provider configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/identity-provider/disable:
+    post:
+      operationId: disableIdentityProvider
+      description: Disables the current provider revision. Existing OAuth states, codes, and access tokens fail closed immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdentityProviderRevisionRequest" }
+      responses:
+        "200":
+          description: Disabled identity provider configuration.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IdentityProvider" }
@@ -2068,6 +2368,27 @@ paths:
       responses:
         "200": { description: Recent widget sessions without bearer material., content: { application/json: { schema: { $ref: "#/components/schemas/WidgetSessionList" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/widgets/{widget_id}/preview-session:
+    parameters:
+      - { name: widget_id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: createWidgetPreviewSession
+      description: >-
+        Creates a short-lived, single-use bootstrap for an authenticated
+        administrator to exercise an active widget through the normal runtime.
+        The resulting session is classified as an admin preview and is kept
+        separate from customer analytics. It is bound to the console origin.
+      responses:
+        "201":
+          description: One-time administrator preview bootstrap. Never persist this bearer in browser storage.
+          headers:
+            Cache-Control: { schema: { type: string }, description: Always no-store. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WidgetBootstrap" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /api/v1/widgets/{widget_id}/sessions/{session_id}:
     parameters:
       - { name: widget_id, in: path, required: true, schema: { type: string } }
@@ -2141,9 +2462,10 @@ paths:
     get:
       security: []
       operationId: oauthCallback
-      description: Verifies upstream state, nonce and ID token, resolves vendor access fail-closed, creates or resolves the durable customer account, then redirects with a one-time code.
+      description: For public OAuth states, verifies upstream state, nonce and ID token, resolves vendor access fail-closed, creates or resolves the durable customer account, then redirects with a one-time code. Prefixed administration-test states stop after OIDC, audience/client, nonce, issuer, and customer-claim verification and redirect to the fixed same-origin Identity page without retaining tokens or creating runtime identity data.
       responses:
         "302": { description: Exact registered client redirect. }
+        "303": { description: Fixed same-origin Identity-page redirect carrying identity_test_id for a stored result, or identity_test_error=invalid_or_expired when the callback transaction cannot be claimed. }
         "401": { $ref: "#/components/responses/OAuthError" }
   /oauth/token:
     post:
@@ -2481,7 +2803,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: { type: string }
+        id: { type: string, description: Present only after a configuration has been saved. }
         resource_set_id: { type: string }
         revision: { type: integer, format: int64, minimum: 1 }
         manifest: { type: array, items: {} }
@@ -2617,29 +2939,6 @@ components:
         state: { type: string, enum: [draft, active, deprecated] }
         revision: { type: integer, format: int64, minimum: 1 }
       required: [key, name, description, action_type, required_grants, confirmation_required, decision_ttl_seconds, state, revision]
-    AuthorizationSimulationRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        granted_grants:
-          type: array
-          uniqueItems: true
-          items: { type: string, pattern: '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$', maxLength: 160 }
-        confirmed: { type: boolean }
-      required: [granted_grants, confirmed]
-    AuthorizationSimulation:
-      type: object
-      additionalProperties: false
-      description: Explanatory local policy evaluation that neither grants access nor calls an external system.
-      properties:
-        authorization_point_id: { type: string }
-        allowed: { type: boolean }
-        missing_grants: { type: array, items: { type: string } }
-        confirmation_required: { type: boolean }
-        confirmation_missing: { type: boolean }
-        explanation: { type: string }
-        simulation_only: { type: boolean, const: true }
-      required: [authorization_point_id, allowed, missing_grants, confirmation_required, confirmation_missing, explanation, simulation_only]
     ToolRevisionSelection:
       type: object
       additionalProperties: false
@@ -2835,6 +3134,204 @@ components:
       additionalProperties: false
       properties: { items: { type: array, items: { $ref: "#/components/schemas/IntegrationPackageBinding" } } }
       required: [items]
+    RuntimeAuthenticationType:
+      type: string
+      enum: [none, delegated_oauth, bearer, authorization_scheme, api_key_header, api_key_query, basic, oauth_client_credentials, custom_header]
+      description: Vendor-neutral upstream authentication mode for one service-connection revision.
+    RuntimeCredentialAuthenticationType:
+      type: string
+      enum: [bearer, authorization_scheme, api_key_header, api_key_query, basic, oauth_client_credentials, custom_header]
+      description: Upstream authentication mode that requires an encrypted runtime credential set.
+    RuntimeAuthenticationConfiguration:
+      type: object
+      additionalProperties: false
+      description: Non-secret structural authentication settings. Only fields applicable to the selected authentication type are accepted; credential values belong exclusively in write-only request fields.
+      properties:
+        scheme: { type: string, minLength: 1, maxLength: 120 }
+        query_name: { type: string, minLength: 1, maxLength: 120 }
+        username: { type: string, minLength: 1, maxLength: 500 }
+        client_id: { type: string, minLength: 1, maxLength: 500 }
+        token_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        token_endpoint_auth_method: { type: string, enum: [client_secret_basic, client_secret_post] }
+        scopes: { type: array, items: { type: string, minLength: 1, maxLength: 500 }, maxItems: 100, uniqueItems: true }
+        audience: { type: string, minLength: 1, maxLength: 1000 }
+        resource: { type: string, minLength: 1, maxLength: 1000 }
+        prefix: { type: string, maxLength: 120 }
+    RuntimeServiceConnectionRevision:
+      type: object
+      additionalProperties: false
+      description: Immutable, environment-specific runtime destination and authentication configuration. It references credential metadata by ID and contains no credential or vault material.
+      properties:
+        id: { type: string }
+        connection_id: { type: string }
+        environment_id: { type: string }
+        base_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        authentication_type: { $ref: "#/components/schemas/RuntimeAuthenticationType" }
+        credential_set_id: { type: string }
+        auth_config: { $ref: "#/components/schemas/RuntimeAuthenticationConfiguration" }
+        content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        revision: { type: integer, format: int64, minimum: 1 }
+        current: { type: boolean }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, connection_id, environment_id, base_url, authentication_type, auth_config, content_hash, revision, current, created_at]
+    RuntimeServiceConnection:
+      type: object
+      additionalProperties: false
+      description: Stable API-owned identity for an upstream service, with current immutable revisions grouped by environment.
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        integration_id: { type: string }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 500 }
+        state: { type: string, enum: [active, disabled] }
+        revision: { type: integer, format: int64, minimum: 1 }
+        current_revisions: { type: array, items: { $ref: "#/components/schemas/RuntimeServiceConnectionRevision" } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, integration_id, name, state, revision, created_at, updated_at]
+    RuntimeServiceConnectionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RuntimeServiceConnection" } }
+      required: [items]
+    RuntimeServiceConnectionCheck:
+      type: object
+      additionalProperties: false
+      description: One non-secret deterministic readiness result for a connection or environment revision.
+      properties:
+        key: { type: string }
+        label: { type: string }
+        ready: { type: boolean }
+        message: { type: string }
+        environment_id: { type: string }
+      required: [key, label, ready, message]
+    RuntimeServiceConnectionReadiness:
+      type: object
+      additionalProperties: false
+      description: Value-free readiness summary; it exposes neither credentials nor internal vault identifiers.
+      properties:
+        connection_id: { type: string }
+        ready: { type: boolean }
+        checks: { type: array, items: { $ref: "#/components/schemas/RuntimeServiceConnectionCheck" } }
+      required: [connection_id, ready, checks]
+    RuntimeCredentialVersion:
+      type: object
+      additionalProperties: false
+      description: Credential lifecycle metadata only. The encrypted value and its internal vault reference are intentionally outside the API contract.
+      properties:
+        id: { type: string }
+        credential_set_id: { type: string }
+        fingerprint: { type: string, pattern: "^[0-9a-f]{16}$" }
+        state: { type: string, enum: [pending, active, retiring, revoked, expired] }
+        created_by: { type: string }
+        activated_at: { type: string, format: date-time }
+        retires_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, credential_set_id, fingerprint, state, created_at]
+    RuntimeCredentialSet:
+      type: object
+      additionalProperties: false
+      description: Stable, credential-redacted metadata for a dedicated API credential or a deliberately shared service credential.
+      properties:
+        id: { type: string }
+        deployment_id: { type: string }
+        organisation_id: { type: string }
+        environment_id: { type: string }
+        scope: { type: string, enum: [dedicated, shared] }
+        owner_integration_id: { type: string, description: Present for dedicated credentials and absent for shared credentials. }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        environment_variable: { type: string, pattern: "^[A-Z][A-Z0-9_]{0,127}$" }
+        authentication_type: { $ref: "#/components/schemas/RuntimeCredentialAuthenticationType" }
+        header_name: { type: string, maxLength: 120 }
+        state: { type: string, enum: [active, disabled] }
+        credential_present: { type: boolean }
+        active_fingerprint: { type: string, pattern: "^[0-9a-f]{16}$" }
+        revision: { type: integer, format: int64, minimum: 1 }
+        versions: { type: array, items: { $ref: "#/components/schemas/RuntimeCredentialVersion" } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, deployment_id, organisation_id, environment_id, scope, name, environment_variable, authentication_type, state, credential_present, revision, created_at, updated_at]
+    RuntimeCredentialSetList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RuntimeCredentialSet" } }
+      required: [items]
+    RuntimeCredentialUsage:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/RuntimeServiceConnection" } }
+        count: { type: integer, minimum: 0 }
+      required: [items, count]
+    RuntimeSetup:
+      type: object
+      additionalProperties: false
+      description: API-local runtime Access read model. Credential sets contain redacted lifecycle metadata only.
+      properties:
+        integration: { $ref: "#/components/schemas/Integration" }
+        environments: { type: array, items: { $ref: "#/components/schemas/Environment" } }
+        service_connections: { type: array, items: { $ref: "#/components/schemas/RuntimeServiceConnection" } }
+        credential_sets: { type: array, items: { $ref: "#/components/schemas/RuntimeCredentialSet" } }
+      required: [integration, environments, service_connections, credential_sets]
+    RuntimeSetupRequest:
+      type: object
+      additionalProperties: false
+      description: Shortest-path setup request. Secret-bearing modes require exactly one eligible existing_credential_set_id or a new credential value; none and delegated_oauth reject credential selection.
+      properties:
+        environment_id: { type: string }
+        connection_name: { type: string, minLength: 1, maxLength: 120, default: Default }
+        connection_description: { type: string, maxLength: 500 }
+        base_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        authentication_type: { $ref: "#/components/schemas/RuntimeAuthenticationType" }
+        auth_config: { $ref: "#/components/schemas/RuntimeAuthenticationConfiguration" }
+        existing_credential_set_id: { type: string }
+        credential_scope: { type: string, enum: [dedicated, shared], default: dedicated }
+        credential_name: { type: string, minLength: 1, maxLength: 120 }
+        environment_variable: { type: string, pattern: "^[A-Z][A-Z0-9_]{0,127}$" }
+        header_name: { type: string, maxLength: 120 }
+        credential: { type: string, format: password, minLength: 1, writeOnly: true, description: Plaintext credential accepted for immediate encryption and never returned. }
+        credential_expires_at: { type: string, format: date-time }
+      required: [environment_id, base_url, authentication_type]
+    RuntimeServiceConnectionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120, default: Default }
+        description: { type: string, maxLength: 500 }
+        environment_id: { type: string }
+        base_url: { $ref: "#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI" }
+        authentication_type: { $ref: "#/components/schemas/RuntimeAuthenticationType" }
+        credential_set_id: { type: string, description: Required for secret-bearing authentication types and forbidden for none or delegated_oauth. }
+        auth_config: { $ref: "#/components/schemas/RuntimeAuthenticationConfiguration" }
+        state: { type: string, enum: [active, disabled], default: active }
+      required: [environment_id, base_url, authentication_type]
+    RuntimeCredentialSetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        environment_id: { type: string }
+        scope: { type: string, enum: [dedicated, shared], default: dedicated, description: Omit for the safe API-dedicated default; shared must be selected explicitly. }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        environment_variable: { type: string, pattern: "^[A-Z][A-Z0-9_]{0,127}$" }
+        authentication_type: { $ref: "#/components/schemas/RuntimeCredentialAuthenticationType" }
+        header_name: { type: string, maxLength: 120 }
+        credential: { type: string, format: password, minLength: 1, writeOnly: true, description: Plaintext credential accepted for immediate encryption and never returned. }
+        expires_at: { type: string, format: date-time }
+      required: [environment_id, authentication_type, credential]
+    RotateRuntimeCredentialRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        credential: { type: string, format: password, minLength: 1, writeOnly: true, description: Replacement plaintext credential accepted for immediate encryption and never returned. }
+        expires_at: { type: string, format: date-time }
+      required: [credential]
     Integration:
       type: object
       additionalProperties: false
@@ -3360,7 +3857,7 @@ components:
     JSONSchema:
       type: object
       additionalProperties: true
-      description: JSON Schema document accepted by DokoSoko's bounded schema validator.
+      description: A strict object-root JSON Schema accepted by DokoSoko's bounded validator. The encoded document is limited to 64 KiB and 10 nested levels, with at most 64 properties per object and 128 scalar enum values. Every object node must set additionalProperties=false. Local references, composition keywords, and remote resolution are unsupported.
     ToolAuthorizationPolicy:
       type: object
       additionalProperties: false
@@ -3373,21 +3870,125 @@ components:
         confirmation_required: { type: boolean, default: false }
         risk: { type: string, enum: [low, medium, high, critical], description: Defaults by method when omitted; critical tools require confirmation. }
         idempotency_required: { type: boolean, default: false }
+    ToolUpstreamAuth:
+      type: object
+      additionalProperties: false
+      description: Non-secret, vendor-neutral upstream authentication configuration. Credential values are supplied separately through a write-only credential field and are never represented here or returned by the API.
+      properties:
+        type:
+          type: string
+          enum: [delegated_oauth, none, bearer, authorization_scheme, api_key_header, api_key_query, basic, oauth_client_credentials, custom_header]
+        scheme:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[!#$%&''*+.^_`|~A-Za-z0-9-]{1,64}$'
+          description: RFC 9110 auth-scheme used only by authorization_scheme, for example Token, ApiKey, or SSWS. The runtime emits Authorization "<scheme> <credential>" without exposing the credential.
+        header_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[!#$%&''*+.^_`|~A-Za-z0-9-]+$'
+          description: Header used by api_key_header or custom_header. Authorization, cookies, routing headers, connection headers, and method-override headers are rejected.
+        query_name:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$'
+          description: Query parameter used only by api_key_query. The fixed stored endpoint itself must not contain a query string.
+        prefix:
+          type: string
+          maxLength: 64
+          description: Optional non-secret prefix for api_key_header or custom_header. It is normalized and followed by one ASCII space before the credential.
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Non-secret username used only by basic. Colons and control characters are rejected.
+        client_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: OAuth client identifier used only by oauth_client_credentials.
+        token_url:
+          type: string
+          format: uri
+          maxLength: 8192
+          description: Credential-free OAuth token endpoint. Public endpoints use HTTPS on the default port; local development endpoints use HTTP on localhost, a localhost subdomain, 127.0.0.1, or ::1 and may use a local port. User information, query strings, and fragments are forbidden.
+        token_endpoint_auth_method:
+          type: string
+          enum: [client_secret_basic, client_secret_post]
+          default: client_secret_basic
+          description: OAuth client-secret placement used only by oauth_client_credentials.
+        scopes:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 200 }
+        audience: { type: string, maxLength: 500, description: Optional OAuth audience parameter. }
+        resource: { type: string, maxLength: 500, description: Optional OAuth resource parameter. }
+      required: [type]
+      allOf:
+        - if: { properties: { type: { const: authorization_scheme } }, required: [type] }
+          then: { required: [scheme] }
+        - if: { properties: { type: { enum: [api_key_header, custom_header] } }, required: [type] }
+          then: { required: [header_name] }
+        - if: { properties: { type: { const: api_key_query } }, required: [type] }
+          then: { required: [query_name] }
+        - if: { properties: { type: { const: basic } }, required: [type] }
+          then: { required: [username] }
+        - if: { properties: { type: { const: oauth_client_credentials } }, required: [type] }
+          then: { required: [client_id, token_url] }
+    ToolRequestMapping:
+      type: object
+      additionalProperties: false
+      description: Maps input-schema properties into the fixed HTTP request. Unmapped GET inputs default to query parameters; unmapped inputs for other methods default to the JSON body. Path placeholders must be required by the input schema and explicitly mapped to path.
+      properties:
+        parameter_locations:
+          type: object
+          maxProperties: 64
+          propertyNames: { pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+          additionalProperties: { type: string, enum: [path, query, header, body] }
+      default: {}
+    ToolResponseMapping:
+      type: object
+      additionalProperties: false
+      properties:
+        result_path:
+          type: string
+          maxLength: 500
+          description: Optional dotted property path or JSON Pointer selecting the object validated against output_schema.
+      default: {}
+    ToolExample:
+      type: object
+      additionalProperties: true
+      description: Non-secret JSON object no larger than 64 KiB, validated against the corresponding tool schema.
+    ToolCredential:
+      type: string
+      format: password
+      writeOnly: true
+      minLength: 1
+      maxLength: 16384
+      description: Upstream credential encrypted immediately and never returned. Required for bearer, authorization_scheme, API-key, basic, OAuth client-credentials, and custom-header modes; rejected for none and delegated_oauth. Control characters are forbidden.
     CreateToolRequest:
       type: object
       additionalProperties: false
       properties:
-        organisation_id: { type: string }
+        organisation_id: { type: string, deprecated: true, description: Accepted for compatibility but ignored; organisation ownership is derived from product_id. }
         namespace: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
         name: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
         description: { type: string, minLength: 1, maxLength: 500 }
         input_schema: { $ref: "#/components/schemas/JSONSchema" }
         output_schema: { $ref: "#/components/schemas/JSONSchema" }
-        endpoint: { type: string, format: uri, description: Fixed credential-free HTTPS URL on the configured vendor API origin. }
+        endpoint: { type: string, format: uri, maxLength: 8192, description: "Fixed credential-free destination with no user information, query string, or fragment. Public destinations use HTTPS on the default port. Local development destinations use HTTP on localhost, a localhost subdomain, 127.0.0.1, or ::1 and may use a local port. delegated_oauth additionally requires the configured authorization API origin." }
         http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        upstream_auth: { $ref: "#/components/schemas/ToolUpstreamAuth" }
+        credential: { $ref: "#/components/schemas/ToolCredential" }
+        request_mapping: { $ref: "#/components/schemas/ToolRequestMapping" }
+        response_mapping: { $ref: "#/components/schemas/ToolResponseMapping" }
+        request_example: { type: [object, "null"], additionalProperties: true, description: Non-secret request object no larger than 64 KiB. }
+        response_example: { type: [object, "null"], additionalProperties: true, description: Non-secret response object no larger than 64 KiB. }
         authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
         timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 10000 }
-      required: [organisation_id, namespace, name, description, input_schema, endpoint, http_method]
+      required: [namespace, name, description, input_schema, endpoint, http_method]
     Tool:
       type: object
       additionalProperties: false
@@ -3395,15 +3996,22 @@ components:
         id: { type: string }
         organisation_id: { type: string }
         product_id: { type: string }
-        namespace: { type: string }
-        name: { type: string }
-        description: { type: string }
+        namespace: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+        name: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+        description: { type: string, minLength: 1, maxLength: 500 }
         input_schema: { $ref: "#/components/schemas/JSONSchema" }
         output_schema: { $ref: "#/components/schemas/JSONSchema" }
         state: { type: string, enum: [draft, published, retired] }
         revision: { type: integer, format: int64, minimum: 1 }
-        endpoint: { type: string, format: uri, description: Included only on the administrative editor representation of HTTP tools; never contains credentials. }
+        endpoint: { type: string, format: uri, maxLength: 8192, readOnly: true, description: "Included only on the administrative editor representation of HTTP tools. It is credential-free and any legacy user information, query, or fragment is redacted." }
+        endpoint_requires_review: { type: boolean, readOnly: true, description: Present and true only when unsafe legacy endpoint components were redacted or the stored endpoint could not be parsed. }
         http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE, MCP] }
+        upstream_auth: { $ref: "#/components/schemas/ToolUpstreamAuth" }
+        credential_present: { type: boolean, readOnly: true, description: True when a purpose-bound encrypted upstream credential exists. The credential itself is never returned. False may be omitted. }
+        request_mapping: { $ref: "#/components/schemas/ToolRequestMapping" }
+        response_mapping: { $ref: "#/components/schemas/ToolResponseMapping" }
+        request_example: { $ref: "#/components/schemas/ToolExample" }
+        response_example: { $ref: "#/components/schemas/ToolExample" }
         authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
         timeout_ms: { type: integer, minimum: 100, maximum: 60000 }
         backend_kind: { type: string, enum: [http, mcp] }
@@ -3428,13 +4036,19 @@ components:
     ReplaceToolDraftRequest:
       type: object
       additionalProperties: false
-      description: Full replacement contract for a draft. The common fields are required for both HTTP-backed and managed MCP-backed tools. Endpoint and HTTP method are additionally required and validated by the service for HTTP-backed tools; for managed MCP-backed tools their stored upstream values are preserved and request values are ignored.
+      description: Full replacement contract for a draft. The common fields are required for both HTTP-backed and managed MCP-backed tools. Endpoint and HTTP method are additionally required for HTTP-backed tools. HTTP connection fields omitted from the request preserve their current values. Managed MCP-backed tools preserve and ignore HTTP connection fields.
       properties:
         description: { type: string, minLength: 1, maxLength: 500 }
         input_schema: { $ref: "#/components/schemas/JSONSchema" }
         output_schema: { $ref: "#/components/schemas/JSONSchema" }
-        endpoint: { type: string, format: uri, description: Required for an HTTP-backed tool. Fixed credential-free HTTPS URL on the default port, or HTTP only for a localhost local-development host; it must use the exact configured delegated vendor API origin and must not contain a fragment. Ignored for managed MCP-backed tools. }
+        endpoint: { type: string, format: uri, maxLength: 8192, description: "Required for an HTTP-backed tool. Public destinations use credential-free HTTPS on the default port. Local development destinations use HTTP on localhost, a localhost subdomain, 127.0.0.1, or ::1 and may use a local port. Query strings and fragments are forbidden. delegated_oauth additionally requires the configured authorization API origin. Ignored for managed MCP-backed tools." }
         http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE], description: Required for an HTTP-backed tool and restricted to these five methods. Managed MCP-backed tools retain their MCP method and ignore this request value. }
+        upstream_auth: { $ref: "#/components/schemas/ToolUpstreamAuth" }
+        credential: { $ref: "#/components/schemas/ToolCredential" }
+        request_mapping: { $ref: "#/components/schemas/ToolRequestMapping" }
+        response_mapping: { $ref: "#/components/schemas/ToolResponseMapping" }
+        request_example: { type: [object, "null"], additionalProperties: true, description: Supply null to clear the current request example. }
+        response_example: { type: [object, "null"], additionalProperties: true, description: Supply null to clear the current response example. }
         authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
         timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 10000 }
         revision: { type: integer, format: int64, minimum: 1 }
@@ -3445,7 +4059,165 @@ components:
       properties:
         namespace: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', description: New immutable namespace identity. }
         name: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', description: New immutable tool-name identity. }
-      required: [namespace, name]
+        credential: { $ref: "#/components/schemas/ToolCredential" }
+        revision: { type: integer, format: int64, minimum: 1, description: Exact source-tool revision that was reviewed. A stale revision is rejected before any credential is stored. }
+      required: [namespace, name, revision]
+    ToolDraft:
+      type: object
+      additionalProperties: false
+      description: Canonical non-secret HTTP tool candidate shared by manual, import, proposal, and analysis flows. Inbound credential_present is ignored and normalized from server-side state or explicit save intent.
+      properties:
+        namespace: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$' }
+        name: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$' }
+        description: { type: string, maxLength: 500 }
+        http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        endpoint: { type: string, format: uri, maxLength: 8192, description: "Fixed credential-free public HTTPS or local-development HTTP endpoint; user information, query strings, and fragments are removed during normalization." }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 10000 }
+        input_schema: { $ref: "#/components/schemas/JSONSchema" }
+        output_schema: { $ref: "#/components/schemas/JSONSchema" }
+        upstream_auth: { $ref: "#/components/schemas/ToolUpstreamAuth" }
+        request_mapping: { $ref: "#/components/schemas/ToolRequestMapping" }
+        response_mapping: { $ref: "#/components/schemas/ToolResponseMapping" }
+        authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
+        request_example: { type: object, additionalProperties: true, description: Optional non-secret object no larger than 64 KiB. }
+        response_example: { type: object, additionalProperties: true, description: Optional non-secret object no larger than 64 KiB. }
+        credential_present: { type: boolean, readOnly: true, description: Server-derived presence bit. This is not credential material and an inbound value is never trusted. }
+      required: [namespace, name, description, http_method, endpoint, timeout_ms, input_schema, output_schema, upstream_auth, request_mapping, response_mapping, authorization_policy, credential_present]
+    ToolDraftContext:
+      type: object
+      additionalProperties: false
+      properties:
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        base_tool_id: { type: string, minLength: 1, maxLength: 200, description: Existing tool used to derive credential presence and reject stale assisted edits. }
+        base_revision: { type: integer, format: int64, minimum: 1 }
+        credential_will_be_supplied: { type: boolean, default: false, description: Non-secret declaration that the final create or update request will include a credential. It does not transmit or persist a credential. }
+      required: [draft]
+      dependentRequired:
+        base_tool_id: [base_revision]
+        base_revision: [base_tool_id]
+    ToolBuilderChatMessage:
+      type: object
+      additionalProperties: false
+      description: One untrusted, non-secret conversation message. Credential-like material is rejected. Messages are contextual hints only and can never authorize saving, publishing, binding, testing, or calling a tool.
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string, minLength: 1, maxLength: 2048, description: UTF-8 content limited to 2,048 encoded bytes after surrounding whitespace is removed. }
+      required: [role, content]
+    ToolDraftProposalInput:
+      type: object
+      additionalProperties: false
+      properties:
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        base_tool_id: { type: string, minLength: 1, maxLength: 200 }
+        base_revision: { type: integer, format: int64, minimum: 1 }
+        credential_will_be_supplied: { type: boolean, default: false }
+        instruction: { type: string, minLength: 1, maxLength: 8192, description: Non-secret instruction for the configured Analysis AI workload. }
+        history:
+          type: array
+          maxItems: 12
+          description: Chronological user/assistant context. The combined role and content data is limited to 12,288 UTF-8 bytes. History is processed as untrusted input, rejected when it resembles credential material, and never persisted as tool state.
+          items: { $ref: "#/components/schemas/ToolBuilderChatMessage" }
+      required: [draft, instruction]
+      dependentRequired:
+        base_tool_id: [base_revision]
+        base_revision: [base_tool_id]
+    ToolDraftAnalysisInput:
+      $ref: "#/components/schemas/ToolDraftContext"
+    ToolDraftImportSource:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [curl, postman, postman_collection, openapi, openapi_json, openapi_yaml, openapi_document, openapi_url], description: Omit or use a recognized value for automatic format detection. openapi_url is intentionally rejected rather than fetched. }
+        value: { type: string, minLength: 1, maxLength: 524288, description: "Pasted cURL command, Postman Collection JSON, or OpenAPI JSON/YAML document." }
+      required: [value]
+    ToolDraftImportInput:
+      type: object
+      additionalProperties: false
+      properties:
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        base_tool_id: { type: string, minLength: 1, maxLength: 200 }
+        base_revision: { type: integer, format: int64, minimum: 1 }
+        credential_will_be_supplied: { type: boolean, default: false }
+        source: { $ref: "#/components/schemas/ToolDraftImportSource" }
+      required: [draft, source]
+      dependentRequired:
+        base_tool_id: [base_revision]
+        base_revision: [base_tool_id]
+    ToolDraftFinding:
+      type: object
+      additionalProperties: false
+      properties:
+        level: { type: string, enum: [error, warning, info] }
+        code: { type: string, minLength: 1, maxLength: 80 }
+        message: { type: string, minLength: 1, maxLength: 500 }
+        field: { type: string, maxLength: 120 }
+        suggestion: { type: string, maxLength: 500 }
+      required: [level, code, message]
+    ToolDraftChange:
+      type: object
+      additionalProperties: false
+      properties:
+        field: { type: string, minLength: 1, maxLength: 120 }
+        rationale: { type: string, maxLength: 500 }
+        security_sensitive: { type: boolean, default: false }
+      required: [field]
+    ToolDraftValidation:
+      type: object
+      additionalProperties: false
+      properties:
+        valid: { type: boolean }
+        network_call_performed: { type: boolean, const: false }
+        findings: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/ToolDraftFinding" } }
+        normalized_draft: { $ref: "#/components/schemas/ToolDraft" }
+        checked_at: { type: string, format: date-time }
+      required: [valid, network_call_performed, findings, normalized_draft, checked_at]
+    ToolDraftProposal:
+      type: object
+      additionalProperties: false
+      properties:
+        proposal_id: { type: string, format: uuid }
+        base_fingerprint: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        summary: { type: string, minLength: 1, maxLength: 2000 }
+        reply: { type: string, minLength: 1, maxLength: 2000 }
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        changes: { type: array, maxItems: 32, items: { $ref: "#/components/schemas/ToolDraftChange" } }
+        findings: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/ToolDraftFinding" } }
+        valid: { type: boolean }
+        generated_at: { type: string, format: date-time }
+      required: [draft, changes, findings, valid]
+    ToolDraftImportCandidate:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string, minLength: 1, maxLength: 2000 }
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        changes: { type: array, maxItems: 32, items: { $ref: "#/components/schemas/ToolDraftChange" } }
+        findings: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/ToolDraftFinding" } }
+        valid: { type: boolean }
+      required: [draft, changes, findings, valid]
+    ToolDraftImportResult:
+      type: object
+      additionalProperties: false
+      properties:
+        candidates: { type: array, minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/ToolDraftImportCandidate" } }
+        findings:
+          type: array
+          maxItems: 128
+          items: { $ref: "#/components/schemas/ToolDraftFinding" }
+        generated_at: { type: string, format: date-time }
+      required: [candidates, findings]
+    ToolDraftAnalysis:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string, minLength: 1, maxLength: 2000 }
+        reply: { type: string, minLength: 1, maxLength: 2000 }
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        valid: { type: boolean }
+        network_call_performed: { type: boolean, const: false }
+        findings: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/ToolDraftFinding" } }
+        generated_at: { type: string, format: date-time }
+      required: [summary, draft, valid, network_call_performed, findings]
     ToolDryRunRequest:
       type: object
       additionalProperties: false
@@ -3471,6 +4243,142 @@ components:
         normalized_arguments: { type: object, additionalProperties: true }
         warnings: { type: array, items: { type: string } }
       required: [tool_id, revision, valid, network_call_performed, method, backend_kind, required_grants, confirmation_required, risk, idempotency_required, normalized_arguments, warnings]
+    ToolTestConfirmationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, format: int64, minimum: 1, description: Exact current persisted revision. }
+        arguments: { type: object, additionalProperties: true, default: {}, description: Exact arguments bound into the one-time confirmation by a canonical SHA-256 digest; argument values are never retained as run evidence. }
+        typed_tool_name: { type: string, minLength: 3, maxLength: 129, description: Exact namespace.name confirmation text. }
+        acknowledge_side_effects: { type: boolean, const: true, description: Acknowledges the real upstream request, including mutation side effects or an explicit stored confirmation policy on a GET. }
+      required: [revision, arguments, typed_tool_name, acknowledge_side_effects]
+    ToolTestConfirmation:
+      type: object
+      additionalProperties: false
+      properties:
+        confirmation_nonce: { type: string, minLength: 47, maxLength: 47, description: Single-use raw nonce returned once and never persisted. }
+        expires_at: { type: string, format: date-time }
+        tool_id: { type: string }
+        tool_revision: { type: integer, format: int64, minimum: 1 }
+      required: [confirmation_nonce, expires_at, tool_id, tool_revision]
+    ToolTestRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, format: int64, minimum: 1 }
+        arguments: { type: object, additionalProperties: true, default: {}, description: Validated against the exact stored input schema. Values may be sent to the fixed upstream for this one test but are never retained as evidence. }
+        confirmation_nonce: { type: string, maxLength: 200, description: Required for non-GET tests or when the exact tool policy requires explicit confirmation, and consumed exactly once. Never retained in evidence or audit metadata. }
+        idempotency_key: { type: string, minLength: 16, maxLength: 200, description: Visible ASCII value required for mutation tests when the exact tool policy requires idempotency. Forwarded through the runtime boundary but never retained in evidence. }
+      required: [revision, arguments]
+    ToolTestJSONShape:
+      type: object
+      additionalProperties: false
+      description: Bounded value-free JSON structure. Only ordinary schema-declared property names or positional redaction placeholders and JSON types may be retained; scalar values never are.
+      properties:
+        type: { type: string, enum: [object, array, string, number, integer, boolean, "null", unknown] }
+        properties:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ToolTestJSONShape" }
+        items:
+          type: array
+          maxItems: 64
+          items: { $ref: "#/components/schemas/ToolTestJSONShape" }
+        length: { type: integer, minimum: 0, description: Array length only; omitted when zero. }
+        truncated: { type: boolean }
+      required: [type]
+    ToolTestFinding:
+      type: object
+      additionalProperties: false
+      properties:
+        phase: { type: string, minLength: 1, maxLength: 80 }
+        code: { type: string, minLength: 1, maxLength: 120 }
+        message: { type: string, minLength: 1, maxLength: 500 }
+        instance_path: { type: string, maxLength: 500, description: Value-free JSON instance location. }
+        schema_path: { type: string, maxLength: 500 }
+      required: [phase, code, message]
+    ToolTestRun:
+      type: object
+      additionalProperties: false
+      description: Sanitized, append-only evidence retained for at most 24 hours. Shape object keys are limited to schema-declared property names; undeclared upstream keys are replaced with positional placeholders, and diagnostic paths redact undeclared property names. Actor/request IDs and argument hashes remain server-private; destinations, headers, bodies, scalar values, credentials, nonce material, and idempotency keys are never stored in this representation.
+      properties:
+        id: { type: string }
+        organisation_id: { type: string }
+        product_id: { type: string }
+        tool_id: { type: string }
+        tool_revision: { type: integer, format: int64, minimum: 1 }
+        tool_name: { type: string }
+        method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        authentication_type: { type: string, enum: [delegated_oauth, none, bearer, authorization_scheme, api_key_header, api_key_query, basic, oauth_client_credentials, custom_header], description: delegated_oauth is retained only on a controlled authorization-unavailable failure with no upstream network call. }
+        outcome: { type: string, enum: [success, failure] }
+        phase: { type: string }
+        network_call_performed: { type: boolean }
+        upstream_status_code: { type: integer, minimum: 100, maximum: 599 }
+        response_bytes: { type: integer, format: int64, minimum: 0 }
+        duration_ms: { type: integer, format: int64, minimum: 0 }
+        request_shape: { $ref: "#/components/schemas/ToolTestJSONShape" }
+        response_shape: { $ref: "#/components/schemas/ToolTestJSONShape" }
+        findings: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/ToolTestFinding" } }
+        evidence_hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$', readOnly: true, description: Server-computed browser/server consent binding over this exact run. It is required by the analysis request but never sent to the configured provider. }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+      required: [id, organisation_id, product_id, tool_id, tool_revision, tool_name, method, authentication_type, outcome, phase, network_call_performed, duration_ms, request_shape, findings, evidence_hash, expires_at, created_at]
+    ToolTestRunList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ToolTestRun" } }
+      required: [items]
+    ToolTestAnalysisMessage:
+      type: object
+      additionalProperties: false
+      description: One caller-supplied untrusted, non-secret contextual message. It cannot authorize any action and is never persisted by this endpoint.
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string, minLength: 1, maxLength: 2048, description: At most 2,048 UTF-8 bytes after trimming. Credential-like material, destination URLs, nonce-shaped material, and UUID-shaped internal identifiers are rejected. }
+      required: [role, content]
+    ToolTestAnalysisRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, format: int64, minimum: 1, description: Must equal both the exact run revision and current exact base revision. }
+        evidence_hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$', description: Browser/server consent-binding token recomputed over this exact run. It is enforced by the server and never sent to the Analysis provider. }
+        consent_to_analysis_provider: { type: boolean, const: true, description: Must be explicitly present and true before the configured Analysis provider is contacted. }
+        question: { type: string, minLength: 1, maxLength: 2048, description: Latest non-secret question, limited to 2,048 UTF-8 bytes after trimming. Credential-like material, destination URLs, nonce-shaped material, and UUID-shaped internal identifiers are rejected. }
+        history:
+          type: array
+          maxItems: 12
+          description: Chronological untrusted user/assistant context. Combined role/content data is limited to 12,288 UTF-8 bytes, rejected when credential-like or containing a destination URL, nonce-shaped material, or UUID-shaped internal identifier, and never persisted as tool state.
+          items: { $ref: "#/components/schemas/ToolTestAnalysisMessage" }
+      required: [revision, evidence_hash, consent_to_analysis_provider, question]
+    ToolTestAnalysisProposal:
+      type: object
+      additionalProperties: false
+      description: Complete non-secret candidate merged onto and locally validated against the exact base revision. Examples, endpoint, upstream authentication configuration and derived credential presence are preserved from server state rather than accepted from the provider. This object remains human-review-only.
+      properties:
+        proposal_id: { type: string, format: uuid }
+        base_tool_id: { type: string }
+        base_revision: { type: integer, format: int64, minimum: 1 }
+        base_fingerprint: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        requires_clone: { type: boolean, description: True for an immutable published base. The proposal cannot be applied in place. }
+        draft: { $ref: "#/components/schemas/ToolDraft" }
+        changes: { type: array, maxItems: 32, items: { $ref: "#/components/schemas/ToolDraftChange" } }
+        findings: { type: array, maxItems: 128, items: { $ref: "#/components/schemas/ToolDraftFinding" } }
+        valid: { type: boolean }
+      required: [proposal_id, base_tool_id, base_revision, base_fingerprint, requires_clone, draft, changes, findings, valid]
+    ToolTestAnalysis:
+      type: object
+      additionalProperties: false
+      description: Advisory provider reply bound to one exact evidence hash and revision. No tool or upstream mutation occurs.
+      properties:
+        tool_revision: { type: integer, format: int64, minimum: 1 }
+        evidence_hash: { type: string, pattern: '^sha256:[0-9a-f]{64}$', description: Returned to let the browser reject a response not bound to its consent preview; not sent to the provider. }
+        reply: { type: string, minLength: 1, maxLength: 2000 }
+        findings: { type: array, maxItems: 32, items: { $ref: "#/components/schemas/ToolDraftFinding" } }
+        proposal: { $ref: "#/components/schemas/ToolTestAnalysisProposal" }
+        provider_outcome: { type: string, enum: [succeeded, unusable] }
+        advisory: { type: boolean, const: true }
+        generated_at: { type: string, format: date-time }
+      required: [tool_revision, evidence_hash, reply, findings, provider_outcome, advisory, generated_at]
     CreateMCPConnectionRequest:
       type: object
       additionalProperties: false
@@ -3570,25 +4478,52 @@ components:
       type: object
       additionalProperties: false
       properties:
-        issuer: { type: string, format: uri, description: Fixed HTTPS OIDC issuer origin. }
+        provider: { type: string, const: oidc, description: Explicit fixed provider discriminator for standards-based OpenID Connect. }
+        issuer: { type: string, format: uri, description: Exact HTTPS OIDC issuer, including any path, port, or trailing slash. HTTP is accepted only for localhost development. }
         client_id: { type: string, minLength: 1 }
         client_secret: { type: string, format: password, writeOnly: true, description: Required for initial configuration; omit or send empty to retain the current encrypted secret. }
         scopes:
           type: array
           items: { type: string }
           default: [openid, profile, email]
-        audience: { type: string }
-        oauth_resource: { type: string, format: uri, description: Optional RFC 8707 resource indicator sent to the upstream authorization server; independent of the delegated API origin. }
-        organisation_claim: { type: string, default: org_id }
-        installation_claim: { type: string, default: installation_id, description: Optional trusted OIDC claim matched to a registered product installation. }
-        delegated_api_origin:
-          description: Credential-free HTTPS origin used only with the delegated user token. DokoSoko appends the normative access-evaluation path and rejects customer tool endpoints on other origins.
+        audience: { type: string, description: Optional provider-specific authorization-request audience. Omitted upstream when empty. }
+        oauth_resource: { type: string, format: uri, description: Optional absolute RFC 8707 resource identifier sent to the upstream authorization server; independent of the authorization API origin and not dereferenced by DokoSoko. }
+        customer_account_claim: { type: string, minLength: 1, description: Required string ID-token claim that identifies the customer account; no implicit claim is assumed. }
+        installation_claim: { type: string, description: Optional trusted OIDC claim matched to a registered product installation. }
+        authorization_api_origin:
+          description: Credential-free HTTPS origin used only with the delegated user token. Loopback and *.localhost HTTP origins with explicit ports are accepted only for local development. DokoSoko appends the normative access-evaluation path and rejects customer tool endpoints on other origins.
           type: string
           format: uri
-          pattern: '^https://[^/?#:@]+$'
-        state: { type: string, enum: [active, disabled] }
         revision: { type: integer, format: int64, minimum: 0 }
-      required: [issuer, client_id, delegated_api_origin, state, revision]
+      required: [provider, issuer, client_id, customer_account_claim, authorization_api_origin, revision]
+    IdentityProviderRevisionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, format: int64, minimum: 1 }
+      required: [revision]
+    ActivateIdentityProviderRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        revision: { type: integer, format: int64, minimum: 1 }
+        test_id: { type: string, minLength: 1 }
+      required: [revision, test_id]
+    IdentityProviderTest:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [pending, passed, failed, expired] }
+        configuration_revision: { type: integer, format: int64, minimum: 1 }
+        authorization_url: { type: string, format: uri, description: Returned only by the begin operation and never persisted. }
+        failure_code: { type: string, description: Stable non-secret lifecycle failure code. client_authentication_unsupported means discovery advertised neither client_secret_basic nor client_secret_post. }
+        issuer: { type: string, format: uri }
+        customer_id: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+      required: [id, status, configuration_revision, created_at, expires_at]
     IdentityProvider:
       type: object
       additionalProperties: false
@@ -3596,21 +4531,27 @@ components:
         id: { type: string }
         organisation_id: { type: string }
         deployment_id: { type: string }
-        issuer: { type: string, format: uri }
+        provider: { type: string, const: oidc }
+        configured: { type: boolean }
+        credential_present: { type: boolean }
+        callback_url: { type: string, format: uri }
+        access_evaluation_url: { type: string, description: Exact delegated evaluation URL, or empty before an API origin is configured. }
+        issuer: { type: string, description: Empty only in the first-run unconfigured response. }
         client_id: { type: string }
         scopes:
           type: array
           items: { type: string }
         audience: { type: string }
         oauth_resource: { type: string, format: uri }
-        organisation_claim: { type: string }
+        customer_account_claim: { type: string }
         installation_claim: { type: string }
-        delegated_api_origin: { type: string, format: uri }
+        authorization_api_origin: { type: string }
         state: { type: string, enum: [active, disabled] }
-        revision: { type: integer, format: int64, minimum: 1 }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-      required: [id, organisation_id, deployment_id, issuer, client_id, scopes, delegated_api_origin, state, revision, created_at, updated_at]
+        revision: { type: integer, format: int64, minimum: 0 }
+        last_test: { $ref: "#/components/schemas/IdentityProviderTest" }
+        created_at: { type: string, format: date-time, description: Present only after a configuration has been saved. }
+        updated_at: { type: string, format: date-time, description: Present only after a configuration has been saved. }
+      required: [organisation_id, deployment_id, provider, configured, credential_present, callback_url, access_evaluation_url, issuer, client_id, scopes, audience, oauth_resource, customer_account_claim, installation_claim, authorization_api_origin, state, revision]
     ReportProductContext:
       type: object
       additionalProperties: false
@@ -4347,6 +5288,7 @@ components:
             - type: object
               properties:
                 confirmed: { type: boolean, default: false }
+                idempotency_key: { type: string, minLength: 16, maxLength: 200, pattern: "^[!-~]{16,200}$", description: Stable identifier for one tool invocation. Required for custom HTTP mutations whose discovery metadata declares com.dokosoko/idempotencyKeyRequired. Reuse it across transport retries; do not substitute a request ID. }
       required: [name, arguments, _meta]
     MCPRequestMeta:
       type: object
@@ -4821,6 +5763,24 @@ components:
         snapshot: { type: object, additionalProperties: true }
         bound_at: { type: string, format: date-time }
       required: [integration_id, integration_revision_id, integration_revision, manifest_hash, snapshot, bound_at]
+    WidgetKnowledgeBinding:
+      type: object
+      additionalProperties: false
+      description: Activation-time pin to one exact published recipe revision. Active widgets never follow later recipe edits implicitly.
+      properties:
+        recipe_id: { type: string }
+        recipe_revision_id: { type: string }
+        recipe_revision: { type: integer, format: int64, minimum: 1 }
+        integration_ids: { type: array, uniqueItems: true, items: { type: string } }
+        title: { type: string }
+        outcome: { type: string }
+        audience: { type: string }
+        stable_uri: { type: string }
+        markdown: { type: string }
+        references: { type: array, items: { $ref: "#/components/schemas/RecipeReference" } }
+        content_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        bound_at: { type: string, format: date-time }
+      required: [recipe_id, recipe_revision_id, recipe_revision, integration_ids, title, outcome, audience, stable_uri, markdown, references, content_hash, bound_at]
     Widget:
       type: object
       additionalProperties: false
@@ -4833,12 +5793,13 @@ components:
         allowed_origins: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uri } }
         integration_ids: { type: array, uniqueItems: true, items: { type: string } }
         integration_bindings: { type: array, items: { $ref: "#/components/schemas/WidgetIntegrationBinding" } }
+        knowledge_bindings: { type: array, items: { $ref: "#/components/schemas/WidgetKnowledgeBinding" } }
         appearance: { $ref: "#/components/schemas/WidgetAppearance" }
         revision: { type: integer, minimum: 1 }
         activated_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, deployment_id, organisation_id, name, state, allowed_origins, integration_ids, integration_bindings, appearance, revision, created_at, updated_at]
+      required: [id, deployment_id, organisation_id, name, state, allowed_origins, integration_ids, integration_bindings, knowledge_bindings, appearance, revision, created_at, updated_at]
     WidgetList:
       type: object
       additionalProperties: false
@@ -4909,12 +5870,24 @@ components:
         secret: { type: string, pattern: "^doko_wsk_[A-Za-z0-9_-]{40,}$", writeOnly: true }
         credential: { $ref: "#/components/schemas/WidgetSecret" }
       required: [secret, credential]
+    WidgetBootstrap:
+      type: object
+      additionalProperties: false
+      properties:
+        bootstrapToken:
+          type: string
+          pattern: "^doko_wbt_[A-Za-z0-9_-]{40,}$"
+          writeOnly: true
+          description: Single-use bearer held only in browser memory.
+        expiresAt: { type: string, format: date-time }
+      required: [bootstrapToken, expiresAt]
     WidgetSession:
       type: object
       additionalProperties: false
       properties:
         id: { type: string }
         widget_id: { type: string }
+        kind: { type: string, enum: [customer, admin_preview] }
         user_id: { type: string }
         customer_organisation_id: { type: string }
         origin: { type: string, format: uri }
@@ -4922,7 +5895,7 @@ components:
         revoked_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
         last_seen_at: { type: [string, "null"], format: date-time }
-      required: [id, widget_id, user_id, origin, expires_at, created_at]
+      required: [id, widget_id, kind, user_id, origin, expires_at, created_at]
     WidgetSessionList:
       type: object
       additionalProperties: false

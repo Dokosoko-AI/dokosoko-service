@@ -53,7 +53,7 @@ func (h *Handler) Routes() http.Handler {
 
 func (h *Handler) supportSubmissions(w http.ResponseWriter, r *http.Request) {
 	started := h.now()
-	requestID := strings.TrimSpace(r.Header.Get("X-DokoSoko-Request-ID"))
+	requestID := strings.TrimSpace(r.Header.Get("X-External-Request-ID"))
 	if !requestIDPattern.MatchString(requestID) {
 		requestID = ""
 	}
@@ -77,7 +77,7 @@ func (h *Handler) supportSubmissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if requestID == "" {
-		fail(http.StatusBadRequest, "invalid_request_id", "X-DokoSoko-Request-ID must match req_ followed by 32 lowercase hexadecimal characters.")
+		fail(http.StatusBadRequest, "invalid_request_id", "X-External-Request-ID must match req_ followed by 32 lowercase hexadecimal characters.")
 		return
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))

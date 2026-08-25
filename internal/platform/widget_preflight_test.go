@@ -68,7 +68,7 @@ func configurePrivateIntegrationPolicyTool(t *testing.T, service *platform.Servi
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_ready_status", OrganisationID: integration.OrganisationID, ProductID: integration.DeploymentID, Namespace: "ready", Name: "status", Description: "Read readiness status.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":true}`), BaseURL: "https://api.example.test/health/ready", HTTPMethod: "GET", AuthorizationPolicy: json.RawMessage(`{"required_grants":["ready.read"],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
+	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_ready_status", OrganisationID: integration.OrganisationID, ProductID: integration.DeploymentID, Namespace: "ready", Name: "status", Description: "Read readiness status.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), BaseURL: "https://api.example.test/health/ready", HTTPMethod: "GET", UpstreamAuth: json.RawMessage(`{"type":"delegated_oauth"}`), RequestMapping: json.RawMessage(`{}`), ResponseMapping: json.RawMessage(`{}`), AuthorizationPolicy: json.RawMessage(`{"required_grants":["ready.read"],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +79,36 @@ func configurePrivateIntegrationPolicyTool(t *testing.T, service *platform.Servi
 	if _, err = service.SetIntegrationToolBindings(ctx, integration.ID, []platform.ToolRevisionSelection{{ToolID: publishedTool.ID, Revision: publishedTool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, actor); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func configurePrivateIntegrationRuntimePolicyTool(t *testing.T, service *platform.Service, integration model.Integration, actor platform.Actor) model.RuntimeServiceConnection {
+	t.Helper()
+	ctx := t.Context()
+	grant, err := service.SaveGrantDefinition(ctx, "", platform.GrantDefinitionInput{Key: "ready.runtime.read", DisplayName: "Read runtime readiness", Description: "Read runtime readiness status.", Risk: "low", State: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point, err := service.SaveAuthorizationPoint(ctx, integration.ID, "", platform.AuthorizationPointInput{Key: "ready.runtime.status.read", Name: "Read runtime readiness", Description: "Read runtime readiness status.", ActionType: "read", RequiredGrants: []string{grant.Key}, DecisionTTLSeconds: 300, State: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup, err := service.ConfigureRuntimeSetup(ctx, integration.ID, platform.RuntimeSetupInput{EnvironmentID: "env_prod", BaseURL: "https://api.example.test", AuthenticationType: "none"}, actor)
+	if err != nil || len(setup.Connections) != 1 {
+		t.Fatalf("runtime setup=%#v err=%v", setup, err)
+	}
+	connection := setup.Connections[0]
+	draft, err := service.CreateTool(ctx, platform.ToolInput{ProductID: integration.DeploymentID, Scope: model.ToolScopeAPI, OwnerIntegrationID: integration.ID, RuntimeServiceConnectionID: connection.ID, HTTPPath: "/health/ready", Namespace: "ready", Name: "runtime_status", Description: "Read runtime readiness status.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ready":{"type":"boolean"}}}`), HTTPMethod: "GET", AuthorizationPolicy: json.RawMessage(`{"required_grants":["ready.runtime.read"],"confirmation_required":false,"risk":"low"}`), TimeoutMS: 5000}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishedTool, err := service.PublishTool(ctx, integration.DeploymentID, draft.ID, draft.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SetIntegrationToolBindings(ctx, integration.ID, []platform.ToolRevisionSelection{{ToolID: publishedTool.ID, Revision: publishedTool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, actor); err != nil {
+		t.Fatal(err)
+	}
+	return connection
 }
 
 func configureReadyPrivateIntegration(t *testing.T, service *platform.Service, memory *store.Memory, actor platform.Actor) model.Integration {
@@ -119,6 +149,18 @@ func TestPrivateIntegrationPublicationRequiresServerPreflightAndExactCandidate(t
 	preflight, err := service.IntegrationPreflight(ctx, ready.ID)
 	if err != nil || !preflight.Ready || preflight.CandidateManifestHash == "" {
 		t.Fatalf("preflight=%#v err=%v", preflight, err)
+	}
+	commonOnlyServiceAccessFound := false
+	for _, check := range preflight.Checks {
+		if check.Code == "service_access" {
+			commonOnlyServiceAccessFound = true
+			if check.Required || check.Status != "optional" {
+				t.Fatalf("legacy/common-only service access should remain optional: %#v", check)
+			}
+		}
+	}
+	if !commonOnlyServiceAccessFound {
+		t.Fatalf("service_access check missing from preflight: %#v", preflight.Checks)
 	}
 	published, err := service.PublishIntegrationCandidate(ctx, ready.ID, preflight.CandidateRevision, preflight.CandidateManifestHash, actor)
 	if err != nil || published.ManifestHash != preflight.CandidateManifestHash {
@@ -204,7 +246,7 @@ func TestWidgetPinsPublishedIntegrationAndChatIgnoresMutableRows(t *testing.T) {
 	// PostgreSQL jsonb may normalize object-key order. The immutable revision ID
 	// and stored manifest hash remain authoritative across that representation.
 	reply, err := service.AnswerWidgetMessage(ctx, platform.WidgetPrincipal{Widget: chatWidget, Session: model.WidgetSession{ID: "session-pinned"}}, "Which tool is available?")
-	if err != nil || reply != "The pinned Ready API exposes ready.status." {
+	if err != nil || !strings.HasPrefix(reply, "The pinned Ready API exposes ready.status.") || !strings.Contains(reply, "### Sources") || !strings.Contains(reply, "Create an API key") {
 		t.Fatalf("reply=%q err=%v", reply, err)
 	}
 	if !bytes.Contains(doer.requestBody, []byte("Immutable published description.")) || !bytes.Contains(doer.requestBody, []byte("ready.status")) || bytes.Contains(doer.requestBody, []byte("MUTABLE DESCRIPTION MUST NOT REACH CHAT")) {
@@ -212,6 +254,62 @@ func TestWidgetPinsPublishedIntegrationAndChatIgnoresMutableRows(t *testing.T) {
 	}
 	if _, err = service.SetWidgetState(ctx, updatedWidget.ID, "active", updatedWidget.Revision, actor); err == nil || !strings.Contains(err.Error(), "publish the exact preflight candidate") {
 		t.Fatalf("reactivation followed an unpublished mutable row: %v", err)
+	}
+}
+
+func TestWidgetAcceptsExactRuntimeServiceConnectionPublication(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x52}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, &productBuilderDoer{response: `{"choices":[{"message":{"content":"Ready."}}],"usage":{"total_tokens":2}}`})
+	actor := platform.Actor{ID: "root_widget_runtime", RequestID: "req_widget_runtime"}
+	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "runtime-ready-api", VersionKey: "v1", DisplayName: "Runtime Ready API", Description: "Runtime-backed immutable publication.", Visibility: model.VisibilityPrivate, Lifecycle: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configurePrivateIntegrationFoundations(t, service, memory, integration, actor)
+	connection := configurePrivateIntegrationRuntimePolicyTool(t, service, integration, actor)
+	preflight, err := service.IntegrationPreflight(ctx, integration.ID)
+	if err != nil || !preflight.Ready {
+		t.Fatalf("runtime preflight=%#v err=%v", preflight, err)
+	}
+	var serviceAccess platform.IntegrationPreflightCheck
+	for _, check := range preflight.Checks {
+		if check.Code == "service_access" {
+			serviceAccess = check
+		}
+	}
+	if !serviceAccess.Required || serviceAccess.Status != "pass" {
+		t.Fatalf("runtime service access check = %#v", serviceAccess)
+	}
+	published, err := service.PublishIntegrationCandidate(ctx, integration.ID, preflight.CandidateRevision, preflight.CandidateManifestHash, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := service.ProductManifest(ctx, integration.DeploymentID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Integrations) != 1 || len(manifest.Integrations[0].ServiceConnections) != 1 || manifest.Integrations[0].ServiceConnections[0].ConnectionID != connection.ID || len(manifest.Integrations[0].ServiceConnections[0].CurrentRevisions) != 1 || !manifest.Integrations[0].ServiceConnections[0].CurrentRevisions[0].CredentialReady {
+		t.Fatalf("product manifest runtime service metadata = %#v", manifest.Integrations)
+	}
+	if _, err = service.SaveLLMProfile(ctx, platform.LLMProfileInput{OrganisationID: integration.OrganisationID, ProductID: integration.DeploymentID, Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "widget-assistant-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 512, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
+		t.Fatal(err)
+	}
+	provisioning, err := service.CreateWidget(ctx, platform.WidgetInput{Name: "Runtime assistant", AllowedOrigins: []string{"https://app.customer.example"}, IntegrationIDs: []string{integration.ID}, Appearance: platform.WidgetAppearance{Theme: "auto", LauncherPosition: "right"}}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := service.SetWidgetState(ctx, provisioning.Widget.ID, "active", provisioning.Widget.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active.IntegrationBindings) != 1 || active.IntegrationBindings[0].IntegrationRevisionID != published.ID || !bytes.Contains(active.IntegrationBindings[0].Snapshot, []byte(`"service_connections"`)) || bytes.Contains(active.IntegrationBindings[0].Snapshot, []byte(`"secret_id"`)) {
+		t.Fatalf("widget runtime binding = %#v", active.IntegrationBindings)
 	}
 }
 
@@ -250,7 +348,7 @@ func TestWidgetExplicitToolExecutionRequestStatesCatalogOnlyBoundary(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := "This widget can explain the published `ready.status` tool contract, but it cannot execute tools. Use an authorized private MCP client to call `ready.status` so DokoSoko can enforce the configured identity, grants, and authorization policy."
+	expected := "I can explain the published `ready.status` operation, but this widget is currently configured for guidance only, so I can't run it. I can show you the exact prerequisites and verification steps, or an administrator can enable a confirmed action path for this widget."
 	if reply != expected {
 		t.Fatalf("catalog-only reply = %q", reply)
 	}

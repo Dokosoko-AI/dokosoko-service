@@ -372,6 +372,16 @@ func TestCreateRecipeFromPromptAnalysesEvidenceAndReturnsEditableDraft(t *testin
 	if !strings.Contains(recipe.CurrentRevision.Markdown, "## Implementation") {
 		t.Fatalf("markdown = %q", recipe.CurrentRevision.Markdown)
 	}
+	if strings.Contains(recipe.CurrentRevision.Markdown, "recipe-missing-endpoint-selection") {
+		t.Fatalf("prompt recipe failed to select the explicit MCP endpoint: %q", recipe.CurrentRevision.Markdown)
+	}
+	reworked, err := service.ReworkRecipe(ctx, "prod_acme", recipe.ID, "Clarify the MCP verification steps.", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(reworked.CurrentRevision.Markdown, "recipe-missing-endpoint-selection") {
+		t.Fatalf("recipe rework discarded the selected MCP endpoint: %q", reworked.CurrentRevision.Markdown)
+	}
 	analysis, err := memory.IntegrationAnalysis(ctx, "prod_acme", recipe.AnalysisID)
 	if err != nil || len(analysis.Evidence) == 0 {
 		t.Fatalf("analysis = %#v err=%v", analysis, err)
@@ -569,7 +579,7 @@ func TestIntegrationScopedRecipeGenerationUsesOnlySelectedBindings(t *testing.T)
 
 	publishTool := func(id, namespace, name, endpoint string) model.Tool {
 		t.Helper()
-		draft, createErr := memory.CreateTool(ctx, model.Tool{ID: id, OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: namespace, Name: name, Description: name + " operation", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), BaseURL: endpoint, HTTPMethod: "GET", AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
+		draft, createErr := memory.CreateTool(ctx, model.Tool{ID: id, OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: namespace, Name: name, Description: name + " operation", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), BaseURL: endpoint, HTTPMethod: "GET", UpstreamAuth: json.RawMessage(`{"type":"none"}`), RequestMapping: json.RawMessage(`{}`), ResponseMapping: json.RawMessage(`{}`), AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
 		if createErr != nil {
 			t.Fatal(createErr)
 		}
@@ -599,19 +609,21 @@ func TestIntegrationScopedRecipeGenerationUsesOnlySelectedBindings(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundScope, foundIdentity, foundPaymentResource, foundPaymentPublication, foundPaymentTool, foundPaymentEndpoint := false, false, false, false, false, false
+	foundScope, foundIdentity, foundOAuth, foundPaymentResource, foundPaymentPublication, foundPaymentTool, foundPaymentEndpoint, foundKnowledgeTool := false, false, false, false, false, false, false, false
 	for _, evidence := range analysis.Evidence {
 		foundScope = foundScope || evidence.Kind == "integration_scope" && evidence.ResourceID == payments.ID
 		foundIdentity = foundIdentity || evidence.Kind == "identity_provider" && evidence.ResourceID == "idp_scoped" && strings.Contains(evidence.Excerpt, "tenant_id") && strings.Contains(evidence.Excerpt, "platform.readiness")
+		foundOAuth = foundOAuth || evidence.Kind == "mcp_oauth" && strings.Contains(evidence.Excerpt, "PKCE method S256")
 		foundPaymentResource = foundPaymentResource || evidence.Kind == "resource_set" && evidence.ResourceID == paymentContract.ID
 		foundPaymentPublication = foundPaymentPublication || evidence.Kind == "source_publication" && evidence.ResourceID == publications[0].ID && strings.Contains(evidence.Excerpt, "Create an API key")
 		foundPaymentTool = foundPaymentTool || evidence.Kind == "tool" && evidence.ResourceID == paymentTool.ID && evidence.Version == fmt.Sprint(paymentTool.Revision)
 		foundPaymentEndpoint = foundPaymentEndpoint || evidence.Kind == "tool" && strings.Contains(evidence.Excerpt, "https://payments.example.test/health/ready")
+		foundKnowledgeTool = foundKnowledgeTool || evidence.Kind == "automatic_tool" && evidence.Label == "payments-api.knowledge.search"
 		if evidence.ResourceID == messaging.ID || evidence.ResourceID == messageContract.ID || evidence.ResourceID == messageTool.ID || evidence.Kind == "source" {
 			t.Fatalf("unselected product evidence leaked into scoped analysis: %#v", evidence)
 		}
 	}
-	if !foundScope || !foundIdentity || !foundPaymentResource || !foundPaymentPublication || !foundPaymentTool || !foundPaymentEndpoint {
+	if !foundScope || !foundIdentity || !foundOAuth || !foundPaymentResource || !foundPaymentPublication || !foundPaymentTool || !foundPaymentEndpoint || !foundKnowledgeTool {
 		t.Fatalf("scoped evidence is incomplete: %#v", analysis.Evidence)
 	}
 	if len(analysis.Plan.Recipes) != 1 || analysis.Plan.Recipes[0].Slug != "connect-acme-payments-api-v1-to-mcp" || analysis.Plan.Recipes[0].Title != "Connect Payments API to MCP" {
@@ -621,6 +633,9 @@ func TestIntegrationScopedRecipeGenerationUsesOnlySelectedBindings(t *testing.T)
 	recipes, err := service.GenerateRecipesForIntegration(ctx, "prod_acme", analysis.ID, payments.ID, actor)
 	if err != nil || len(recipes) != 1 {
 		t.Fatalf("generate scoped recipes: values=%#v err=%v", recipes, err)
+	}
+	if markdown := recipes[0].CurrentRevision.Markdown; !strings.Contains(markdown, "protected-resource metadata") || !strings.Contains(markdown, "payments-api.knowledge.search") || strings.Contains(markdown, "MCP discovery exposes `payments.check_readiness` at exact tool revision") {
+		t.Fatalf("scoped recipe omitted platform OAuth/automatic tools or claimed revision discovery: %s", markdown)
 	}
 	if _, err := service.GenerateRecipesForIntegration(ctx, "prod_acme", analysis.ID, messaging.ID, actor); err == nil || !strings.Contains(err.Error(), "not scoped") {
 		t.Fatalf("cross-integration generation was accepted: %v", err)

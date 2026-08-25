@@ -109,7 +109,12 @@ func Run(ctx context.Context, config Config) (Report, error) {
 		}
 		report.Add(Check{Name: "tools/call", Status: Skip, Required: config.CallConfirmed, Detail: detail})
 	} else {
-		outcome := client.call(ctx, "tools/call", config.CallTool, config.CallArguments, config.CallConfirmed)
+		var outcome callOutcome
+		if config.CallConfirmed {
+			outcome = client.callConfirmed(ctx, config.CallTool, config.CallArguments)
+		} else {
+			outcome = client.call(ctx, "tools/call", config.CallTool, config.CallArguments, false)
+		}
 		report.Add(outcomeCheck("tools/call: "+config.CallTool, outcome, nil))
 	}
 
@@ -214,15 +219,43 @@ func runConfirmationChecks(ctx context.Context, report *Report, config Config, c
 		report.Add(Check{Name: "authorization.confirmation.positive", Status: Skip, Required: config.VerifyConfirmedCall, Detail: "no confirmation-gated tool was configured"})
 		return
 	}
+	idempotencyKey, err := randomID("mcpacc_idem_")
+	if err != nil {
+		report.Add(Check{Name: "authorization.confirmation.negative", Status: Fail, Required: true, Detail: "could not generate confirmation idempotency metadata"})
+		report.Add(Check{Name: "authorization.confirmation.positive", Status: Skip, Required: config.VerifyConfirmedCall, Detail: "confirmation challenge could not be started"})
+		return
+	}
 	code := -32003
-	unconfirmed := client.call(ctx, "tools/call", config.ConfirmationTool, config.ConfirmationArguments, false)
-	report.Add(outcomeCheck("authorization.confirmation.negative", unconfirmed, &code))
+	unconfirmed := client.callToolWithConfirmation(ctx, "tools/call", config.ConfirmationTool, config.ConfirmationArguments, false, "", idempotencyKey)
+	negative := outcomeCheck("authorization.confirmation.negative", unconfirmed, &code)
+	challenge, challengeErr := confirmationChallenge(unconfirmed)
+	if negative.Status == Pass && challengeErr != nil {
+		negative.Status = Fail
+		negative.Detail = challengeErr.Error()
+	}
+	report.Add(negative)
 	if !config.VerifyConfirmedCall {
 		report.Add(Check{Name: "authorization.confirmation.positive", Status: Skip, Detail: "confirmed invocation was not enabled"})
 		return
 	}
-	confirmed := client.call(ctx, "tools/call", config.ConfirmationTool, config.ConfirmationArguments, true)
-	report.Add(outcomeCheck("authorization.confirmation.positive", confirmed, nil))
+	if challengeErr != nil {
+		report.Add(Check{Name: "authorization.confirmation.positive", Status: Fail, Required: true, Detail: "server did not provide a usable confirmation challenge"})
+		report.Add(Check{Name: "authorization.confirmation.replay", Status: Skip, Required: true, Detail: "no consumed challenge was available to replay"})
+		return
+	}
+	confirmed := client.callToolWithConfirmation(ctx, "tools/call", config.ConfirmationTool, config.ConfirmationArguments, true, challenge, idempotencyKey)
+	positive := outcomeCheck("authorization.confirmation.positive", confirmed, nil)
+	report.Add(positive)
+	if positive.Status != Pass {
+		report.Add(Check{Name: "authorization.confirmation.replay", Status: Skip, Required: true, Detail: "the confirmed invocation did not consume its challenge"})
+		return
+	}
+	replayed := client.callToolWithConfirmation(ctx, "tools/call", config.ConfirmationTool, config.ConfirmationArguments, true, challenge, idempotencyKey)
+	replay := outcomeCheck("authorization.confirmation.replay", replayed, &code)
+	if replay.Status == Pass {
+		replay.Detail = "the consumed confirmation challenge was rejected on replay"
+	}
+	report.Add(replay)
 }
 
 func toolNames(raw json.RawMessage) ([]string, error) {

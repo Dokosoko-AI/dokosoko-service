@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,11 +24,16 @@ import (
 )
 
 var (
-	ErrConfirmationRequired = errors.New("public access confirmation required")
-	ErrUnsafeForPublic      = errors.New("resource is not safe for public access")
-	ErrInvalidVisibility    = errors.New("invalid visibility")
-	ErrToolDrifted          = errors.New("imported tool schema drift requires review")
-	ErrSourceReviewRequired = errors.New("source publication requires a completed, reviewable crawl with fetched evidence")
+	ErrConfirmationRequired  = errors.New("public access confirmation required")
+	ErrUnsafeForPublic       = errors.New("resource is not safe for public access")
+	ErrInvalidVisibility     = errors.New("invalid visibility")
+	ErrToolDrifted           = errors.New("imported tool schema drift requires review")
+	ErrSourceReviewRequired  = errors.New("source publication requires a completed, reviewable crawl with fetched evidence")
+	ErrIdentityDraftRequired = errors.New("identity provider must be a disabled draft")
+	ErrIdentityTestRequired  = errors.New("a passing, unexpired identity test for this exact configuration revision is required")
+	ErrIdentityConfigInvalid = errors.New("identity provider configuration is invalid")
+	ErrIdentityCredential    = errors.New("identity provider client credential is required")
+	ErrIdentityDisableFirst  = errors.New("identity provider must be disabled before disconnecting")
 )
 
 type Actor struct {
@@ -45,6 +51,8 @@ type Service struct {
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+const identityOAuthCleanupBatch = 100
 
 func New(storage store.Store) *Service {
 	return &Service{store: storage, aiRuntime: newAIRuntime(nil), aiEnvironmentCredentials: make(map[string]string), now: func() time.Time { return time.Now().UTC() }}
@@ -71,7 +79,6 @@ type IdentityInput struct {
 	OrganisationClaim  string
 	InstallationClaim  string
 	DelegatedAPIOrigin string
-	State              string
 	Revision           int64
 }
 
@@ -93,6 +100,17 @@ func validHTTPSURI(raw string) bool {
 	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
 }
 
+func validOIDCIssuer(raw string) bool {
+	parsed, err := url.Parse(raw)
+	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
+	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func validOAuthResourceIdentifier(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && raw != "" && !strings.ContainsAny(raw, " \t\r\n") && parsed.IsAbs() && parsed.Scheme != "" && parsed.User == nil && parsed.Fragment == ""
+}
+
 func validOAuthRedirect(raw string) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
@@ -104,34 +122,45 @@ func validOAuthRedirect(raw string) bool {
 func validToolEndpoint(raw string) bool {
 	parsed, err := url.Parse(raw)
 	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
-	return err == nil && (parsed.Scheme == "https" && parsed.Port() == "" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+	return err == nil && (parsed.Scheme == "https" && !local && parsed.Port() == "" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+// Legacy ConfigureIdentity removed trailing slashes even when they were part
+// of the provider's exact issuer. Treat adding that slash back as a
+// normalization of the same credential boundary during upgrade; the saved
+// value itself remains exact.
+func equivalentOIDCIssuer(left, right string) bool {
+	if left == right {
+		return true
+	}
+	leftURL, leftErr := url.Parse(left)
+	rightURL, rightErr := url.Parse(right)
+	if leftErr != nil || rightErr != nil || leftURL.User != nil || rightURL.User != nil || leftURL.RawQuery != "" || rightURL.RawQuery != "" || leftURL.Fragment != "" || rightURL.Fragment != "" {
+		return false
+	}
+	leftRoot := leftURL.EscapedPath() == "" || leftURL.EscapedPath() == "/"
+	rightRoot := rightURL.EscapedPath() == "" || rightURL.EscapedPath() == "/"
+	return leftRoot && rightRoot && strings.EqualFold(leftURL.Scheme, rightURL.Scheme) && strings.EqualFold(leftURL.Host, rightURL.Host)
 }
 
 func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, actor Actor) (identity.ProviderConfig, error) {
 	input.DeploymentID = strings.TrimSpace(input.DeploymentID)
-	input.Issuer, input.ClientID, input.ClientSecret = strings.TrimRight(strings.TrimSpace(input.Issuer), "/"), strings.TrimSpace(input.ClientID), strings.TrimSpace(input.ClientSecret)
+	input.Issuer, input.ClientID, input.ClientSecret = strings.TrimSpace(input.Issuer), strings.TrimSpace(input.ClientID), strings.TrimSpace(input.ClientSecret)
 	input.Audience, input.OAuthResource = strings.TrimSpace(input.Audience), strings.TrimSpace(input.OAuthResource)
 	input.OrganisationClaim, input.InstallationClaim = strings.TrimSpace(input.OrganisationClaim), strings.TrimSpace(input.InstallationClaim)
 	input.DelegatedAPIOrigin = strings.TrimRight(strings.TrimSpace(input.DelegatedAPIOrigin), "/")
-	input.State = strings.ToLower(strings.TrimSpace(input.State))
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
 		return identity.ProviderConfig{}, err
 	}
-	if input.DeploymentID != deployment.ID || input.ClientID == "" || !validHTTPSOrigin(input.Issuer) {
-		return identity.ProviderConfig{}, errors.New("deployment, HTTPS OIDC issuer, and client ID are required")
+	if input.DeploymentID != deployment.ID || input.ClientID == "" || !validOIDCIssuer(input.Issuer) {
+		return identity.ProviderConfig{}, fmt.Errorf("%w: deployment, exact OIDC issuer (HTTPS, or HTTP for localhost development), and client ID are required", ErrIdentityConfigInvalid)
 	}
-	if !validHTTPSBaseOrigin(input.DelegatedAPIOrigin) || (input.OAuthResource != "" && !validHTTPSURI(input.OAuthResource)) {
-		return identity.ProviderConfig{}, errors.New("delegated API origin and OAuth resource must be credential-free HTTPS URLs")
-	}
-	if input.State == "" {
-		input.State = "active"
-	}
-	if input.State != "active" && input.State != "disabled" {
-		return identity.ProviderConfig{}, errors.New("identity provider state must be active or disabled")
+	if !validHTTPSBaseOrigin(input.DelegatedAPIOrigin) || (input.OAuthResource != "" && !validOAuthResourceIdentifier(input.OAuthResource)) {
+		return identity.ProviderConfig{}, fmt.Errorf("%w: authorization API origin must be a credential-free HTTPS origin (or HTTP localhost), and OAuth resource must be an absolute URI without a fragment", ErrIdentityConfigInvalid)
 	}
 	if input.OrganisationClaim == "" {
-		input.OrganisationClaim = "org_id"
+		return identity.ProviderConfig{}, fmt.Errorf("%w: customer account claim is required", ErrIdentityConfigInvalid)
 	}
 	if len(input.Scopes) == 0 {
 		input.Scopes = []string{"openid", "profile", "email"}
@@ -152,14 +181,14 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 	if currentErr != nil && !errors.Is(currentErr, store.ErrNotFound) {
 		return identity.ProviderConfig{}, currentErr
 	}
-	config := identity.ProviderConfig{OrganisationID: deployment.OrganisationID, DeploymentID: input.DeploymentID, Issuer: input.Issuer, ClientID: input.ClientID, Scopes: scopes, Audience: input.Audience, OAuthResource: input.OAuthResource, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, DelegatedAPIOrigin: input.DelegatedAPIOrigin, State: input.State, Revision: input.Revision}
+	config := identity.ProviderConfig{OrganisationID: deployment.OrganisationID, DeploymentID: input.DeploymentID, Issuer: input.Issuer, ClientID: input.ClientID, Scopes: scopes, Audience: input.Audience, OAuthResource: input.OAuthResource, OrganisationClaim: input.OrganisationClaim, InstallationClaim: input.InstallationClaim, DelegatedAPIOrigin: input.DelegatedAPIOrigin, State: "disabled", Revision: input.Revision}
 	if currentErr == nil {
 		if input.Revision != current.Revision {
 			return identity.ProviderConfig{}, store.ErrConflict
 		}
 		config.ID, config.ClientSecretID = current.ID, current.ClientSecretID
-		if (current.Issuer != config.Issuer || current.ClientID != config.ClientID) && input.ClientSecret == "" {
-			return identity.ProviderConfig{}, errors.New("changing the OIDC issuer or client ID requires a new client secret")
+		if (!equivalentOIDCIssuer(current.Issuer, config.Issuer) || current.ClientID != config.ClientID) && input.ClientSecret == "" {
+			return identity.ProviderConfig{}, fmt.Errorf("%w: changing the OIDC issuer or client ID requires a new client secret", ErrIdentityCredential)
 		}
 	} else {
 		if input.Revision != 0 {
@@ -169,6 +198,16 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 		if err != nil {
 			return identity.ProviderConfig{}, err
 		}
+	}
+	if config.ClientSecretID == "" && input.ClientSecret == "" {
+		return identity.ProviderConfig{}, fmt.Errorf("%w for initial configuration", ErrIdentityCredential)
+	}
+	readiness := config
+	if input.ClientSecret != "" {
+		readiness.ClientSecretID = "pending-encrypted-client-credential"
+	}
+	if err := identity.ValidateProviderConfig(readiness); err != nil {
+		return identity.ProviderConfig{}, fmt.Errorf("%w: %v", ErrIdentityConfigInvalid, err)
 	}
 	if input.ClientSecret != "" {
 		if s.vault == nil {
@@ -187,15 +226,118 @@ func (s *Service) ConfigureIdentity(ctx context.Context, input IdentityInput, ac
 		}
 		config.ClientSecretID = secretID
 	}
-	if config.ClientSecretID == "" {
-		return identity.ProviderConfig{}, errors.New("OIDC client secret is required for initial configuration")
+	newSecretID := ""
+	if input.ClientSecret != "" {
+		newSecretID = config.ClientSecretID
 	}
 	updated, err := s.store.SaveIdentityProvider(ctx, config)
 	if err != nil {
+		return identity.ProviderConfig{}, s.cleanupFailedIdentityCredential(ctx, deployment.OrganisationID, newSecretID, err)
+	}
+	s.deleteStaleIdentityOAuthArtifacts(ctx, updated.DeploymentID)
+	if currentErr == nil && newSecretID != "" && current.ClientSecretID != "" && current.ClientSecretID != newSecretID {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		cleanupErr := s.store.DeleteSecret(cleanupCtx, deployment.OrganisationID, current.ClientSecretID)
+		cancel()
+		if cleanupErr != nil {
+			_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "identity_provider.credential.cleanup_failed", TargetType: "identity_provider", TargetID: updated.ID, Current: map[string]any{"retired_secret_id": current.ClientSecretID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+		}
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "identity_provider.draft.saved", TargetType: "identity_provider", TargetID: updated.ID, Current: map[string]any{"provider": "oidc", "issuer": updated.Issuer, "client_id": updated.ClientID, "scopes": updated.Scopes, "audience": updated.Audience, "oauth_resource": updated.OAuthResource, "customer_account_claim": updated.OrganisationClaim, "installation_claim": updated.InstallationClaim, "authorization_api_origin": updated.DelegatedAPIOrigin, "state": updated.State, "revision": updated.Revision, "credential_rotated": input.ClientSecret != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return updated, nil
+}
+
+func (s *Service) cleanupFailedIdentityCredential(ctx context.Context, organisationID, credentialID string, operationErr error) error {
+	if credentialID == "" {
+		return operationErr
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := s.store.DeleteSecret(cleanupCtx, organisationID, credentialID); err != nil {
+		return errors.Join(operationErr, fmt.Errorf("stored identity credential cleanup failed: %w", err))
+	}
+	return operationErr
+}
+
+func (s *Service) deleteStaleIdentityOAuthArtifacts(ctx context.Context, deploymentID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_, _ = s.store.DeleteStaleOAuthArtifacts(cleanupCtx, deploymentID, s.now(), identityOAuthCleanupBatch)
+}
+
+func (s *Service) ActivateIdentityProvider(ctx context.Context, deploymentID, testID string, revision int64, actor Actor) (identity.ProviderConfig, error) {
+	current, err := s.store.IdentityProvider(ctx, deploymentID)
+	if err != nil {
 		return identity.ProviderConfig{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "identity_provider.configured", TargetType: "identity_provider", TargetID: updated.ID, Current: map[string]any{"issuer": updated.Issuer, "scopes": updated.Scopes, "oauth_resource": updated.OAuthResource, "delegated_api_origin": updated.DelegatedAPIOrigin, "state": updated.State, "credential_rotated": input.ClientSecret != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if current.Revision != revision {
+		return identity.ProviderConfig{}, store.ErrConflict
+	}
+	if current.State != "disabled" {
+		return identity.ProviderConfig{}, ErrIdentityDraftRequired
+	}
+	if err := identity.ValidateProviderConfig(current); err != nil {
+		return identity.ProviderConfig{}, err
+	}
+	test, err := s.store.IdentityProviderTest(ctx, deploymentID, strings.TrimSpace(testID))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return identity.ProviderConfig{}, ErrIdentityTestRequired
+		}
+		return identity.ProviderConfig{}, err
+	}
+	if test.ConfigurationRevision != current.Revision || test.Status != "passed" || test.CompletedAt == nil || !test.ExpiresAt.After(s.now()) || test.Issuer != current.Issuer || test.Subject == "" || test.CustomerID == "" {
+		return identity.ProviderConfig{}, ErrIdentityTestRequired
+	}
+	current.State = "active"
+	updated, err := s.store.SaveIdentityProvider(ctx, current)
+	if err != nil {
+		return identity.ProviderConfig{}, err
+	}
+	s.deleteStaleIdentityOAuthArtifacts(ctx, updated.DeploymentID)
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "identity_provider.activated", TargetType: "identity_provider", TargetID: updated.ID, Current: map[string]any{"state": updated.State, "tested_configuration_revision": test.ConfigurationRevision, "test_id": test.ID}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return updated, nil
+}
+
+func (s *Service) DisableIdentityProvider(ctx context.Context, deploymentID string, revision int64, actor Actor) (identity.ProviderConfig, error) {
+	current, err := s.store.IdentityProvider(ctx, deploymentID)
+	if err != nil {
+		return identity.ProviderConfig{}, err
+	}
+	if current.Revision != revision {
+		return identity.ProviderConfig{}, store.ErrConflict
+	}
+	if current.State == "disabled" {
+		s.deleteStaleIdentityOAuthArtifacts(ctx, current.DeploymentID)
+		return current, nil
+	}
+	current.State = "disabled"
+	updated, err := s.store.SaveIdentityProvider(ctx, current)
+	if err != nil {
+		return identity.ProviderConfig{}, err
+	}
+	s.deleteStaleIdentityOAuthArtifacts(ctx, updated.DeploymentID)
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "identity_provider.disabled", TargetType: "identity_provider", TargetID: updated.ID, Prior: map[string]any{"state": "active"}, Current: map[string]any{"state": updated.State}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return updated, nil
+}
+
+func (s *Service) DisconnectIdentityProvider(ctx context.Context, deploymentID string, revision int64, actor Actor) (identity.ProviderConfig, error) {
+	current, err := s.store.IdentityProvider(ctx, deploymentID)
+	if err != nil {
+		return identity.ProviderConfig{}, err
+	}
+	if current.Revision != revision {
+		return identity.ProviderConfig{}, store.ErrConflict
+	}
+	if current.State != "disabled" {
+		return identity.ProviderConfig{}, ErrIdentityDisableFirst
+	}
+	deleted, err := s.store.DeleteIdentityProvider(ctx, deploymentID, revision)
+	if err != nil {
+		return identity.ProviderConfig{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deleted.OrganisationID, ProductID: deleted.DeploymentID, ActorID: actor.ID, Action: "identity_provider.disconnected", TargetType: "identity_provider", TargetID: deleted.ID, Prior: map[string]any{"provider": "oidc", "issuer": deleted.Issuer, "client_id": deleted.ClientID, "audience": deleted.Audience, "oauth_resource": deleted.OAuthResource, "customer_account_claim": deleted.OrganisationClaim, "installation_claim": deleted.InstallationClaim, "authorization_api_origin": deleted.DelegatedAPIOrigin, "state": deleted.State, "revision": deleted.Revision}, Current: map[string]any{"configured": false}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return deleted, nil
 }
 
 func (s *Service) UpdateCustomerAccountState(ctx context.Context, productID, accountID, state string, revision int64, actor Actor) (identity.CustomerAccount, error) {
@@ -347,17 +489,53 @@ func (s *Service) QueueCrawl(ctx context.Context, productID, sourceID string, ac
 }
 
 type ToolInput struct {
-	OrganisationID      string
-	ProductID           string
-	Namespace           string
-	Name                string
-	Description         string
-	InputSchema         json.RawMessage
-	OutputSchema        json.RawMessage
-	Endpoint            string
-	HTTPMethod          string
-	AuthorizationPolicy json.RawMessage
-	TimeoutMS           int
+	OrganisationID             string
+	ProductID                  string
+	Scope                      string
+	OwnerIntegrationID         string
+	RuntimeServiceConnectionID string
+	HTTPPath                   string
+	Namespace                  string
+	Name                       string
+	Description                string
+	InputSchema                json.RawMessage
+	OutputSchema               json.RawMessage
+	Endpoint                   string
+	HTTPMethod                 string
+	UpstreamAuth               json.RawMessage
+	Credential                 string
+	RequestMapping             json.RawMessage
+	ResponseMapping            json.RawMessage
+	RequestExample             json.RawMessage
+	ResponseExample            json.RawMessage
+	AuthorizationPolicy        json.RawMessage
+	TimeoutMS                  int
+}
+
+func (s *Service) normalizeToolOwnership(ctx context.Context, product model.Product, scope, ownerIntegrationID string) (string, string, error) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	ownerIntegrationID = strings.TrimSpace(ownerIntegrationID)
+	if scope == "" {
+		scope = model.ToolScopeCommon
+	}
+	switch scope {
+	case model.ToolScopeCommon:
+		if ownerIntegrationID != "" {
+			return "", "", errors.New("common tools cannot have an owner integration")
+		}
+		return scope, "", nil
+	case model.ToolScopeAPI:
+		if ownerIntegrationID == "" {
+			return "", "", errors.New("api tools require owner_integration_id")
+		}
+		integration, err := s.store.Integration(ctx, product.ID, ownerIntegrationID)
+		if err != nil || integration.OrganisationID != product.OrganisationID {
+			return "", "", errors.New("api tool owner must be an integration in the same deployment")
+		}
+		return scope, ownerIntegrationID, nil
+	default:
+		return "", "", errors.New("tool scope must be common or api")
+	}
 }
 
 type ProviderInput struct {
@@ -535,8 +713,18 @@ func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, act
 }
 
 func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) (model.Tool, error) {
+	product, err := s.store.Product(ctx, input.ProductID)
+	if err != nil {
+		return model.Tool{}, err
+	}
+	input.OrganisationID = product.OrganisationID
+	input.Scope, input.OwnerIntegrationID, err = s.normalizeToolOwnership(ctx, product, input.Scope, input.OwnerIntegrationID)
+	if err != nil {
+		return model.Tool{}, err
+	}
 	input.Namespace, input.Name = strings.ToLower(strings.TrimSpace(input.Namespace)), strings.ToLower(strings.TrimSpace(input.Name))
 	input.Description, input.HTTPMethod, input.Endpoint = strings.TrimSpace(input.Description), strings.ToUpper(strings.TrimSpace(input.HTTPMethod)), strings.TrimSpace(input.Endpoint)
+	input.RuntimeServiceConnectionID, input.HTTPPath = strings.TrimSpace(input.RuntimeServiceConnectionID), strings.TrimSpace(input.HTTPPath)
 	if !toolNamePattern.MatchString(input.Namespace) || !toolNamePattern.MatchString(input.Name) || input.Description == "" || len(input.Description) > 500 {
 		return model.Tool{}, errors.New("tool namespace, name, and description are invalid")
 	}
@@ -550,17 +738,61 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 		return model.Tool{}, fmt.Errorf("output schema: %w", err)
 	}
 	methods := map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
-	parsed, err := url.Parse(input.Endpoint)
-	if err != nil || !validToolEndpoint(input.Endpoint) || !methods[input.HTTPMethod] {
-		return model.Tool{}, errors.New("tool endpoint must be a fixed credential-free HTTPS URL on the default port and use an allowed HTTP method")
+	if !methods[input.HTTPMethod] {
+		return model.Tool{}, errors.New("tool must use an allowed HTTP method")
 	}
-	provider, err := s.store.IdentityProvider(ctx, input.ProductID)
-	if err != nil || provider.State != "active" || provider.DelegatedAPIOrigin == "" {
-		return model.Tool{}, errors.New("configure an active identity provider delegated API origin before creating an HTTP tool")
+	var parsed *url.URL
+	var auth ToolUpstreamAuth
+	if input.RuntimeServiceConnectionID != "" {
+		if input.Endpoint != "" || strings.TrimSpace(input.Credential) != "" || len(bytes.TrimSpace(input.UpstreamAuth)) != 0 {
+			return model.Tool{}, errors.New("API runtime tools use their service connection for endpoint and authentication")
+		}
+		input.Endpoint, input.UpstreamAuth, err = s.validateRuntimeToolConnection(ctx, product, input)
+		if err != nil {
+			return model.Tool{}, err
+		}
+		_ = json.Unmarshal(input.UpstreamAuth, &auth)
+		parsed, _ = url.Parse(input.Endpoint)
+	} else {
+		parsed, err = url.Parse(input.Endpoint)
+		if err != nil || !validToolEndpoint(input.Endpoint) {
+			return model.Tool{}, errors.New("tool endpoint must be a fixed credential-free public HTTPS URL or HTTP localhost URL and use an allowed HTTP method")
+		}
+		var upstreamAuth json.RawMessage
+		upstreamAuth, auth, _, err = normalizeToolUpstreamAuth(input.UpstreamAuth, nil, "", input.Credential)
+		if err != nil {
+			return model.Tool{}, err
+		}
+		input.UpstreamAuth = upstreamAuth
 	}
-	vendorOrigin, err := url.Parse(provider.DelegatedAPIOrigin)
-	if err != nil || !strings.EqualFold(parsed.Scheme, vendorOrigin.Scheme) || !strings.EqualFold(parsed.Host, vendorOrigin.Host) {
-		return model.Tool{}, errors.New("tool endpoint must use the configured vendor API origin")
+	if auth.Type == "delegated_oauth" {
+		provider, providerErr := s.store.IdentityProvider(ctx, input.ProductID)
+		if providerErr != nil || provider.State != "active" || provider.DelegatedAPIOrigin == "" {
+			return model.Tool{}, errors.New("configure an active identity provider authorization API origin before creating a delegated OAuth tool")
+		}
+		vendorOrigin, originErr := url.Parse(provider.DelegatedAPIOrigin)
+		if originErr != nil || !strings.EqualFold(parsed.Scheme, vendorOrigin.Scheme) || !strings.EqualFold(parsed.Host, vendorOrigin.Host) {
+			return model.Tool{}, errors.New("delegated OAuth tool endpoint must use the configured vendor API origin")
+		}
+	}
+	input.RequestMapping, _, err = normalizeToolRequestMapping(input.RequestMapping)
+	if err != nil {
+		return model.Tool{}, err
+	}
+	input.ResponseMapping, _, err = normalizeToolResponseMapping(input.ResponseMapping)
+	if err != nil {
+		return model.Tool{}, err
+	}
+	if err := validateToolMappings(input.InputSchema, input.Endpoint, input.HTTPMethod, input.RequestMapping); err != nil {
+		return model.Tool{}, err
+	}
+	input.RequestExample, err = normalizeToolExample(input.RequestExample, input.InputSchema, "request")
+	if err != nil {
+		return model.Tool{}, err
+	}
+	input.ResponseExample, err = normalizeToolExample(input.ResponseExample, input.OutputSchema, "response")
+	if err != nil {
+		return model.Tool{}, err
 	}
 	if input.TimeoutMS == 0 {
 		input.TimeoutMS = 10_000
@@ -573,20 +805,54 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 		return model.Tool{}, err
 	}
 	input.AuthorizationPolicy = policy
+	input, err = s.validateCanonicalToolInput(ctx, input, credentialRequired(auth.Type) && (input.RuntimeServiceConnectionID != "" || input.Credential != ""))
+	if err != nil {
+		return model.Tool{}, err
+	}
 	toolID, err := randomUUID()
 	if err != nil {
 		return model.Tool{}, err
 	}
-	connectionID, err := randomUUID()
-	if err != nil {
-		return model.Tool{}, err
+	connectionID := ""
+	if input.RuntimeServiceConnectionID == "" {
+		connectionID, err = randomUUID()
+		if err != nil {
+			return model.Tool{}, err
+		}
 	}
-	value, err := s.store.CreateTool(ctx, model.Tool{ID: toolID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIConnectionID: connectionID, BaseURL: input.Endpoint, HTTPMethod: input.HTTPMethod, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
-	if err != nil {
-		return model.Tool{}, err
+	credentialID, credentialFingerprint := "", ""
+	if input.Credential != "" {
+		credentialID, credentialFingerprint, err = s.saveToolCredential(ctx, input.OrganisationID, connectionID, input.Credential)
+		if err != nil {
+			return model.Tool{}, err
+		}
 	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "tool.created", TargetType: "tool", TargetID: toolID, Current: map[string]any{"name": input.Namespace + "." + input.Name, "method": input.HTTPMethod, "authentication": "delegated_vendor_oauth", "state": "draft"}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	baseURL := input.Endpoint
+	if input.RuntimeServiceConnectionID != "" {
+		baseURL = ""
+	}
+	value, err := s.store.CreateTool(ctx, model.Tool{ID: toolID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Scope: input.Scope, OwnerIntegrationID: input.OwnerIntegrationID, RuntimeServiceConnectionID: input.RuntimeServiceConnectionID, HTTPPath: input.HTTPPath, Namespace: input.Namespace, Name: input.Name, Description: input.Description, InputSchema: input.InputSchema, OutputSchema: input.OutputSchema, APIConnectionID: connectionID, BaseURL: baseURL, HTTPMethod: input.HTTPMethod, UpstreamAuth: input.UpstreamAuth, CredentialID: credentialID, CredentialFingerprint: credentialFingerprint, RequestMapping: input.RequestMapping, ResponseMapping: input.ResponseMapping, RequestExample: input.RequestExample, ResponseExample: input.ResponseExample, AuthorizationPolicy: input.AuthorizationPolicy, TimeoutMS: input.TimeoutMS, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
+	if err != nil {
+		return model.Tool{}, s.cleanupFailedToolCredential(ctx, input.OrganisationID, credentialID, err)
+	}
+	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "tool.created", TargetType: "tool", TargetID: toolID, Current: map[string]any{"name": input.Namespace + "." + input.Name, "scope": input.Scope, "owner_integration_id": input.OwnerIntegrationID, "method": input.HTTPMethod, "authentication": auth.Type, "credential_stored": credentialID != "", "state": "draft"}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, err
+}
+
+// cleanupFailedToolCredential makes a best effort to undo secret creation even
+// when the request context has already been cancelled. The original operation
+// error and any cleanup error are both retained so callers can distinguish the
+// failed write from an orphaned-secret condition that needs operator attention.
+func (s *Service) cleanupFailedToolCredential(ctx context.Context, organisationID, credentialID string, operationErr error) error {
+	if credentialID == "" {
+		return operationErr
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := s.store.DeleteSecret(cleanupCtx, organisationID, credentialID); err != nil {
+		return errors.Join(operationErr, fmt.Errorf("stored tool credential cleanup failed: %w", err))
+	}
+	return operationErr
 }
 
 func (s *Service) PublishTool(ctx context.Context, productID, toolID string, revision int64, actor Actor) (model.Tool, error) {
@@ -596,6 +862,9 @@ func (s *Service) PublishTool(ctx context.Context, productID, toolID string, rev
 	}
 	if current.BackendKind == "mcp" && current.UpstreamDrifted {
 		return model.Tool{}, ErrToolDrifted
+	}
+	if err := s.validateStoredHTTPTool(ctx, current); err != nil {
+		return model.Tool{}, fmt.Errorf("tool requires review before publication: %w", err)
 	}
 	if err := s.validateToolGrantRegistry(ctx, productID, current); err != nil {
 		return model.Tool{}, err

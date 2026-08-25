@@ -510,6 +510,7 @@ type IntegrationManifestTool struct {
 	ToolRevision               int64  `json:"tool_revision"`
 	AuthorizationPointID       string `json:"authorization_point_id"`
 	AuthorizationPointRevision int64  `json:"authorization_point_revision"`
+	RuntimeServiceConnectionID string `json:"runtime_service_connection_id,omitempty"`
 	Namespace                  string `json:"namespace"`
 	Name                       string `json:"name"`
 	BackendKind                string `json:"backend_kind"`
@@ -525,6 +526,28 @@ type IntegrationManifestAccessConnection struct {
 	EnvironmentID            string `json:"environment_id,omitempty"`
 	State                    string `json:"state"`
 	ContentHash              string `json:"content_hash"`
+}
+
+type IntegrationManifestServiceConnectionRevision struct {
+	RevisionID         string          `json:"revision_id"`
+	Revision           int64           `json:"revision"`
+	EnvironmentID      string          `json:"environment_id"`
+	BaseURL            string          `json:"base_url"`
+	AuthenticationType string          `json:"authentication_type"`
+	CredentialSetID    string          `json:"credential_set_id,omitempty"`
+	AuthConfig         json.RawMessage `json:"auth_config"`
+	ContentHash        string          `json:"content_hash"`
+	Current            bool            `json:"current"`
+	CredentialReady    bool            `json:"credential_ready"`
+}
+
+type IntegrationManifestServiceConnection struct {
+	ConnectionID       string                                         `json:"connection_id"`
+	ConnectionRevision int64                                          `json:"connection_revision"`
+	Name               string                                         `json:"name"`
+	Description        string                                         `json:"description,omitempty"`
+	State              string                                         `json:"state"`
+	CurrentRevisions   []IntegrationManifestServiceConnectionRevision `json:"current_revisions"`
 }
 
 type IntegrationManifest struct {
@@ -543,6 +566,7 @@ type IntegrationManifest struct {
 	Packages                 []IntegrationManifestPackage            `json:"packages"`
 	AuthorizationPoints      []IntegrationManifestAuthorizationPoint `json:"authorization_points"`
 	Tools                    []IntegrationManifestTool               `json:"tools"`
+	ServiceConnections       []IntegrationManifestServiceConnection  `json:"service_connections"`
 	AccessConnections        []IntegrationManifestAccessConnection   `json:"access_connections"`
 }
 
@@ -933,30 +957,132 @@ type Secret struct {
 	CreatedAt      time.Time
 }
 
+const (
+	ToolScopeCommon = "common"
+	ToolScopeAPI    = "api"
+)
+
 type Tool struct {
-	ID                  string          `json:"id"`
-	OrganisationID      string          `json:"organisation_id"`
-	ProductID           string          `json:"product_id"`
-	Namespace           string          `json:"namespace"`
-	Name                string          `json:"name"`
-	Description         string          `json:"description"`
-	InputSchema         json.RawMessage `json:"input_schema"`
-	OutputSchema        json.RawMessage `json:"output_schema"`
-	State               string          `json:"state"`
-	Revision            int64           `json:"revision"`
-	APIConnectionID     string          `json:"-"`
-	BaseURL             string          `json:"-"`
-	HTTPMethod          string          `json:"http_method"`
-	AuthorizationPolicy json.RawMessage `json:"authorization_policy"`
-	TimeoutMS           int             `json:"timeout_ms"`
-	BackendKind         string          `json:"backend_kind"`
-	MCPConnectionID     string          `json:"mcp_connection_id,omitempty"`
-	UpstreamToolName    string          `json:"upstream_tool_name,omitempty"`
-	UpstreamSchemaHash  string          `json:"upstream_schema_hash,omitempty"`
-	UpstreamAnnotations json.RawMessage `json:"upstream_annotations,omitempty"`
-	UpstreamDrifted     bool            `json:"upstream_drifted"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
+	ID                          string              `json:"id"`
+	OrganisationID              string              `json:"organisation_id"`
+	ProductID                   string              `json:"product_id"`
+	Scope                       string              `json:"scope"`
+	OwnerIntegrationID          string              `json:"owner_integration_id,omitempty"`
+	RuntimeServiceConnectionID  string              `json:"runtime_service_connection_id,omitempty"`
+	HTTPPath                    string              `json:"http_path,omitempty"`
+	RuntimeTargets              []ToolRuntimeTarget `json:"-"`
+	RuntimeConnectionRevisionID string              `json:"-"`
+	RuntimeCredentialSetID      string              `json:"-"`
+	RuntimeCredentialVersionID  string              `json:"-"`
+	Namespace                   string              `json:"namespace"`
+	Name                        string              `json:"name"`
+	Description                 string              `json:"description"`
+	InputSchema                 json.RawMessage     `json:"input_schema"`
+	OutputSchema                json.RawMessage     `json:"output_schema"`
+	State                       string              `json:"state"`
+	Revision                    int64               `json:"revision"`
+	APIConnectionID             string              `json:"-"`
+	BaseURL                     string              `json:"-"`
+	HTTPMethod                  string              `json:"http_method"`
+	UpstreamAuth                json.RawMessage     `json:"upstream_auth,omitempty"`
+	CredentialID                string              `json:"-"`
+	CredentialFingerprint       string              `json:"-"`
+	CredentialPresent           bool                `json:"credential_present,omitempty"`
+	RequestMapping              json.RawMessage     `json:"request_mapping,omitempty"`
+	ResponseMapping             json.RawMessage     `json:"response_mapping,omitempty"`
+	RequestExample              json.RawMessage     `json:"request_example,omitempty"`
+	ResponseExample             json.RawMessage     `json:"response_example,omitempty"`
+	AuthorizationPolicy         json.RawMessage     `json:"authorization_policy"`
+	TimeoutMS                   int                 `json:"timeout_ms"`
+	BackendKind                 string              `json:"backend_kind"`
+	MCPConnectionID             string              `json:"mcp_connection_id,omitempty"`
+	UpstreamToolName            string              `json:"upstream_tool_name,omitempty"`
+	UpstreamSchemaHash          string              `json:"upstream_schema_hash,omitempty"`
+	UpstreamAnnotations         json.RawMessage     `json:"upstream_annotations,omitempty"`
+	UpstreamDrifted             bool                `json:"upstream_drifted"`
+	CreatedAt                   time.Time           `json:"created_at"`
+	UpdatedAt                   time.Time           `json:"updated_at"`
+}
+
+// JSONShape is a bounded, value-free description of a JSON value. Tool test
+// evidence may retain object keys, JSON types, and array lengths, but never
+// request or response scalar values.
+type JSONShape struct {
+	Type       string               `json:"type"`
+	Properties map[string]JSONShape `json:"properties,omitempty"`
+	Items      []JSONShape          `json:"items,omitempty"`
+	Length     int                  `json:"length,omitempty"`
+	Truncated  bool                 `json:"truncated,omitempty"`
+}
+
+type ToolTestFinding struct {
+	Phase        string `json:"phase"`
+	Code         string `json:"code"`
+	Message      string `json:"message"`
+	InstancePath string `json:"instance_path,omitempty"`
+	SchemaPath   string `json:"schema_path,omitempty"`
+}
+
+// ToolTestConfirmation is the durable one-time confirmation primitive used by
+// both administrator live tests and managed MCP tool invocations. It contains
+// only a digest of the nonce; the raw nonce is returned to the caller once and
+// is never persisted. Each protocol uses a separate domain-bound argument hash.
+type ToolTestConfirmation struct {
+	ID             string    `json:"id"`
+	OrganisationID string    `json:"organisation_id"`
+	ProductID      string    `json:"product_id"`
+	ToolID         string    `json:"tool_id"`
+	ToolRevision   int64     `json:"tool_revision"`
+	ArgumentHash   []byte    `json:"-"`
+	NonceDigest    []byte    `json:"-"`
+	ActorID        string    `json:"-"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// ManagedOperationConfirmation is a one-time, server-side confirmation for a
+// generated MCP operation that has no durable Tool row of its own. The
+// argument hash binds the exact operation, immutable catalog binding,
+// authenticated access evaluation, idempotency key, and arguments. Raw nonces
+// and argument values are never persisted.
+type ManagedOperationConfirmation struct {
+	ID             string    `json:"id"`
+	OrganisationID string    `json:"organisation_id"`
+	ProductID      string    `json:"product_id"`
+	OperationKey   string    `json:"operation_key"`
+	ArgumentHash   []byte    `json:"-"`
+	NonceDigest    []byte    `json:"-"`
+	ActorID        string    `json:"-"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// ToolTestRun is deliberately sanitized, short-lived evidence. It must never
+// contain a destination, path, query, header, credential, argument value, or
+// response scalar value.
+type ToolTestRun struct {
+	ID                   string            `json:"id"`
+	OrganisationID       string            `json:"organisation_id"`
+	ProductID            string            `json:"product_id"`
+	ToolID               string            `json:"tool_id"`
+	ToolRevision         int64             `json:"tool_revision"`
+	ToolName             string            `json:"tool_name"`
+	ActorID              string            `json:"-"`
+	RequestID            string            `json:"-"`
+	ArgumentHash         []byte            `json:"-"`
+	Method               string            `json:"method"`
+	AuthenticationType   string            `json:"authentication_type"`
+	Outcome              string            `json:"outcome"`
+	Phase                string            `json:"phase"`
+	NetworkCallPerformed bool              `json:"network_call_performed"`
+	UpstreamStatusCode   int               `json:"upstream_status_code,omitempty"`
+	ResponseBytes        int64             `json:"response_bytes,omitempty"`
+	RequestShape         JSONShape         `json:"request_shape"`
+	ResponseShape        *JSONShape        `json:"response_shape,omitempty"`
+	Findings             []ToolTestFinding `json:"findings"`
+	DurationMS           int64             `json:"duration_ms"`
+	ExpiresAt            time.Time         `json:"expires_at"`
+	CreatedAt            time.Time         `json:"created_at"`
 }
 
 const StatelessMCPv2Protocol = "2026-07-28"
@@ -1023,6 +1149,7 @@ type Widget struct {
 	AllowedOrigins      []string                   `json:"allowed_origins"`
 	IntegrationIDs      []string                   `json:"integration_ids"`
 	IntegrationBindings []WidgetIntegrationBinding `json:"integration_bindings"`
+	KnowledgeBindings   []WidgetKnowledgeBinding   `json:"knowledge_bindings"`
 	Appearance          json.RawMessage            `json:"appearance"`
 	Revision            int64                      `json:"revision"`
 	ActivatedAt         *time.Time                 `json:"activated_at,omitempty"`
@@ -1043,6 +1170,25 @@ type WidgetIntegrationBinding struct {
 	BoundAt               time.Time       `json:"bound_at"`
 }
 
+// WidgetKnowledgeBinding pins one exact, reviewed recipe revision to the
+// widget activation that selected it. Recipes remain deployment-wide authoring
+// resources; their integration dependencies decide which widgets may receive
+// them. Runtime chat never follows a mutable recipe row implicitly.
+type WidgetKnowledgeBinding struct {
+	RecipeID         string            `json:"recipe_id"`
+	RecipeRevisionID string            `json:"recipe_revision_id"`
+	RecipeRevision   int               `json:"recipe_revision"`
+	IntegrationIDs   []string          `json:"integration_ids"`
+	Title            string            `json:"title"`
+	Outcome          string            `json:"outcome"`
+	Audience         string            `json:"audience"`
+	StableURI        string            `json:"stable_uri"`
+	Markdown         string            `json:"markdown"`
+	References       []RecipeReference `json:"references"`
+	ContentHash      string            `json:"content_hash"`
+	BoundAt          time.Time         `json:"bound_at"`
+}
+
 // WidgetSecret stores only a SHA-256 digest. The raw credential is returned
 // exactly once by the control-plane operation that creates it.
 type WidgetSecret struct {
@@ -1055,13 +1201,35 @@ type WidgetSecret struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+const (
+	WidgetSessionKindCustomer     = "customer"
+	WidgetSessionKindAdminPreview = "admin_preview"
+)
+
+// WidgetContextFact is a deliberately small, display-ready fact selected by
+// the customer's trusted backend. It lets the embedded assistant answer about
+// the page the customer is already viewing without giving the model a customer
+// identifier or arbitrary API access.
+type WidgetContextFact struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type WidgetSessionContext struct {
+	View  string              `json:"view,omitempty"`
+	Title string              `json:"title,omitempty"`
+	Facts []WidgetContextFact `json:"facts,omitempty"`
+}
+
 // WidgetBootstrap is a one-time, origin-bound token created by a customer's
 // trusted backend. It never carries customer credentials or requested scopes.
 type WidgetBootstrap struct {
 	Digest                 []byte
 	WidgetID               string
+	Kind                   string
 	UserID                 string
 	CustomerOrganisationID string
+	Context                WidgetSessionContext
 	Origin                 string
 	ExpiresAt              time.Time
 	UsedAt                 *time.Time
@@ -1071,16 +1239,29 @@ type WidgetBootstrap struct {
 // WidgetSession is the short-lived bearer accepted by the hosted widget
 // runtime. Authorization remains the current Widget configuration.
 type WidgetSession struct {
-	ID                     string     `json:"id"`
-	WidgetID               string     `json:"widget_id"`
-	Digest                 []byte     `json:"-"`
-	UserID                 string     `json:"user_id"`
-	CustomerOrganisationID string     `json:"customer_organisation_id,omitempty"`
-	Origin                 string     `json:"origin"`
-	ExpiresAt              time.Time  `json:"expires_at"`
-	RevokedAt              *time.Time `json:"revoked_at,omitempty"`
-	CreatedAt              time.Time  `json:"created_at"`
-	LastSeenAt             *time.Time `json:"last_seen_at,omitempty"`
+	ID                     string               `json:"id"`
+	WidgetID               string               `json:"widget_id"`
+	Kind                   string               `json:"kind"`
+	Digest                 []byte               `json:"-"`
+	UserID                 string               `json:"user_id"`
+	CustomerOrganisationID string               `json:"customer_organisation_id,omitempty"`
+	Context                WidgetSessionContext `json:"-"`
+	Origin                 string               `json:"origin"`
+	ExpiresAt              time.Time            `json:"expires_at"`
+	RevokedAt              *time.Time           `json:"revoked_at,omitempty"`
+	CreatedAt              time.Time            `json:"created_at"`
+	LastSeenAt             *time.Time           `json:"last_seen_at,omitempty"`
+}
+
+// WidgetAgentMessage is bounded, session-scoped conversation context. It is
+// deliberately separate from analytics so customer questions and answers do
+// not become product-wide knowledge or model-training material by accident.
+type WidgetAgentMessage struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Provider struct {
@@ -1284,6 +1465,7 @@ type AuditEvent struct {
 	Prior          map[string]any `json:"prior,omitempty"`
 	Current        map[string]any `json:"current,omitempty"`
 	RequestID      string         `json:"request_id"`
+	Outcome        string         `json:"outcome,omitempty"`
 	CreatedAt      time.Time      `json:"created_at"`
 }
 

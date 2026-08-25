@@ -102,6 +102,50 @@ func (s *Service) CreateAccessDefinition(ctx context.Context, input AccessDefini
 	return value, nil
 }
 
+func (s *Service) UpdateAccessDefinition(ctx context.Context, id string, input AccessDefinitionInput, expectedRevision int64, actor Actor) (model.AccessDefinition, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	current, err := s.store.AccessDefinition(ctx, deployment.ID, strings.TrimSpace(id))
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	if expectedRevision < 1 {
+		return model.AccessDefinition{}, errors.New("access definition revision is required")
+	}
+
+	// A revision may evolve the documented surface without changing the identity or
+	// interpretation of an existing encrypted connection.
+	input.ServiceKey = current.ServiceKey
+	input.InstanceCardinality = current.InstanceCardinality
+	input.CredentialScope = current.CredentialScope
+	input.ManagementAuthType = current.ManagementAuthType
+	input, err = normalizeAccessDefinition(input)
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	if input.APIResourceSetID != "" {
+		set, err := s.store.ResourceSet(ctx, deployment.ID, input.APIResourceSetID)
+		if err != nil || set.Kind != "api" {
+			return model.AccessDefinition{}, errors.New("access definition API resource set must reference an API resource set")
+		}
+	}
+
+	value := current
+	value.Name = input.Name
+	value.InstanceLabelSingular = input.InstanceLabelSingular
+	value.InstanceLabelPlural = input.InstanceLabelPlural
+	value.APIResourceSetID = input.APIResourceSetID
+	value.Operations = input.Operations
+	updated, err := s.store.UpdateAccessDefinition(ctx, value, expectedRevision)
+	if err != nil {
+		return model.AccessDefinition{}, err
+	}
+	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_definition.updated", TargetType: "access_definition", TargetID: updated.ID, Prior: map[string]any{"revision": current.Revision, "api_resource_set_id": current.APIResourceSetID}, Current: map[string]any{"revision": updated.Revision, "api_resource_set_id": updated.APIResourceSetID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	return updated, nil
+}
+
 type AccessConnectionInput struct {
 	AccessDefinitionID string
 	EnvironmentID      string

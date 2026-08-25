@@ -3,6 +3,7 @@ package platform_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -10,6 +11,76 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
+
+func TestIntegrationToolBindingsRejectWeakerAuthorizationActions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		method  string
+		action  string
+		allowed bool
+	}{
+		{name: "GET accepts read", method: http.MethodGet, action: "read", allowed: true},
+		{name: "GET accepts write", method: http.MethodGet, action: "write", allowed: true},
+		{name: "GET accepts destructive", method: http.MethodGet, action: "destructive", allowed: true},
+		{name: "POST rejects read", method: http.MethodPost, action: "read"},
+		{name: "POST accepts write", method: http.MethodPost, action: "write", allowed: true},
+		{name: "POST accepts destructive", method: http.MethodPost, action: "destructive", allowed: true},
+		{name: "PUT rejects read", method: http.MethodPut, action: "read"},
+		{name: "PUT accepts write", method: http.MethodPut, action: "write", allowed: true},
+		{name: "PATCH rejects read", method: http.MethodPatch, action: "read"},
+		{name: "PATCH accepts write", method: http.MethodPatch, action: "write", allowed: true},
+		{name: "DELETE rejects read", method: http.MethodDelete, action: "read"},
+		{name: "DELETE rejects write", method: http.MethodDelete, action: "write"},
+		{name: "DELETE accepts destructive", method: http.MethodDelete, action: "destructive", allowed: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			memory := store.NewMemory()
+			service := platform.New(memory)
+			actor := platform.Actor{ID: "root_binding", RequestID: "req_binding"}
+
+			integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "actions-api", VersionKey: "v1", DisplayName: "Actions API", Description: "Authorization action compatibility tests.", Visibility: model.VisibilityPrivate, Lifecycle: "active"}, actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			point, err := service.SaveAuthorizationPoint(ctx, integration.ID, "", platform.AuthorizationPointInput{Key: "actions.operation." + test.action, Name: test.action + " operation", Description: "Authorize the operation.", ActionType: test.action, ConfirmationRequired: test.action == "destructive", DecisionTTLSeconds: 120, State: "active"}, actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			policy := json.RawMessage(`{"required_grants":[],"confirmation_required":false,"risk":"low","idempotency_required":false}`)
+			if test.method != http.MethodGet {
+				policy = json.RawMessage(`{"required_grants":[],"confirmation_required":false,"risk":"medium","idempotency_required":true}`)
+			}
+			if test.method == http.MethodDelete {
+				policy = json.RawMessage(`{"required_grants":[],"confirmation_required":true,"risk":"critical","idempotency_required":true}`)
+			}
+			draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_" + strings.ToLower(test.method) + "_" + test.action, OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "actions", Name: strings.ToLower(test.method) + "_" + test.action, Description: "Exercise authorization action compatibility.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), BaseURL: "https://api.vendor.example/v1/actions", HTTPMethod: test.method, UpstreamAuth: json.RawMessage(`{"type":"none"}`), RequestMapping: json.RawMessage(`{}`), ResponseMapping: json.RawMessage(`{}`), AuthorizationPolicy: policy, TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			published, err := service.PublishTool(ctx, "prod_acme", draft.ID, draft.Revision, actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = service.SetIntegrationToolBindings(ctx, integration.ID, []platform.ToolRevisionSelection{{ToolID: published.ID, Revision: published.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, actor)
+			if test.allowed {
+				if err != nil {
+					t.Fatalf("strong-enough %s action rejected for %s: %v", test.action, test.method, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "weaker than the minimum") {
+				t.Fatalf("weak %s action error for %s = %v", test.action, test.method, err)
+			}
+		})
+	}
+}
 
 func TestPublishedIntegrationManifestCarriesExactAuthorizationAndToolContract(t *testing.T) {
 	t.Parallel()
@@ -31,7 +102,7 @@ func TestPublishedIntegrationManifestCarriesExactAuthorizationAndToolContract(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_customers_read", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "customers", Name: "read", Description: "Read one customer.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"customer_id":{"type":"string"}},"required":["customer_id"]}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"customer_id":{"type":"string"}},"required":["customer_id"]}`), BaseURL: "https://api.vendor.example/v1/customers", HTTPMethod: "GET", AuthorizationPolicy: json.RawMessage(`{"required_grants":["customers.read"],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
+	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_customers_read", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "customers", Name: "read", Description: "Read one customer.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"customer_id":{"type":"string"}},"required":["customer_id"]}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"customer_id":{"type":"string"}},"required":["customer_id"]}`), BaseURL: "https://api.vendor.example/v1/customers", HTTPMethod: "GET", UpstreamAuth: json.RawMessage(`{"type":"none"}`), RequestMapping: json.RawMessage(`{}`), ResponseMapping: json.RawMessage(`{}`), AuthorizationPolicy: json.RawMessage(`{"required_grants":["customers.read"],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http", UpstreamAnnotations: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,9 +14,9 @@ type ProviderConfig struct {
 	Scopes             []string  `json:"scopes"`
 	Audience           string    `json:"audience,omitempty"`
 	OAuthResource      string    `json:"oauth_resource,omitempty"`
-	OrganisationClaim  string    `json:"organisation_claim"`
+	OrganisationClaim  string    `json:"customer_account_claim"`
 	InstallationClaim  string    `json:"installation_claim"`
-	DelegatedAPIOrigin string    `json:"delegated_api_origin"`
+	DelegatedAPIOrigin string    `json:"authorization_api_origin"`
 	State              string    `json:"state"`
 	Revision           int64     `json:"revision"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -39,6 +39,7 @@ type CustomerAccount struct {
 type OAuthState struct {
 	Digest              []byte
 	ProductID           string
+	ProviderRevision    int64
 	ClientID            string
 	RedirectURI         string
 	Resource            string
@@ -53,6 +54,8 @@ type OAuthState struct {
 type OAuthCode struct {
 	Digest                 []byte
 	ProductID              string
+	OrganisationID         string
+	ProviderRevision       int64
 	ClientID               string
 	RedirectURI            string
 	Resource               string
@@ -77,6 +80,7 @@ type OAuthCode struct {
 type AccessToken struct {
 	Digest                 []byte
 	ProductID              string
+	ProviderRevision       int64
 	ClientID               string
 	Resource               string
 	Issuer                 string
@@ -95,6 +99,29 @@ type AccessToken struct {
 	ExpiresAt              time.Time
 	CreatedAt              time.Time
 	RevokedAt              *time.Time
+}
+
+// ProviderTest is a short-lived proof that one exact disabled provider
+// revision completed the real upstream OIDC authorization-code flow. It never
+// contains upstream tokens or a client secret.
+type ProviderTest struct {
+	ID                    string     `json:"id"`
+	OrganisationID        string     `json:"-"`
+	DeploymentID          string     `json:"-"`
+	ConfigurationRevision int64      `json:"configuration_revision"`
+	StateDigest           []byte     `json:"-"`
+	UpstreamVerifier      string     `json:"-"`
+	Nonce                 string     `json:"-"`
+	Status                string     `json:"status"`
+	AuthorizationURL      string     `json:"authorization_url,omitempty"`
+	FailureCode           string     `json:"failure_code,omitempty"`
+	Issuer                string     `json:"issuer,omitempty"`
+	Subject               string     `json:"-"`
+	CustomerID            string     `json:"customer_id,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	ExpiresAt             time.Time  `json:"expires_at"`
+	CompletedAt           *time.Time `json:"completed_at,omitempty"`
+	CallbackClaimedAt     *time.Time `json:"-"`
 }
 
 type Principal struct {

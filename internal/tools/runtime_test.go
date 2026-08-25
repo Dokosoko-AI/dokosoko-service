@@ -46,17 +46,17 @@ func TestRuntimePinsDefinitionValidatesSchemaAndEnforcesGrant(t *testing.T) {
 	if _, err := memory.SaveIdentityProvider(context.Background(), identity.ProviderConfig{ID: "identity-1", OrganisationID: "org_acme", DeploymentID: "prod_acme", Issuer: "https://identity.vendor.example", ClientID: "doko", DelegatedAPIOrigin: "https://api.vendor.example", State: "active"}); err != nil {
 		t.Fatal(err)
 	}
+	registerGrant(t, service, "sandboxes.create")
 	tool, err := service.CreateTool(context.Background(), platform.ToolInput{
 		OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "projects", Name: "create_sandbox", Description: "Create an authorized sandbox.",
 		InputSchema:  []byte(`{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string","maxLength":40}},"required":["name"]}`),
 		OutputSchema: []byte(`{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"}},"required":["id"]}`),
 		Endpoint:     "https://api.vendor.example/v1/sandboxes", HTTPMethod: "POST",
-		AuthorizationPolicy: []byte(`{"required_grants":["sandboxes.create"],"confirmation_required":false}`), TimeoutMS: 5000,
+		AuthorizationPolicy: []byte(`{"required_grants":["sandboxes.create"],"confirmation_required":false,"idempotency_required":true}`), TimeoutMS: 5000,
 	}, platform.Actor{ID: "root", RequestID: "create"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerGrant(t, service, "sandboxes.create")
 	tool, err = service.PublishTool(context.Background(), tool.ProductID, tool.ID, tool.Revision, platform.Actor{ID: "root", RequestID: "publish"})
 	if err != nil {
 		t.Fatal(err)
@@ -69,16 +69,16 @@ func TestRuntimePinsDefinitionValidatesSchemaAndEnforcesGrant(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"sandbox-1"}`))}, nil
 	}))
-	if _, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo"}, tools.Principal{Subject: "user", Grants: map[string]bool{}}); err != tools.ErrDenied {
+	if _, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo"}, tools.Principal{Subject: "user", Grants: map[string]bool{}, IdempotencyKey: "runtime-test-key-0001"}); err != tools.ErrDenied {
 		t.Fatalf("missing grant error = %v", err)
 	}
-	if _, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo", "url": "https://attacker"}, tools.Principal{Subject: "user", Grants: map[string]bool{"sandboxes.create": true}}); err == nil {
+	if _, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo", "url": "https://attacker"}, tools.Principal{Subject: "user", Grants: map[string]bool{"sandboxes.create": true}, IdempotencyKey: "runtime-test-key-0002"}); err == nil {
 		t.Fatal("unexpected schema argument was accepted")
 	}
-	if _, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo"}, tools.Principal{Subject: "user", Grants: map[string]bool{"sandboxes.create": true}, DelegatedAPIOrigin: "https://api.vendor.example"}); err != tools.ErrDenied {
+	if _, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo"}, tools.Principal{Subject: "user", Grants: map[string]bool{"sandboxes.create": true}, DelegatedAPIOrigin: "https://api.vendor.example", IdempotencyKey: "runtime-test-key-0003"}); err != tools.ErrDenied {
 		t.Fatalf("missing delegated token error = %v", err)
 	}
-	value, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo"}, tools.Principal{Subject: "user", Grants: map[string]bool{"sandboxes.create": true}, DelegatedAPIOrigin: "https://api.vendor.example", DelegatedAccessToken: "delegated-customer-token", RequestID: "execute"})
+	value, err := runtime.Execute(context.Background(), tool.ProductID, "projects.create_sandbox", map[string]any{"name": "demo"}, tools.Principal{Subject: "user", Grants: map[string]bool{"sandboxes.create": true}, DelegatedAPIOrigin: "https://api.vendor.example", DelegatedAccessToken: "delegated-customer-token", RequestID: "execute", IdempotencyKey: "runtime-test-key-0004"})
 	if err != nil {
 		t.Fatal(err)
 	}

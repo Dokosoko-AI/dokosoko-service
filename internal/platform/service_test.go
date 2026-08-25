@@ -680,7 +680,7 @@ func TestWidgetActivationRequiresAHardenedAssistantAndAnswersWithoutIdentityOrCr
 		t.Fatal(err)
 	}
 	reply, err := service.AnswerWidgetMessage(ctx, platform.WidgetPrincipal{Widget: active, Session: model.WidgetSession{ID: "session-1", UserID: "private-user-123", CustomerOrganisationID: "private-org-456"}}, "How do calls work?")
-	if err != nil || reply != "The Voice API supports calls." {
+	if err != nil || !strings.HasPrefix(reply, "The Voice API supports calls.") || !strings.Contains(reply, "### Sources") || !strings.Contains(reply, "Create an API key") {
 		t.Fatalf("widget reply = %q err=%v", reply, err)
 	}
 	if doer.authorization != "Bearer provider-secret" || bytes.Contains(doer.requestBody, []byte("provider-secret")) || bytes.Contains(doer.requestBody, []byte("private-user-123")) || bytes.Contains(doer.requestBody, []byte("private-org-456")) || bytes.Contains(doer.requestBody, []byte(`"temperature":0.2`)) || !bytes.Contains(doer.requestBody, []byte("Never claim to have read customer data")) {

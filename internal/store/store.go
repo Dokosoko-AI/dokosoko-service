@@ -14,6 +14,28 @@ var (
 	ErrConflict = errors.New("revision conflict")
 )
 
+const identitySecretOrphanGrace = 15 * time.Minute
+
+func boundedToolTestCleanupLimit(limit int) int {
+	if limit < 1 {
+		return 0
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
+}
+
+func boundedOAuthArtifactCleanupLimit(limit int) int {
+	if limit < 1 {
+		return 0
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
+}
+
 type Store interface {
 	Organisations(context.Context) ([]model.Organisation, error)
 	CreateOrganisation(context.Context, model.Organisation) (model.Organisation, error)
@@ -26,6 +48,20 @@ type Store interface {
 	UpdateIntegration(context.Context, model.Integration, int64) (model.Integration, error)
 	IntegrationRevisions(context.Context, string) ([]model.IntegrationRevision, error)
 	CreateIntegrationRevision(context.Context, model.IntegrationRevision) (model.IntegrationRevision, error)
+	RuntimeServiceConnections(context.Context, string, string) ([]model.RuntimeServiceConnection, error)
+	RuntimeServiceConnection(context.Context, string, string) (model.RuntimeServiceConnection, error)
+	CreateRuntimeServiceConnection(context.Context, model.RuntimeServiceConnection) (model.RuntimeServiceConnection, error)
+	UpdateRuntimeServiceConnection(context.Context, model.RuntimeServiceConnection, int64) (model.RuntimeServiceConnection, error)
+	RuntimeServiceConnectionRevisions(context.Context, string, string) ([]model.RuntimeServiceConnectionRevision, error)
+	CreateRuntimeServiceConnectionRevision(context.Context, model.RuntimeServiceConnectionRevision) (model.RuntimeServiceConnectionRevision, error)
+	RuntimeCredentialSets(context.Context, string, string) ([]model.RuntimeCredentialSet, error)
+	RuntimeCredentialSet(context.Context, string, string) (model.RuntimeCredentialSet, error)
+	CreateRuntimeCredentialSet(context.Context, model.RuntimeCredentialSet) (model.RuntimeCredentialSet, error)
+	UpdateRuntimeCredentialSet(context.Context, model.RuntimeCredentialSet, int64) (model.RuntimeCredentialSet, error)
+	RuntimeCredentialVersions(context.Context, string) ([]model.RuntimeCredentialVersion, error)
+	CreateRuntimeCredentialVersion(context.Context, model.RuntimeCredentialVersion) (model.RuntimeCredentialVersion, error)
+	ActivateRuntimeCredentialVersion(context.Context, string, string, string, time.Time) (model.RuntimeCredentialVersion, error)
+	RevokeRuntimeCredentialVersion(context.Context, string, string, string, time.Time) (model.RuntimeCredentialVersion, error)
 	ResourceSets(context.Context, string, string) ([]model.ResourceSet, error)
 	ResourceSet(context.Context, string, string) (model.ResourceSet, error)
 	CreateResourceSet(context.Context, model.ResourceSet, model.ResourceSetRevision) (model.ResourceSet, error)
@@ -55,6 +91,7 @@ type Store interface {
 	AccessDefinitions(context.Context, string) ([]model.AccessDefinition, error)
 	AccessDefinition(context.Context, string, string) (model.AccessDefinition, error)
 	CreateAccessDefinition(context.Context, model.AccessDefinition) (model.AccessDefinition, error)
+	UpdateAccessDefinition(context.Context, model.AccessDefinition, int64) (model.AccessDefinition, error)
 	AccessConnections(context.Context, string) ([]model.AccessConnection, error)
 	AccessConnection(context.Context, string, string) (model.AccessConnection, error)
 	CreateAccessConnection(context.Context, model.AccessConnection) (model.AccessConnection, error)
@@ -115,6 +152,7 @@ type Store interface {
 	CreateCrawlJob(context.Context, model.CrawlJob) (model.CrawlJob, error)
 	CreateSecret(context.Context, model.Secret) (model.Secret, error)
 	Secret(context.Context, string, string) (model.Secret, error)
+	DeleteSecret(context.Context, string, string) error
 	Tools(context.Context, string, bool) ([]model.Tool, error)
 	Tool(context.Context, string, string) (model.Tool, error)
 	CreateTool(context.Context, model.Tool) (model.Tool, error)
@@ -123,6 +161,14 @@ type Store interface {
 	UpdateImportedTool(context.Context, model.Tool, int64) (model.Tool, error)
 	MarkImportedToolDrift(context.Context, string, string, bool) (model.Tool, error)
 	PublishTool(context.Context, string, string, int64, string) (model.Tool, error)
+	CreateToolTestConfirmation(context.Context, model.ToolTestConfirmation) error
+	ConsumeToolTestConfirmation(context.Context, []byte, string, string, int64, []byte, string, string, time.Time) (model.ToolTestConfirmation, error)
+	CreateManagedOperationConfirmation(context.Context, model.ManagedOperationConfirmation) error
+	ConsumeManagedOperationConfirmation(context.Context, []byte, string, string, []byte, string, string, time.Time) (model.ManagedOperationConfirmation, error)
+	DeleteExpiredToolTestData(context.Context, time.Time, int) (int64, error)
+	AppendToolTestRun(context.Context, model.ToolTestRun) error
+	ToolTestRuns(context.Context, string, string, time.Time) ([]model.ToolTestRun, error)
+	ToolTestRun(context.Context, string, string, string, time.Time) (model.ToolTestRun, error)
 	MCPConnections(context.Context, string) ([]model.MCPConnection, error)
 	MCPConnection(context.Context, string, string) (model.MCPConnection, error)
 	CreateMCPConnection(context.Context, model.MCPConnection) (model.MCPConnection, error)
@@ -192,8 +238,17 @@ type Store interface {
 	WidgetSessionByDigest(context.Context, []byte, time.Time) (model.WidgetSession, error)
 	RevokeWidgetSession(context.Context, string, string, time.Time) (model.WidgetSession, error)
 	RevokeWidgetSessions(context.Context, string, time.Time) error
+	WidgetAgentMessages(context.Context, string, int) ([]model.WidgetAgentMessage, error)
+	AppendWidgetAgentMessages(context.Context, []model.WidgetAgentMessage) error
 	IdentityProvider(context.Context, string) (identity.ProviderConfig, error)
 	SaveIdentityProvider(context.Context, identity.ProviderConfig) (identity.ProviderConfig, error)
+	DeleteIdentityProvider(context.Context, string, int64) (identity.ProviderConfig, error)
+	CreateIdentityProviderTest(context.Context, identity.ProviderTest) error
+	IdentityProviderTest(context.Context, string, string) (identity.ProviderTest, error)
+	ClaimIdentityProviderTestByStateDigest(context.Context, []byte, time.Time) (identity.ProviderTest, error)
+	LatestIdentityProviderTest(context.Context, string) (identity.ProviderTest, error)
+	CompleteIdentityProviderTest(context.Context, identity.ProviderTest) (identity.ProviderTest, error)
+	ExpireIdentityProviderTests(context.Context, string, time.Time) error
 	OAuthClient(context.Context, string, string) (identity.OAuthClient, error)
 	CreateOAuthClient(context.Context, identity.OAuthClient) (identity.OAuthClient, error)
 	CustomerAccounts(context.Context, string, string, int) ([]identity.CustomerAccount, bool, error)
@@ -206,6 +261,7 @@ type Store interface {
 	ConsumeOAuthCode(context.Context, []byte) (identity.OAuthCode, error)
 	CreateAccessToken(context.Context, identity.AccessToken) error
 	AccessTokenByDigest(context.Context, []byte) (identity.AccessToken, error)
+	DeleteStaleOAuthArtifacts(context.Context, string, time.Time, int) (int64, error)
 	PublicKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
 	PrivateKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
 	AppendAnalytics(context.Context, model.AnalyticsEvent) error

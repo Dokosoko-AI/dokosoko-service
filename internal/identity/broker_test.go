@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,6 +67,99 @@ func (f fakeAccessEvaluator) Resolve(_ context.Context, _ identity.ProviderConfi
 	return identity.AccessEvaluation{ID: "eval_7", Grants: []string{"developer.pro"}, PolicyVersion: "2026-08", ExpiresAt: time.Now().UTC().Add(30 * time.Minute)}, nil
 }
 
+type countingAccessEvaluator struct{ calls int }
+
+func (f *countingAccessEvaluator) Resolve(context.Context, identity.ProviderConfig, identity.UpstreamIdentity) (identity.AccessEvaluation, error) {
+	f.calls++
+	return identity.AccessEvaluation{}, errors.New("identity tests must not evaluate access")
+}
+
+type blockingProviderTestUpstream struct {
+	started   chan struct{}
+	release   chan struct{}
+	exchanges atomic.Int32
+}
+
+func (u *blockingProviderTestUpstream) AuthorizationURL(ctx context.Context, config identity.ProviderConfig, state, nonce, challenge, callback string) (string, error) {
+	return (fakeUpstream{}).AuthorizationURL(ctx, config, state, nonce, challenge, callback)
+}
+
+func (u *blockingProviderTestUpstream) ExchangeAndVerify(ctx context.Context, config identity.ProviderConfig, code, verifier, nonce, callback string) (identity.UpstreamIdentity, error) {
+	if u.exchanges.Add(1) == 1 {
+		close(u.started)
+	}
+	select {
+	case <-ctx.Done():
+		return identity.UpstreamIdentity{}, ctx.Err()
+	case <-u.release:
+	}
+	return (fakeUpstream{}).ExchangeAndVerify(ctx, config, code, verifier, nonce, callback)
+}
+
+type failingProviderDiscovery struct{}
+
+func (failingProviderDiscovery) AuthorizationURL(context.Context, identity.ProviderConfig, string, string, string, string) (string, error) {
+	return "", errors.New("OIDC discovery unavailable")
+}
+
+func (failingProviderDiscovery) ExchangeAndVerify(context.Context, identity.ProviderConfig, string, string, string, string) (identity.UpstreamIdentity, error) {
+	return identity.UpstreamIdentity{}, errors.New("unexpected exchange")
+}
+
+type trackingBrokerRepository struct {
+	*store.Memory
+	identityReads          int
+	staleIdentityRead      int
+	delegatedSecretIDs     []string
+	deletedDelegatedSecret []string
+}
+
+type revisionBumpingUpstream struct{ memory *store.Memory }
+
+func (u revisionBumpingUpstream) AuthorizationURL(ctx context.Context, config identity.ProviderConfig, state, nonce, challenge, callback string) (string, error) {
+	return (fakeUpstream{}).AuthorizationURL(ctx, config, state, nonce, challenge, callback)
+}
+
+func (u revisionBumpingUpstream) ExchangeAndVerify(ctx context.Context, config identity.ProviderConfig, code, verifier, nonce, callback string) (identity.UpstreamIdentity, error) {
+	upstream, err := (fakeUpstream{}).ExchangeAndVerify(ctx, config, code, verifier, nonce, callback)
+	if err != nil {
+		return identity.UpstreamIdentity{}, err
+	}
+	current, err := u.memory.IdentityProvider(ctx, config.DeploymentID)
+	if err != nil {
+		return identity.UpstreamIdentity{}, err
+	}
+	if _, err := u.memory.SaveIdentityProvider(ctx, current); err != nil {
+		return identity.UpstreamIdentity{}, err
+	}
+	return upstream, nil
+}
+
+func (r *trackingBrokerRepository) IdentityProvider(ctx context.Context, productID string) (identity.ProviderConfig, error) {
+	r.identityReads++
+	value, err := r.Memory.IdentityProvider(ctx, productID)
+	if err == nil && r.staleIdentityRead == r.identityReads {
+		value.Revision++
+	}
+	return value, err
+}
+
+func (r *trackingBrokerRepository) CreateSecret(ctx context.Context, value model.Secret) (model.Secret, error) {
+	created, err := r.Memory.CreateSecret(ctx, value)
+	if err == nil && value.Purpose == "vendor_delegated_access" {
+		r.delegatedSecretIDs = append(r.delegatedSecretIDs, created.ID)
+	}
+	return created, err
+}
+
+func (r *trackingBrokerRepository) DeleteSecret(ctx context.Context, organisationID, id string) error {
+	err := r.Memory.DeleteSecret(ctx, organisationID, id)
+	if err == nil {
+		r.deletedDelegatedSecret = append(r.deletedDelegatedSecret, id)
+	}
+	return err
+}
+
 type staticClientMetadata struct{ redirectURIs []string }
 
 func (resolver staticClientMetadata) Resolve(_ context.Context, id string) (identity.ClientMetadata, error) {
@@ -85,7 +179,9 @@ func configuredMemory(t *testing.T) (*store.Memory, *secrets.Vault) {
 		DeploymentID:       productID,
 		Issuer:             "https://idp.example",
 		ClientID:           "upstream-client",
+		ClientSecretID:     "upstream-client-secret",
 		Scopes:             []string{"openid"},
+		Audience:           "https://api.vendor.example",
 		OrganisationClaim:  "org_id",
 		DelegatedAPIOrigin: "https://api.vendor.example",
 		State:              "active",
@@ -119,6 +215,241 @@ func TestDisabledIdentityProviderFailsClosed(t *testing.T) {
 	_, err = broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, Scope: "mcp:private", State: "client-state", CodeChallenge: challenge(strings.Repeat("v", 48))})
 	if !errors.Is(err, identity.ErrIdentityDisabled) {
 		t.Fatalf("disabled identity provider did not fail closed: %v", err)
+	}
+}
+
+func TestProviderTestVerifiesIdentityWithoutCreatingRuntimeState(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	provider, err := memory.IdentityProvider(context.Background(), productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator := &countingAccessEvaluator{}
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, evaluator, staticClientMetadata{})
+	test, err := broker.BeginProviderTest(context.Background(), productID, provider.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(test.AuthorizationURL)
+	if err != nil || !identity.IsProviderTestState(parsed.Query().Get("state")) || test.Status != "pending" {
+		t.Fatalf("test = %#v, url error = %v", test, err)
+	}
+	completed, err := broker.CompleteProviderTest(context.Background(), parsed.Query().Get("state"), "vendor-code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != "passed" || completed.ConfigurationRevision != provider.Revision || completed.Issuer != provider.Issuer || completed.Subject != "vendor-user-42" || completed.CustomerID != "vendor-account-7" || completed.AuthorizationURL != "" || completed.UpstreamVerifier != "" || completed.Nonce != "" {
+		t.Fatalf("completed test = %#v", completed)
+	}
+	if evaluator.calls != 0 {
+		t.Fatalf("access evaluator calls = %d", evaluator.calls)
+	}
+	accounts, _, err := memory.CustomerAccounts(context.Background(), productID, "", 50)
+	if err != nil || len(accounts) != 0 {
+		t.Fatalf("identity test created customer accounts: %#v, err=%v", accounts, err)
+	}
+	if _, err := broker.CompleteProviderTest(context.Background(), parsed.Query().Get("state"), "vendor-code", ""); !errors.Is(err, identity.ErrProviderTest) {
+		t.Fatalf("provider test callback was reusable: %v", err)
+	}
+}
+
+func TestProviderTestDiscoveryFailureReturnsStoredResult(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	provider, err := memory.IdentityProvider(context.Background(), productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := identity.NewBroker(memory, vault, publicURL, failingProviderDiscovery{}, &countingAccessEvaluator{}, staticClientMetadata{})
+	failed, err := broker.BeginProviderTest(context.Background(), productID, provider.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.ID == "" || failed.Status != "failed" || failed.FailureCode != "oidc_authorization_failed" || failed.AuthorizationURL != "" || failed.CompletedAt == nil {
+		t.Fatalf("failed discovery result = %#v", failed)
+	}
+	stored, err := memory.IdentityProviderTest(context.Background(), productID, failed.ID)
+	if err != nil || stored.Status != "failed" || stored.FailureCode != failed.FailureCode || stored.UpstreamVerifier != "" || stored.Nonce != "" {
+		t.Fatalf("stored discovery result = %#v, err=%v", stored, err)
+	}
+}
+
+func TestProviderTestRejectsIncompleteLegacyConfiguration(t *testing.T) {
+	memory := store.NewMemory()
+	legacy, err := memory.SaveIdentityProvider(context.Background(), identity.ProviderConfig{ID: "legacy-idp", OrganisationID: "org_acme", DeploymentID: productID, Issuer: "https://legacy-id.example.com/tenant", ClientID: "legacy-client", ClientSecretID: "legacy-secret", Scopes: []string{"profile"}, DelegatedAPIOrigin: "https://api.vendor.example", State: "disabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := secrets.New(bytes.Repeat([]byte{0x6c}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, &countingAccessEvaluator{}, staticClientMetadata{})
+	if _, err := broker.BeginProviderTest(context.Background(), productID, legacy.Revision); !errors.Is(err, identity.ErrProviderConfiguration) {
+		t.Fatalf("incomplete legacy provider test error = %v", err)
+	}
+	if _, err := memory.LatestIdentityProviderTest(context.Background(), productID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("incomplete provider created a test transaction: %v", err)
+	}
+}
+
+func TestProviderTestCallbackIsAtomicallyClaimed(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	provider, err := memory.IdentityProvider(context.Background(), productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := &blockingProviderTestUpstream{started: make(chan struct{}), release: make(chan struct{})}
+	broker := identity.NewBroker(memory, vault, publicURL, upstream, &countingAccessEvaluator{}, staticClientMetadata{})
+	started, err := broker.BeginProviderTest(context.Background(), productID, provider.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizationURL, err := url.Parse(started.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawState := authorizationURL.Query().Get("state")
+	type completion struct {
+		test identity.ProviderTest
+		err  error
+	}
+	first := make(chan completion, 1)
+	go func() {
+		value, completeErr := broker.CompleteProviderTest(context.Background(), rawState, "vendor-code", "")
+		first <- completion{test: value, err: completeErr}
+	}()
+	<-upstream.started
+	if _, err := broker.CompleteProviderTest(context.Background(), rawState, "", "access_denied"); !errors.Is(err, identity.ErrProviderTest) {
+		t.Fatalf("duplicate callback was not rejected while the exact transaction was processing: %v", err)
+	}
+	close(upstream.release)
+	completed := <-first
+	if completed.err != nil || completed.test.Status != "passed" || upstream.exchanges.Load() != 1 {
+		t.Fatalf("claimed callback result=%#v err=%v exchanges=%d", completed.test, completed.err, upstream.exchanges.Load())
+	}
+	stored, err := memory.IdentityProviderTest(context.Background(), productID, started.ID)
+	if err != nil || stored.Status != "passed" {
+		t.Fatalf("stored callback result=%#v err=%v", stored, err)
+	}
+}
+
+func TestProviderRevisionInvalidatesOAuthStateCodeAndAccessToken(t *testing.T) {
+	bumpProvider := func(t *testing.T, memory *store.Memory) {
+		t.Helper()
+		provider, err := memory.IdentityProvider(context.Background(), productID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := memory.SaveIdentityProvider(context.Background(), provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("state", func(t *testing.T) {
+		memory, vault := configuredMemory(t)
+		broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+		upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, State: "state", CodeChallenge: challenge(strings.Repeat("v", 48))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, _ := url.Parse(upstreamURL)
+		bumpProvider(t, memory)
+		if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); !errors.Is(err, identity.ErrProviderRevision) {
+			t.Fatalf("stale state accepted: %v", err)
+		}
+	})
+
+	t.Run("code", func(t *testing.T) {
+		memory, vault := configuredMemory(t)
+		broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+		verifier := strings.Repeat("v", 48)
+		code := authorize(t, broker, verifier)
+		bumpProvider(t, memory)
+		if _, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource); !errors.Is(err, identity.ErrProviderRevision) {
+			t.Fatalf("stale authorization code accepted: %v", err)
+		}
+	})
+
+	t.Run("access token", func(t *testing.T) {
+		memory, vault := configuredMemory(t)
+		broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+		verifier := strings.Repeat("v", 48)
+		code := authorize(t, broker, verifier)
+		token, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bumpProvider(t, memory)
+		if _, err := broker.Authenticate(context.Background(), token.AccessToken); !errors.Is(err, identity.ErrInvalidOAuth) {
+			t.Fatalf("stale access token accepted: %v", err)
+		}
+	})
+}
+
+func TestCallbackAndExchangeCleanDelegatedTokenWhenOwnershipFails(t *testing.T) {
+	t.Run("callback final revision race", func(t *testing.T) {
+		memory, vault := configuredMemory(t)
+		repository := &trackingBrokerRepository{Memory: memory}
+		broker := identity.NewBroker(repository, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+		verifier := strings.Repeat("v", 48)
+		upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, State: "state", CodeChallenge: challenge(verifier)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, _ := url.Parse(upstreamURL)
+		repository.identityReads = 0
+		repository.staleIdentityRead = 5
+		if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); !errors.Is(err, identity.ErrProviderRevision) {
+			t.Fatalf("callback revision race error = %v", err)
+		}
+		if len(repository.delegatedSecretIDs) != 1 || len(repository.deletedDelegatedSecret) != 1 || repository.deletedDelegatedSecret[0] != repository.delegatedSecretIDs[0] {
+			t.Fatalf("created=%v deleted=%v", repository.delegatedSecretIDs, repository.deletedDelegatedSecret)
+		}
+		if _, err := memory.Secret(context.Background(), "org_acme", repository.delegatedSecretIDs[0]); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("callback failure stranded delegated token: %v", err)
+		}
+	})
+
+	t.Run("consumed code revision race", func(t *testing.T) {
+		memory, vault := configuredMemory(t)
+		repository := &trackingBrokerRepository{Memory: memory}
+		broker := identity.NewBroker(repository, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{}, staticClientMetadata{})
+		verifier := strings.Repeat("v", 48)
+		code := authorize(t, broker, verifier)
+		if len(repository.delegatedSecretIDs) != 1 {
+			t.Fatalf("delegated token secrets = %v", repository.delegatedSecretIDs)
+		}
+		provider, err := memory.IdentityProvider(context.Background(), productID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := memory.SaveIdentityProvider(context.Background(), provider); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource); !errors.Is(err, identity.ErrProviderRevision) {
+			t.Fatalf("exchange revision race error = %v", err)
+		}
+		if len(repository.deletedDelegatedSecret) != 1 || repository.deletedDelegatedSecret[0] != repository.delegatedSecretIDs[0] {
+			t.Fatalf("created=%v deleted=%v", repository.delegatedSecretIDs, repository.deletedDelegatedSecret)
+		}
+	})
+}
+
+func TestCallbackRechecksRevisionBeforeRuntimeIdentitySideEffects(t *testing.T) {
+	memory, vault := configuredMemory(t)
+	evaluator := &countingAccessEvaluator{}
+	broker := identity.NewBroker(memory, vault, publicURL, revisionBumpingUpstream{memory: memory}, evaluator, staticClientMetadata{})
+	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, State: "state", CodeChallenge: challenge(strings.Repeat("v", 48))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := url.Parse(upstreamURL)
+	if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); !errors.Is(err, identity.ErrProviderRevision) {
+		t.Fatalf("callback revision race error = %v", err)
+	}
+	accounts, _, err := memory.CustomerAccounts(context.Background(), productID, "", 50)
+	if err != nil || len(accounts) != 0 || evaluator.calls != 0 {
+		t.Fatalf("stale callback side effects: accounts=%#v evaluator_calls=%d err=%v", accounts, evaluator.calls, err)
 	}
 }
 
@@ -298,7 +629,7 @@ func TestAccessEvaluationUsesDelegatedBearerAndRetrySafeHeaders(t *testing.T) {
 		} else if request.Header.Get("Idempotency-Key") != idempotencyKey {
 			t.Fatalf("idempotency key changed across retry")
 		}
-		requestIDs = append(requestIDs, request.Header.Get("X-DokoSoko-Request-ID"))
+		requestIDs = append(requestIDs, request.Header.Get("X-External-Request-ID"))
 		if requests == 1 {
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"unavailable"}`))}, nil
 		}

@@ -17,7 +17,7 @@ func TestCustomToolDefinitionPublishesConfirmationAndRevisionMetadata(t *testing
 		t.Fatalf("name = %#v", definition["name"])
 	}
 	metadata, _ := definition["_meta"].(map[string]any)
-	if metadata["com.dokosoko/toolRevision"] != int64(7) || metadata["com.dokosoko/confirmationRequired"] != true || metadata["com.dokosoko/risk"] != "critical" {
+	if metadata["com.dokosoko/toolRevision"] != int64(7) || metadata["com.dokosoko/confirmationRequired"] != true || metadata["com.dokosoko/risk"] != "critical" || metadata["com.dokosoko/idempotencyKeyRequired"] != true || metadata["com.dokosoko/idempotencyKeyMetaField"] != "idempotency_key" {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	annotations, _ := definition["annotations"].(map[string]any)
@@ -43,5 +43,45 @@ func TestCustomToolDefinitionPublishesExactAuthorizationActionMetadata(t *testin
 	annotations, _ := definition["annotations"].(map[string]any)
 	if annotations["readOnlyHint"] != false || annotations["destructiveHint"] != false {
 		t.Fatalf("authorization action annotations = %#v", annotations)
+	}
+}
+
+func TestCustomToolDefinitionUsesConservativeMethodAndAuthorizationAnnotations(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		method          string
+		risk            string
+		action          string
+		wantReadOnly    bool
+		wantDestructive bool
+	}{
+		{name: "unmanaged GET is read only", method: "GET", risk: "low", wantReadOnly: true},
+		{name: "read GET is read only", method: "GET", risk: "low", action: "read", wantReadOnly: true},
+		{name: "write action strengthens GET", method: "GET", risk: "low", action: "write"},
+		{name: "destructive action strengthens GET", method: "GET", risk: "low", action: "destructive", wantDestructive: true},
+		{name: "stale read action cannot mask POST", method: "POST", risk: "medium", action: "read"},
+		{name: "stale read action cannot mask PUT", method: "PUT", risk: "medium", action: "read"},
+		{name: "stale read action cannot mask PATCH", method: "PATCH", risk: "medium", action: "read"},
+		{name: "stale read action cannot mask DELETE", method: "DELETE", risk: "critical", action: "read", wantDestructive: true},
+		{name: "critical policy remains destructive", method: "POST", risk: "critical", action: "write", wantDestructive: true},
+		{name: "destructive action remains destructive", method: "POST", risk: "medium", action: "destructive", wantDestructive: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			tool := model.Tool{ID: "tool_annotations", Revision: 1, Namespace: "safety", Name: "operation", Description: "Exercise annotation derivation.", HTTPMethod: test.method, InputSchema: json.RawMessage(`{"type":"object"}`), AuthorizationPolicy: json.RawMessage(`{"risk":"` + test.risk + `"}`)}
+			binding := toolruntime.BoundAuthorization{}
+			managed := test.action != ""
+			if managed {
+				binding = toolruntime.BoundAuthorization{IntegrationID: "integration_1", AuthorizationPoint: model.AuthorizationPoint{ID: "point_1", ActionType: test.action}, AuthorizationPointRevision: 1}
+			}
+			definition := customToolDefinitionForAuthorization(model.ProductManifest{}, tool, binding, managed)
+			annotations, _ := definition["annotations"].(map[string]any)
+			if annotations["readOnlyHint"] != test.wantReadOnly || annotations["destructiveHint"] != test.wantDestructive {
+				t.Fatalf("annotations = %#v, want readOnly=%t destructive=%t", annotations, test.wantReadOnly, test.wantDestructive)
+			}
+		})
 	}
 }

@@ -471,6 +471,22 @@ func (m *Memory) CreateAccessDefinition(_ context.Context, value model.AccessDef
 	return memoryClone(value), nil
 }
 
+func (m *Memory) UpdateAccessDefinition(_ context.Context, value model.AccessDefinition, expected int64) (model.AccessDefinition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.accessDefinitions[value.ID]
+	if !ok || current.DeploymentID != value.DeploymentID {
+		return model.AccessDefinition{}, ErrNotFound
+	}
+	if current.Revision != expected {
+		return model.AccessDefinition{}, ErrConflict
+	}
+	value.CreatedAt, value.Revision, value.UpdatedAt = current.CreatedAt, expected+1, time.Now().UTC()
+	m.accessDefinitions[value.ID] = memoryClone(value)
+	m.deployment.CatalogRevision++
+	return memoryClone(value), nil
+}
+
 func (m *Memory) accessConnectionLocked(value model.AccessConnection) model.AccessConnection {
 	if definition, ok := m.accessDefinitions[value.AccessDefinitionID]; ok {
 		copy := memoryClone(definition)

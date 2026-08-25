@@ -96,17 +96,26 @@ test("maps the owned typography and Figma semantic theme into one UI contract", 
   assert.match(styles, /\.mobile-theme-toggle\s*\{\s*display:\s*none/);
 });
 
-test("keeps page spacing responsive and independent of view-specific max widths", async () => {
+test("keeps desktop workspaces focused without constraining builders", async () => {
   const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
 
   assert.match(styles, /--page-gutter:\s*clamp\(1rem, 2vw, 2rem\)/);
   assert.match(styles, /--page-block:\s*clamp\(1\.5rem, 2vw, 2rem\)/);
-  assert.match(styles, /\.content\s*\{[^}]*width:\s*auto[^}]*padding:\s*var\(--page-block\) var\(--page-gutter\)/);
-  assert.match(styles, /\.topbar\s*\{[^}]*padding-inline:\s*var\(--page-gutter\)/);
+  assert.match(styles, /--workspace-default:\s*90rem/);
+  assert.match(styles, /--workspace-compact:\s*70rem/);
+  assert.match(styles, /--workspace-wide:\s*100rem/);
+  assert.match(styles, /main\s*\{[^}]*--workspace-max:\s*var\(--workspace-default\)/);
+  assert.match(styles, /main\.workspace-compact\s*\{[^}]*var\(--workspace-compact\)/);
+  assert.match(styles, /main\.workspace-wide\s*\{[^}]*var\(--workspace-wide\)/);
+  assert.match(styles, /\.content\s*\{[^}]*width:\s*100%[^}]*max-width:\s*var\(--workspace-max\)[^}]*margin-inline:\s*auto[^}]*padding:\s*var\(--page-block\) var\(--page-gutter\)/);
+  assert.match(styles, /\.topbar-inner\s*\{[^}]*max-width:\s*var\(--workspace-max\)[^}]*margin-inline:\s*auto[^}]*padding-inline:\s*var\(--page-gutter\)/);
+  assert.match(source, /consoleRoute\.kind === "tool-builder"[\s\S]*?"workspace-wide"[\s\S]*?section === "identity" \|\| section === "settings"[\s\S]*?"workspace-compact"/);
+  assert.match(source, /<main id="main-content" className=\{workspaceClass\}/);
+  assert.match(source, /<header className="topbar">\s*<div className="topbar-inner">/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.content\s*\{[^}]*padding:\s*24px 16px 48px/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.compact-audit-row\s*\{[^}]*grid-template-columns:\s*38px minmax\(0, 1fr\)/);
   assert.match(styles, /\.compact-audit-row > code\s*\{[^}]*display:\s*none/);
-  assert.doesNotMatch(styles, /--content-max|width:\s*min\(1120px/);
 });
 
 test("keeps the Recipes authoring workflow inside the same global route stack", async () => {
@@ -124,13 +133,32 @@ test("keeps the Recipes authoring workflow inside the same global route stack", 
   assert.match(source, /<aside className="recipe-editor-sidebar">[\s\S]*?recipe-ai-rework/);
 });
 
-test("limits typography to the owned six-step scale and four weights", async () => {
+test("keeps API documentation setup short without bypassing reviewed evidence", async () => {
+  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const guide = await readFile(appFile("app/components/integrations/IntegrationAgentGuide.tsx"), "utf8");
+
+  assert.match(source, /sourcePublicationManifestEntry[\s\S]*source_publication_id:[\s\S]*content_hash:/);
+  assert.match(source, /api\.resourceSets\("documentation"\)/);
+  assert.match(source, /api\.attachResourceSet\(integration\.id, resource\.id, revisionID\)/);
+  assert.match(source, /Review & attach/);
+  assert.match(source, /Publish & attach/);
+  assert.match(source, /That exact revision was already attached/);
+  assert.match(source, /onGenerateAgentGuide\(integrationID\)/);
+  assert.match(guide, /Generate guide/);
+  assert.match(guide, /Refresh guide/);
+  assert.match(guide, /attached, reviewed evidence/);
+  assert.doesNotMatch(guide, /source of truth.*analysis/i);
+});
+
+test("limits typography to the owned six-step scale, line heights, and four weights", async () => {
   const styles = await readFile(appFile("app/globals.css"), "utf8");
   const tokenBlock = styles.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
 
   for (const [token, value] of [
     ["text-caption", ".75rem"], ["text-body", ".8125rem"], ["text-label", ".875rem"],
     ["text-heading", "1rem"], ["text-metric", "1.25rem"], ["text-title", "1.75rem"],
+    ["leading-caption", "1.125rem"], ["leading-dense", "1.25rem"], ["leading-control", "1.375rem"],
+    ["leading-heading", "1.5rem"], ["leading-section", "1.75rem"], ["leading-title", "2.25rem"],
     ["weight-regular", "400"], ["weight-medium", "500"], ["weight-semibold", "600"], ["weight-bold", "700"],
   ]) assert.match(tokenBlock, new RegExp(`--${token}:\\s*${value.replace(".", "\\.")}`));
 
@@ -140,6 +168,62 @@ test("limits typography to the owned six-step scale and four weights", async () 
   assert.match(styles, /body\s*\{[^}]*font-family:\s*var\(--font-ui\)/);
   assert.match(styles, /code, pre, kbd, samp\s*\{[^}]*font-family:\s*var\(--font-code\)/);
   assert.match(styles, /strong, b\s*\{[^}]*font-weight:\s*var\(--weight-semibold\)/);
+});
+
+test("maps dashboard, RootGate, and OIDC typography onto semantic roles", async () => {
+  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const layout = await readFile(appFile("app/components/core/layout.tsx"), "utf8");
+  const rootGate = await readFile(appFile("app/components/RootGate.tsx"), "utf8");
+  const identitySetup = await readFile(appFile("app/components/OIDCIdentitySetup.tsx"), "utf8");
+  const primitiveSources = (await Promise.all([
+    "button.tsx", "dialog.tsx", "heading.tsx", "input.tsx", "select.tsx", "text.tsx", "textarea.tsx",
+  ].map((file) => readFile(appFile(`app/components/core/${file}`), "utf8")))).join("\n");
+
+  for (const [role, size, weight, leading] of [
+    ["page-title", "text-title", "weight-semibold", "leading-title"],
+    ["section-title", "text-metric", "weight-semibold", "leading-section"],
+    ["heading", "text-heading", "weight-semibold", "leading-heading"],
+    ["body-large", "text-heading", "weight-regular", "leading-heading"],
+    ["body", "text-label", "weight-regular", "leading-control"],
+    ["dense", "text-body", "weight-regular", "leading-dense"],
+    ["control", "text-label", "weight-medium", "leading-control"],
+    ["caption", "text-caption", "weight-regular", "leading-caption"],
+  ]) {
+    assert.match(styles, new RegExp(`\\.type-${role}\\s*\\{[^}]*font-size:\\s*var\\(--${size}\\)[^}]*font-weight:\\s*var\\(--${weight}\\)[^}]*line-height:\\s*var\\(--${leading}\\)`));
+  }
+
+  assert.match(layout, /<h1 className="type-page-title">\{title\}<\/h1>/);
+  assert.match(layout, /<p className="type-body-large">\{description\}<\/p>/);
+  assert.match(layout, /<h2 className="type-section-title">\{title\}<\/h2>/);
+  assert.match(layout, /<Heading className="type-heading">\{title\}<\/Heading>/);
+  assert.match(rootGate, /<h1 className="type-section-title">\{title\}<\/h1><p className="type-body">\{description\}<\/p>/);
+  assert.match(rootGate, /<footer className="type-caption">Private by default/);
+  assert.match(identitySetup, /<h2 className="type-heading">Test sign-in<\/h2><p className="type-body">/);
+  assert.match(identitySetup, /<h2 className="type-heading">Activate customer sign-in<\/h2><p className="type-body">/);
+
+  assert.match(styles, /\.auth-card h1\s*\{[^}]*font-size:\s*var\(--text-metric\)[^}]*font-weight:\s*var\(--weight-semibold\)[^}]*line-height:\s*var\(--leading-section\)/);
+  assert.match(styles, /\.auth-card > p\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.auth-field input\s*\{[^}]*font-family:\s*var\(--font-ui\)[^}]*font-size:\s*var\(--text-label\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.auth-field\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*font-weight:\s*var\(--weight-medium\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.auth-field select\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.auth-field textarea\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.auth-problem\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.core-button\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*font-weight:\s*var\(--weight-medium\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.identity-verification-card h2\s*\{[^}]*font-size:\s*var\(--text-heading\)[^}]*font-weight:\s*var\(--weight-semibold\)[^}]*line-height:\s*var\(--leading-heading\)/);
+  assert.match(styles, /\.identity-verification-card p\s*\{[^}]*font-size:\s*var\(--text-label\)[^}]*line-height:\s*var\(--leading-control\)/);
+  assert.match(styles, /\.dialog-title\s*\{[^}]*font-size:\s*var\(--text-heading\)[^}]*font-weight:\s*var\(--weight-semibold\)[^}]*line-height:\s*var\(--leading-heading\)/);
+  assert.match(styles, /\.entity-missing h1\s*\{[^}]*font-size:\s*var\(--text-metric\)[^}]*font-weight:\s*var\(--weight-semibold\)[^}]*line-height:\s*var\(--leading-section\)/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?:is\(input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="range"\]\), select, textarea\)\s*\{[^}]*font-size:\s*var\(--text-heading\)[^}]*line-height:\s*var\(--leading-heading\)/);
+
+  assert.equal(styles.match(/\.recovery-grid\s*\{/g)?.length, 1, "recovery grid should have one owned rule");
+  assert.equal(styles.match(/\.recovery-grid code\s*\{/g)?.length, 1, "recovery code typography should not be overridden later");
+  assert.match(primitiveSources, /type-page-title/);
+  assert.match(primitiveSources, /type-heading/);
+  assert.match(primitiveSources, /type-body/);
+  assert.match(primitiveSources, /type-dense/);
+  assert.match(primitiveSources, /type-control/);
+  assert.doesNotMatch(primitiveSources, /text-2xl\/8|text-base\/6|sm:text-(?:xl\/8|sm\/6)|sm:text-\[0\.8125rem\]/);
+  assert.doesNotMatch(`${rootGate}\n${identitySetup}`, /\bfont(?:Family|Size|Weight)\s*:/);
 });
 
 test("keeps interactive controls semantic inside shared data tables", async () => {
@@ -196,4 +280,78 @@ test("keeps application colors inside the semantic light and dark token schemes"
       assert.ok(contrast(hex(block, "subtle"), hex(block, surface)) >= 4.5, `--subtle must remain readable on --${surface}`);
     }
   }
+});
+
+test("keeps the experimental widget implementation behind the deployment capability", async () => {
+  const consoleApp = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const launcher = await readFile(appFile("app/components/WidgetPreviewLauncher.tsx"), "utf8");
+  const markdown = await readFile(appFile("app/components/MarkdownMessage.tsx"), "utf8");
+  const packageJSON = JSON.parse(await readFile(appFile("package.json"), "utf8"));
+  const client = await readFile(appFile("app/lib/api.ts"), "utf8");
+  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const controlPlane = await readFile(appFile("api/openapi.yaml"), "utf8");
+  const runtime = await readFile(appFile("api/widget-runtime.openapi.yaml"), "utf8");
+
+  assert.match(consoleApp, /import \{ WidgetPreviewLauncher \}/);
+  assert.match(consoleApp, /const widgetsEnabled = Boolean\(currentDeployment\?\.features\?\.widgets\)/);
+  assert.match(consoleApp, /widgetsEnabled \? api\.widgets\(\) : Promise\.resolve/);
+  assert.match(consoleApp, /\{widgetsEnabled && <WidgetPreviewLauncher widgets=\{widgets\}/);
+  assert.match(consoleApp, /\{widgetsEnabled && <section className="section-block widget-channel-card"/);
+  assert.match(consoleApp, /<WidgetDetailView[\s\S]*recipes=\{recipes\}/);
+  assert.match(consoleApp, /Publish guidance/);
+  assert.match(consoleApp, /Refresh guidance/);
+  assert.match(consoleApp, /Review guidance/);
+  assert.match(consoleApp, /guidanceNeedsReview/);
+  assert.match(styles, /widget-setup-steps li\.attention/);
+  assert.match(client, /knowledge_bindings:/);
+  assert.match(launcher, /widgets\.filter\(\(widget\) => widget\.state === "active"\)/);
+  assert.match(launcher, /api\.widgetConfiguration\(widgetID\)[\s\S]*api\.widgetPreviewBootstrap\(widgetID\)[\s\S]*api\.exchangeWidgetSession\(bootstrap\.bootstrapToken, window\.location\.origin\)/);
+  assert.match(launcher, /streamWidgetMessage\(token, question/);
+  assert.match(launcher, /No active widget/);
+  assert.match(launcher, /Admin preview/);
+  assert.match(launcher, /Why this answer\?/);
+  assert.match(launcher, /Customer page context is added by the embedding backend/);
+  assert.match(launcher, /Ask a customer question/);
+  assert.doesNotMatch(launcher, /Ask what this API can do/);
+  assert.match(consoleApp, /context: \{[\s\S]*view: "profile"[\s\S]*label: "Plan"/);
+  assert.match(runtime, /WidgetSessionContext:[\s\S]*bounded snapshot/);
+  assert.match(launcher, /addAssistantSource/);
+  assert.match(launcher, /setAssistantTrace/);
+  assert.match(launcher, /aria-label="Open widget preview"|aria-label=\{open \? "Close widget preview" : "Open widget preview"\}/);
+  assert.match(launcher, /role="log" aria-live="polite"/);
+  assert.match(launcher, /message\.role === "assistant"[\s\S]*<MarkdownMessage>/);
+  assert.doesNotMatch(launcher, /localStorage|sessionStorage|widgetSecret|doko_wsk_/);
+
+  assert.equal(packageJSON.dependencies["react-markdown"], "10.1.0");
+  assert.equal(packageJSON.dependencies["remark-gfm"], "4.0.1");
+  assert.match(markdown, /remarkPlugins=\{\[remarkGfm\]\}/);
+  assert.match(markdown, /skipHtml/);
+  assert.match(markdown, /protocol === "https:"[\s\S]*protocol === "http:"[\s\S]*protocol === "mailto:"/);
+  assert.match(markdown, /rel="noopener noreferrer"/);
+  assert.match(markdown, /img: \(\{ alt \}\)/);
+  assert.doesNotMatch(markdown, /dangerouslySetInnerHTML|rehypeRaw|javascript:/i);
+
+  assert.match(client, /widgetConfiguration:[^\n]+credentials: "omit"/);
+  assert.match(client, /widgetPreviewBootstrap:[^\n]+\/preview-session/);
+  assert.match(client, /exchangeWidgetSession:[^\n]+credentials: "omit"/);
+  assert.match(client, /fetch\("\/v1\/widget-chat"[\s\S]*credentials: "omit"[\s\S]*Authorization: `Bearer \$\{sessionToken\}`/);
+  assert.match(client, /payload\.type === "source"[\s\S]*onSource/);
+  assert.match(client, /payload\.type === "trace"[\s\S]*onTrace/);
+
+  assert.match(styles, /\.widget-preview-root\s*\{[^}]*position:\s*fixed[^}]*right:\s*24px[^}]*bottom:\s*24px/);
+  assert.match(styles, /\.widget-preview-launcher\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/);
+  assert.match(styles, /\.widget-preview-panel\s*\{[^}]*width:\s*min\(400px,[^}]*height:\s*min\(620px/);
+  assert.match(styles, /\.widget-preview-panel\s*\{[^}]*top:\s*auto[^}]*right:\s*0[^}]*bottom:\s*58px[^}]*left:\s*auto/);
+  assert.match(styles, /\.markdown-message :where\(ul, ol\)/);
+  assert.match(styles, /\.markdown-message pre\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.widget-preview-root\s*\{[^}]*right:\s*16px/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration:\s*\.01ms !important/);
+
+  assert.match(controlPlane, /\/api\/v1\/widgets\/\{widget_id\}\/preview-session:/);
+  assert.match(controlPlane, /enum: \[customer, admin_preview\]/);
+  assert.match(runtime, /kind:[\s\S]*enum: \[customer, admin_preview\]/);
+  assert.match(runtime, /WidgetAgentStreamEvent:/);
+  assert.match(runtime, /const: text_delta/);
+  assert.match(runtime, /const: source/);
+  assert.match(runtime, /const: trace/);
 });

@@ -3,12 +3,45 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
+
+type stagedToolLookupStore struct {
+	store.Store
+	calls      int
+	firstTools []model.Tool
+	firstErr   error
+	laterTools []model.Tool
+}
+
+func (s *stagedToolLookupStore) Tools(context.Context, string, bool) ([]model.Tool, error) {
+	s.calls++
+	if s.calls == 1 {
+		return s.firstTools, s.firstErr
+	}
+	return s.laterTools, nil
+}
+
+func TestExecutableToolLookupFailsClosedBeforeRuntimeSecondLookup(t *testing.T) {
+	appearing := model.Tool{ID: "tool_appeared", ProductID: "prod_acme", Namespace: "records", Name: "read"}
+	for name, fixture := range map[string]*stagedToolLookupStore{
+		"store error":          {Store: store.NewMemory(), firstErr: errors.New("temporary lookup failure"), laterTools: []model.Tool{appearing}},
+		"published after read": {Store: store.NewMemory(), firstTools: []model.Tool{}, laterTools: []model.Tool{appearing}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := &Server{service: platform.New(fixture)}
+			selected, err := server.executableTool(context.Background(), "prod_acme", "records.read", model.ProductSelectionContext{})
+			if err == nil || selected.ID != "" || fixture.calls != 1 {
+				t.Fatalf("selected=%#v err=%v lookup calls=%d", selected, err, fixture.calls)
+			}
+		})
+	}
+}
 
 func TestIntegrationToolAuthorizationIsExactAndIntegrationIsolated(t *testing.T) {
 	ctx := context.Background()
@@ -33,7 +66,7 @@ func TestIntegrationToolAuthorizationIsExactAndIntegrationIsolated(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_records", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "records", Name: "read", Description: "Read records.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`), OutputSchema: json.RawMessage(`{"type":"object"}`), BaseURL: "https://api.vendor.example/records", HTTPMethod: "GET", AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http"})
+	draft, err := memory.CreateTool(ctx, model.Tool{ID: "tool_records", OrganisationID: "org_acme", ProductID: "prod_acme", Namespace: "records", Name: "read", Description: "Read records.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), BaseURL: "https://api.vendor.example/records", HTTPMethod: "GET", UpstreamAuth: json.RawMessage(`{"type":"none"}`), RequestMapping: json.RawMessage(`{}`), ResponseMapping: json.RawMessage(`{}`), AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false}`), TimeoutMS: 5000, BackendKind: "http"})
 	if err != nil {
 		t.Fatal(err)
 	}

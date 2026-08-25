@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/coreos/go-oidc/v3 v3.16.0
 	github.com/jackc/pgx/v5 v5.10.0
+	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/crypto v0.54.0
 	golang.org/x/oauth2 v0.30.0
 )
@@ -34,7 +35,6 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

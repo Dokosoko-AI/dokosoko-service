@@ -120,7 +120,7 @@ func TestSubmissionIsEncryptedIdempotentAndConsentBound(t *testing.T) {
 		t.Fatalf("unsafe outbox record: %#v", stored)
 	}
 	envelope, err := service.decrypt(stored)
-	if err != nil || envelope.Reporter.Email != "" || envelope.Reporter.DisplayName != "" || envelope.Reporter.ExternalCustomerID != "customer-1" || envelope.Reporter.Principal.Subject != "user-123" || envelope.Bug == nil || envelope.Bug.IdempotencyKey != "" {
+	if err != nil || envelope.SchemaVersion != "2026-08-25" || envelope.Provider.Key != "dokosoko" || envelope.Resource.Type != "deployment" || envelope.Resource.ID != "prod_acme" || envelope.Channel != "private_mcp" || envelope.Extensions == nil || envelope.Extensions.DokoSoko.ManifestHash != "sha256:test" || envelope.LegacyProduct != nil || envelope.LegacyIntegration != nil || envelope.LegacySource != "" || envelope.Reporter.Email != "" || envelope.Reporter.DisplayName != "" || envelope.Reporter.ExternalCustomerID != "customer-1" || envelope.Reporter.Principal.Subject != "user-123" || envelope.Bug == nil || envelope.Bug.IdempotencyKey != "" {
 		t.Fatalf("envelope=%#v err=%v", envelope, err)
 	}
 	detail, err := service.Submission(ctx, "prod_acme", first.ID)
@@ -154,7 +154,7 @@ func TestDeliveryUsesNormativeEndpointAndRetrySafeContract(t *testing.T) {
 		if request.Method != http.MethodPost || request.URL.String() != "https://api.vendor.example/v1/support-submissions" || request.Header.Get("Authorization") != "Bearer delivery-secret" {
 			t.Fatalf("request=%s %s headers=%v", request.Method, request.URL, request.Header)
 		}
-		idempotencyKey, requestID = request.Header.Get("Idempotency-Key"), request.Header.Get("X-DokoSoko-Request-ID")
+		idempotencyKey, requestID = request.Header.Get("Idempotency-Key"), request.Header.Get("X-External-Request-ID")
 		if err := json.NewDecoder(request.Body).Decode(&delivered); err != nil {
 			t.Fatal(err)
 		}
@@ -179,6 +179,13 @@ func TestDeliveryUsesNormativeEndpointAndRetrySafeContract(t *testing.T) {
 	encoded, _ := json.Marshal(delivered)
 	if !bytes.Contains(encoded, []byte(`"principal":{"issuer":"https://identity.vendor.example","subject":"user-123"}`)) || !bytes.Contains(encoded, []byte(`"external_customer_id":"customer-1"`)) || !bytes.Contains(encoded, []byte(`"email":"developer@example.com"`)) {
 		t.Fatalf("trusted delivery context is incomplete: %s", encoded)
+	}
+	submission, submissionOK := delivered["submission"].(map[string]any)
+	provider, providerOK := submission["provider"].(map[string]any)
+	resource, resourceOK := submission["resource"].(map[string]any)
+	_, extensionsOK := submission["extensions"].(map[string]any)
+	if !submissionOK || !providerOK || provider["key"] != "dokosoko" || !resourceOK || resource["type"] != "deployment" || resource["id"] != "prod_acme" || submission["channel"] != "private_mcp" || !extensionsOK || submission["product"] != nil || submission["source"] != nil || bytes.Contains(encoded, []byte(`"integration":null`)) {
+		t.Fatalf("delivery did not use the provider-neutral envelope: %s", encoded)
 	}
 }
 

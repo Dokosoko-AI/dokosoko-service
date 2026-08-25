@@ -177,6 +177,22 @@ func (s *Server) adminWidgetSessions(w http.ResponseWriter, r *http.Request, wid
 	writeJSON(w, http.StatusOK, map[string]any{"items": values})
 }
 
+func (s *Server) createAdminWidgetPreviewSession(w http.ResponseWriter, r *http.Request, widgetID string) {
+	admin := actor(r)
+	if !s.allowFixedWindow("widget-preview|"+widgetID+"|"+admin.ID, 30, time.Now().UTC()) {
+		writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Widget preview session limit exceeded.", nil)
+		return
+	}
+	value, err := s.service.CreateWidgetPreviewBootstrap(r.Context(), widgetID, s.baseURL, admin)
+	if err != nil {
+		s.widgetRuntimeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	writeJSON(w, http.StatusCreated, value)
+}
+
 func (s *Server) revokeAdminWidgetSession(w http.ResponseWriter, r *http.Request, widgetID, sessionID string) {
 	deployment, err := s.service.Store().Deployment(r.Context())
 	if err != nil {
@@ -215,10 +231,11 @@ func (s *Server) widgetConfiguration(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createWidgetSession(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	var input struct {
-		WidgetID       string `json:"widgetId"`
-		UserID         string `json:"userId"`
-		OrganisationID string `json:"organizationId"`
-		Origin         string `json:"origin"`
+		WidgetID       string                     `json:"widgetId"`
+		UserID         string                     `json:"userId"`
+		OrganisationID string                     `json:"organizationId"`
+		Context        model.WidgetSessionContext `json:"context"`
+		Origin         string                     `json:"origin"`
 	}
 	if err := decodeJSON(r.Body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
@@ -228,7 +245,7 @@ func (s *Server) createWidgetSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Widget session request limit exceeded.", nil)
 		return
 	}
-	value, err := s.service.CreateWidgetBootstrap(r.Context(), input.WidgetID, bearerToken(r), input.UserID, input.OrganisationID, input.Origin, r.Header.Get("Idempotency-Key"))
+	value, err := s.service.CreateWidgetBootstrapWithContext(r.Context(), input.WidgetID, bearerToken(r), input.UserID, input.OrganisationID, input.Origin, input.Context, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		s.widgetRuntimeError(w, err)
 		return
@@ -272,8 +289,10 @@ func (s *Server) currentWidgetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"widgetId":            principal.Widget.ID,
 		"sessionId":           principal.Session.ID,
+		"kind":                principal.Session.Kind,
 		"userId":              principal.Session.UserID,
 		"organizationId":      principal.Session.CustomerOrganisationID,
+		"context":             principal.Session.Context,
 		"origin":              principal.Session.Origin,
 		"expiresAt":           principal.Session.ExpiresAt,
 		"integrationIds":      principal.Widget.IntegrationIDs,
@@ -305,7 +324,7 @@ func (s *Server) widgetChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, err := s.service.AnswerWidgetMessage(r.Context(), principal, input.Message)
+	response, err := s.service.AnswerWidgetMessageDetailed(r.Context(), principal, input.Message)
 	if err != nil {
 		s.widgetRuntimeError(w, err)
 		return
@@ -315,11 +334,22 @@ func (s *Server) widgetChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	for index, word := range strings.Fields(reply) {
-		if index > 0 {
-			word = " " + word
+	for _, source := range response.Sources {
+		encoded, _ := json.Marshal(map[string]any{"type": "source", "source": source})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
+		if flusher != nil {
+			flusher.Flush()
 		}
-		encoded, _ := json.Marshal(map[string]string{"text": word})
+	}
+	if principal.Session.Kind == model.WidgetSessionKindAdminPreview {
+		encoded, _ := json.Marshal(map[string]any{"type": "trace", "trace": response.Trace})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	for _, chunk := range widgetResponseChunks(response.Answer, 256) {
+		encoded, _ := json.Marshal(map[string]string{"type": "text_delta", "text": chunk})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
 		if flusher != nil {
 			flusher.Flush()
@@ -335,7 +365,27 @@ func (s *Server) widgetChat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	digest := sha256.Sum256([]byte(principal.Widget.ID + "\x00" + principal.Session.UserID))
-	_ = s.service.Store().AppendAnalytics(r.Context(), model.AnalyticsEvent{OrganisationID: principal.Widget.OrganisationID, ProductID: principal.Widget.DeploymentID, EventName: "widget.message", ActorKind: "widget_user", ActorPseudonym: hex.EncodeToString(digest[:16]), Dimensions: map[string]any{"channel": "widget", "widget_id": principal.Widget.ID, "integration_count": len(principal.Widget.IntegrationBindings)}, CreatedAt: time.Now().UTC()})
+	eventName, actorKind, channel := "widget.message", "widget_user", "widget"
+	if principal.Session.Kind == model.WidgetSessionKindAdminPreview {
+		eventName, actorKind, channel = "widget.preview.message", "administrator_preview", "widget_preview"
+	}
+	_ = s.service.Store().AppendAnalytics(r.Context(), model.AnalyticsEvent{OrganisationID: principal.Widget.OrganisationID, ProductID: principal.Widget.DeploymentID, EventName: eventName, ActorKind: actorKind, ActorPseudonym: hex.EncodeToString(digest[:16]), Dimensions: map[string]any{"channel": channel, "widget_id": principal.Widget.ID, "integration_count": len(principal.Widget.IntegrationBindings)}, CreatedAt: time.Now().UTC()})
+}
+
+func widgetResponseChunks(value string, size int) []string {
+	if size < 1 {
+		size = 256
+	}
+	runes := []rune(value)
+	result := make([]string, 0, (len(runes)+size-1)/size)
+	for start := 0; start < len(runes); start += size {
+		end := start + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		result = append(result, string(runes[start:end]))
+	}
+	return result
 }
 
 func (s *Server) widgetRuntimeError(w http.ResponseWriter, err error) {

@@ -17,7 +17,7 @@ send-bug:
 		--header 'Authorization: Bearer local-example-backend-token-change-me' \
 		--header 'Content-Type: application/json' \
 		--header 'Idempotency-Key: example-bug-submission-0001' \
-		--header "X-DokoSoko-Request-ID: req_$$(openssl rand -hex 16)" \
+		--header "X-External-Request-ID: req_$$(openssl rand -hex 16)" \
 		--data @requests/bug.json
 
 send-feedback:
@@ -25,5 +25,5 @@ send-feedback:
 		--header 'Authorization: Bearer local-example-backend-token-change-me' \
 		--header 'Content-Type: application/json' \
 		--header 'Idempotency-Key: example-feedback-submission-0001' \
-		--header "X-DokoSoko-Request-ID: req_$$(openssl rand -hex 16)" \
+		--header "X-External-Request-ID: req_$$(openssl rand -hex 16)" \
 		--data @requests/feedback.json

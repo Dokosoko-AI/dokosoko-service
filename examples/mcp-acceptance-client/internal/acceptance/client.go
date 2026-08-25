@@ -216,6 +216,13 @@ func randomBytes(size int) ([]byte, error) {
 }
 
 func (c mcpClient) call(ctx context.Context, method, name string, arguments map[string]any, confirmed bool) callOutcome {
+	return c.callToolWithConfirmation(ctx, method, name, arguments, confirmed, "", "")
+}
+
+// callToolWithConfirmation keeps confirmation and idempotency metadata outside
+// the tool arguments. The same values can therefore be reused across the
+// challenge and confirmed retry without changing the invocation being bound.
+func (c mcpClient) callToolWithConfirmation(ctx context.Context, method, name string, arguments map[string]any, confirmed bool, confirmationChallenge, idempotencyKey string) callOutcome {
 	started := time.Now()
 	requestID, err := randomID("mcpacc_")
 	if err != nil {
@@ -230,8 +237,51 @@ func (c mcpClient) call(ctx context.Context, method, name string, arguments map[
 		}
 		params["arguments"] = arguments
 		meta["confirmed"] = confirmed
+		if confirmationChallenge != "" {
+			meta["confirmation_challenge"] = confirmationChallenge
+		}
+		if idempotencyKey != "" {
+			meta["idempotency_key"] = idempotencyKey
+		}
 	}
 	return c.callRaw(ctx, requestID, method, name, params, started)
+}
+
+type confirmationChallengeData struct {
+	ConfirmationRequired  bool   `json:"confirmation_required"`
+	ConfirmationChallenge string `json:"confirmation_challenge"`
+	RetryMetadataField    string `json:"retry_metadata_field"`
+}
+
+func confirmationChallenge(outcome callOutcome) (string, error) {
+	if outcome.TransportError != nil || outcome.Response.Error == nil || outcome.Response.Error.Code != -32003 {
+		return "", errors.New("response was not a confirmation-required challenge")
+	}
+	var data confirmationChallengeData
+	if json.Unmarshal(outcome.Response.Error.Data, &data) != nil || !data.ConfirmationRequired || data.ConfirmationChallenge == "" || data.RetryMetadataField != "params._meta.confirmation_challenge" {
+		return "", errors.New("confirmation error omitted the server-issued retry challenge")
+	}
+	if len(data.ConfirmationChallenge) > 512 || strings.ContainsAny(data.ConfirmationChallenge, "\r\n\t ") {
+		return "", errors.New("confirmation challenge was malformed")
+	}
+	return data.ConfirmationChallenge, nil
+}
+
+// callConfirmed requests a server challenge with confirmed=true but no nonce,
+// then repeats the exact invocation with the returned one-time nonce. If a
+// server executes the first call because the tool is not confirmation-gated,
+// that successful result is returned and no second call is made.
+func (c mcpClient) callConfirmed(ctx context.Context, name string, arguments map[string]any) callOutcome {
+	idempotencyKey, err := randomID("mcpacc_idem_")
+	if err != nil {
+		return callOutcome{TransportError: err}
+	}
+	initial := c.callToolWithConfirmation(ctx, "tools/call", name, arguments, true, "", idempotencyKey)
+	challenge, err := confirmationChallenge(initial)
+	if err != nil {
+		return initial
+	}
+	return c.callToolWithConfirmation(ctx, "tools/call", name, arguments, true, challenge, idempotencyKey)
 }
 
 func (c mcpClient) callRaw(ctx context.Context, requestID, method, name string, params map[string]any, started time.Time) callOutcome {
