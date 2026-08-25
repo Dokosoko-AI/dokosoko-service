@@ -26,9 +26,15 @@ services:
     volumes:
       - dokosoko-data:/data
       - dokosoko-uploads:/uploads
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
+    stop_grace_period: 30s
     restart: unless-stopped
 
   crawler:
@@ -59,6 +65,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=256m,mode=1777
+    stop_grace_period: 30s
     restart: unless-stopped
 
   postgres:

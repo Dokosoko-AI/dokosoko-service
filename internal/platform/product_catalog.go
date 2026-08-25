@@ -157,8 +157,9 @@ func (s *Service) CreateProductVersion(ctx context.Context, productID string, in
 	if err != nil {
 		return model.ProductVersion{}, err
 	}
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.published", TargetType: "product_version", TargetID: value.ID, Current: map[string]any{"version": value.Version, "profile_id": value.ProfileID, "definition_revision": value.DefinitionRevision, "manifest_hash": value.ManifestHash, "diff_summary": value.Diff.Summary, "release_stage": value.ReleaseStage, "rollout_percentage": value.RolloutPercentage, "promotion_state": value.PromotionState, "is_latest": value.IsLatest, "is_lts": value.IsLTS}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.published", TargetType: "product_version", TargetID: value.ID, Current: map[string]any{"version": value.Version, "profile_id": value.ProfileID, "definition_revision": value.DefinitionRevision, "manifest_hash": value.ManifestHash, "diff_summary": value.Diff.Summary, "release_stage": value.ReleaseStage, "rollout_percentage": value.RolloutPercentage, "promotion_state": value.PromotionState, "is_latest": value.IsLatest, "is_lts": value.IsLTS}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ProductVersion{}, err
+	}
 	return value, nil
 }
 
@@ -258,8 +259,9 @@ func (s *Service) UpdateProductVersionLifecycle(ctx context.Context, productID, 
 	if err != nil {
 		return model.ProductVersion{}, err
 	}
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.lifecycle.changed", TargetType: "product_version", TargetID: value.ID, Prior: map[string]any{"is_latest": current.IsLatest, "is_lts": current.IsLTS, "deprecated": current.DeprecatedAt != nil, "rollout_percentage": current.RolloutPercentage}, Current: map[string]any{"product_version": value.Version, "manifest_hash": value.ManifestHash, "is_latest": value.IsLatest, "is_lts": value.IsLTS, "deprecated": value.DeprecatedAt != nil, "replacement_version": value.ReplacementVersion, "sunset_at": value.SunsetAt, "rollout_percentage": value.RolloutPercentage, "impact_acknowledged": input.AcknowledgeImpact}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.lifecycle.changed", TargetType: "product_version", TargetID: value.ID, Prior: map[string]any{"is_latest": current.IsLatest, "is_lts": current.IsLTS, "deprecated": current.DeprecatedAt != nil, "rollout_percentage": current.RolloutPercentage}, Current: map[string]any{"product_version": value.Version, "manifest_hash": value.ManifestHash, "is_latest": value.IsLatest, "is_lts": value.IsLTS, "deprecated": value.DeprecatedAt != nil, "replacement_version": value.ReplacementVersion, "sunset_at": value.SunsetAt, "rollout_percentage": value.RolloutPercentage, "impact_acknowledged": input.AcknowledgeImpact}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ProductVersion{}, err
+	}
 	return value, nil
 }
 
@@ -286,13 +288,17 @@ func (s *Service) DeleteProductVersionPin(ctx context.Context, productID, pinID 
 	if current.ID == "" {
 		return store.ErrNotFound
 	}
-	if err := s.store.DeleteProductVersionPin(ctx, productID, pinID); err != nil {
+	historyID, err := randomUUID()
+	if err != nil {
 		return err
 	}
-	historyID, _ := randomUUID()
-	_ = s.store.AppendProductVersionPinHistory(ctx, model.ProductVersionPinHistory{ID: historyID, OrganisationID: current.OrganisationID, ProductID: productID, PinID: pinID, Scope: current.Scope, ScopeID: current.ScopeID, PriorVersion: current.ProductVersion, Action: "deleted", Reason: current.Reason, ActorID: actor.ID, CreatedAt: s.now()})
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: current.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.unpinned", TargetType: "product_version_pin", TargetID: pinID, Prior: map[string]any{"scope": current.Scope, "scope_id": current.ScopeID, "customer_account_id": current.CustomerAccountID, "product_version": current.ProductVersion}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	history := model.ProductVersionPinHistory{ID: historyID, OrganisationID: current.OrganisationID, ProductID: productID, PinID: pinID, Scope: current.Scope, ScopeID: current.ScopeID, PriorVersion: current.ProductVersion, Action: "deleted", Reason: current.Reason, ActorID: actor.ID, CreatedAt: s.now()}
+	if err := s.store.DeleteProductVersionPin(ctx, productID, pinID, history); err != nil {
+		return err
+	}
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: current.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.unpinned", TargetType: "product_version_pin", TargetID: pinID, Prior: map[string]any{"scope": current.Scope, "scope_id": current.ScopeID, "customer_account_id": current.CustomerAccountID, "product_version": current.ProductVersion}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -725,6 +731,8 @@ func (s *Service) RewriteProductDescription(ctx context.Context, productID, draf
 		return "", fmt.Errorf("%w: model output was invalid", ErrDescriptionRewrite)
 	}
 	totalTokens := completion.InputTokens + completion.OutputTokens
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.description.rewritten", TargetType: "product", TargetID: productID, Current: map[string]any{"model": completion.ResolvedModel, "prompt_version": promptVersion, "input_length": len(draft), "output_length": len(result.Description), "tokens": totalTokens, "saved": false}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.description.rewritten", TargetType: "product", TargetID: productID, Current: map[string]any{"model": completion.ResolvedModel, "prompt_version": promptVersion, "input_length": len(draft), "output_length": len(result.Description), "tokens": totalTokens, "saved": false}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return "", err
+	}
 	return result.Description, nil
 }

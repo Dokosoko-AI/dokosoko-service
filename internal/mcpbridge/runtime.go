@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
@@ -240,26 +241,15 @@ func (m *Manager) CreateConnection(ctx context.Context, input ConnectionInput, a
 	if err != nil {
 		return model.MCPConnection{}, err
 	}
-	_ = m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: value.OrganisationID, ProductID: value.ProductID, ActorID: actor.ID, Action: "mcp.connection.created", TargetType: "mcp_connection", TargetID: value.ID, Current: map[string]any{"name": value.Name, "namespace": value.Namespace, "endpoint_host": mustHost(value.Endpoint), "protocol_version": model.StatelessMCPv2Protocol, "auth_mode": value.AuthMode}, RequestID: actor.RequestID, CreatedAt: m.now()})
+	if err := m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: value.OrganisationID, ProductID: value.ProductID, ActorID: actor.ID, Action: "mcp.connection.created", TargetType: "mcp_connection", TargetID: value.ID, Current: map[string]any{"name": value.Name, "namespace": value.Namespace, "endpoint_host": mustHost(value.Endpoint), "protocol_version": model.StatelessMCPv2Protocol, "auth_mode": value.AuthMode}, RequestID: actor.RequestID, CreatedAt: m.now()}); err != nil {
+		return model.MCPConnection{}, err
+	}
 	return value, nil
 }
 
 func mustHost(raw string) string {
 	parsed, _ := url.Parse(raw)
 	return parsed.Hostname()
-}
-
-func unsafeIP(address net.IP) bool {
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() {
-		return true
-	}
-	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "2001:db8::/32", "fc00::/7", "fe80::/10"} {
-		_, block, _ := net.ParseCIDR(raw)
-		if block.Contains(address) {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *Manager) safeDestination(ctx context.Context, raw string) (*url.URL, net.IP, error) {
@@ -272,7 +262,7 @@ func (m *Manager) safeDestination(ctx context.Context, raw string) (*url.URL, ne
 		return nil, nil, ErrUnsafeDestination
 	}
 	for _, address := range addresses {
-		if unsafeIP(address) {
+		if netpolicy.UnsafeIP(address) {
 			return nil, nil, ErrUnsafeDestination
 		}
 	}
@@ -378,8 +368,14 @@ func (m *Manager) invoke(ctx context.Context, connection model.MCPConnection, me
 		params = make(map[string]any)
 	}
 	params["_meta"] = meta
-	id, _ := randomToken(12)
-	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	id, err := randomToken(12)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	if err != nil {
+		return nil, err
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
@@ -637,7 +633,10 @@ func (m *Manager) Import(ctx context.Context, productID, connectionID string, in
 		}
 		if current.UpstreamSchemaHash == upstream.SchemaHash {
 			if current.UpstreamDrifted {
-				current, _ = m.store.MarkImportedToolDrift(ctx, productID, current.ID, false)
+				current, err = m.store.MarkImportedToolDrift(ctx, productID, current.ID, false)
+				if err != nil {
+					return ImportResult{}, err
+				}
 			}
 			result.Unchanged = append(result.Unchanged, current)
 			continue
@@ -662,7 +661,9 @@ func (m *Manager) Import(ctx context.Context, productID, connectionID string, in
 	if err != nil {
 		return ImportResult{}, err
 	}
-	_ = m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: result.Connection.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "mcp.connection.imported", TargetType: "mcp_connection", TargetID: connectionID, Current: map[string]any{"protocol_version": model.StatelessMCPv2Protocol, "created": len(result.Created), "updated": len(result.Updated), "drifted": len(result.Drifted), "rejected": len(result.Rejected), "catalog_hash": catalog.CatalogHash}, RequestID: actor.RequestID, CreatedAt: syncedAt})
+	if err := m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: result.Connection.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "mcp.connection.imported", TargetType: "mcp_connection", TargetID: connectionID, Current: map[string]any{"protocol_version": model.StatelessMCPv2Protocol, "created": len(result.Created), "updated": len(result.Updated), "drifted": len(result.Drifted), "rejected": len(result.Rejected), "catalog_hash": catalog.CatalogHash}, RequestID: actor.RequestID, CreatedAt: syncedAt}); err != nil {
+		return ImportResult{}, err
+	}
 	return result, nil
 }
 
@@ -748,6 +749,10 @@ func (m *Manager) oauthToken(ctx context.Context, connection model.MCPConnection
 }
 
 func (m *Manager) saveGrant(ctx context.Context, connection model.MCPConnection, subject string, token tokenResponse) (model.MCPUserGrant, error) {
+	id, err := randomUUID()
+	if err != nil {
+		return model.MCPUserGrant{}, err
+	}
 	accessID, err := m.saveSecret(ctx, connection.OrganisationID, "mcp-user-access-"+connection.Namespace, "mcp_upstream_user_access", token.AccessToken, connection.OrganisationID+":mcp-grant:"+connection.ID+":"+subject+":access:")
 	if err != nil {
 		return model.MCPUserGrant{}, err
@@ -756,7 +761,6 @@ func (m *Manager) saveGrant(ctx context.Context, connection model.MCPConnection,
 	if err != nil {
 		return model.MCPUserGrant{}, err
 	}
-	id, _ := randomUUID()
 	expiresIn := token.ExpiresIn
 	if expiresIn <= 0 || expiresIn > int64((30*24*time.Hour).Seconds()) {
 		expiresIn = 3600
@@ -787,7 +791,9 @@ func (m *Manager) CompleteAuthorization(ctx context.Context, state, code, issuer
 	}
 	grant, err := m.saveGrant(ctx, connection, stored.SubjectID, token)
 	if err == nil {
-		_ = m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: connection.OrganisationID, ProductID: connection.ProductID, ActorID: stored.SubjectID, Action: "mcp.user_grant.connected", TargetType: "mcp_connection", TargetID: connection.ID, Current: map[string]any{"auth_mode": connection.AuthMode, "scopes": grant.Scopes, "expires_at": grant.ExpiresAt}, CreatedAt: m.now()})
+		if err := m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: connection.OrganisationID, ProductID: connection.ProductID, ActorID: stored.SubjectID, Action: "mcp.user_grant.connected", TargetType: "mcp_connection", TargetID: connection.ID, Current: map[string]any{"auth_mode": connection.AuthMode, "scopes": grant.Scopes, "expires_at": grant.ExpiresAt}, CreatedAt: m.now()}); err != nil {
+			return model.MCPUserGrant{}, err
+		}
 	}
 	return grant, err
 }
@@ -872,7 +878,9 @@ func (m *Manager) ExecuteMCP(ctx context.Context, tool model.Tool, arguments map
 	if err := validateStructuredOutput(tool.OutputSchema, result); err != nil {
 		return toolruntime.MCPCallResult{}, fmt.Errorf("upstream tool output schema mismatch: %w", err)
 	}
-	_ = m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: tool.OrganisationID, ProductID: tool.ProductID, ActorID: principal.Subject, Action: "mcp.tool.executed", TargetType: "tool", TargetID: tool.ID, Current: map[string]any{"connection_id": connection.ID, "upstream_tool": tool.UpstreamToolName, "protocol_version": model.StatelessMCPv2Protocol, "auth_mode": connection.AuthMode, "is_error": result["isError"] == true}, RequestID: principal.RequestID, CreatedAt: m.now()})
+	if err := m.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: tool.OrganisationID, ProductID: tool.ProductID, ActorID: principal.Subject, Action: "mcp.tool.executed", TargetType: "tool", TargetID: tool.ID, Current: map[string]any{"connection_id": connection.ID, "upstream_tool": tool.UpstreamToolName, "protocol_version": model.StatelessMCPv2Protocol, "auth_mode": connection.AuthMode, "is_error": result["isError"] == true}, RequestID: principal.RequestID, CreatedAt: m.now()}); err != nil {
+		return toolruntime.MCPCallResult{}, err
+	}
 	return toolruntime.MCPCallResult{Result: result}, nil
 }
 

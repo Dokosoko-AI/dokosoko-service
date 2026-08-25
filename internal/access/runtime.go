@@ -22,6 +22,7 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 )
 
@@ -273,19 +274,6 @@ func (r *Runtime) Capabilities(ctx context.Context, deploymentID string, grants 
 	return result
 }
 
-func unsafeIP(address net.IP) bool {
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() {
-		return true
-	}
-	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "2001:db8::/32", "fc00::/7", "fe80::/10"} {
-		_, block, _ := net.ParseCIDR(raw)
-		if block.Contains(address) {
-			return true
-		}
-	}
-	return false
-}
-
 func validOperationPath(raw string) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || !strings.HasPrefix(parsed.Path, "/") || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -305,7 +293,7 @@ func (r *Runtime) clientForURL(ctx context.Context, destination *url.URL) (Doer,
 		return nil, ErrUnsafeDestination
 	}
 	for _, address := range addresses {
-		if unsafeIP(address) && !localDevelopment {
+		if netpolicy.UnsafeIP(address) && !localDevelopment {
 			return nil, ErrUnsafeDestination
 		}
 	}
@@ -609,7 +597,9 @@ func (r *Runtime) CreateInstance(ctx context.Context, deploymentID, connectionID
 	}
 	value, err := r.store.CreateAccessInstance(ctx, model.AccessInstance{ID: randomUUID(), DeploymentID: deploymentID, OrganisationID: connection.OrganisationID, AccessConnectionID: connectionID, EnvironmentID: request.EnvironmentID, OwnerType: ownerType, OwnerID: ownerID, ExternalID: response.ExternalID, DisplayName: response.DisplayName, IdempotencyKey: request.IdempotencyKey, State: response.State, ProviderMetadata: response.ProviderMetadata, ExpiresAt: response.ExpiresAt, IntegrationIDs: []string{request.IntegrationID}})
 	if err == nil {
-		_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: "access_instance.created", TargetType: "access_instance", TargetID: value.ID, Current: map[string]any{"connection_id": connectionID, "integration_id": request.IntegrationID, "external_id": value.ExternalID, "state": value.State}, RequestID: principal.RequestID, CreatedAt: r.now()})
+		if err := r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: "access_instance.created", TargetType: "access_instance", TargetID: value.ID, Current: map[string]any{"connection_id": connectionID, "integration_id": request.IntegrationID, "external_id": value.ExternalID, "state": value.State}, RequestID: principal.RequestID, CreatedAt: r.now()}); err != nil {
+			return model.AccessInstance{}, err
+		}
 	}
 	return value, err
 }
@@ -779,7 +769,9 @@ func (r *Runtime) IssueCredential(ctx context.Context, deploymentID, connectionI
 	if request.RotatedFromCredentialID != "" {
 		action = "access_credential.rotated"
 	}
-	_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: action, TargetType: "access_credential", TargetID: credential.ID, Current: map[string]any{"connection_id": connectionID, "access_instance_id": request.AccessInstanceID, "integration_id": request.IntegrationID, "rotated_from_id": request.RotatedFromCredentialID, "prior_retained_active": request.RotatedFromCredentialID != "", "scopes": credential.Scopes, "storage_mode": credential.StorageMode, "expires_at": credential.ExpiresAt}, RequestID: principal.RequestID, CreatedAt: r.now()})
+	if err := r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: action, TargetType: "access_credential", TargetID: credential.ID, Current: map[string]any{"connection_id": connectionID, "access_instance_id": request.AccessInstanceID, "integration_id": request.IntegrationID, "rotated_from_id": request.RotatedFromCredentialID, "prior_retained_active": request.RotatedFromCredentialID != "", "scopes": credential.Scopes, "storage_mode": credential.StorageMode, "expires_at": credential.ExpiresAt}, RequestID: principal.RequestID, CreatedAt: r.now()}); err != nil {
+		return CredentialResult{}, err
+	}
 	return CredentialResult{Credential: credential, CredentialMaterial: response.CredentialMaterial}, nil
 }
 
@@ -817,7 +809,9 @@ func (r *Runtime) RevokeCredential(ctx context.Context, deploymentID, credential
 	}
 	updated, err := r.store.RevokeAccessCredential(ctx, deploymentID, credentialID, r.now())
 	if err == nil {
-		_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: "access_credential.revoked", TargetType: "access_credential", TargetID: credentialID, RequestID: principal.RequestID, CreatedAt: r.now()})
+		if err := r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: connection.OrganisationID, ProductID: deploymentID, ActorID: principal.Subject, Action: "access_credential.revoked", TargetType: "access_credential", TargetID: credentialID, RequestID: principal.RequestID, CreatedAt: r.now()}); err != nil {
+			return model.AccessCredential{}, err
+		}
 	}
 	return updated, err
 }

@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
@@ -19,6 +22,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
+	"github.com/dokosoko/dokosoko-service/internal/lifecycle"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
@@ -30,12 +34,14 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() error {
+func run(ctx context.Context) error {
 	address := env("DOKOSOKO_LISTEN", ":8080")
 	baseURL := env("DOKOSOKO_PUBLIC_URL", "http://localhost:8080")
 	uiDirectory := env("DOKOSOKO_UI_DIR", "./dist/client")
@@ -55,22 +61,22 @@ func run() error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	startupCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	var persistence store.Store
 	var authPersistence auth.Store
 	var pool *pgxpool.Pool
 	devMemory := boolEnv("DOKOSOKO_DEV_MEMORY")
 	if databaseURL := strings.TrimSpace(os.Getenv("DOKOSOKO_DATABASE_URL")); databaseURL != "" {
-		pool, err = pgxpool.New(ctx, databaseURL)
+		pool, err = pgxpool.New(startupCtx, databaseURL)
 		if err != nil {
 			return fmt.Errorf("configure database: %w", err)
 		}
 		defer pool.Close()
-		if err := pool.Ping(ctx); err != nil {
+		if err := pool.Ping(startupCtx); err != nil {
 			return fmt.Errorf("connect database: %w", err)
 		}
-		if err := store.Migrate(ctx, pool, env("DOKOSOKO_MIGRATIONS_DIR", "./migrations")); err != nil {
+		if err := store.Migrate(startupCtx, pool, env("DOKOSOKO_MIGRATIONS_DIR", "./migrations")); err != nil {
 			return err
 		}
 		postgres := store.NewPostgres(pool, baseURL)
@@ -102,7 +108,7 @@ func run() error {
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
 	accessProxy := accessruntime.New(persistence, vault, nil, nil)
 	accessProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
-	if err := platformService.ConfigureEnvironmentAI(ctx, platform.AIEnvironmentConfig{
+	if err := platformService.ConfigureEnvironmentAI(startupCtx, platform.AIEnvironmentConfig{
 		Provider: os.Getenv("DOKOSOKO_AI_PROVIDER"),
 		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
 		Endpoint: os.Getenv("DOKOSOKO_AI_ENDPOINT"),
@@ -118,17 +124,53 @@ func run() error {
 		UploadDirectory: uploadDirectory, UploadMaxBytes: uploadMaxBytes,
 		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), WidgetsEnabled: boolEnv("DOKOSOKO_WIDGETS_ENABLED"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
 	})
-	workerCtx, stopWorkers := context.WithCancel(context.Background())
-	defer stopWorkers()
-	go reportingService.Run(workerCtx, 30*time.Second)
-	go platformService.RunToolTestRetentionJanitor(workerCtx, platform.DefaultToolTestRetentionInterval)
-	go platformService.RunIdentityOAuthRetentionJanitor(workerCtx, platform.DefaultIdentityOAuthRetentionInterval)
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
-	log.Printf("DokoSoko listening on %s", address)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", address, err)
 	}
-	return nil
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	supervisor := lifecycle.NewSupervisor(workerCtx, log.Printf)
+	supervisor.Start("support-report-delivery", func(ctx context.Context) error { return reportingService.Run(ctx, 30*time.Second) })
+	supervisor.Start("tool-test-retention", func(ctx context.Context) error {
+		return platformService.RunToolTestRetentionJanitor(ctx, platform.DefaultToolTestRetentionInterval)
+	})
+	supervisor.Start("identity-oauth-retention", func(ctx context.Context) error {
+		return platformService.RunIdentityOAuthRetentionJanitor(ctx, platform.DefaultIdentityOAuthRetentionInterval)
+	})
+	defer func() {
+		stopWorkers()
+		supervisor.Wait()
+	}()
+	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	log.Printf("DokoSoko listening on %s", listener.Addr())
+	return serve(ctx, server, listener)
+}
+
+func serve(ctx context.Context, server *http.Server, listener net.Listener) error {
+	serveErrors := make(chan error, 1)
+	go func() { serveErrors <- server.Serve(listener) }()
+	select {
+	case err := <-serveErrors:
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve HTTP: %w", err)
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		shutdownErr := server.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
+			_ = server.Close()
+		}
+		serveErr := <-serveErrors
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP during shutdown: %w", serveErr)
+		}
+		if shutdownErr != nil {
+			return fmt.Errorf("shut down HTTP server: %w", shutdownErr)
+		}
+		return nil
+	}
 }
 
 func env(key, fallback string) string {

@@ -23,6 +23,8 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
+	"github.com/dokosoko/dokosoko-service/internal/ratelimit"
 )
 
 var (
@@ -112,11 +114,6 @@ type cachedOAuthToken struct {
 type oauthTokenFlight struct {
 	done chan struct{}
 	err  error
-}
-
-type connectionRateWindow struct {
-	Started time.Time
-	Count   int
 }
 
 type executionTrace struct {
@@ -294,19 +291,6 @@ func jsonType(value any) string {
 	}
 }
 
-func unsafeIP(address net.IP) bool {
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() {
-		return true
-	}
-	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "::/96", "64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "2001::/32", "2001:2::/48", "2001:10::/28", "2001:20::/28", "2001:db8::/32", "2002::/16", "fc00::/7", "fec0::/10", "fe80::/10"} {
-		_, block, _ := net.ParseCIDR(raw)
-		if block.Contains(address) {
-			return true
-		}
-	}
-	return false
-}
-
 type Runtime struct {
 	store                        Store
 	resolver                     Resolver
@@ -317,8 +301,7 @@ type Runtime struct {
 	tokenMu                      sync.Mutex
 	tokens                       map[string]cachedOAuthToken
 	tokenFlights                 map[string]*oauthTokenFlight
-	rateMu                       sync.Mutex
-	rates                        map[string]connectionRateWindow
+	rateLimiter                  *ratelimit.FixedWindow
 	concurrencyMu                sync.Mutex
 	globalInFlight               int
 	connectionInFlight           map[string]int
@@ -348,7 +331,7 @@ func NewRuntime(store Store, resolver Resolver, doer Doer) *Runtime {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
-	return &Runtime{store: store, resolver: resolver, doer: doer, tokens: make(map[string]cachedOAuthToken), tokenFlights: make(map[string]*oauthTokenFlight), rates: make(map[string]connectionRateWindow), connectionInFlight: make(map[string]int), now: func() time.Time { return time.Now().UTC() }}
+	return &Runtime{store: store, resolver: resolver, doer: doer, tokens: make(map[string]cachedOAuthToken), tokenFlights: make(map[string]*oauthTokenFlight), rateLimiter: ratelimit.NewFixedWindow(upstreamConnectionWindow, maxUpstreamRateWindows), connectionInFlight: make(map[string]int), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (r *Runtime) SetMCPExecutor(executor MCPExecutor)               { r.mcpExecutor = executor }
@@ -544,7 +527,7 @@ func (r *Runtime) safeDestination(ctx context.Context, raw string) (*url.URL, ne
 			}
 			continue
 		}
-		if unsafeIP(address) {
+		if netpolicy.UnsafeIP(address) {
 			return nil, nil, ErrUnsafeDestination
 		}
 	}
@@ -960,30 +943,7 @@ func upstreamIdempotencyKey(productID string, tool model.Tool, principal Princip
 // closed when all slots are occupied by active windows.
 func (r *Runtime) allowUpstreamConnection(productID string, tool model.Tool) bool {
 	key := upstreamConnectionKey(productID, tool)
-	now := r.now()
-	r.rateMu.Lock()
-	defer r.rateMu.Unlock()
-	window, exists := r.rates[key]
-	if !exists {
-		for currentKey, current := range r.rates {
-			if current.Started.IsZero() || !now.Before(current.Started) && now.Sub(current.Started) >= upstreamConnectionWindow {
-				delete(r.rates, currentKey)
-			}
-		}
-		if len(r.rates) >= maxUpstreamRateWindows {
-			return false
-		}
-	}
-	if window.Started.IsZero() || now.Sub(window.Started) >= upstreamConnectionWindow || now.Before(window.Started) {
-		window = connectionRateWindow{Started: now}
-	}
-	if window.Count >= upstreamConnectionLimit {
-		r.rates[key] = window
-		return false
-	}
-	window.Count++
-	r.rates[key] = window
-	return true
+	return r.rateLimiter.Allow(key, upstreamConnectionLimit, r.now())
 }
 
 func upstreamConnectionKey(productID string, tool model.Tool) string {
@@ -1099,7 +1059,7 @@ func tracePhase(category, existing string) string {
 	}
 }
 
-func (r *Runtime) executeAuthorizedTraced(ctx context.Context, productID, fullName string, tool model.Tool, arguments map[string]any, principal Principal, trace *executionTrace, recordAudit bool) (any, error) {
+func (r *Runtime) executeAuthorizedTraced(ctx context.Context, productID, fullName string, tool model.Tool, arguments map[string]any, principal Principal, trace *executionTrace, recordAudit bool) (returnValue any, returnErr error) {
 	if tool.BackendKind == "mcp" {
 		if r.mcpExecutor == nil {
 			return nil, errors.New("Stateless MCPv2 bridge is unavailable")
@@ -1143,7 +1103,10 @@ func (r *Runtime) executeAuthorizedTraced(ctx context.Context, productID, fullNa
 		}
 		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
-		_ = r.store.AppendAudit(auditCtx, model.AuditEvent{ID: auditID(), OrganisationID: tool.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "tool.executed", TargetType: "tool", TargetID: tool.ID, Current: current, RequestID: principal.RequestID, Outcome: auditOutcome, CreatedAt: time.Now().UTC()})
+		if auditErr := r.store.AppendAudit(auditCtx, model.AuditEvent{ID: auditID(), OrganisationID: tool.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "tool.executed", TargetType: "tool", TargetID: tool.ID, Current: current, RequestID: principal.RequestID, Outcome: auditOutcome, CreatedAt: time.Now().UTC()}); auditErr != nil {
+			returnValue = nil
+			returnErr = errors.Join(returnErr, fmt.Errorf("append tool execution audit: %w", auditErr))
+		}
 	}()
 	auditCategory = "rate_limited"
 	if !r.acquireUpstreamSlot(productID, tool) {

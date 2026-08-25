@@ -1,0 +1,240 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	"strings"
+	"time"
+)
+
+func (p *Postgres) PublicKnowledge(ctx context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
+	pattern := "%" + strings.TrimSpace(query) + "%"
+	rows, err := p.pool.Query(ctx, `
+		SELECT DISTINCT kd.id::text, kd.product_id::text, kd.source_id::text, kd.title, kd.body, kd.canonical_url, s.visibility::text
+		FROM source_publications sp
+		JOIN source_publication_documents spd ON spd.source_publication_id = sp.id
+		JOIN knowledge_documents kd ON kd.id = spd.knowledge_document_id
+		JOIN sources s ON s.id = sp.source_id AND s.product_id = sp.product_id
+		WHERE sp.product_id = $1 AND sp.id = ANY($2::uuid[])
+		  AND sp.visibility = 'public' AND s.visibility = 'public'
+		  AND s.state = 'published' AND kd.state = 'published'
+		  AND kd.injection_indicators = '[]'::jsonb
+		  AND ($3 = '%%' OR kd.title ILIKE $3 OR kd.body ILIKE $3)
+		ORDER BY kd.id::text LIMIT 20`, productID, publicationIDs, pattern)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.KnowledgeRecord, 0)
+	for rows.Next() {
+		var value model.KnowledgeRecord
+		if err := rows.Scan(&value.ID, &value.ProductID, &value.SourceID, &value.Title, &value.Text, &value.URL, &value.Visibility); err != nil {
+			return nil, err
+		}
+		value.Published = true
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) PrivateKnowledge(ctx context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
+	pattern := "%" + strings.TrimSpace(query) + "%"
+	rows, err := p.pool.Query(ctx, `
+		SELECT DISTINCT kd.id::text, kd.product_id::text, kd.source_id::text, kd.title, kd.body, kd.canonical_url, s.visibility::text
+		FROM source_publications sp
+		JOIN source_publication_documents spd ON spd.source_publication_id = sp.id
+		JOIN knowledge_documents kd ON kd.id = spd.knowledge_document_id
+		JOIN sources s ON s.id = sp.source_id AND s.product_id = sp.product_id
+		WHERE sp.product_id = $1 AND sp.id = ANY($2::uuid[])
+		  AND s.state = 'published' AND kd.state = 'published'
+		  AND kd.injection_indicators = '[]'::jsonb
+		  AND ($3 = '%%' OR kd.title ILIKE $3 OR kd.body ILIKE $3)
+		ORDER BY kd.id::text LIMIT 20`, productID, publicationIDs, pattern)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.KnowledgeRecord, 0)
+	for rows.Next() {
+		var value model.KnowledgeRecord
+		if err := rows.Scan(&value.ID, &value.ProductID, &value.SourceID, &value.Title, &value.Text, &value.URL, &value.Visibility); err != nil {
+			return nil, err
+		}
+		value.Published = true
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) AppendAnalytics(ctx context.Context, event model.AnalyticsEvent) error {
+	dimensions, _ := json.Marshal(event.Dimensions)
+	_, err := p.pool.Exec(ctx, `INSERT INTO analytics_events(organisation_id, product_id, event_name, actor_kind, actor_pseudonym, integration_run_id, dimensions, value, created_at) VALUES ($1,$2,$3,$4,nullif($5,''),nullif($6,'')::uuid,$7,nullif($8,0),$9)`, event.OrganisationID, event.ProductID, event.EventName, event.ActorKind, event.ActorPseudonym, event.IntegrationRunID, dimensions, event.Value, event.CreatedAt)
+	return databaseError(err)
+}
+
+func (p *Postgres) ProductVersionActivity(ctx context.Context, productID, versionID string, since time.Time) (model.ProductVersionActivity, error) {
+	var value model.ProductVersionActivity
+	err := p.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called') FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND dimensions->>'product_version_id'=$3`, productID, since, versionID).Scan(&value.Requests, &value.ToolCalls)
+	return value, databaseError(err)
+}
+
+func (p *Postgres) LLMTokensUsed(ctx context.Context, productID, role string, since time.Time) (int64, error) {
+	var total int64
+	err := p.pool.QueryRow(ctx, `SELECT coalesce(sum(value),0)::bigint FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='llm.tokens' AND dimensions->>'role'=$3`, productID, since, role).Scan(&total)
+	return total, databaseError(err)
+}
+
+func (p *Postgres) AnalyticsSummary(ctx context.Context, productID string, since time.Time) (model.AnalyticsSummary, error) {
+	value := model.AnalyticsSummary{Since: since, GeneratedAt: time.Now().UTC(), Channels: map[string]int64{"private_mcp": 0, "public_mcp": 0, "widget": 0}, Versions: map[string]int64{}, Funnel: map[string]int64{"connector_authorized": 0, "run_started": 0, "capability_resolved": 0, "credentials_issued": 0, "implementation_validated": 0, "success_reported": 0}}
+	err := p.pool.QueryRow(ctx, `SELECT count(DISTINCT actor_pseudonym) FILTER (WHERE actor_pseudonym IS NOT NULL), count(*) FILTER (WHERE event_name='mcp.request'), count(*) FILTER (WHERE event_name='tool.called') FROM analytics_events WHERE product_id=$1 AND created_at >= $2`, productID, since).Scan(&value.ActiveDevelopers, &value.MCPRequests, &value.ToolCalls)
+	if err != nil {
+		return value, databaseError(err)
+	}
+	if err := p.pool.QueryRow(ctx, `SELECT count(DISTINCT issuer || E'\\000' || subject) FROM oauth_access_tokens WHERE product_id=$1 AND created_at >= $2`, productID, since).Scan(&value.AuthorizedUsers); err != nil {
+		return value, databaseError(err)
+	}
+	if err := p.pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE validated_success IS NOT NULL), count(*) FILTER (WHERE validated_success=true) FROM integration_runs WHERE product_id=$1 AND started_at >= $2`, productID, since).Scan(&value.IntegrationRuns, &value.ValidatedRuns, &value.ValidatedSuccess); err != nil {
+		return value, databaseError(err)
+	}
+	if value.ValidatedRuns > 0 {
+		value.FirstPassRate = float64(value.ValidatedSuccess) * 100 / float64(value.ValidatedRuns)
+	}
+	rows, err := p.pool.Query(ctx, `SELECT coalesce(dimensions->>'channel','unknown'), count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='mcp.request' GROUP BY 1`, productID, since)
+	if err != nil {
+		return value, databaseError(err)
+	}
+	for rows.Next() {
+		var channel string
+		var count int64
+		if err := rows.Scan(&channel, &count); err != nil {
+			rows.Close()
+			return value, err
+		}
+		value.Channels[channel] = count
+	}
+	rows.Close()
+	rows, err = p.pool.Query(ctx, `SELECT dimensions->>'product_version', count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='mcp.request' AND coalesce(dimensions->>'product_version','')<>'' GROUP BY 1`, productID, since)
+	if err != nil {
+		return value, databaseError(err)
+	}
+	for rows.Next() {
+		var version string
+		var count int64
+		if err := rows.Scan(&version, &count); err != nil {
+			rows.Close()
+			return value, err
+		}
+		value.Versions[version] = count
+	}
+	rows.Close()
+	rows, err = p.pool.Query(ctx, `SELECT event_name, count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name = ANY($3) GROUP BY event_name`, productID, since, []string{"connector_authorized", "run_started", "capability_resolved", "credentials_issued", "implementation_validated", "success_reported"})
+	if err != nil {
+		return value, databaseError(err)
+	}
+	for rows.Next() {
+		var name string
+		var count int64
+		if err := rows.Scan(&name, &count); err != nil {
+			rows.Close()
+			return value, err
+		}
+		value.Funnel[name] = count
+	}
+	rows.Close()
+	rows, err = p.pool.Query(ctx, `SELECT created_at::date::text, count(*) FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='mcp.request' GROUP BY created_at::date ORDER BY created_at::date`, productID, since)
+	if err != nil {
+		return value, databaseError(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var point model.AnalyticsPoint
+		if err := rows.Scan(&point.Date, &point.Count); err != nil {
+			return value, err
+		}
+		value.DailyRequests = append(value.DailyRequests, point)
+	}
+	return value, rows.Err()
+}
+
+func (p *Postgres) RecipePopularity(ctx context.Context, productID string, since time.Time) ([]model.RecipePopularity, error) {
+	rows, err := p.pool.Query(ctx, `SELECT dimensions->>'recipe_id', max(dimensions->>'recipe_slug'), count(*) FILTER (WHERE event_name='recipe.view'), count(*) FILTER (WHERE event_name='recipe.plan_selected')
+		FROM analytics_events
+		WHERE product_id=$1 AND created_at >= $2 AND event_name = ANY($3) AND coalesce(dimensions->>'recipe_id','')<>''
+		GROUP BY dimensions->>'recipe_id'
+		ORDER BY count(*) FILTER (WHERE event_name='recipe.plan_selected') DESC, count(*) FILTER (WHERE event_name='recipe.view') DESC, max(dimensions->>'recipe_slug')`, productID, since, []string{"recipe.view", "recipe.plan_selected"})
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.RecipePopularity, 0)
+	for rows.Next() {
+		var value model.RecipePopularity
+		if err := rows.Scan(&value.RecipeID, &value.RecipeSlug, &value.Views, &value.PlanSelections); err != nil {
+			return nil, databaseError(err)
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) AppendAudit(ctx context.Context, event model.AuditEvent) error {
+	if strings.TrimSpace(event.ID) == "" {
+		return errors.New("audit event ID is required")
+	}
+	prior, err := json.Marshal(event.Prior)
+	if err != nil {
+		return fmt.Errorf("marshal audit prior state: %w", err)
+	}
+	current, err := json.Marshal(event.Current)
+	if err != nil {
+		return fmt.Errorf("marshal audit current state: %w", err)
+	}
+	outcome := event.Outcome
+	if outcome == "" {
+		outcome = "success"
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	var persistErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		_, persistErr = p.pool.Exec(persistCtx, `INSERT INTO audit_events(event_key, organisation_id, product_id, actor_id, actor_kind, action, target_type, target_id, prior, current, request_id, outcome, created_at) VALUES ($1, nullif($2, '')::uuid, nullif($3, '')::uuid, $4, 'root', $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (event_key) DO NOTHING`, event.ID, event.OrganisationID, event.ProductID, event.ActorID, event.Action, event.TargetType, event.TargetID, prior, current, event.RequestID, outcome, event.CreatedAt)
+		if persistErr == nil {
+			return nil
+		}
+		if attempt < 2 {
+			timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+			select {
+			case <-persistCtx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return databaseError(errors.Join(persistErr, persistCtx.Err()))
+			case <-timer.C:
+			}
+		}
+	}
+	return databaseError(persistErr)
+}
+
+func (p *Postgres) AuditEvents(ctx context.Context, organisationID string) ([]model.AuditEvent, error) {
+	rows, err := p.pool.Query(ctx, `SELECT event_key, coalesce(organisation_id::text, ''), coalesce(product_id::text, ''), actor_id, action, target_type, target_id, coalesce(prior, '{}'::jsonb), coalesce(current, '{}'::jsonb), request_id, outcome, created_at FROM audit_events WHERE organisation_id = $1 ORDER BY created_at DESC`, organisationID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	result := make([]model.AuditEvent, 0)
+	for rows.Next() {
+		var value model.AuditEvent
+		var prior, current []byte
+		if err := rows.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.ActorID, &value.Action, &value.TargetType, &value.TargetID, &prior, &current, &value.RequestID, &value.Outcome, &value.CreatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(prior, &value.Prior)
+		_ = json.Unmarshal(current, &value.Current)
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}

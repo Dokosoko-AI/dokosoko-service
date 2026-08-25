@@ -182,7 +182,9 @@ func (s *Service) appendToolTestRun(ctx context.Context, runID string, tool mode
 	// The short-lived run is the authoritative durable outcome. Do not turn a
 	// successfully persisted result into a retryable API error solely because
 	// the secondary activity entry could not be appended.
-	_ = s.store.AppendAudit(persistCtx, model.AuditEvent{ID: randomID("audit"), OrganisationID: tool.OrganisationID, ProductID: tool.ProductID, ActorID: actor.ID, Action: "tool.test.executed", TargetType: "tool_test_run", TargetID: run.ID, Current: map[string]any{"tool_id": tool.ID, "tool_revision": tool.Revision, "outcome": run.Outcome, "phase": run.Phase, "network_call_performed": run.NetworkCallPerformed, "status_code": run.UpstreamStatusCode}, RequestID: actor.RequestID, Outcome: run.Outcome, CreatedAt: now})
+	if err := s.store.AppendAudit(persistCtx, model.AuditEvent{ID: randomID("audit"), OrganisationID: tool.OrganisationID, ProductID: tool.ProductID, ActorID: actor.ID, Action: "tool.test.executed", TargetType: "tool_test_run", TargetID: run.ID, Current: map[string]any{"tool_id": tool.ID, "tool_revision": tool.Revision, "outcome": run.Outcome, "phase": run.Phase, "network_call_performed": run.NetworkCallPerformed, "status_code": run.UpstreamStatusCode}, RequestID: actor.RequestID, Outcome: run.Outcome, CreatedAt: now}); err != nil {
+		return model.ToolTestRun{}, err
+	}
 	return run, nil
 }
 
@@ -200,10 +202,10 @@ func (s *Service) appendToolTestExecutionIntent(ctx context.Context, runID strin
 	})
 }
 
-func (s *Service) appendToolTestIndeterminateAudit(ctx context.Context, runID string, tool model.Tool, report toolruntime.DraftTestReport, actor Actor) {
+func (s *Service) appendToolTestIndeterminateAudit(ctx context.Context, runID string, tool model.Tool, report toolruntime.DraftTestReport, actor Actor) error {
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	_ = s.store.AppendAudit(persistCtx, model.AuditEvent{
+	return s.store.AppendAudit(persistCtx, model.AuditEvent{
 		ID: randomID("audit"), OrganisationID: tool.OrganisationID, ProductID: tool.ProductID, ActorID: actor.ID,
 		Action: "tool.test.execution.indeterminate", TargetType: "tool_test_run", TargetID: runID,
 		Current: map[string]any{
@@ -289,8 +291,7 @@ func (s *Service) RunToolTest(ctx context.Context, runtime *toolruntime.Runtime,
 	report := runtime.ExecuteHTTPDraftTest(ctx, productID, latest, input.Arguments, principal)
 	run, persistErr := s.appendToolTestRun(ctx, runID, latest, argumentHash, report, actor)
 	if persistErr != nil {
-		s.appendToolTestIndeterminateAudit(ctx, runID, latest, report, actor)
-		return model.ToolTestRun{}, ErrToolTestOutcomeIndeterminate
+		return model.ToolTestRun{}, errors.Join(ErrToolTestOutcomeIndeterminate, persistErr, s.appendToolTestIndeterminateAudit(ctx, runID, latest, report, actor))
 	}
 	return run, nil
 }

@@ -10,13 +10,15 @@
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "pnpm run build && node --test tests/*.test.mjs && tsx --test tests/*.test.ts",
+    "test": "pnpm run build && pnpm run test:console",
+    "test:console": "node --test tests/*.test.mjs && node --import tsx --test tests/*.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "test:go": "go test ./...",
     "crawler": "tsx crawler/index.ts",
-    "test:crawler": "tsx --test crawler/*.test.ts",
-    "test:all": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:crawler && pnpm run test:go"
+    "test:crawler": "node --import tsx --test crawler/*.test.ts",
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run build && pnpm run test:console && pnpm run test:crawler && pnpm run test:go",
+    "test:all": "pnpm run verify"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.9",

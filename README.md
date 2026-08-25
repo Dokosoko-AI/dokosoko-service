@@ -103,6 +103,8 @@ For the UI development server:
 DOKOSOKO_DEV_PROXY=http://127.0.0.1:8080 pnpm dev
 ```
 
+The console always uses live API data by default. A fixture-backed visual preview is available only in a development build at `?preview=fixtures`; production builds ignore that flag. Live load failures stay visible and fail closed instead of being filled with sample data.
+
 ## Documentation ingestion
 
 The isolated crawler dispatches each source according to its declared kind; it never treats every location as a website URL.
@@ -201,6 +203,8 @@ Required configuration:
 
 Back up PostgreSQL, `dokosoko-data`, `dokosoko-uploads`, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly. Configure the browser-reachable origin here—not an internal container hostname—because copied setup buttons deliberately ignore request `Host` and forwarding headers.
 
+The supplied service and crawler containers run as UID/GID `65532`, drop Linux capabilities, use a read-only root filesystem, and write only to their declared data, upload, and temporary mounts. Compose gives the service 30 seconds to complete its graceful shutdown before termination; keep at least that allowance in other orchestrators.
+
 Database migrations are append-only public deployment history. Never edit, rename, or delete an existing migration; add a new uniquely numbered migration for every schema change. Repository and runtime checksum validation enforce this policy.
 
 ### Breaking v3 upgrade
@@ -214,16 +218,26 @@ After the upgrade, configure customer identity only if private customer access i
 ## Verification
 
 ```bash
-pnpm run test:all
+pnpm run verify
 docker compose config
 ```
 
-The suites cover OAuth resource and PKCE binding, durable customer-account resolution and suspension, fail-closed grants, fixed tool destinations, managed MCP delegation and drift, support consent and idempotent outbox delivery, publication boundaries, access-provider operations, authentication, analytics, crawler isolation, and static console output.
+`pnpm run test:all` remains an alias for `pnpm run verify`. The verification command runs type checking, lint, behavioral and rendered-console tests, crawler isolation tests, a production console build, and the complete Go suite.
+
+PostgreSQL integration tests run automatically when either `DOKOSOKO_TEST_DATABASE_URL` or `TEST_DATABASE_URL` is set. Use a disposable PostgreSQL 17 database with pgvector; the test suite applies the checked migrations and cleans its own organisation-scoped fixtures.
+
+```bash
+export DOKOSOKO_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/dokosoko_test?sslmode=disable'
+go test ./...
+```
+
+The suites cover OAuth resource and PKCE binding, durable customer-account resolution and suspension, fail-closed grants, fixed tool destinations, managed MCP delegation and drift, support consent and idempotent outbox delivery, atomic catalog mutations, cancellation-safe idempotent audits, publication boundaries, access-provider operations, authentication, analytics, crawler isolation, and static console output. GitHub Actions repeats the frontend, PostgreSQL-backed Go, Compose, and container-build checks for every pull request and `main` update.
 
 ## Repository map
 
 ```text
-app/                  administration console
+app/components/console/ lazy-loaded console domain workspaces
+app/lib/              API contracts/client, routes, and pure console domain logic
 cmd/dokosoko/         service entry point
 crawler/              isolated documentation crawler
 internal/identity/    downstream OAuth, upstream OIDC, customer accounts, grants
@@ -231,10 +245,15 @@ internal/reporting/   encrypted support outbox and delivery
 internal/tools/       policy-bound HTTP tool execution
 internal/mcpbridge/   managed MCP import, delegated OAuth, drift, execution
 internal/access/      provider-owned instance and credential lifecycle
-internal/platform/    catalog validation, state transitions, audit
-internal/store/       memory/PostgreSQL persistence
+internal/lifecycle/   process supervision and graceful shutdown coordination
+internal/netpolicy/   shared outbound network and DNS-rebinding policy
+internal/ratelimit/   bounded fixed-window limiting
+internal/model/       domain-split persisted and API model contracts
+internal/platform/    domain-split catalog validation, state transitions, audit
+internal/store/       capability interfaces and domain-split memory/PostgreSQL persistence
 migrations/           checksummed PostgreSQL migrations
 api/                  normative OpenAPI contracts
+.github/workflows/    repeatable console, crawler, Go/PostgreSQL, and image checks
 ```
 
 See [the contract plan](docs/FINAL_PLAN.md) for invariants and failure semantics.

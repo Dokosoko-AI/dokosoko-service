@@ -112,7 +112,9 @@ func (s *Service) SaveGrantDefinition(ctx context.Context, id string, input Gran
 	if err != nil {
 		return model.GrantDefinition{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "authorization.grant.saved", TargetType: "grant_definition", TargetID: updated.ID, Prior: prior, Current: map[string]any{"key": updated.Key, "risk": updated.Risk, "state": updated.State, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "authorization.grant.saved", TargetType: "grant_definition", TargetID: updated.ID, Prior: prior, Current: map[string]any{"key": updated.Key, "risk": updated.Risk, "state": updated.State, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.GrantDefinition{}, err
+	}
 	return updated, nil
 }
 
@@ -246,7 +248,9 @@ func (s *Service) SaveAuthorizationPoint(ctx context.Context, integrationID, poi
 	if err != nil {
 		return model.AuthorizationPoint{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "authorization.point.saved", TargetType: "authorization_point", TargetID: updated.ID, Current: map[string]any{"integration_id": integrationID, "key": updated.Key, "action_type": updated.ActionType, "required_grants": updated.RequiredGrants, "confirmation_required": updated.ConfirmationRequired, "state": updated.State, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "authorization.point.saved", TargetType: "authorization_point", TargetID: updated.ID, Current: map[string]any{"integration_id": integrationID, "key": updated.Key, "action_type": updated.ActionType, "required_grants": updated.RequiredGrants, "confirmation_required": updated.ConfirmationRequired, "state": updated.State, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.AuthorizationPoint{}, err
+	}
 	return updated, nil
 }
 
@@ -385,6 +389,8 @@ func (s *Service) SetIntegrationToolBindings(ctx context.Context, integrationID 
 	if err != nil {
 		return nil, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.tools.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"tools": updated}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.tools.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"tools": updated}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return nil, err
+	}
 	return updated, nil
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -11,6 +11,37 @@ async function render() {
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
+}
+
+async function readModuleSurface(paths) {
+  return (await Promise.all(paths.map((path) => readFile(new URL(`../${path}`, import.meta.url), "utf8")))).join("\n");
+}
+
+async function consoleSource() {
+  return readModuleSurface([
+    "app/components/ConsoleApp.tsx",
+    "app/components/console/integration-views.tsx",
+    "app/components/console/agent-access-views.tsx",
+    "app/components/console/tool-views.tsx",
+    "app/components/console/catalog-settings-views.tsx",
+    "app/components/console/shared.tsx",
+    "app/lib/console-domain.ts",
+  ]);
+}
+
+async function clientSource() {
+  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts"]);
+}
+
+async function stylesSource() {
+  const paths = ["app/globals.css"];
+  const directory = new URL("../app/styles/", import.meta.url);
+  try {
+    for (const name of (await readdir(directory)).filter((value) => value.endsWith(".css")).sort()) paths.push(`app/styles/${name}`);
+  } catch {
+    // The styles directory is optional for older source layouts.
+  }
+  return readModuleSurface(paths);
 }
 
 function componentSource(source, startName, endName) {
@@ -34,11 +65,18 @@ test("server-renders an authentication-safe loading shell", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
+test("production client chunks exclude development fixture tenants", async () => {
+  const directory = new URL("../dist/client/_next/static/chunks/", import.meta.url);
+  const files = (await readdir(directory, { recursive: true })).filter((name) => name.endsWith(".js"));
+  const source = (await Promise.all(files.map((name) => readFile(new URL(name, directory), "utf8")))).join("\n");
+  assert.doesNotMatch(source, /prod_acme|org_acme|Acme Platform|pub_docs_seed|build_acme/);
+});
+
 test("keeps the global navigation to six obvious destinations", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
-  const primaryNavigation = source.slice(source.indexOf("const navigation"), source.indexOf("const initialSources"));
+  const primaryNavigation = source.slice(source.indexOf("const navigation"), source.indexOf("function deploymentAsLegacyProduct"));
 
   for (const label of ["APIs", "Identity", "Tools", "Recipes", "Agent access", "Activity"]) {
     assert.match(primaryNavigation, new RegExp(`label: "${label}"`));
@@ -73,8 +111,8 @@ test("keeps the global navigation to six obvious destinations", async () => {
 });
 
 test("gives AI providers a dedicated, guarded settings workspace", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
@@ -115,11 +153,11 @@ test("gives AI providers a dedicated, guarded settings workspace", async () => {
 });
 
 test("ships one evidence-to-recipe review workflow", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   assert.doesNotMatch(source, /Turn verified integration evidence into implementation guides/);
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const client = await clientSource();
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
   assert.match(routes, /recipes: "\/recipes"/);
@@ -137,21 +175,21 @@ test("ships one evidence-to-recipe review workflow", async () => {
 });
 
 test("recovers stale recipe analysis and refreshes outdated evidence", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   assert.match(source, /staleRunning/);
   assert.match(source, /recipe\.state === "outdated"/);
   assert.match(source, /Date\.now\(\) - runningSince > 5 \* 60 \* 1000/);
 });
 
 test("uses an API directory and a complete onboarding workspace", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const integrationNavigation = await readFile(new URL("../app/components/integrations/IntegrationNavigation.tsx", import.meta.url), "utf8");
   const quickStart = await readFile(new URL("../app/components/integrations/IntegrationQuickStart.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const client = await clientSource();
   const directory = componentSource(source, "IntegrationDirectoryView", "IntegrationSwitcher");
-  const workspace = componentSource(source, "IntegrationWorkspaceView", "unavailableConsoleCapability");
+  const workspace = componentSource(source, "IntegrationWorkspaceView", "AuthorizationPolicyWorkspace");
   const integrationTabs = routes.slice(routes.indexOf("export const INTEGRATION_TABS"), routes.indexOf("export const INTEGRATION_RESOURCE_TABS"));
 
   assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "Quick Start" \},\s*\{ id: "documentation", label: "Documentation" \},\s*\{ id: "access", label: "Access" \},\s*\{ id: "tools", label: "Tools" \},\s*\{ id: "test", label: "Test" \},\s*\{ id: "history", label: "History" \},\s*\];/);
@@ -203,8 +241,8 @@ test("uses an API directory and a complete onboarding workspace", async () => {
 });
 
 test("uses recoverable, lifecycle-safe package publication flows", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
   const server = await readFile(new URL("../internal/httpapi/server_packages.go", import.meta.url), "utf8");
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
   const releaseContract = client.slice(client.indexOf("export type APIPackageRelease"), client.indexOf("export type APIPackageArtifact"));
@@ -238,8 +276,8 @@ test("uses recoverable, lifecycle-safe package publication flows", async () => {
 });
 
 test("uses a common-tool catalog at the deployment root and keeps API tools scoped", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const styles = await stylesSource();
   const catalog = componentSource(source, "ToolsView", "SettingsTabs");
   const connections = componentSource(source, "MCPConnectionsView", "ToolsView");
 
@@ -276,12 +314,12 @@ test("uses a common-tool catalog at the deployment root and keeps API tools scop
 });
 
 test("keeps API authorization policy authoring in API Access and out of root Tools and Identity", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
   const identitySetup = await readFile(new URL("../app/components/OIDCIdentitySetup.tsx", import.meta.url), "utf8");
   const policyWorkspace = componentSource(source, "AuthorizationPolicyWorkspace", "IntegrationToolsWorkspace");
   const toolsView = componentSource(source, "ToolsView", "SettingsTabs");
-  const integrationWorkspace = componentSource(source, "IntegrationWorkspaceView", "unavailableConsoleCapability");
+  const integrationWorkspace = componentSource(source, "IntegrationWorkspaceView", "AuthorizationPolicyWorkspace");
 
   for (const capability of ["grantDefinitions", "createGrantDefinition", "updateGrantDefinition", "authorizationPoints", "createAuthorizationPoint", "updateAuthorizationPoint"]) {
     assert.match(client, new RegExp(`\\b${capability}\\b`));
@@ -312,10 +350,10 @@ test("keeps API authorization policy authoring in API Access and out of root Too
 });
 
 test("keeps reusable tool authoring in the deployment tool builder and detail", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
   const builder = await readFile(new URL("../app/components/ToolBuilderView.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await stylesSource();
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
   const liveEvidence = componentSource(source, "ToolLiveTestEvidence", "ToolDetailView");
   const detail = componentSource(source, "ToolDetailView", "ConsoleNotFoundView");
@@ -457,8 +495,8 @@ test("keeps reusable tool authoring in the deployment tool builder and detail", 
 });
 
 test("splits API tools into built-ins, API-owned definitions, and attached common tools", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
   const bindingWorkspace = componentSource(source, "IntegrationToolsWorkspace", "IntegrationTestWorkspace");
 
   assert.match(client, /tools: Array<\{ tool_id: string; revision: number; authorization_point_id: string; authorization_point_revision: number \}>/);
@@ -502,9 +540,9 @@ test("splits API tools into built-ins, API-owned definitions, and attached commo
 });
 
 test("uploads local knowledge files with a browser-managed multipart request", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const styles = await stylesSource();
+  const client = await clientSource();
 
   assert.match(client, /uploadSource: \(productID: string, organisationID: string, name: string, file: File\)/);
   assert.match(client, /const body = new FormData\(\)/);
@@ -528,8 +566,8 @@ test("uploads local knowledge files with a browser-managed multipart request", a
 });
 
 test("shows exact crawler classifier indicators during source review", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
   assert.match(client, /injection_indicators: string\[\]/);
@@ -538,7 +576,7 @@ test("shows exact crawler classifier indicators during source review", async () 
 });
 
 test("keeps private defaults and guarded public transitions in the client contract", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   const packageJson = await readFile(new URL("../package.json", import.meta.url), "utf8");
 
   assert.match(source, /visibility:\s*"private"/);
@@ -574,7 +612,7 @@ test("keeps private defaults and guarded public transitions in the client contra
 });
 
 test("keeps Agent access headings and setup cards concise", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
 
   for (const removed of [
     "Control how authenticated and public agents reach your APIs and knowledge.",
@@ -586,14 +624,15 @@ test("keeps Agent access headings and setup cards concise", async () => {
 });
 
 test("keeps live customer suspension controls under Agent access and fails closed while unavailable", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
+  const styles = await stylesSource();
   const distribution = componentSource(source, "DistributionView", "CustomerAccessPanel");
   const customerAccess = componentSource(source, "CustomerAccessPanel", "AgentSetupCard");
 
   assert.match(source, /status: "loading", items: \[\], hasMore: false/);
-  assert.match(source, /fixturePreview \? Promise\.resolve\(\{ items: fixtureCustomerAccounts, has_more: false \}\) : api\.customerAccounts\(product\.id\)/);
+  assert.match(source, /fixturePreview \? Promise\.resolve\(\{ items: fixtures\?\.customerAccounts \?\? \[\], has_more: false \}\)/);
+  assert.match(source, /: api\.customerAccounts\(product\.id\)/);
   assert.match(source, /status: "unavailable", items: \[\], hasMore: false/);
   assert.match(source, /api\.updateCustomerAccount\(productID, account\.id, state, account\.revision\)/);
   assert.match(source, /const page = await api\.customerAccounts\(productID, cursor\)/);
@@ -621,7 +660,7 @@ test("keeps live customer suspension controls under Agent access and fails close
 });
 
 test("keeps page and panel headings concise across the console", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   const identitySetup = await readFile(new URL("../app/components/OIDCIdentitySetup.tsx", import.meta.url), "utf8");
   const uiSource = `${source}\n${identitySetup}`;
 
@@ -659,8 +698,8 @@ test("keeps page and panel headings concise across the console", async () => {
 });
 
 test("imports APIs without exposing Product Definition as a product concept", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
 
   assert.match(source, /title="Import APIs"/);
   assert.match(source, /Review exceptions, not configuration/);
@@ -673,8 +712,8 @@ test("imports APIs without exposing Product Definition as a product concept", as
 });
 
 test("keeps immutable publishing controls behind advanced settings", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
 
   assert.match(source, /title="Advanced publishing"/);
   assert.match(source, />Advanced publishing</);
@@ -694,11 +733,11 @@ test("keeps immutable publishing controls behind advanced settings", async () =>
 });
 
 test("ships a provider-neutral OIDC draft, test, and activation workspace", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   const identitySetup = await readFile(new URL("../app/components/OIDCIdentitySetup.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const client = await clientSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await stylesSource();
   const settings = componentSource(source, "SettingsView", "RootAccessPanel");
   const settingsTabs = routes.slice(routes.indexOf("export const SETTINGS_TABS"), routes.indexOf("export const SECTION_PATHS"));
   const identityClient = client.slice(client.indexOf("identity: ()"), client.indexOf("supportSubmissions:", client.indexOf("identity: ()")));
@@ -845,8 +884,8 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
 });
 
 test("ships consent-gated support reporting configuration and inbox", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
 
 	assert.match(source, /Bug reports & feedback/);
 	assert.doesNotMatch(source, /Configure consent-gated reporting and secure delivery/);
@@ -870,8 +909,8 @@ test("ships consent-gated support reporting configuration and inbox", async () =
 });
 
 test("ships first-class API, reusable resource, and service-connection management", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
+  const source = await consoleSource();
+  const client = await clientSource();
 
   assert.match(source, /Add API/);
   assert.match(source, /Create reusable resource set/);
@@ -901,10 +940,10 @@ test("ships first-class API, reusable resource, and service-connection managemen
 });
 
 test("uses the real masked runtime-service model for API-local Access", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   const access = await readFile(new URL("../app/components/integrations/IntegrationRuntimeAccess.tsx", import.meta.url), "utf8");
-  const client = await readFile(new URL("../app/lib/api.ts", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const client = await clientSource();
+  const styles = await stylesSource();
   const runtimeTypes = client.slice(client.indexOf("export type APIRuntimeAuthenticationType"), client.indexOf("export type APISource"));
 
   assert.match(source, /<IntegrationRuntimeAccess integration=\{integration\}[\s\S]{0,80}onMessage=\{onMessage\}/);
@@ -936,9 +975,9 @@ test("uses the real masked runtime-service model for API-local Access", async ()
 });
 
 test("leads API documentation with an advisory agent guide", async () => {
-  const source = await readFile(new URL("../app/components/ConsoleApp.tsx", import.meta.url), "utf8");
+  const source = await consoleSource();
   const guide = await readFile(new URL("../app/components/integrations/IntegrationAgentGuide.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const styles = await stylesSource();
 
   assert.match(source, /analysis\.state === "review" && analysisMatchesIntegration\(analysis, integration\.id\)/);
   assert.match(source, /<IntegrationAgentGuide analysis=\{agentGuideAnalysis\} canGenerate=\{attachedResources\.length > 0\} busy=\{guideBusy\} onGenerate=\{generateAgentGuide\} \/>[\s\S]*Documentation ingestion/);

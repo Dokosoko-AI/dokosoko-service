@@ -418,7 +418,9 @@ func (s *Service) CreateWidget(ctx context.Context, input WidgetInput, actor Act
 	if _, err := s.store.CreateWidgetSecret(ctx, model.WidgetSecret{ID: secretID, WidgetID: created.ID, Digest: digest, Fingerprint: fingerprint}); err != nil {
 		return WidgetProvisioning{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: created.OrganisationID, ProductID: created.DeploymentID, ActorID: actor.ID, Action: "widget.created", TargetType: "widget", TargetID: created.ID, Current: map[string]any{"name": created.Name, "state": created.State, "allowed_origins": created.AllowedOrigins, "integration_ids": created.IntegrationIDs}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: created.OrganisationID, ProductID: created.DeploymentID, ActorID: actor.ID, Action: "widget.created", TargetType: "widget", TargetID: created.ID, Current: map[string]any{"name": created.Name, "state": created.State, "allowed_origins": created.AllowedOrigins, "integration_ids": created.IntegrationIDs}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return WidgetProvisioning{}, err
+	}
 	return WidgetProvisioning{Widget: created, Secret: secret}, nil
 }
 
@@ -472,7 +474,9 @@ func (s *Service) UpdateWidget(ctx context.Context, widgetID string, input Widge
 	if err != nil {
 		return model.Widget{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "widget.updated", TargetType: "widget", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "state": updated.State, "allowed_origins": updated.AllowedOrigins, "integration_ids": updated.IntegrationIDs, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "widget.updated", TargetType: "widget", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "state": updated.State, "allowed_origins": updated.AllowedOrigins, "integration_ids": updated.IntegrationIDs, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Widget{}, err
+	}
 	return updated, nil
 }
 
@@ -518,7 +522,9 @@ func (s *Service) SetWidgetState(ctx context.Context, widgetID, state string, re
 			return model.Widget{}, err
 		}
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "widget." + state, TargetType: "widget", TargetID: updated.ID, Current: map[string]any{"state": state, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "widget." + state, TargetType: "widget", TargetID: updated.ID, Current: map[string]any{"state": state, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Widget{}, err
+	}
 	return updated, nil
 }
 
@@ -543,7 +549,9 @@ func (s *Service) RotateWidgetSecret(ctx context.Context, widgetID string, actor
 	if err != nil {
 		return "", model.WidgetSecret{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor.ID, Action: "widget.secret.created", TargetType: "widget_secret", TargetID: created.ID, Current: map[string]any{"widget_id": widgetID, "fingerprint": created.Fingerprint}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor.ID, Action: "widget.secret.created", TargetType: "widget_secret", TargetID: created.ID, Current: map[string]any{"widget_id": widgetID, "fingerprint": created.Fingerprint}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return "", model.WidgetSecret{}, err
+	}
 	return raw, created, nil
 }
 
@@ -682,7 +690,9 @@ func (s *Service) CreateWidgetPreviewBootstrap(ctx context.Context, widgetID, or
 	if err := s.store.CreateWidgetBootstrap(ctx, model.WidgetBootstrap{Digest: digest, WidgetID: widget.ID, Kind: model.WidgetSessionKindAdminPreview, UserID: "admin-preview:" + actorID, Origin: normalizedOrigin, ExpiresAt: expiresAt}); err != nil {
 		return WidgetBootstrapResult{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor.ID, Action: "widget.preview.started", TargetType: "widget", TargetID: widget.ID, Current: map[string]any{"kind": model.WidgetSessionKindAdminPreview, "origin": normalizedOrigin, "revision": widget.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor.ID, Action: "widget.preview.started", TargetType: "widget", TargetID: widget.ID, Current: map[string]any{"kind": model.WidgetSessionKindAdminPreview, "origin": normalizedOrigin, "revision": widget.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return WidgetBootstrapResult{}, err
+	}
 	return WidgetBootstrapResult{BootstrapToken: raw, ExpiresAt: expiresAt}, nil
 }
 

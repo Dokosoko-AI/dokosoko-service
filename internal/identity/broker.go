@@ -24,6 +24,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"golang.org/x/oauth2"
 )
@@ -741,28 +742,11 @@ func registeredRedirectMatches(values []string, requested string) bool {
 	return false
 }
 
-func unsafeIP(address net.IP) bool {
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() {
-		return true
-	}
-	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "2001:db8::/32", "fc00::/7", "fe80::/10"} {
-		_, block, _ := net.ParseCIDR(raw)
-		if block.Contains(address) {
-			return true
-		}
-	}
-	return false
-}
-
 // IsLocalDevelopmentHostname recognizes the RFC-reserved localhost namespace
 // without accepting lookalike public suffixes such as localhost.example.com.
 func IsLocalDevelopmentHostname(hostname string) bool {
 	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 	return hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" || strings.HasSuffix(hostname, ".localhost")
-}
-
-func localDevelopmentIP(address net.IP) bool {
-	return address != nil && (address.IsLoopback() || address.IsPrivate())
 }
 
 func resolveSafeOIDCDestination(ctx context.Context, parsed *url.URL, resolver IPResolver, allowLocal bool, localBoundary []net.IP) ([]net.IP, error) {
@@ -790,7 +774,7 @@ func resolveSafeOIDCDestination(ctx context.Context, parsed *url.URL, resolver I
 		return nil, errors.New("destination did not resolve safely")
 	}
 	for _, address := range addresses {
-		if localDevelopment && !localDevelopmentIP(address) || !localDevelopment && unsafeIP(address) {
+		if localDevelopment && !netpolicy.LocalDevelopmentIP(address) || !localDevelopment && netpolicy.UnsafeIP(address) {
 			return nil, errors.New("destination resolves outside its permitted network boundary")
 		}
 		if localDevelopment && len(localBoundary) > 0 && !ipInBoundary(address, localBoundary) {
@@ -889,7 +873,7 @@ func safeClient(ctx context.Context, parsed *url.URL, provided *http.Client, res
 		return nil, errors.New("destination did not resolve safely")
 	}
 	for _, address := range addresses {
-		if (localDevelopment && !localDevelopmentIP(address)) || (!localDevelopment && unsafeIP(address)) {
+		if (localDevelopment && !netpolicy.LocalDevelopmentIP(address)) || (!localDevelopment && netpolicy.UnsafeIP(address)) {
 			return nil, errors.New("destination resolves to a non-public address")
 		}
 	}

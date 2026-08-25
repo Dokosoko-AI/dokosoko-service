@@ -685,10 +685,10 @@ func applyToolTestAIEditableDraft(base ToolDraft, raw string) (ToolDraft, error)
 	return candidate, nil
 }
 
-func (s *Service) appendToolTestAnalysisAudit(ctx context.Context, product model.Product, run model.ToolTestRun, actor Actor, consent bool, providerOutcome string, findingCount, changeCount int) {
+func (s *Service) appendToolTestAnalysisAudit(ctx context.Context, product model.Product, run model.ToolTestRun, actor Actor, consent bool, providerOutcome string, findingCount, changeCount int) error {
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	_ = s.store.AppendAudit(persistCtx, model.AuditEvent{
+	return s.store.AppendAudit(persistCtx, model.AuditEvent{
 		ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID,
 		Action: "tool.test.analysis", TargetType: "tool_test_run", TargetID: run.ID,
 		Current:   map[string]any{"consent": consent, "provider_outcome": providerOutcome, "finding_count": findingCount, "change_count": changeCount},
@@ -739,28 +739,23 @@ func (s *Service) AnalyseToolTestRun(ctx context.Context, productID, toolID, run
 	expectedHash := ToolTestAnalysisEvidenceHash(run)
 	input.EvidenceHash = strings.ToLower(strings.TrimSpace(input.EvidenceHash))
 	if !toolTestAnalysisHashPattern.MatchString(input.EvidenceHash) || input.EvidenceHash != expectedHash {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, input.ConsentToSend, "not_called", 0, 0)
-		return ToolTestAnalysisResult{}, ErrToolTestAnalysisEvidenceMismatch
+		return ToolTestAnalysisResult{}, errors.Join(ErrToolTestAnalysisEvidenceMismatch, s.appendToolTestAnalysisAudit(ctx, product, run, actor, input.ConsentToSend, "not_called", 0, 0))
 	}
 	if !input.ConsentToSend {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, false, "not_called", 0, 0)
-		return ToolTestAnalysisResult{}, ErrToolTestAnalysisConsentRequired
+		return ToolTestAnalysisResult{}, errors.Join(ErrToolTestAnalysisConsentRequired, s.appendToolTestAnalysisAudit(ctx, product, run, actor, false, "not_called", 0, 0))
 	}
 	question, history, err := normalizeToolTestAnalysisConversation(input.Question, input.History)
 	if err != nil {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0)
-		return ToolTestAnalysisResult{}, err
+		return ToolTestAnalysisResult{}, errors.Join(err, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0))
 	}
 	base, err := decodeToolTestStoredDraft(tool)
 	if err != nil {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0)
-		return ToolTestAnalysisResult{}, err
+		return ToolTestAnalysisResult{}, errors.Join(err, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0))
 	}
 	evidence := toolTestEvidenceForAI(run, base)
 	encodedEvidence, err := json.Marshal(evidence)
 	if err != nil || len(encodedEvidence) > maxToolTestAnalysisEvidenceBytes {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0)
-		return ToolTestAnalysisResult{}, ErrToolTestAnalysisInvalidInput
+		return ToolTestAnalysisResult{}, errors.Join(ErrToolTestAnalysisInvalidInput, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0))
 	}
 	contract := toolTestContractForAI(base)
 	userPayload, err := json.Marshal(map[string]any{
@@ -770,13 +765,11 @@ func (s *Service) AnalyseToolTestRun(ctx context.Context, productID, toolID, run
 		"latest_question":     question,
 	})
 	if err != nil {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0)
-		return ToolTestAnalysisResult{}, ErrToolTestAnalysisInvalidInput
+		return ToolTestAnalysisResult{}, errors.Join(ErrToolTestAnalysisInvalidInput, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "not_called", 0, 0))
 	}
 	profile, connection, err := s.aiWorkloadTarget(ctx, product, airuntime.WorkloadAnalysis)
 	if err != nil {
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "unavailable", 0, 0)
-		return ToolTestAnalysisResult{}, err
+		return ToolTestAnalysisResult{}, errors.Join(err, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "unavailable", 0, 0))
 	}
 	if err := s.appendToolTestAnalysisIntent(ctx, product, run, actor, expectedHash, profile, connection); err != nil {
 		return ToolTestAnalysisResult{}, err
@@ -794,8 +787,7 @@ func (s *Service) AnalyseToolTestRun(ctx context.Context, productID, toolID, run
 		if errors.Is(providerErr, ErrAIUnavailable) {
 			outcome = "unavailable"
 		}
-		s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, outcome, 0, 0)
-		return ToolTestAnalysisResult{}, providerErr
+		return ToolTestAnalysisResult{}, errors.Join(providerErr, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, outcome, 0, 0))
 	}
 
 	providerOutcome := "succeeded"
@@ -821,8 +813,7 @@ func (s *Service) AnalyseToolTestRun(ctx context.Context, productID, toolID, run
 			} else {
 				validation, validationErr := s.ValidateToolDraftContext(ctx, product.ID, ToolDraftContext{Draft: candidate, BaseToolID: tool.ID, BaseRevision: tool.Revision})
 				if validationErr != nil {
-					s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "failed", len(findings), 0)
-					return ToolTestAnalysisResult{}, validationErr
+					return ToolTestAnalysisResult{}, errors.Join(validationErr, s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, "failed", len(findings), 0))
 				}
 				proposalID, _ := randomUUID()
 				changes := toolBuilderChanges(base, validation.NormalizedDraft, "Suggested from the consented sanitized live-test evidence; review before applying.")
@@ -844,7 +835,9 @@ func (s *Service) AnalyseToolTestRun(ctx context.Context, productID, toolID, run
 		findingCount += len(proposal.Findings)
 		changeCount = len(proposal.Changes)
 	}
-	s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, providerOutcome, findingCount, changeCount)
+	if err := s.appendToolTestAnalysisAudit(ctx, product, run, actor, true, providerOutcome, findingCount, changeCount); err != nil {
+		return ToolTestAnalysisResult{}, err
+	}
 	return ToolTestAnalysisResult{
 		ToolRevision: tool.Revision, EvidenceHash: expectedHash, Reply: reply, Findings: findings, Proposal: proposal,
 		ProviderOutcome: providerOutcome, Advisory: true, GeneratedAt: s.now(),

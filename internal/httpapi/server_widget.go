@@ -209,7 +209,10 @@ func (s *Server) revokeAdminWidgetSession(w http.ResponseWriter, r *http.Request
 		s.storeError(w, err)
 		return
 	}
-	_ = s.service.Store().AppendAudit(r.Context(), model.AuditEvent{ID: "audit_" + sessionID, OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor(r).ID, Action: "widget.session.revoked", TargetType: "widget_session", TargetID: sessionID, Current: map[string]any{"widget_id": widgetID}, RequestID: actor(r).RequestID, CreatedAt: time.Now().UTC()})
+	if err := s.service.Store().AppendAudit(r.Context(), model.AuditEvent{ID: "audit_" + sessionID, OrganisationID: widget.OrganisationID, ProductID: widget.DeploymentID, ActorID: actor(r).ID, Action: "widget.session.revoked", TargetType: "widget_session", TargetID: sessionID, Current: map[string]any{"widget_id": widgetID}, RequestID: actor(r).RequestID, CreatedAt: time.Now().UTC()}); err != nil {
+		s.storeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, value)
 }
 
@@ -332,6 +335,10 @@ func (s *Server) widgetChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Streaming responses manage their lifetime through the request context.
+	// Clear the server-wide write deadline so a healthy SSE stream is not cut
+	// off by the bounded timeout used for ordinary responses.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 	for _, source := range response.Sources {

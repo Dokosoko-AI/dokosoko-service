@@ -369,7 +369,9 @@ func (s *Service) SaveRoute(ctx context.Context, deploymentID, routeID string, i
 			_ = s.store.ActivateHeldReportSubmissions(ctx, deploymentID, saved.ID, KindFeedback, s.now())
 		}
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: deployment.OrganisationID, ProductID: deploymentID, ActorID: actorID, Action: "support_route.saved", TargetType: "support_route", TargetID: saved.ID, Current: map[string]any{"name": saved.Name, "is_default": saved.IsDefault, "integration_ids": saved.IntegrationIDs, "backend_connection_id": saved.BackendConnectionID, "bug_reports_enabled": saved.BugReportsEnabled, "feedback_enabled": saved.FeedbackEnabled}, RequestID: requestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: deployment.OrganisationID, ProductID: deploymentID, ActorID: actorID, Action: "support_route.saved", TargetType: "support_route", TargetID: saved.ID, Current: map[string]any{"name": saved.Name, "is_default": saved.IsDefault, "integration_ids": saved.IntegrationIDs, "backend_connection_id": saved.BackendConnectionID, "bug_reports_enabled": saved.BugReportsEnabled, "feedback_enabled": saved.FeedbackEnabled}, RequestID: requestID, CreatedAt: s.now()}); err != nil {
+		return model.SupportRoute{}, err
+	}
 	return saved, nil
 }
 
@@ -564,7 +566,10 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	integrationSnapshot := json.RawMessage(`{}`)
 	if integration != nil {
 		integrationID = integration.IntegrationID
-		integrationSnapshot, _ = json.Marshal(integration)
+		integrationSnapshot, err = json.Marshal(integration)
+		if err != nil {
+			return SubmissionView{}, err
+		}
 	}
 	digest := sha256.Sum256([]byte(product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
 	now := s.now()
@@ -713,48 +718,45 @@ func (s *Service) ProcessPending(ctx context.Context, limit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, value := range values {
-		s.deliver(ctx, value)
+	for index, value := range values {
+		if err := s.deliver(ctx, value); err != nil {
+			return index, fmt.Errorf("persist report delivery state for %s: %w", value.ID, err)
+		}
 	}
 	return len(values), nil
 }
 
-func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
+func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) error {
 	endpoint, credentialID, err := s.deliveryRoute(ctx, value)
 	if err != nil {
 		if errors.Is(err, ErrDeliveryUnavailable) || errors.Is(err, ErrNotConfigured) || errors.Is(err, store.ErrNotFound) {
 			value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "held", nil, nil, ""
-			_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
-			return
+			_, updateErr := s.store.UpdateReportSubmissionDelivery(ctx, value)
+			return updateErr
 		}
-		s.deliveryFailed(ctx, value, err)
-		return
+		return s.deliveryFailed(ctx, value, err)
 	}
 	if endpoint == "" || credentialID == "" {
 		value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "held", nil, nil, ""
-		_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
-		return
+		_, updateErr := s.store.UpdateReportSubmissionDelivery(ctx, value)
+		return updateErr
 	}
 	envelope, err := s.decrypt(value)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("encrypted report payload could not be opened"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("encrypted report payload could not be opened"))
 	}
 	credential, err := s.deliveryCredential(ctx, value.OrganisationID, credentialID)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("support delivery credential is unavailable"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("support delivery credential is unavailable"))
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil || !validDeliveryURL(endpoint) {
-		s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))
 	}
 	body, _ := json.Marshal(map[string]any{"submission_id": value.ID, "created_at": value.CreatedAt, "submission": envelope})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(body))
 	if err != nil {
-		s.deliveryFailed(ctx, value, err)
-		return
+		return s.deliveryFailed(ctx, value, err)
 	}
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Content-Type", "application/json")
@@ -763,23 +765,19 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 	request.Header.Set("X-External-Request-ID", requestID())
 	client, err := identity.SafeOutboundClient(ctx, parsed, s.Client, s.Resolver)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("support API destination is unsafe"))
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		s.deliveryFailed(ctx, value, errors.New("support API request failed"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("support API request failed"))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
 		failure := fmt.Errorf("support API returned status %d", response.StatusCode)
 		if response.StatusCode != http.StatusRequestTimeout && response.StatusCode != http.StatusTooManyRequests && response.StatusCode < 500 {
-			s.deliveryFailedPermanently(ctx, value, failure)
-		} else {
-			s.deliveryFailedAfter(ctx, value, failure, retryAfter(response.Header.Get("Retry-After"), s.now()))
+			return s.deliveryFailedPermanently(ctx, value, failure)
 		}
-		return
+		return s.deliveryFailedAfter(ctx, value, failure, retryAfter(response.Header.Get("Retry-After"), s.now()))
 	}
 	result := struct {
 		ID          string `json:"id"`
@@ -789,29 +787,26 @@ func (s *Service) deliver(ctx context.Context, value model.ReportSubmission) {
 	}{}
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxDeliveryResponse+1))
 	if readErr != nil || len(raw) > maxDeliveryResponse {
-		s.deliveryFailed(ctx, value, errors.New("support API response is too large"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("support API response is too large"))
 	}
 	if len(bytes.TrimSpace(raw)) > 0 {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		if err := decoder.Decode(&result); err != nil {
-			s.deliveryFailed(ctx, value, errors.New("support API returned invalid JSON"))
-			return
+			return s.deliveryFailed(ctx, value, errors.New("support API returned invalid JSON"))
 		}
 		var trailing any
 		if decoder.Decode(&trailing) != io.EOF {
-			s.deliveryFailed(ctx, value, errors.New("support API returned multiple JSON values"))
-			return
+			return s.deliveryFailed(ctx, value, errors.New("support API returned multiple JSON values"))
 		}
 	}
 	if result.ID == "" || len(result.ID) > 200 || result.Status != "accepted" || len(result.ExternalID) > 200 || len(result.ExternalURL) > 2000 || (result.ExternalURL != "" && !validExternalURL(result.ExternalURL)) {
-		s.deliveryFailed(ctx, value, errors.New("support API returned invalid receipt"))
-		return
+		return s.deliveryFailed(ctx, value, errors.New("support API returned invalid receipt"))
 	}
 	now := s.now()
 	value.State, value.NextAttemptAt, value.DeliveryStartedAt, value.LastError = "delivered", nil, nil, ""
 	value.ExternalID, value.ExternalURL, value.DeliveredAt = result.ExternalID, result.ExternalURL, &now
-	_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
+	_, err = s.store.UpdateReportSubmissionDelivery(ctx, value)
+	return err
 }
 
 func (s *Service) deliveryRoute(ctx context.Context, value model.ReportSubmission) (endpoint, credentialID string, err error) {
@@ -853,13 +848,13 @@ func (s *Service) deliveryCredential(ctx context.Context, organisationID, id str
 	return string(plain), err
 }
 
-func (s *Service) deliveryFailed(ctx context.Context, value model.ReportSubmission, failure error) {
-	s.deliveryFailedAfter(ctx, value, failure, time.Time{})
+func (s *Service) deliveryFailed(ctx context.Context, value model.ReportSubmission, failure error) error {
+	return s.deliveryFailedAfter(ctx, value, failure, time.Time{})
 }
 
-func (s *Service) deliveryFailedPermanently(ctx context.Context, value model.ReportSubmission, failure error) {
+func (s *Service) deliveryFailedPermanently(ctx context.Context, value model.ReportSubmission, failure error) error {
 	value.Attempts = max(value.Attempts, maxDeliveryAttempts)
-	s.deliveryFailedAfter(ctx, value, failure, time.Time{})
+	return s.deliveryFailedAfter(ctx, value, failure, time.Time{})
 }
 
 func retryAfter(raw string, now time.Time) time.Time {
@@ -872,7 +867,7 @@ func retryAfter(raw string, now time.Time) time.Time {
 	return time.Time{}
 }
 
-func (s *Service) deliveryFailedAfter(ctx context.Context, value model.ReportSubmission, failure error, retryAt time.Time) {
+func (s *Service) deliveryFailedAfter(ctx context.Context, value model.ReportSubmission, failure error, retryAt time.Time) error {
 	value.DeliveryStartedAt = nil
 	message := failure.Error()
 	if len(message) > 500 {
@@ -892,10 +887,11 @@ func (s *Service) deliveryFailedAfter(ctx context.Context, value model.ReportSub
 		}
 		value.State, value.NextAttemptAt = "pending", &next
 	}
-	_, _ = s.store.UpdateReportSubmissionDelivery(ctx, value)
+	_, err := s.store.UpdateReportSubmissionDelivery(ctx, value)
+	return err
 }
 
-func (s *Service) Run(ctx context.Context, interval time.Duration) {
+func (s *Service) Run(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
@@ -904,10 +900,14 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
-			_, _ = s.ProcessPending(ctx, 50)
-			_, _ = s.store.DeleteExpiredReportSubmissions(ctx, s.now())
+			if _, err := s.ProcessPending(ctx, 50); err != nil {
+				return fmt.Errorf("process pending reports: %w", err)
+			}
+			if _, err := s.store.DeleteExpiredReportSubmissions(ctx, s.now()); err != nil {
+				return fmt.Errorf("delete expired reports: %w", err)
+			}
 		}
 	}
 }

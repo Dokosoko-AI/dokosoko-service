@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
 )
 
 const maxProviderResponse = 2 << 20
@@ -181,7 +183,7 @@ func FixedHTTPSClient(ctx context.Context, raw string) (HTTPDoer, *url.URL, erro
 		return nil, nil, errors.New("provider endpoint could not be resolved safely")
 	}
 	for _, address := range addresses {
-		if unsafeProviderIP(address) {
+		if netpolicy.UnsafeIP(address) {
 			return nil, nil, errors.New("provider endpoint resolved to a disallowed network")
 		}
 	}
@@ -211,19 +213,6 @@ func FixedHTTPSHTTPClient(ctx context.Context, raw string) (*http.Client, error)
 		return nil, errors.New("provider HTTP client has an unexpected type")
 	}
 	return value, nil
-}
-
-func unsafeProviderIP(address net.IP) bool {
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() {
-		return true
-	}
-	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "2001:db8::/32", "fc00::/7", "fe80::/10"} {
-		_, block, _ := net.ParseCIDR(raw)
-		if block.Contains(address) {
-			return true
-		}
-	}
-	return false
 }
 
 func firstNonEmpty(values ...string) string {

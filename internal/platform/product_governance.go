@@ -245,8 +245,9 @@ func (s *Service) ReconcileProductVersion(ctx context.Context, productID, versio
 	if err != nil {
 		return model.ProductVersion{}, err
 	}
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.drift.checked", TargetType: "product_version", TargetID: updated.ID, Current: map[string]any{"product_version": updated.Version, "manifest_hash": updated.ManifestHash, "drift_status": updated.DriftStatus, "finding_count": len(updated.DriftDetails)}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.drift.checked", TargetType: "product_version", TargetID: updated.ID, Current: map[string]any{"product_version": updated.Version, "manifest_hash": updated.ManifestHash, "drift_status": updated.DriftStatus, "finding_count": len(updated.DriftDetails)}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ProductVersion{}, err
+	}
 	return updated, nil
 }
 
@@ -306,8 +307,9 @@ func (s *Service) PromoteProductVersion(ctx context.Context, productID, versionI
 	if err != nil {
 		return model.ProductVersion{}, err
 	}
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.promotion." + input.Action, TargetType: "product_version", TargetID: updated.ID, Prior: map[string]any{"promotion_state": prior}, Current: map[string]any{"product_version": updated.Version, "promotion_state": updated.PromotionState, "release_stage": updated.ReleaseStage, "is_latest": updated.IsLatest, "is_lts": updated.IsLTS, "note": input.Note}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.promotion." + input.Action, TargetType: "product_version", TargetID: updated.ID, Prior: map[string]any{"promotion_state": prior}, Current: map[string]any{"product_version": updated.Version, "promotion_state": updated.PromotionState, "release_stage": updated.ReleaseStage, "is_latest": updated.IsLatest, "is_lts": updated.IsLTS, "note": input.Note}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ProductVersion{}, err
+	}
 	return updated, nil
 }
 
@@ -349,8 +351,9 @@ func (s *Service) SaveProductInstallation(ctx context.Context, productID string,
 	if err != nil {
 		return model.ProductInstallation{}, err
 	}
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.installation.saved", TargetType: "product_installation", TargetID: value.ID, Current: map[string]any{"customer_account_id": value.CustomerAccountID, "environment_id": value.EnvironmentID, "external_id": value.ExternalID, "state": value.State}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.installation.saved", TargetType: "product_installation", TargetID: value.ID, Current: map[string]any{"customer_account_id": value.CustomerAccountID, "environment_id": value.EnvironmentID, "external_id": value.ExternalID, "state": value.State}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ProductInstallation{}, err
+	}
 	return value, nil
 }
 
@@ -440,17 +443,24 @@ func (s *Service) SaveScopedProductVersionPin(ctx context.Context, productID str
 	if err != nil {
 		return model.ProductVersionPin{}, err
 	}
-	value, err := s.store.SaveProductVersionPin(ctx, model.ProductVersionPin{ID: id, OrganisationID: product.OrganisationID, ProductID: productID, Scope: input.Scope, ScopeID: input.ScopeID, CustomerAccountID: input.CustomerAccountID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: version.ID, ProductVersion: version.Version, Reason: input.Reason}, input.Revision)
+	action := "created"
+	pinID := id
+	if prior.ID != "" {
+		action = "updated"
+		pinID = prior.ID
+	}
+	historyID, err := randomUUID()
 	if err != nil {
 		return model.ProductVersionPin{}, err
 	}
-	action := "created"
-	if prior.ID != "" {
-		action = "updated"
+	pin := model.ProductVersionPin{ID: id, OrganisationID: product.OrganisationID, ProductID: productID, Scope: input.Scope, ScopeID: input.ScopeID, CustomerAccountID: input.CustomerAccountID, EnvironmentID: input.EnvironmentID, InstallationID: input.InstallationID, ProductVersionID: version.ID, ProductVersion: version.Version, Reason: input.Reason}
+	history := model.ProductVersionPinHistory{ID: historyID, OrganisationID: product.OrganisationID, ProductID: productID, PinID: pinID, Scope: input.Scope, ScopeID: input.ScopeID, PriorVersion: prior.ProductVersion, ProductVersion: version.Version, Action: action, Reason: input.Reason, ActorID: actor.ID, CreatedAt: s.now()}
+	value, err := s.store.SaveProductVersionPin(ctx, pin, input.Revision, history)
+	if err != nil {
+		return model.ProductVersionPin{}, err
 	}
-	historyID, _ := randomUUID()
-	_ = s.store.AppendProductVersionPinHistory(ctx, model.ProductVersionPinHistory{ID: historyID, OrganisationID: value.OrganisationID, ProductID: productID, PinID: value.ID, Scope: value.Scope, ScopeID: value.ScopeID, PriorVersion: prior.ProductVersion, ProductVersion: value.ProductVersion, Action: action, Reason: value.Reason, ActorID: actor.ID, CreatedAt: s.now()})
-	_, _ = s.store.BumpProductCatalogRevision(ctx, productID)
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.pinned", TargetType: "product_version_pin", TargetID: value.ID, Prior: map[string]any{"product_version": prior.ProductVersion}, Current: map[string]any{"scope": value.Scope, "scope_id": value.ScopeID, "customer_account_id": value.CustomerAccountID, "product_version": value.ProductVersion, "reason": value.Reason}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "product.version.pinned", TargetType: "product_version_pin", TargetID: value.ID, Prior: map[string]any{"product_version": prior.ProductVersion}, Current: map[string]any{"scope": value.Scope, "scope_id": value.ScopeID, "customer_account_id": value.CustomerAccountID, "product_version": value.ProductVersion, "reason": value.Reason}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ProductVersionPin{}, err
+	}
 	return value, nil
 }

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 )
 
@@ -159,19 +160,6 @@ func allow(config providerConfig, principal Principal) bool {
 	return true
 }
 
-func unsafeIP(address net.IP) bool {
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsMulticast() {
-		return true
-	}
-	for _, raw := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "2001:db8::/32", "fc00::/7", "fe80::/10"} {
-		_, block, _ := net.ParseCIDR(raw)
-		if block.Contains(address) {
-			return true
-		}
-	}
-	return false
-}
-
 func (r *Runtime) destination(ctx context.Context, provider model.Provider, path string) (*url.URL, Doer, error) {
 	base, err := url.Parse(provider.BaseURL)
 	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.Port() != "" || !strings.HasPrefix(path, "/") {
@@ -182,7 +170,7 @@ func (r *Runtime) destination(ctx context.Context, provider model.Provider, path
 		return nil, nil, ErrUnsafeDestination
 	}
 	for _, address := range addresses {
-		if unsafeIP(address) {
+		if netpolicy.UnsafeIP(address) {
 			return nil, nil, ErrUnsafeDestination
 		}
 	}
@@ -297,7 +285,9 @@ func (r *Runtime) CreateProject(ctx context.Context, productID, providerID strin
 	}
 	value, err := r.store.CreateProject(ctx, model.Project{ID: randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, EnvironmentID: request.EnvironmentID, ProviderID: providerID, OwnerType: "user", OwnerID: principal.Subject, ExternalID: response.ProjectID, IdempotencyKey: request.IdempotencyKey, State: response.State, ExpiresAt: response.ExpiresAt})
 	if err == nil {
-		_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "project.created", TargetType: "project", TargetID: value.ID, Current: map[string]any{"provider_id": providerID, "state": value.State}, RequestID: principal.RequestID, CreatedAt: r.now()})
+		if err := r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "project.created", TargetType: "project", TargetID: value.ID, Current: map[string]any{"provider_id": providerID, "state": value.State}, RequestID: principal.RequestID, CreatedAt: r.now()}); err != nil {
+			return model.Project{}, err
+		}
 	}
 	return value, err
 }
@@ -343,7 +333,9 @@ func (r *Runtime) IssueCredential(ctx context.Context, productID, providerID str
 	if err != nil {
 		return CredentialResult{}, err
 	}
-	_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "credential.issued", TargetType: "credential_lease", TargetID: lease.ID, Current: map[string]any{"provider_id": providerID, "scopes": lease.Scopes, "expires_at": lease.ExpiresAt}, RequestID: principal.RequestID, CreatedAt: r.now()})
+	if err := r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "credential.issued", TargetType: "credential_lease", TargetID: lease.ID, Current: map[string]any{"provider_id": providerID, "scopes": lease.Scopes, "expires_at": lease.ExpiresAt}, RequestID: principal.RequestID, CreatedAt: r.now()}); err != nil {
+		return CredentialResult{}, err
+	}
 	return CredentialResult{Lease: lease, Credential: response.Credential}, nil
 }
 
@@ -369,7 +361,9 @@ func (r *Runtime) RevokeCredential(ctx context.Context, productID, leaseID strin
 	}
 	updated, err := r.store.RevokeCredentialLease(ctx, productID, leaseID, r.now())
 	if err == nil {
-		_ = r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "credential.revoked", TargetType: "credential_lease", TargetID: leaseID, RequestID: principal.RequestID, CreatedAt: r.now()})
+		if err := r.store.AppendAudit(ctx, model.AuditEvent{ID: "audit_" + randomUUID(), OrganisationID: provider.OrganisationID, ProductID: productID, ActorID: principal.Subject, Action: "credential.revoked", TargetType: "credential_lease", TargetID: leaseID, RequestID: principal.RequestID, CreatedAt: r.now()}); err != nil {
+			return model.CredentialLease{}, err
+		}
 	}
 	return updated, err
 }

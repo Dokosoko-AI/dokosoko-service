@@ -137,7 +137,9 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 	if err != nil {
 		return model.AIProviderConnection{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "ai.provider.saved", TargetType: "ai_provider_connection", TargetID: value.ID, Current: map[string]any{"provider": value.Provider, "managed_by": value.ManagedBy, "enabled": value.Enabled, "is_backup": value.IsBackup, "backup_models": backupModels, "credential_rotated": input.Credential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.DeploymentID, ActorID: actor.ID, Action: "ai.provider.saved", TargetType: "ai_provider_connection", TargetID: value.ID, Current: map[string]any{"provider": value.Provider, "managed_by": value.ManagedBy, "enabled": value.Enabled, "is_backup": value.IsBackup, "backup_models": backupModels, "credential_rotated": input.Credential != ""}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.AIProviderConnection{}, err
+	}
 	return value, nil
 }
 
@@ -202,7 +204,9 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 	if err != nil {
 		return model.AIWorkloadProfile{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "ai.workload.saved", TargetType: "ai_workload_profile", TargetID: value.ID, Current: map[string]any{"workload": value.Workload, "provider_connection_id": value.ProviderConnectionID, "model": value.Model, "enabled": value.Enabled, "daily_token_budget": value.DailyTokenBudget}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "ai.workload.saved", TargetType: "ai_workload_profile", TargetID: value.ID, Current: map[string]any{"workload": value.Workload, "provider_connection_id": value.ProviderConnectionID, "model": value.Model, "enabled": value.Enabled, "daily_token_budget": value.DailyTokenBudget}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.AIWorkloadProfile{}, err
+	}
 	return value, nil
 }
 
@@ -344,7 +348,9 @@ func (s *Service) TestAIProviderConnection(ctx context.Context, deploymentID, co
 	if saveErr != nil {
 		return model.AIProviderConnection{}, saveErr
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "ai.provider.tested", TargetType: "ai_provider_connection", TargetID: connection.ID, Current: map[string]any{"provider": connection.Provider, "outcome": map[bool]string{true: "failed", false: "succeeded"}[testErr != nil], "error_code": connection.LastErrorCode}, RequestID: actor.RequestID, CreatedAt: now})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "ai.provider.tested", TargetType: "ai_provider_connection", TargetID: connection.ID, Current: map[string]any{"provider": connection.Provider, "outcome": map[bool]string{true: "failed", false: "succeeded"}[testErr != nil], "error_code": connection.LastErrorCode}, RequestID: actor.RequestID, CreatedAt: now}); err != nil {
+		return model.AIProviderConnection{}, err
+	}
 	if testErr != nil {
 		return updated, testErr
 	}

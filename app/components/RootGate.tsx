@@ -4,6 +4,7 @@ import { Check, Copy, Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck, TriangleA
 import { QRCodeSVG } from "qrcode.react";
 import { FormEvent, useEffect, useState } from "react";
 import { APIDeployment, APIError, APIOrganisation, APIUser, SetupEnrollment, api } from "../lib/api";
+import type { ConsoleFixtures } from "../dev/console-fixtures";
 import { Button } from "./core/control";
 import { ConsoleApp } from "./ConsoleApp";
 
@@ -16,6 +17,8 @@ function errorMessage(error: unknown): string {
 
 export function RootGate() {
   const [gate, setGate] = useState<Gate>("loading");
+  const [consoleMode, setConsoleMode] = useState<"live" | "fixtures">("live");
+  const [consoleFixtures, setConsoleFixtures] = useState<ConsoleFixtures | null>(null);
   const [user, setUser] = useState<APIUser | null>(null);
   const [deployment, setDeployment] = useState<APIDeployment | null>(null);
   const [onboardingOrganisation, setOnboardingOrganisation] = useState<APIOrganisation | null>(null);
@@ -26,11 +29,20 @@ export function RootGate() {
       process.env.NODE_ENV === "development" &&
       new URLSearchParams(window.location.search).get("preview") === "fixtures"
     ) {
-      // Fixture mode is URL-driven browser state. Resolve it after hydration so
-      // the server and first client render share the same safe loading shell.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setGate("console");
-      return;
+      // Fixture mode is URL-driven browser state. Load its data only in a
+      // development build so production bundles contain no sample tenant.
+      let cancelled = false;
+      import("../dev/console-fixtures").then(({ consoleFixtures: fixtures }) => {
+        if (cancelled) return;
+        setConsoleFixtures(fixtures);
+        setConsoleMode("fixtures");
+        setGate("console");
+      }).catch((error) => {
+        if (cancelled) return;
+        setProblem(errorMessage(error));
+        setGate("error");
+      });
+      return () => { cancelled = true; };
     }
 
     let cancelled = false;
@@ -46,18 +58,19 @@ export function RootGate() {
           await openWorkspace(session.user);
         }
       } catch (error) {
-        if (!cancelled) setGate(error instanceof APIError && error.status === 401 ? "login" : "error");
+        if (!cancelled) {
+          if (error instanceof APIError && error.status === 401) {
+            setGate("login");
+          } else {
+            setProblem(errorMessage(error));
+            setGate("error");
+          }
+        }
       }
     }).catch((error) => {
-      // A standalone static preview has no service API and intentionally displays
-      // the fixture console. A responding, misconfigured service gets an error gate.
       if (!cancelled) {
-        if (error instanceof APIError) {
-          setProblem(error.message);
-          setGate("error");
-        } else {
-          setGate("console");
-        }
+        setProblem(errorMessage(error));
+        setGate("error");
       }
     });
     return () => { cancelled = true; };
@@ -102,7 +115,7 @@ export function RootGate() {
   if (gate === "login") return <LoginScreen onComplete={openWorkspace} />;
   if (gate === "onboarding") return <WorkspaceSetup existingOrganisation={onboardingOrganisation} onComplete={(value) => { setDeployment(value); setGate("console"); }} />;
   if (gate === "error") return <AuthShell icon={<TriangleAlert />} title="Deployment needs attention" description={problem || "Authentication is not configured. Check the setup token, master key, database, and public URL."} />;
-  return <ConsoleApp key={deployment?.id ?? "fixture-preview"} currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
+  return <ConsoleApp key={deployment?.id ?? "fixture-preview"} mode={consoleMode} fixtures={consoleFixtures} currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
 }
 
 function slugify(value: string): string {

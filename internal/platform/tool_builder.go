@@ -735,8 +735,8 @@ func toolBuilderAuthClass(value string) string {
 	return "invalid"
 }
 
-func (s *Service) appendToolBuilderAudit(ctx context.Context, product model.Product, actor Actor, action string, metadata map[string]any) {
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: action, TargetType: "tool_builder", TargetID: product.ID, Current: metadata, RequestID: actor.RequestID, CreatedAt: s.now()})
+func (s *Service) appendToolBuilderAudit(ctx context.Context, product model.Product, actor Actor, action string, metadata map[string]any) error {
+	return s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: action, TargetType: "tool_builder", TargetID: product.ID, Current: metadata, RequestID: actor.RequestID, CreatedAt: s.now()})
 }
 
 // AuditToolDraftValidation records only counts and non-secret classifications;
@@ -746,8 +746,7 @@ func (s *Service) AuditToolDraftValidation(ctx context.Context, productID string
 	if err != nil {
 		return err
 	}
-	s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.validated", map[string]any{"valid": result.Valid, "finding_count": len(result.Findings), "method": toolBuilderMethodClass(result.NormalizedDraft.HTTPMethod), "authentication": toolBuilderAuthClass(result.NormalizedDraft.UpstreamAuth.Type)})
-	return nil
+	return s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.validated", map[string]any{"valid": result.Valid, "finding_count": len(result.Findings), "method": toolBuilderMethodClass(result.NormalizedDraft.HTTPMethod), "authentication": toolBuilderAuthClass(result.NormalizedDraft.UpstreamAuth.Type)})
 }
 
 func (s *Service) toolDraftBase(ctx context.Context, productID, toolID string, revision int64) (model.Tool, bool, error) {
@@ -993,7 +992,9 @@ func (s *Service) ProposeToolDraft(ctx context.Context, productID string, input 
 		Valid:           validation.Valid,
 		GeneratedAt:     s.now(),
 	}
-	s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.proposed", map[string]any{"valid": proposal.Valid, "finding_count": len(proposal.Findings), "change_count": len(proposal.Changes), "conversation_message_count": len(history), "method": toolBuilderMethodClass(proposal.Draft.HTTPMethod), "authentication": toolBuilderAuthClass(proposal.Draft.UpstreamAuth.Type)})
+	if err := s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.proposed", map[string]any{"valid": proposal.Valid, "finding_count": len(proposal.Findings), "change_count": len(proposal.Changes), "conversation_message_count": len(history), "method": toolBuilderMethodClass(proposal.Draft.HTTPMethod), "authentication": toolBuilderAuthClass(proposal.Draft.UpstreamAuth.Type)}); err != nil {
+		return ToolDraftProposal{}, err
+	}
 	return proposal, nil
 }
 
@@ -1058,7 +1059,9 @@ func (s *Service) AnalyseToolDraft(ctx context.Context, productID string, input 
 	}
 	sortToolBuilderFindings(findings)
 	analysis := ToolDraftAnalysis{Summary: summary, Reply: summary, Draft: validation.NormalizedDraft, Valid: validation.Valid, NetworkCallPerformed: false, Findings: findings, GeneratedAt: s.now()}
-	s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.analysed", map[string]any{"valid": analysis.Valid, "finding_count": len(analysis.Findings), "ai_available": aiErr == nil, "method": toolBuilderMethodClass(analysis.Draft.HTTPMethod), "authentication": toolBuilderAuthClass(analysis.Draft.UpstreamAuth.Type)})
+	if err := s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.analysed", map[string]any{"valid": analysis.Valid, "finding_count": len(analysis.Findings), "ai_available": aiErr == nil, "method": toolBuilderMethodClass(analysis.Draft.HTTPMethod), "authentication": toolBuilderAuthClass(analysis.Draft.UpstreamAuth.Type)}); err != nil {
+		return ToolDraftAnalysis{}, err
+	}
 	return analysis, nil
 }
 
@@ -2318,6 +2321,8 @@ func (s *Service) ImportToolDraft(ctx context.Context, productID string, input T
 		result.Candidates = append(result.Candidates, ToolDraftImportCandidate{Summary: "Imported a candidate HTTP operation for review.", Draft: validation.NormalizedDraft, Changes: toolBuilderChanges(base, validation.NormalizedDraft, "Updated from imported contract metadata."), Findings: validation.Findings, Valid: validation.Valid})
 	}
 	sortToolBuilderFindings(result.Findings)
-	s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.imported", map[string]any{"format": kind, "candidate_count": len(result.Candidates), "credential_material_detected": credentialDetected})
+	if err := s.appendToolBuilderAudit(ctx, product, actor, "tool_builder.imported", map[string]any{"format": kind, "candidate_count": len(result.Candidates), "credential_material_detected": credentialDetected}); err != nil {
+		return ToolDraftImportResult{}, err
+	}
 	return result, nil
 }

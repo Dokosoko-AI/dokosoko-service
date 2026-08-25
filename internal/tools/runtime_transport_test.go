@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/netpolicy"
 )
 
 func TestPinnedPerCallTransportCannotRetainIdleConnections(t *testing.T) {
@@ -61,12 +62,12 @@ func TestUpstreamIdempotencyKeyIsStableAndNamespaced(t *testing.T) {
 
 func TestUnsafeIPRejectsIPv6TransitionAndLocalUseRanges(t *testing.T) {
 	for _, raw := range []string{"64:ff9b::c000:201", "64:ff9b:1::c000:201", "fec0::1", "2002:c000:0201::1", "2001::1", "::192.0.2.1"} {
-		if !unsafeIP(net.ParseIP(raw)) {
+		if !netpolicy.UnsafeIP(net.ParseIP(raw)) {
 			t.Fatalf("special IPv6 address %s was accepted", raw)
 		}
 	}
 	for _, raw := range []string{"8.8.8.8", "2606:4700:4700::1111"} {
-		if unsafeIP(net.ParseIP(raw)) {
+		if netpolicy.UnsafeIP(net.ParseIP(raw)) {
 			t.Fatalf("public address %s was rejected", raw)
 		}
 	}
@@ -82,20 +83,20 @@ func TestPerProcessUpstreamLimiterIsBoundedPrunedAndFailClosed(t *testing.T) {
 			t.Fatalf("active window %d was rejected before the cap", index)
 		}
 	}
-	if len(runtime.rates) != maxUpstreamRateWindows {
-		t.Fatalf("rate window map size=%d", len(runtime.rates))
+	if runtime.rateLimiter.Len() != maxUpstreamRateWindows {
+		t.Fatalf("rate window map size=%d", runtime.rateLimiter.Len())
 	}
 	if runtime.allowUpstreamConnection("product", model.Tool{ID: "overflow"}) {
 		t.Fatal("new window was admitted after the per-process cap")
 	}
-	if len(runtime.rates) != maxUpstreamRateWindows {
-		t.Fatalf("failed admission changed map size=%d", len(runtime.rates))
+	if runtime.rateLimiter.Len() != maxUpstreamRateWindows {
+		t.Fatalf("failed admission changed map size=%d", runtime.rateLimiter.Len())
 	}
 	now = now.Add(upstreamConnectionWindow)
 	if !runtime.allowUpstreamConnection("product", model.Tool{ID: "after-expiry"}) {
 		t.Fatal("new window was rejected after expired windows should have been pruned")
 	}
-	if len(runtime.rates) != 1 {
-		t.Fatalf("expired windows were not pruned: size=%d", len(runtime.rates))
+	if runtime.rateLimiter.Len() != 1 {
+		t.Fatalf("expired windows were not pruned: size=%d", runtime.rateLimiter.Len())
 	}
 }

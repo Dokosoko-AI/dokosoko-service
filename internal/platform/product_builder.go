@@ -582,7 +582,9 @@ func (s *Service) BuildProductDefinition(ctx context.Context, productID string, 
 	if err != nil {
 		return model.ProductBuild{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "product.build.generated", TargetType: "product_build", TargetID: build.ID, Current: map[string]any{"analysis_mode": build.AnalysisMode, "input_count": len(inputs), "component_count": len(definition.Components), "unresolved_count": len(unresolved)}, RequestID: actor.RequestID, CreatedAt: now})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "product.build.generated", TargetType: "product_build", TargetID: build.ID, Current: map[string]any{"analysis_mode": build.AnalysisMode, "input_count": len(inputs), "component_count": len(definition.Components), "unresolved_count": len(unresolved)}, RequestID: actor.RequestID, CreatedAt: now}); err != nil {
+		return model.ProductBuild{}, err
+	}
 	return build, nil
 }
 
@@ -627,7 +629,9 @@ func (s *Service) PublishProductDefinition(ctx context.Context, productID, build
 	if _, err := s.store.MarkProductBuildPublished(ctx, productID, buildID); err != nil {
 		return model.ProductDefinition{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: saved.OrganisationID, ProductID: saved.ProductID, ActorID: actor.ID, Action: "product.definition.published", TargetType: "product_definition", TargetID: saved.ID, Current: map[string]any{"revision": saved.Revision, "component_count": len(saved.Components), "profile_count": len(saved.Profiles), "source_build_id": buildID}, RequestID: actor.RequestID, CreatedAt: now})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: saved.OrganisationID, ProductID: saved.ProductID, ActorID: actor.ID, Action: "product.definition.published", TargetType: "product_definition", TargetID: saved.ID, Current: map[string]any{"revision": saved.Revision, "component_count": len(saved.Components), "profile_count": len(saved.Profiles), "source_build_id": buildID}, RequestID: actor.RequestID, CreatedAt: now}); err != nil {
+		return model.ProductDefinition{}, err
+	}
 	return saved, nil
 }
 

@@ -323,7 +323,9 @@ func (s *Service) CreateRuntimeCredentialSet(ctx context.Context, integrationID 
 	if err != nil {
 		return model.RuntimeCredentialSet{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_credential_set.created", TargetType: "runtime_credential_set", TargetID: result.ID, Current: map[string]any{"scope": result.Scope, "owner_integration_id": result.OwnerIntegrationID, "environment_id": result.EnvironmentID, "environment_variable": result.EnvironmentVariable, "authentication_type": result.AuthenticationType, "fingerprint": result.ActiveFingerprint}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_credential_set.created", TargetType: "runtime_credential_set", TargetID: result.ID, Current: map[string]any{"scope": result.Scope, "owner_integration_id": result.OwnerIntegrationID, "environment_id": result.EnvironmentID, "environment_variable": result.EnvironmentVariable, "authentication_type": result.AuthenticationType, "fingerprint": result.ActiveFingerprint}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.RuntimeCredentialSet{}, err
+	}
 	return result, nil
 }
 
@@ -364,7 +366,9 @@ func (s *Service) RotateRuntimeCredential(ctx context.Context, credentialSetID, 
 	if err != nil {
 		return model.RuntimeCredentialSet{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_credential.rotated", TargetType: "runtime_credential_set", TargetID: updated.ID, Prior: map[string]any{"fingerprint": credentialSet.ActiveFingerprint}, Current: map[string]any{"fingerprint": updated.ActiveFingerprint, "affected_connections": s.runtimeCredentialConnectionCount(ctx, deployment.ID, updated.ID)}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_credential.rotated", TargetType: "runtime_credential_set", TargetID: updated.ID, Prior: map[string]any{"fingerprint": credentialSet.ActiveFingerprint}, Current: map[string]any{"fingerprint": updated.ActiveFingerprint, "affected_connections": s.runtimeCredentialConnectionCount(ctx, deployment.ID, updated.ID)}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.RuntimeCredentialSet{}, err
+	}
 	return updated, nil
 }
 
@@ -385,7 +389,9 @@ func (s *Service) RevokeRuntimeCredentialVersion(ctx context.Context, credential
 	if err != nil {
 		return model.RuntimeCredentialSet{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_credential.revoked", TargetType: "runtime_credential_version", TargetID: version.ID, Current: map[string]any{"credential_set_id": credentialSet.ID, "state": version.State, "fingerprint": version.Fingerprint, "credential_present": updated.CredentialPresent}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_credential.revoked", TargetType: "runtime_credential_version", TargetID: version.ID, Current: map[string]any{"credential_set_id": credentialSet.ID, "state": version.State, "fingerprint": version.Fingerprint, "credential_present": updated.CredentialPresent}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.RuntimeCredentialSet{}, err
+	}
 	return updated, nil
 }
 
@@ -508,7 +514,9 @@ func (s *Service) ConfigureRuntimeServiceConnection(ctx context.Context, integra
 	if err != nil {
 		return model.RuntimeServiceConnection{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_service_connection.configured", TargetType: "runtime_service_connection", TargetID: updated.ID, Current: map[string]any{"integration_id": integration.ID, "environment_id": input.EnvironmentID, "base_url": input.BaseURL, "authentication_type": input.AuthenticationType, "credential_set_id": input.CredentialSetID, "connection_revision_id": createdRevision.ID, "connection_revision": createdRevision.Revision, "content_hash": createdRevision.ContentHash}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "runtime_service_connection.configured", TargetType: "runtime_service_connection", TargetID: updated.ID, Current: map[string]any{"integration_id": integration.ID, "environment_id": input.EnvironmentID, "base_url": input.BaseURL, "authentication_type": input.AuthenticationType, "credential_set_id": input.CredentialSetID, "connection_revision_id": createdRevision.ID, "connection_revision": createdRevision.Revision, "content_hash": createdRevision.ContentHash}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.RuntimeServiceConnection{}, err
+	}
 	return updated, nil
 }
 

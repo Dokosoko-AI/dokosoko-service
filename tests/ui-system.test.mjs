@@ -5,6 +5,36 @@ import test from "node:test";
 const appFile = (path) => new URL(`../${path}`, import.meta.url);
 const repositoryFile = (path) => new URL(`../../${path}`, import.meta.url);
 
+async function readModuleSurface(paths) {
+  return (await Promise.all(paths.map((path) => readFile(appFile(path), "utf8")))).join("\n");
+}
+
+async function consoleSource() {
+  return readModuleSurface([
+    "app/components/ConsoleApp.tsx",
+    "app/components/console/integration-views.tsx",
+    "app/components/console/agent-access-views.tsx",
+    "app/components/console/tool-views.tsx",
+    "app/components/console/catalog-settings-views.tsx",
+    "app/components/console/shared.tsx",
+    "app/lib/console-domain.ts",
+  ]);
+}
+
+async function clientSource() {
+  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts"]);
+}
+
+async function stylesSource() {
+  const paths = ["app/globals.css"];
+  try {
+    for (const name of (await readdir(appFile("app/styles/"))).filter((value) => value.endsWith(".css")).sort()) paths.push(`app/styles/${name}`);
+  } catch {
+    // The styles directory is optional for older source layouts.
+  }
+  return readModuleSurface(paths);
+}
+
 test("keeps the complete source inventory inside the owned core component layer", async () => {
   const importedDirectory = appFile("app/components/core/");
   const componentFiles = (entries) => entries.filter((name) => name.endsWith(".tsx")).sort();
@@ -32,9 +62,9 @@ test("keeps the complete source inventory inside the owned core component layer"
 });
 
 test("uses one interface contract for headers, tabs, sections, panels, filters, and rows", async () => {
-  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const source = await consoleSource();
   const layout = await readFile(appFile("app/components/core/layout.tsx"), "utf8");
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const styles = await stylesSource();
   const routes = await readFile(appFile("app/lib/console-routes.ts"), "utf8");
 
   for (const primitive of ["ViewStack", "PageHeader", "PageTabs", "SectionHeader", "PanelHeader", "SegmentedControl", "DataTable", "DataTableHeader", "DataTableRow", "DataTableEmpty"]) {
@@ -57,9 +87,9 @@ test("uses one interface contract for headers, tabs, sections, panels, filters, 
 test("maps the owned typography and Figma semantic theme into one UI contract", async () => {
   const figmaTheme = await readFile(repositoryFile("New Figma Designs - DokoSoko Control Plane UI/src/styles/theme.css"), "utf8");
   const layout = await readFile(appFile("app/layout.tsx"), "utf8");
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const styles = await stylesSource();
   const themeToggle = await readFile(appFile("app/components/ThemeToggle.tsx"), "utf8");
-  const consoleApp = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const consoleApp = await consoleSource();
 
   assert.match(figmaTheme, /--primary:\s*#4f46e5/);
   assert.match(layout, /Geist, JetBrains_Mono/);
@@ -97,8 +127,8 @@ test("maps the owned typography and Figma semantic theme into one UI contract", 
 });
 
 test("keeps desktop workspaces focused without constraining builders", async () => {
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
-  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const styles = await stylesSource();
+  const source = await consoleSource();
 
   assert.match(styles, /--page-gutter:\s*clamp\(1rem, 2vw, 2rem\)/);
   assert.match(styles, /--page-block:\s*clamp\(1\.5rem, 2vw, 2rem\)/);
@@ -119,8 +149,8 @@ test("keeps desktop workspaces focused without constraining builders", async () 
 });
 
 test("keeps the Recipes authoring workflow inside the same global route stack", async () => {
-  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const source = await consoleSource();
+  const styles = await stylesSource();
 
   assert.doesNotMatch(source, /workflow-frame|recipe-workspace/);
   assert.match(source, /className="recipe-library-row"/);
@@ -134,7 +164,7 @@ test("keeps the Recipes authoring workflow inside the same global route stack", 
 });
 
 test("keeps API documentation setup short without bypassing reviewed evidence", async () => {
-  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const source = await consoleSource();
   const guide = await readFile(appFile("app/components/integrations/IntegrationAgentGuide.tsx"), "utf8");
 
   assert.match(source, /sourcePublicationManifestEntry[\s\S]*source_publication_id:[\s\S]*content_hash:/);
@@ -151,7 +181,7 @@ test("keeps API documentation setup short without bypassing reviewed evidence", 
 });
 
 test("limits typography to the owned six-step scale, line heights, and four weights", async () => {
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const styles = await stylesSource();
   const tokenBlock = styles.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
 
   for (const [token, value] of [
@@ -171,7 +201,7 @@ test("limits typography to the owned six-step scale, line heights, and four weig
 });
 
 test("maps dashboard, RootGate, and OIDC typography onto semantic roles", async () => {
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const styles = await stylesSource();
   const layout = await readFile(appFile("app/components/core/layout.tsx"), "utf8");
   const rootGate = await readFile(appFile("app/components/RootGate.tsx"), "utf8");
   const identitySetup = await readFile(appFile("app/components/OIDCIdentitySetup.tsx"), "utf8");
@@ -227,10 +257,10 @@ test("maps dashboard, RootGate, and OIDC typography onto semantic roles", async 
 });
 
 test("keeps interactive controls semantic inside shared data tables", async () => {
-  const source = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const source = await consoleSource();
   const layout = await readFile(appFile("app/components/core/layout.tsx"), "utf8");
   const table = await readFile(appFile("app/components/core/table.tsx"), "utf8");
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const styles = await stylesSource();
 
   assert.match(layout, /role="table"/);
   assert.match(layout, /role="row"/);
@@ -257,7 +287,7 @@ test("keeps interactive controls semantic inside shared data tables", async () =
 });
 
 test("keeps application colors inside the semantic light and dark token schemes", async () => {
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const styles = await stylesSource();
   const rootMatch = styles.match(/:root\s*\{([\s\S]*?)\n\}/);
   const darkMatch = styles.match(/html\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/);
   assert.ok(rootMatch && darkMatch);
@@ -283,17 +313,17 @@ test("keeps application colors inside the semantic light and dark token schemes"
 });
 
 test("keeps the experimental widget implementation behind the deployment capability", async () => {
-  const consoleApp = await readFile(appFile("app/components/ConsoleApp.tsx"), "utf8");
+  const consoleApp = await consoleSource();
   const launcher = await readFile(appFile("app/components/WidgetPreviewLauncher.tsx"), "utf8");
   const markdown = await readFile(appFile("app/components/MarkdownMessage.tsx"), "utf8");
   const packageJSON = JSON.parse(await readFile(appFile("package.json"), "utf8"));
-  const client = await readFile(appFile("app/lib/api.ts"), "utf8");
-  const styles = await readFile(appFile("app/globals.css"), "utf8");
+  const client = await clientSource();
+  const styles = await stylesSource();
   const controlPlane = await readFile(appFile("api/openapi.yaml"), "utf8");
   const runtime = await readFile(appFile("api/widget-runtime.openapi.yaml"), "utf8");
 
   assert.match(consoleApp, /import \{ WidgetPreviewLauncher \}/);
-  assert.match(consoleApp, /const widgetsEnabled = Boolean\(currentDeployment\?\.features\?\.widgets\)/);
+  assert.match(consoleApp, /const widgetsEnabled = Boolean\(currentDeployment\.features\?\.widgets\)/);
   assert.match(consoleApp, /widgetsEnabled \? api\.widgets\(\) : Promise\.resolve/);
   assert.match(consoleApp, /\{widgetsEnabled && <WidgetPreviewLauncher widgets=\{widgets\}/);
   assert.match(consoleApp, /\{widgetsEnabled && <section className="section-block widget-channel-card"/);

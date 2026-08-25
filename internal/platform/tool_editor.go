@@ -481,7 +481,9 @@ func (s *Service) UpdateTool(ctx context.Context, productID, toolID string, inpu
 		}
 		return model.Tool{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "tool.updated", TargetType: "tool", TargetID: updated.ID, Prior: map[string]any{"revision": current.Revision}, Current: map[string]any{"revision": updated.Revision, "state": updated.State, "required_grants": input.AuthorizationPolicy}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "tool.updated", TargetType: "tool", TargetID: updated.ID, Prior: map[string]any{"revision": current.Revision}, Current: map[string]any{"revision": updated.Revision, "state": updated.State, "required_grants": input.AuthorizationPolicy}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Tool{}, err
+	}
 	return updated, nil
 }
 
@@ -545,7 +547,9 @@ func (s *Service) CloneTool(ctx context.Context, productID, toolID string, input
 	if err != nil {
 		return model.Tool{}, s.cleanupFailedToolCredential(ctx, copy.OrganisationID, copy.CredentialID, err)
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: created.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "tool.cloned", TargetType: "tool", TargetID: created.ID, Current: map[string]any{"source_tool_id": current.ID, "source_revision": current.Revision, "source_state": current.State, "name": created.Namespace + "." + created.Name, "credential_supplied": copy.CredentialID != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: created.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "tool.cloned", TargetType: "tool", TargetID: created.ID, Current: map[string]any{"source_tool_id": current.ID, "source_revision": current.Revision, "source_state": current.State, "name": created.Namespace + "." + created.Name, "credential_supplied": copy.CredentialID != ""}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Tool{}, err
+	}
 	return created, nil
 }
 
@@ -565,7 +569,9 @@ func (s *Service) RetireTool(ctx context.Context, productID, toolID string, expe
 	if err != nil {
 		return model.Tool{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "tool.retired", TargetType: "tool", TargetID: updated.ID, Prior: map[string]any{"state": current.State}, Current: map[string]any{"state": updated.State, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "tool.retired", TargetType: "tool", TargetID: updated.ID, Prior: map[string]any{"state": current.State}, Current: map[string]any{"state": updated.State, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Tool{}, err
+	}
 	return updated, nil
 }
 

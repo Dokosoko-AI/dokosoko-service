@@ -1,10 +1,38 @@
 package main
 
 import (
+	"context"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
+
+type blockingListener struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (l *blockingListener) Accept() (net.Conn, error) { <-l.closed; return nil, net.ErrClosed }
+func (l *blockingListener) Close() error              { l.once.Do(func() { close(l.closed) }); return nil }
+func (l *blockingListener) Addr() net.Addr            { return testAddress("test") }
+
+type testAddress string
+
+func (a testAddress) Network() string { return string(a) }
+func (a testAddress) String() string  { return string(a) }
+
+func TestServeShutsDownAfterCancellation(t *testing.T) {
+	listener := &blockingListener{closed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })}
+	if err := serve(ctx, server, listener); err != nil {
+		t.Fatalf("serve returned an error during graceful shutdown: %v", err)
+	}
+}
 
 func TestSourceUploadConfigDefaultsToDisabled(t *testing.T) {
 	t.Setenv("DOKOSOKO_UPLOAD_DIR", "")

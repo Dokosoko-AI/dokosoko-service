@@ -52,7 +52,9 @@ func (s *Service) CreateDeployment(ctx context.Context, input DeploymentInput, a
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: value.ID, ActorID: actor.ID, Action: "deployment.created", TargetType: "deployment", TargetID: value.ID, Current: map[string]any{"name": value.Name, "slug": value.Slug}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: value.ID, ActorID: actor.ID, Action: "deployment.created", TargetType: "deployment", TargetID: value.ID, Current: map[string]any{"name": value.Name, "slug": value.Slug}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Deployment{}, err
+	}
 	return value, nil
 }
 
@@ -74,7 +76,9 @@ func (s *Service) UpdateDeployment(ctx context.Context, input DeploymentInput, a
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ID, ActorID: actor.ID, Action: "deployment.updated", TargetType: "deployment", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "slug": updated.Slug, "default_release_policy": updated.DefaultReleasePolicy}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ID, ActorID: actor.ID, Action: "deployment.updated", TargetType: "deployment", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "slug": updated.Slug, "default_release_policy": updated.DefaultReleasePolicy}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Deployment{}, err
+	}
 	return updated, nil
 }
 
@@ -149,7 +153,9 @@ func (s *Service) CreateIntegration(ctx context.Context, input IntegrationInput,
 	if err != nil {
 		return model.Integration{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.created", TargetType: "integration", TargetID: value.ID, Current: map[string]any{"family_key": value.FamilyKey, "version_key": value.VersionKey, "visibility": value.Visibility, "lifecycle": value.Lifecycle}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.created", TargetType: "integration", TargetID: value.ID, Current: map[string]any{"family_key": value.FamilyKey, "version_key": value.VersionKey, "visibility": value.Visibility, "lifecycle": value.Lifecycle}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Integration{}, err
+	}
 	return value, nil
 }
 
@@ -186,7 +192,9 @@ func (s *Service) UpdateIntegration(ctx context.Context, integrationID string, i
 	if err != nil {
 		return model.Integration{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.updated", TargetType: "integration", TargetID: updated.ID, Current: map[string]any{"family_key": updated.FamilyKey, "version_key": updated.VersionKey, "visibility": updated.Visibility, "lifecycle": updated.Lifecycle, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.updated", TargetType: "integration", TargetID: updated.ID, Current: map[string]any{"family_key": updated.FamilyKey, "version_key": updated.VersionKey, "visibility": updated.Visibility, "lifecycle": updated.Lifecycle, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Integration{}, err
+	}
 	return updated, nil
 }
 
@@ -218,7 +226,9 @@ func (s *Service) SetIntegrationAccessConnections(ctx context.Context, integrati
 	if err != nil {
 		return model.Integration{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.access_connections.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"access_connection_ids": updated.AccessConnections}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.access_connections.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"access_connection_ids": updated.AccessConnections}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Integration{}, err
+	}
 	return updated, nil
 }
 
@@ -247,7 +257,9 @@ func (s *Service) SetIntegrationSupportRoute(ctx context.Context, integrationID,
 	if err != nil {
 		return model.Integration{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.support_route.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"support_route_id": updated.SupportRouteID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.support_route.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"support_route_id": updated.SupportRouteID}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.Integration{}, err
+	}
 	return updated, nil
 }
 
@@ -394,7 +406,9 @@ func (s *Service) CreateResourceSet(ctx context.Context, input ResourceSetInput,
 	if err != nil {
 		return model.ResourceSet{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "resource_set.created", TargetType: input.Kind + "_set", TargetID: value.ID, Current: map[string]any{"name": value.Name, "revision": value.Revision, "content_hash": value.Latest.ContentHash}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "resource_set.created", TargetType: input.Kind + "_set", TargetID: value.ID, Current: map[string]any{"name": value.Name, "revision": value.Revision, "content_hash": value.Latest.ContentHash}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ResourceSet{}, err
+	}
 	return value, nil
 }
 
@@ -430,7 +444,9 @@ func (s *Service) UpdateResourceSet(ctx context.Context, setID string, input Res
 	if err != nil {
 		return model.ResourceSet{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "resource_set.updated", TargetType: input.Kind + "_set", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "revision": updated.Revision, "content_hash": updated.Latest.ContentHash, "affected_integrations": updated.UsedBy}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "resource_set.updated", TargetType: input.Kind + "_set", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "revision": updated.Revision, "content_hash": updated.Latest.ContentHash, "affected_integrations": updated.UsedBy}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.ResourceSet{}, err
+	}
 	return updated, nil
 }
 
@@ -468,7 +484,9 @@ func (s *Service) AttachResourceSet(ctx context.Context, integrationID, setID, p
 	if err != nil {
 		return model.IntegrationResourceLink{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.resource_set.attached", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"resource_set_id": setID, "follow_latest": link.FollowLatest, "pinned_revision_id": link.PinnedRevisionID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.resource_set.attached", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"resource_set_id": setID, "follow_latest": link.FollowLatest, "pinned_revision_id": link.PinnedRevisionID}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.IntegrationResourceLink{}, err
+	}
 	return link, nil
 }
 
@@ -480,7 +498,9 @@ func (s *Service) DetachResourceSet(ctx context.Context, integrationID, setID st
 	if err := s.store.DeleteIntegrationResourceLink(ctx, integrationID, setID); err != nil {
 		return err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.resource_set.detached", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"resource_set_id": setID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.resource_set.detached", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"resource_set_id": setID}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1054,6 +1074,8 @@ func (s *Service) PublishIntegration(ctx context.Context, integrationID string, 
 		}
 		return model.IntegrationRevision{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.published", TargetType: "integration_revision", TargetID: revision.ID, Current: map[string]any{"integration_id": integration.ID, "revision": revision.Revision, "manifest_hash": revision.ManifestHash}, RequestID: actor.RequestID, CreatedAt: now})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.published", TargetType: "integration_revision", TargetID: revision.ID, Current: map[string]any{"integration_id": integration.ID, "revision": revision.Revision, "manifest_hash": revision.ManifestHash}, RequestID: actor.RequestID, CreatedAt: now}); err != nil {
+		return model.IntegrationRevision{}, err
+	}
 	return revision, nil
 }

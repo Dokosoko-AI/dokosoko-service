@@ -141,7 +141,9 @@ func (s *Service) CreateBackendConnection(ctx context.Context, input BackendConn
 		}
 		return model.BackendConnection{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: created.OrganisationID, ProductID: created.DeploymentID, ActorID: actor.ID, Action: "backend_connection.created", TargetType: "backend_connection", TargetID: created.ID, Current: map[string]any{"name": created.Name, "base_url": created.BaseURL, "authentication_type": created.AuthenticationType, "state": created.State, "credential_configured": created.CredentialFingerprint != ""}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: created.OrganisationID, ProductID: created.DeploymentID, ActorID: actor.ID, Action: "backend_connection.created", TargetType: "backend_connection", TargetID: created.ID, Current: map[string]any{"name": created.Name, "base_url": created.BaseURL, "authentication_type": created.AuthenticationType, "state": created.State, "credential_configured": created.CredentialFingerprint != ""}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.BackendConnection{}, err
+	}
 	return created, nil
 }
 
@@ -181,7 +183,9 @@ func (s *Service) UpdateBackendConnection(ctx context.Context, id string, input 
 		}
 		return model.BackendConnection{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "backend_connection.updated", TargetType: "backend_connection", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "base_url": updated.BaseURL, "authentication_type": updated.AuthenticationType, "state": updated.State}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "backend_connection.updated", TargetType: "backend_connection", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "base_url": updated.BaseURL, "authentication_type": updated.AuthenticationType, "state": updated.State}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.BackendConnection{}, err
+	}
 	return updated, nil
 }
 
@@ -219,6 +223,8 @@ func (s *Service) RotateBackendConnectionCredential(ctx context.Context, id, cre
 		}
 		return model.BackendConnectionCredential{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "backend_connection.credential.created", TargetType: "backend_connection", TargetID: updated.ID, Current: map[string]any{"credential_fingerprint": updated.CredentialFingerprint}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.DeploymentID, ActorID: actor.ID, Action: "backend_connection.credential.created", TargetType: "backend_connection", TargetID: updated.ID, Current: map[string]any{"credential_fingerprint": updated.CredentialFingerprint}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.BackendConnectionCredential{}, err
+	}
 	return model.BackendConnectionCredential{ID: secret.ID, BackendConnectionID: updated.ID, Fingerprint: updated.CredentialFingerprint, ConnectionRevision: updated.Revision, CreatedAt: secret.CreatedAt}, nil
 }

@@ -164,7 +164,9 @@ func (s *Service) CreatePackageArtifact(ctx context.Context, input PackageArtifa
 	if err != nil {
 		return model.PackageArtifact{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.created", TargetType: "package_artifact", TargetID: value.ID, Current: map[string]any{"ecosystem": value.Ecosystem, "coordinate": value.Coordinate, "visibility": value.Visibility, "delivery": "external_registry"}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.created", TargetType: "package_artifact", TargetID: value.ID, Current: map[string]any{"ecosystem": value.Ecosystem, "coordinate": value.Coordinate, "visibility": value.Visibility, "delivery": "external_registry"}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.PackageArtifact{}, err
+	}
 	return value, nil
 }
 
@@ -195,7 +197,9 @@ func (s *Service) UpdatePackageArtifact(ctx context.Context, artifactID string, 
 	if err != nil {
 		return model.PackageArtifact{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.updated", TargetType: "package_artifact", TargetID: updated.ID, Current: map[string]any{"ecosystem": updated.Ecosystem, "coordinate": updated.Coordinate, "visibility": updated.Visibility, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.updated", TargetType: "package_artifact", TargetID: updated.ID, Current: map[string]any{"ecosystem": updated.Ecosystem, "coordinate": updated.Coordinate, "visibility": updated.Visibility, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.PackageArtifact{}, err
+	}
 	return updated, nil
 }
 
@@ -320,7 +324,9 @@ func (s *Service) PublishPackageArtifact(ctx context.Context, artifactID string,
 	if err != nil {
 		return model.PackageArtifact{}, model.PackageRelease{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_release.published", TargetType: "package_release", TargetID: createdRelease.ID, Current: map[string]any{"package_artifact_id": artifact.ID, "version": createdRelease.Version, "digest": createdRelease.Digest, "content_hash": createdRelease.ContentHash, "delivery": "external_registry"}, RequestID: actor.RequestID, CreatedAt: now})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_release.published", TargetType: "package_release", TargetID: createdRelease.ID, Current: map[string]any{"package_artifact_id": artifact.ID, "version": createdRelease.Version, "digest": createdRelease.Digest, "content_hash": createdRelease.ContentHash, "delivery": "external_registry"}, RequestID: actor.RequestID, CreatedAt: now}); err != nil {
+		return model.PackageArtifact{}, model.PackageRelease{}, err
+	}
 	return updatedArtifact, createdRelease, nil
 }
 
@@ -389,7 +395,9 @@ func (s *Service) DeprecatePackageArtifact(ctx context.Context, artifactID strin
 	if err != nil {
 		return model.PackageArtifact{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.deprecated", TargetType: "package_artifact", TargetID: updated.ID, Current: map[string]any{"replacement_package_artifact_id": updated.ReplacementPackageArtifactID, "sunset_at": updated.SunsetAt, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.deprecated", TargetType: "package_artifact", TargetID: updated.ID, Current: map[string]any{"replacement_package_artifact_id": updated.ReplacementPackageArtifactID, "sunset_at": updated.SunsetAt, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.PackageArtifact{}, err
+	}
 	return updated, nil
 }
 
@@ -420,7 +428,9 @@ func (s *Service) RetirePackageArtifact(ctx context.Context, artifactID string, 
 	if err != nil {
 		return model.PackageArtifact{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.retired", TargetType: "package_artifact", TargetID: updated.ID, Current: map[string]any{"replacement_package_artifact_id": updated.ReplacementPackageArtifactID, "sunset_at": updated.SunsetAt, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "package_artifact.retired", TargetType: "package_artifact", TargetID: updated.ID, Current: map[string]any{"replacement_package_artifact_id": updated.ReplacementPackageArtifactID, "sunset_at": updated.SunsetAt, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.PackageArtifact{}, err
+	}
 	return updated, nil
 }
 
@@ -455,7 +465,9 @@ func (s *Service) BindPackageRelease(ctx context.Context, integrationID, release
 	if err != nil {
 		return model.IntegrationPackageBinding{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.package_release.bound", TargetType: "integration", TargetID: integration.ID, Current: map[string]any{"package_artifact_id": artifact.ID, "package_release_id": release.ID, "version": release.Version}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.package_release.bound", TargetType: "integration", TargetID: integration.ID, Current: map[string]any{"package_artifact_id": artifact.ID, "package_release_id": release.ID, "version": release.Version}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.IntegrationPackageBinding{}, err
+	}
 	return value, nil
 }
 
@@ -470,6 +482,8 @@ func (s *Service) UnbindPackageArtifact(ctx context.Context, integrationID, arti
 	if err := s.store.DeleteIntegrationPackageBinding(ctx, integrationID, artifactID); err != nil {
 		return err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.package_release.unbound", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"package_artifact_id": artifactID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.package_release.unbound", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"package_artifact_id": artifactID}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return err
+	}
 	return nil
 }

@@ -98,7 +98,9 @@ func (s *Service) CreateAccessDefinition(ctx context.Context, input AccessDefini
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_definition.created", TargetType: "access_definition", TargetID: value.ID, Current: map[string]any{"service_key": value.ServiceKey, "instance_cardinality": value.InstanceCardinality, "credential_scope": value.CredentialScope}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_definition.created", TargetType: "access_definition", TargetID: value.ID, Current: map[string]any{"service_key": value.ServiceKey, "instance_cardinality": value.InstanceCardinality, "credential_scope": value.CredentialScope}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.AccessDefinition{}, err
+	}
 	return value, nil
 }
 
@@ -142,7 +144,9 @@ func (s *Service) UpdateAccessDefinition(ctx context.Context, id string, input A
 	if err != nil {
 		return model.AccessDefinition{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_definition.updated", TargetType: "access_definition", TargetID: updated.ID, Prior: map[string]any{"revision": current.Revision, "api_resource_set_id": current.APIResourceSetID}, Current: map[string]any{"revision": updated.Revision, "api_resource_set_id": updated.APIResourceSetID}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_definition.updated", TargetType: "access_definition", TargetID: updated.ID, Prior: map[string]any{"revision": current.Revision, "api_resource_set_id": current.APIResourceSetID}, Current: map[string]any{"revision": updated.Revision, "api_resource_set_id": updated.APIResourceSetID}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.AccessDefinition{}, err
+	}
 	return updated, nil
 }
 
@@ -222,6 +226,8 @@ func (s *Service) CreateAccessConnection(ctx context.Context, input AccessConnec
 	if err != nil {
 		return model.AccessConnection{}, err
 	}
-	_ = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_connection.created", TargetType: "access_connection", TargetID: value.ID, Current: map[string]any{"access_definition_id": definition.ID, "environment_id": value.EnvironmentID, "integration_ids": value.IntegrationIDs}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "access_connection.created", TargetType: "access_connection", TargetID: value.ID, Current: map[string]any{"access_definition_id": definition.ID, "environment_id": value.EnvironmentID, "integration_ids": value.IntegrationIDs}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+		return model.AccessConnection{}, err
+	}
 	return value, nil
 }
