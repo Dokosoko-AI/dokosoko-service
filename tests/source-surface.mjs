@@ -1,0 +1,49 @@
+import { readFile, readdir } from "node:fs/promises";
+
+const repositoryFile = (path) => new URL(`../${path}`, import.meta.url);
+
+async function readModuleSurface(paths) {
+  return (await Promise.all(paths.map((path) => readFile(repositoryFile(path), "utf8")))).join("\n");
+}
+
+export async function consoleSource() {
+  return readModuleSurface([
+    "app/components/console/workspace-navigation.tsx",
+    "app/components/ConsoleApp.tsx",
+    "app/components/console/integration-views.tsx",
+    "app/components/console/integrations/authorization-policy-workspace.tsx",
+    "app/components/console/integrations/tools-workspace.tsx",
+    "app/components/console/integrations/test-workspace.tsx",
+    "app/components/console/integrations/packages-workspace.tsx",
+    "app/components/console/agent-access-views.tsx",
+    "app/components/console/tool-views.tsx",
+    "app/components/console/catalog-settings-views.tsx",
+    "app/components/console/shared.tsx",
+    "app/components/console/use-admin-activity-workspace.ts",
+    "app/components/console/use-ai-workspace.ts",
+    "app/components/console/use-console-navigation.ts",
+    "app/components/console/use-entity-detail.ts",
+    "app/components/console/use-mcp-workspace.ts",
+    "app/components/console/use-product-release-workspace.ts",
+    "app/components/console/use-publication-workflow.ts",
+    "app/components/console/use-source-workflow.ts",
+    "app/components/console/use-widget-workflow.ts",
+    "app/lib/console-domain.ts",
+  ]);
+}
+
+export async function clientSource() {
+  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts"]);
+}
+
+export async function stylesSource() {
+  const paths = ["app/globals.css"];
+  try {
+    for (const name of (await readdir(repositoryFile("app/styles/"))).filter((value) => value.endsWith(".css")).sort()) {
+      paths.push(`app/styles/${name}`);
+    }
+  } catch {
+    // The styles directory is optional for older source layouts.
+  }
+  return readModuleSurface(paths);
+}

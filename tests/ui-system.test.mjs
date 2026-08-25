@@ -2,38 +2,10 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
+import { clientSource, consoleSource, stylesSource } from "./source-surface.mjs";
+
 const appFile = (path) => new URL(`../${path}`, import.meta.url);
 const repositoryFile = (path) => new URL(`../../${path}`, import.meta.url);
-
-async function readModuleSurface(paths) {
-  return (await Promise.all(paths.map((path) => readFile(appFile(path), "utf8")))).join("\n");
-}
-
-async function consoleSource() {
-  return readModuleSurface([
-    "app/components/ConsoleApp.tsx",
-    "app/components/console/integration-views.tsx",
-    "app/components/console/agent-access-views.tsx",
-    "app/components/console/tool-views.tsx",
-    "app/components/console/catalog-settings-views.tsx",
-    "app/components/console/shared.tsx",
-    "app/lib/console-domain.ts",
-  ]);
-}
-
-async function clientSource() {
-  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts"]);
-}
-
-async function stylesSource() {
-  const paths = ["app/globals.css"];
-  try {
-    for (const name of (await readdir(appFile("app/styles/"))).filter((value) => value.endsWith(".css")).sort()) paths.push(`app/styles/${name}`);
-  } catch {
-    // The styles directory is optional for older source layouts.
-  }
-  return readModuleSurface(paths);
-}
 
 test("keeps the complete source inventory inside the owned core component layer", async () => {
   const importedDirectory = appFile("app/components/core/");

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
+import { clientSource, consoleSource, stylesSource } from "./source-surface.mjs";
+
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
@@ -11,37 +13,6 @@ async function render() {
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
-}
-
-async function readModuleSurface(paths) {
-  return (await Promise.all(paths.map((path) => readFile(new URL(`../${path}`, import.meta.url), "utf8")))).join("\n");
-}
-
-async function consoleSource() {
-  return readModuleSurface([
-    "app/components/ConsoleApp.tsx",
-    "app/components/console/integration-views.tsx",
-    "app/components/console/agent-access-views.tsx",
-    "app/components/console/tool-views.tsx",
-    "app/components/console/catalog-settings-views.tsx",
-    "app/components/console/shared.tsx",
-    "app/lib/console-domain.ts",
-  ]);
-}
-
-async function clientSource() {
-  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts"]);
-}
-
-async function stylesSource() {
-  const paths = ["app/globals.css"];
-  const directory = new URL("../app/styles/", import.meta.url);
-  try {
-    for (const name of (await readdir(directory)).filter((value) => value.endsWith(".css")).sort()) paths.push(`app/styles/${name}`);
-  } catch {
-    // The styles directory is optional for older source layouts.
-  }
-  return readModuleSurface(paths);
 }
 
 function componentSource(source, startName, endName) {
@@ -414,8 +385,8 @@ test("keeps reusable tool authoring in the deployment tool builder and detail", 
   assert.match(builder, /onDirtyChange\?\.\(dirty\)/);
   assert.doesNotMatch(builder, /window\.confirm/);
   assert.match(source, /const toolBuilderDirtyRef = useRef\(false\)/);
-  assert.match(source, /function confirmToolBuilderNavigation\(nextPath: string\)/);
-  assert.match(source, /window\.history\.pushState\(null, "", routeURL\(current\.path\)\)/);
+  assert.match(source, /const confirmToolBuilderNavigation = useCallback\(\(nextPath: string\) =>/);
+  assert.match(source, /window\.history\.pushState\(null, "", browserRouteURL\(current\.path\)\)/);
   assert.match(source, /onDirtyChange=\{handleToolBuilderDirtyChange\}/);
   assert.match(styles, /\.tool-builder-chat-transcript[\s\S]*overflow-y: auto/);
   assert.match(styles, /\.tool-detail-section \.integration-health-check \{ grid-template-columns: 30px minmax\(0, 1fr\) auto;/);
@@ -631,9 +602,9 @@ test("keeps live customer suspension controls under Agent access and fails close
   const customerAccess = componentSource(source, "CustomerAccessPanel", "AgentSetupCard");
 
   assert.match(source, /status: "loading", items: \[\], hasMore: false/);
-  assert.match(source, /fixturePreview \? Promise\.resolve\(\{ items: fixtures\?\.customerAccounts \?\? \[\], has_more: false \}\)/);
+  assert.match(source, /const request = fixturePreview\s*\?\s*Promise\.resolve\(\{ items: fixtures\?\.customerAccounts \?\? \[\], has_more: false \}\)/);
   assert.match(source, /: api\.customerAccounts\(product\.id\)/);
-  assert.match(source, /status: "unavailable", items: \[\], hasMore: false/);
+  assert.match(source, /status: "unavailable",\s*items: \[\],\s*hasMore: false/);
   assert.match(source, /api\.updateCustomerAccount\(productID, account\.id, state, account\.revision\)/);
   assert.match(source, /const page = await api\.customerAccounts\(productID, cursor\)/);
   assert.match(source, /items: \[\.\.\.current\.items, \.\.\.page\.items\.filter\(\(item\) => !known\.has\(item\.id\)\)\], hasMore: page\.has_more/);
