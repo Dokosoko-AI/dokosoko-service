@@ -15,7 +15,7 @@ import {
 import type { APIUser } from "../../lib/api";
 import { type Section, sectionPath } from "../../lib/console-routes";
 import { ThemeToggle } from "../ThemeToggle";
-import { ConsoleLink } from "./shared";
+import { ConsoleLink } from "./console-link";
 
 export type NavigationGroup = "apis" | "identity" | "tools" | "recipes" | "agent-access" | "activity";
 

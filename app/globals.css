@@ -2,4 +2,9 @@
 
 @import "./styles/console-base.css";
 @import "./styles/core-ui.css";
-@import "./styles/console-workspaces.css";
+@import "./styles/console-tool-builder.css";
+@import "./styles/console-settings.css";
+@import "./styles/console-mcp.css";
+@import "./styles/console-product.css";
+@import "./styles/console-catalog.css";
+@import "./styles/console-responsive.css";

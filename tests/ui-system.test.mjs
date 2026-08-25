@@ -305,7 +305,7 @@ test("keeps the experimental widget implementation behind the deployment capabil
   assert.match(consoleApp, /Review guidance/);
   assert.match(consoleApp, /guidanceNeedsReview/);
   assert.match(styles, /widget-setup-steps li\.attention/);
-  assert.match(client, /knowledge_bindings:/);
+  assert.match(controlPlane, /knowledge_bindings: \{ type: array, items: \{ \$ref: "#\/components\/schemas\/WidgetKnowledgeBinding" \} \}/);
   assert.match(launcher, /widgets\.filter\(\(widget\) => widget\.state === "active"\)/);
   assert.match(launcher, /api\.widgetConfiguration\(widgetID\)[\s\S]*api\.widgetPreviewBootstrap\(widgetID\)[\s\S]*api\.exchangeWidgetSession\(bootstrap\.bootstrapToken, window\.location\.origin\)/);
   assert.match(launcher, /streamWidgetMessage\(token, question/);

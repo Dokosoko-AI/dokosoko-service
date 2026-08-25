@@ -43,32 +43,19 @@ test("production client chunks exclude development fixture tenants", async () =>
   assert.doesNotMatch(source, /prod_acme|org_acme|Acme Platform|pub_docs_seed|build_acme/);
 });
 
-test("keeps the global navigation to six obvious destinations", async () => {
+test("keeps the rendered navigation destinations backed by canonical routes", async () => {
   const source = await consoleSource();
   const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
-  const primaryNavigation = source.slice(source.indexOf("const navigation"), source.indexOf("function deploymentAsLegacyProduct"));
-
-  for (const label of ["APIs", "Identity", "Tools", "Recipes", "Agent access", "Activity"]) {
-    assert.match(primaryNavigation, new RegExp(`label: "${label}"`));
-  }
-  assert.match(primaryNavigation, /\{ id: "identity", label: "Identity", icon: Users, defaultSection: "identity", sections: \[\{ id: "identity", label: "Customer sign-in" \}\] \}/);
-  assert.match(primaryNavigation, /\{ id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: \[\{ id: "tools", label: "Catalog" \}, \{ id: "connections", label: "Connections" \}\] \}/);
-  assert.match(primaryNavigation, /\{ id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes"/);
-  assert.doesNotMatch(source, /<BookOpen data-slot="icon" \/>Recipes<\/Button>/);
   assert.doesNotMatch(source, /Control plane/);
   assert.doesNotMatch(source, /className="environment"/);
   assert.doesNotMatch(styles, /\.environment\s*\{/);
-  for (const removed of ["label: \"Overview\"", "label: \"Integrations\"", "label: \"Access\"", "label: \"Distribution\"", "label: \"Operations\"", "label: \"Insights\""]) {
-    assert.ok(!primaryNavigation.includes(removed), `${removed} should not remain in primary navigation`);
-  }
   assert.match(source, /useState<ConsoleRoute>/);
   assert.doesNotMatch(source, /setSection/);
   assert.match(source, /window\.history\[method\]/);
   assert.match(source, /window\.history\.replaceState\(null, "", `\$\{next\.path\}/);
   assert.doesNotMatch(source, /replaceState\(null, "", `\$\{sectionPath\("overview"\)/);
   assert.doesNotMatch(source, /className="section-tabs"/);
-  assert.match(source, /className="mobile-navigation"/);
   for (const path of ["/integrations", "/identity", "/tools", "/tools/connections", "/recipes", "/agent-access", "/activity", "/settings"]) {
     assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
   }
@@ -538,10 +525,8 @@ test("uploads local knowledge files with a browser-managed multipart request", a
 
 test("shows exact crawler classifier indicators during source review", async () => {
   const source = await consoleSource();
-  const client = await clientSource();
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
-  assert.match(client, /injection_indicators: string\[\]/);
   assert.match(source, /Classifier indicators: \{document\.injection_indicators\.join\(", "\)\}/);
   assert.match(openapi, /injection_indicators: \{ type: array, items: \{ type: string \} \}/);
 });

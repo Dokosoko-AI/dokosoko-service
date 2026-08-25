@@ -1,0 +1,42 @@
+/* MCP connection and catalogue workspaces */
+.mcp-policy-banner { display: grid; grid-template-columns: 40px 1fr 18px; align-items: center; gap: 13px; margin: -10px 0 24px; padding: 15px 17px; border: 1px solid var(--accent-line); border-radius: 11px; color: inherit; background: linear-gradient(105deg, var(--accent-soft), var(--accent-soft) 70%); text-decoration: none; }
+.mcp-policy-banner:hover { border-color: var(--accent-highlight); }
+.mcp-policy-banner > span:nth-child(2), .protocol-policy > span { display: grid; gap: 4px; }
+.mcp-policy-banner strong, .protocol-policy strong { color: var(--accent-strong); font-size: var(--text-body); }
+.mcp-policy-banner small, .protocol-policy small { color: var(--muted); font-size: var(--text-caption); }
+.mcp-policy-banner > svg { width: 16px; height: 16px; color: var(--accent); }
+.mcp-policy-icon, .connection-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; color: var(--accent); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.mcp-policy-icon svg, .connection-mark svg { width: 18px; height: 18px; }
+.mcp-connections-panel { overflow: hidden; }
+.mcp-connection-row { display: grid; grid-template-columns: 42px minmax(250px, 1fr) minmax(90px, .25fr) minmax(105px, .32fr) auto; align-items: center; gap: 14px; min-height: 80px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.mcp-connection-row:last-child { border-bottom: 0; }
+.connection-main { min-width: 0; display: grid; gap: 6px; }
+.connection-main > span { display: flex; align-items: center; gap: 7px; }
+.connection-main strong { font-size: var(--text-body); }
+.connection-main code { overflow: hidden; color: var(--text); font-size: var(--text-caption); text-overflow: ellipsis; white-space: nowrap; }
+.connection-main small, .connection-stat small { color: var(--subtle); font-size: var(--text-caption); }
+.connection-stat { display: grid; gap: 4px; }
+.connection-stat strong { font-size: var(--text-body); }
+.identity-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+.identity-flow > span { display: grid; grid-template-columns: 22px 1fr; column-gap: 8px; row-gap: 4px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.identity-flow svg { grid-row: 1 / 3; width: 18px; height: 18px; color: var(--accent); }
+.identity-flow strong { font-size: var(--text-caption); }
+.identity-flow small { color: var(--muted); font-size: var(--text-caption); line-height: 1.45; }
+.protocol-policy { display: grid; grid-template-columns: 30px 1fr 15px; align-items: center; gap: 9px; padding: 11px 12px; border: 1px solid var(--accent-line); border-radius: 9px; color: inherit; background: var(--accent-soft); text-decoration: none; }
+.protocol-policy > svg:first-child { width: 18px; height: 18px; color: var(--accent); }
+.protocol-policy > svg:last-child { width: 13px; height: 13px; color: var(--accent-highlight); }
+.dialog-panel:has(.mcp-import-review) { width: min(680px, 100%); }
+.mcp-import-review { display: grid; gap: 16px; }
+.import-summary { display: flex; align-items: center; gap: 9px; }
+.import-summary code { color: var(--text); font-size: var(--text-caption); }
+.import-summary > span:last-child { margin-left: auto; color: var(--muted); font-size: var(--text-caption); }
+.catalog-list { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; }
+.catalog-tool { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 68px; padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.catalog-tool:last-child { border-bottom: 0; }
+.catalog-tool:hover { background: var(--accent-soft); }
+.catalog-tool > input { position: absolute; opacity: 0; }
+.catalog-tool > input:checked + .check-box { border-color: var(--accent); background: var(--accent); }
+.catalog-tool > span:nth-child(3) { min-width: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; }
+.catalog-tool strong { font-size: var(--text-body); }
+.catalog-tool code { align-self: center; overflow: hidden; color: var(--accent); font-size: var(--text-caption); text-overflow: ellipsis; white-space: nowrap; }
+.catalog-tool small { grid-column: 1 / -1; color: var(--muted); font-size: var(--text-caption); }

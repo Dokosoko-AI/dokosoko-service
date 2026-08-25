@@ -38,6 +38,7 @@ yarn-error.log*
 /dist/
 /.wrangler/
 /tsconfig.tsbuildinfo
+/app/lib/control-plane.generated.ts
 /storage/
 /outputs/
 /work/
