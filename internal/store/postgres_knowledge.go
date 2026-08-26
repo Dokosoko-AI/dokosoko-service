@@ -183,7 +183,7 @@ func (p *Postgres) PublishSource(ctx context.Context, productID, sourceID string
 	}
 	if latestJob.ID != publication.CrawlJobID || latestJob.FinishedAt == nil ||
 		(latestJob.State != "review" && latestJob.State != "succeeded") ||
-		latestJob.FetchedCount == 0 {
+		latestJob.FetchedCount == 0 || latestJob.FailedCount != 0 || latestJob.SkippedCount != 0 {
 		return model.Source{}, model.SourcePublication{}, ErrConflict
 	}
 
@@ -240,6 +240,133 @@ func (p *Postgres) PublishSource(ctx context.Context, productID, sourceID string
 	if publication.ContentHash != lockedHash {
 		return model.Source{}, model.SourcePublication{}, ErrConflict
 	}
+	publication.OrganisationID = lockedSource.OrganisationID
+	publication.ProductID = productID
+	publication.SourceID = sourceID
+	publication.Visibility = lockedSource.Visibility
+	publication.DocumentCount = len(documentIDs)
+
+	var documentationReview *SourcePublicationDocumentationReview
+	typedRun, runErr := scanDeveloperAssetIngestionRun(tx.QueryRow(ctx, developerAssetIngestionRunSelect+`
+		WHERE deployment_id=$1 AND id=$2 AND source_id=$3
+		FOR UPDATE`, productID, publication.CrawlJobID, sourceID))
+	if errors.Is(runErr, ErrNotFound) {
+		// An unbound OpenAPI source may be reviewed as legacy evidence before
+		// being attached and recrawled for an exact contract target. An uploaded
+		// contract source can also have no new typed run when normalization is
+		// unchanged. Documentation-producing sources fail closed without one.
+		var contractSource bool
+		if lookupErr := tx.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM api_contract_sources binding
+			JOIN api_contracts contract ON contract.id=binding.api_contract_id AND contract.deployment_id=binding.deployment_id
+			WHERE binding.deployment_id=$1 AND binding.source_id=$2 AND binding.lifecycle='attached' AND contract.lifecycle='active'
+		)`, productID, sourceID).Scan(&contractSource); lookupErr != nil {
+			return model.Source{}, model.SourcePublication{}, databaseError(lookupErr)
+		}
+		if lockedSource.Kind != "openapi" && !contractSource {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+	} else if runErr != nil {
+		return model.Source{}, model.SourcePublication{}, runErr
+	} else {
+		if typedRun.DeploymentID != productID || typedRun.OrganisationID != lockedSource.OrganisationID ||
+			typedRun.ID != publication.CrawlJobID || typedRun.SourceID != sourceID ||
+			typedRun.State != model.DeveloperAssetIngestionReviewReady ||
+			typedRun.AcquiredCount != latestJob.FetchedCount || typedRun.FailedCount != 0 || typedRun.SkippedCount != 0 {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+		switch typedRun.AssetKind {
+		case model.DeveloperAssetDocumentation:
+			legacyRows, queryErr := tx.Query(ctx, `
+				SELECT kd.id::text,cjd.crawl_job_id::text,cjd.assessment_state::text,
+				       cjd.assessment_injection_indicators
+				FROM crawl_job_documents cjd
+				JOIN knowledge_documents kd ON kd.id=cjd.knowledge_document_id
+				WHERE cjd.crawl_job_id=$1 AND kd.product_id=$2 AND kd.source_id=$3
+				ORDER BY kd.id
+				FOR UPDATE OF cjd,kd`, publication.CrawlJobID, productID, sourceID)
+			if queryErr != nil {
+				return model.Source{}, model.SourcePublication{}, databaseError(queryErr)
+			}
+			legacyDocuments := make(map[string]model.CrawlReviewDocument)
+			for legacyRows.Next() {
+				var document model.CrawlReviewDocument
+				if scanErr := legacyRows.Scan(&document.ID, &document.CrawlJobID, &document.State, &document.InjectionIndicators); scanErr != nil {
+					legacyRows.Close()
+					return model.Source{}, model.SourcePublication{}, databaseError(scanErr)
+				}
+				if legacyDocuments[document.ID].ID != "" {
+					legacyRows.Close()
+					return model.Source{}, model.SourcePublication{}, ErrConflict
+				}
+				legacyDocuments[document.ID] = document
+			}
+			legacyRowsErr := legacyRows.Err()
+			legacyRows.Close()
+			if legacyRowsErr != nil {
+				return model.Source{}, model.SourcePublication{}, databaseError(legacyRowsErr)
+			}
+
+			typedRows, queryErr := tx.Query(ctx, documentationDocumentSelect+`
+				WHERE deployment_id=$1 AND ingestion_run_id=$2
+				ORDER BY ordinal,id
+				FOR UPDATE`, productID, typedRun.ID)
+			if queryErr != nil {
+				return model.Source{}, model.SourcePublication{}, databaseError(queryErr)
+			}
+			typedDocuments := make([]model.DocumentationDocument, 0, typedRun.AcquiredCount)
+			for typedRows.Next() {
+				document, scanErr := scanDocumentationDocument(typedRows)
+				if scanErr != nil {
+					typedRows.Close()
+					return model.Source{}, model.SourcePublication{}, scanErr
+				}
+				typedDocuments = append(typedDocuments, document)
+			}
+			typedRowsErr := typedRows.Err()
+			typedRows.Close()
+			if typedRowsErr != nil {
+				return model.Source{}, model.SourcePublication{}, databaseError(typedRowsErr)
+			}
+
+			mapRows, queryErr := tx.Query(ctx, documentationMapSelect+`
+				WHERE deployment_id=$1 AND ingestion_run_id=$2
+				ORDER BY created_at,id
+				FOR UPDATE`, productID, typedRun.ID)
+			if queryErr != nil {
+				return model.Source{}, model.SourcePublication{}, databaseError(queryErr)
+			}
+			maps := make([]model.DocumentationMap, 0, 1)
+			for mapRows.Next() {
+				value, scanErr := scanDocumentationMap(mapRows)
+				if scanErr != nil {
+					mapRows.Close()
+					return model.Source{}, model.SourcePublication{}, scanErr
+				}
+				maps = append(maps, value)
+			}
+			mapRowsErr := mapRows.Err()
+			mapRows.Close()
+			if mapRowsErr != nil {
+				return model.Source{}, model.SourcePublication{}, databaseError(mapRowsErr)
+			}
+			if len(maps) != 1 {
+				return model.Source{}, model.SourcePublication{}, ErrConflict
+			}
+			review, bridgeErr := buildSourcePublicationDocumentationReview(
+				productID, typedRun, publication, typedDocuments, &maps[0], legacyDocuments, documentIDs,
+			)
+			if bridgeErr != nil {
+				return model.Source{}, model.SourcePublication{}, bridgeErr
+			}
+			documentationReview = &review
+		case model.DeveloperAssetContract:
+			// The exact contract candidate publication consumes this legacy source
+			// publication and owns the contract run's published transition.
+		default:
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+	}
 
 	updated, err := scanSource(tx.QueryRow(ctx, `UPDATE sources SET state = 'published', revision = revision + 1, updated_at = now() WHERE product_id = $1 AND id = $2 AND revision = $3 AND state <> 'quarantined' RETURNING id::text, organisation_id::text, product_id::text, name, kind, location, visibility::text, state::text, revision, created_at, updated_at`, productID, sourceID, expected))
 	if errors.Is(err, ErrNotFound) {
@@ -268,6 +395,21 @@ func (p *Postgres) PublishSource(ctx context.Context, productID, sourceID string
 	if _, err := tx.Exec(ctx, `UPDATE knowledge_documents SET state = 'published', visibility = $3, revision = revision + 1, updated_at = now() WHERE product_id = $1 AND source_id = $2 AND id = ANY($4::uuid[]) AND state = 'validated' AND injection_indicators = '[]'::jsonb`, productID, sourceID, updated.Visibility, documentIDs); err != nil {
 		return model.Source{}, model.SourcePublication{}, err
 	}
+	if documentationReview != nil {
+		if err := insertSourcePublicationDocumentationReviewTx(ctx, tx, *documentationReview); err != nil {
+			return model.Source{}, model.SourcePublication{}, err
+		}
+		transition, transitionErr := tx.Exec(ctx, `UPDATE developer_asset_ingestion_runs
+			SET state='published',lease_owner='',lease_expires_at=NULL,heartbeat_at=NULL,finished_at=coalesce(finished_at,now())
+			WHERE id=$1 AND deployment_id=$2 AND asset_kind='documentation' AND source_id=$3 AND target_id=$3 AND state='review_ready'`,
+			typedRun.ID, productID, sourceID)
+		if transitionErr != nil {
+			return model.Source{}, model.SourcePublication{}, databaseError(transitionErr)
+		}
+		if transition.RowsAffected() != 1 {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Source{}, model.SourcePublication{}, err
 	}
@@ -276,11 +418,19 @@ func (p *Postgres) PublishSource(ctx context.Context, productID, sourceID string
 
 func scanCrawlJob(row interface{ Scan(...any) error }) (model.CrawlJob, error) {
 	var value model.CrawlJob
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.SourceID, &value.State, &value.Attempt, &value.DiscoveredCount, &value.FetchedCount, &value.ChangedCount, &value.ErrorCode, &value.ErrorMessage, &value.QueuedAt, &value.StartedAt, &value.FinishedAt)
+	err := row.Scan(
+		&value.ID, &value.OrganisationID, &value.ProductID, &value.SourceID,
+		&value.State, &value.Attempt, &value.DiscoveredCount, &value.FetchedCount,
+		&value.ChangedCount, &value.FailedCount, &value.SkippedCount,
+		&value.RedirectedCount, &value.LeaseOwner, &value.LeaseExpiresAt,
+		&value.HeartbeatAt, &value.PipelineVersion, &value.RawManifestHash,
+		&value.Diagnostics, &value.ErrorCode, &value.ErrorMessage, &value.QueuedAt,
+		&value.StartedAt, &value.FinishedAt,
+	)
 	return value, databaseError(err)
 }
 
-const crawlJobSelect = `SELECT id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at FROM crawl_jobs`
+const crawlJobSelect = `SELECT id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, failed_count, skipped_count, redirected_count, lease_owner, lease_expires_at, heartbeat_at, pipeline_version, raw_manifest_hash, diagnostics, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at FROM crawl_jobs`
 
 func (p *Postgres) CrawlJobs(ctx context.Context, productID, sourceID string) ([]model.CrawlJob, error) {
 	rows, err := p.pool.Query(ctx, crawlJobSelect+` WHERE product_id = $1 AND source_id = $2 ORDER BY queued_at DESC, id DESC LIMIT 50`, productID, sourceID)
@@ -312,7 +462,7 @@ func createCrawlJobWithSourceLock(ctx context.Context, query pgxRowQuerier, valu
 	if err != nil {
 		return model.CrawlJob{}, databaseError(err)
 	}
-	return scanCrawlJob(query.QueryRow(ctx, `INSERT INTO crawl_jobs(id, organisation_id, product_id, source_id, state) VALUES ($1, $2, $3, $4, 'queued') RETURNING id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at`, value.ID, value.OrganisationID, value.ProductID, value.SourceID))
+	return scanCrawlJob(query.QueryRow(ctx, `INSERT INTO crawl_jobs(id, organisation_id, product_id, source_id, state) VALUES ($1, $2, $3, $4, 'queued') RETURNING id::text, organisation_id::text, product_id::text, source_id::text, state, attempt, discovered_count, fetched_count, changed_count, failed_count, skipped_count, redirected_count, lease_owner, lease_expires_at, heartbeat_at, pipeline_version, raw_manifest_hash, diagnostics, coalesce(error_code, ''), coalesce(error_message, ''), queued_at, started_at, finished_at`, value.ID, value.OrganisationID, value.ProductID, value.SourceID))
 }
 
 func (p *Postgres) CreateCrawlJob(ctx context.Context, value model.CrawlJob) (model.CrawlJob, error) {

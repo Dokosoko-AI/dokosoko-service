@@ -1,12 +1,14 @@
 import {
-  Bot, BookOpen, ChevronRight, Database, Plus, Server,
-  Share2, ShieldCheck, Sparkles, TerminalSquare, Wrench,
+  Bot, BookOpen, ChevronRight, Copy, Database, LockKeyhole, Plus, RefreshCw, Server,
+  Share2, ShieldCheck, Sparkles, TerminalSquare, TriangleAlert, Wrench,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import { APIError, api } from "../../lib/api";
 import type {
+  APIGrantDefinition,
   APIAIProviderConnection, APIAIProviderUsage, APIAIWorkflowPrompt, APIAIWorkloadProfile, APIAuditEvent,
-  APIIntegration, APIIntegrationAnalysis, APIMCPConnection, APINativePlugin,
+  APIIntegration, APIIntegrationAnalysis, APIMCPConnection, APIMCPPreview, APINativePlugin,
   APIProduct, APIRecipe, APISupportSubmission, APITool, APIUser,
 } from "../../lib/api";
 import { SETTINGS_TABS, type SettingsTab, entityPath, sectionPath, settingsPath, toolBuilderPath } from "../../lib/console-routes";
@@ -15,14 +17,16 @@ import { Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, Tab
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader, SectionHeader } from "../core/layout";
 import { IntegrationEvidenceGaps } from "../integrations/IntegrationEvidenceGaps";
 import { toolIsCommon } from "../integrations/tool-scope";
+import { RecipeApprovalDialog } from "./dialogs/recipe-approval-dialog";
+import { createRecipeApprovalReview, type RecipeApprovalReview } from "./dialogs/recipe-approval-review";
 import {
   type AIWorkload, ConsoleLink, EntityLink, SettingsCard, aiModelDefaults,
   activeRecipeIntegrationID, aiModelOptions, aiProviderLabel, aiProviders, aiWorkloads, analysisMatchesIntegration,
   recipeHasScopeDependencyMismatch, recipeMatchesIntegration, recipeScopeIDs, toolPolicy, toolStateLabel,
 } from "./shared";
 
-function ToolsWorkspaceTabs({ active, onNavigate }: { active: "catalog" | "connections"; onNavigate: (path: string) => void }) {
-  return <PageTabs label="Tool areas"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className={`page-tab ${active === "catalog" ? "active" : ""}`}>Catalog</ConsoleLink><ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className={`page-tab ${active === "connections" ? "active" : ""}`}>MCP connections</ConsoleLink></PageTabs>;
+function ToolsWorkspaceTabs({ active, onNavigate }: { active: "catalog" | "connections" | "preview"; onNavigate: (path: string) => void }) {
+  return <PageTabs label="Tool areas"><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className={`page-tab ${active === "catalog" ? "active" : ""}`}>Catalog</ConsoleLink><ConsoleLink path={sectionPath("connections")} onNavigate={onNavigate} className={`page-tab ${active === "connections" ? "active" : ""}`}>MCP connections</ConsoleLink><ConsoleLink path={sectionPath("mcp-preview")} onNavigate={onNavigate} className={`page-tab ${active === "preview" ? "active" : ""}`}>MCP preview</ConsoleLink></PageTabs>;
 }
 
 export function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect, onNavigate }: { connections: APIMCPConnection[]; tools: APITool[]; busy: boolean; onAdd: () => void; onInspect: (connection: APIMCPConnection) => void; onNavigate: (path: string) => void }) {
@@ -40,6 +44,107 @@ export function ToolsView({ tools, integrations, connections, nativePlugins, onS
   </>;
 }
 
+const mcpPreviewMethods: Array<{ id: APIMCPPreview["method"]; label: string }> = [
+  { id: "server/discover", label: "Server discovery" },
+  { id: "tools/list", label: "Tools list" },
+  { id: "resources/list", label: "Resources list" },
+  { id: "resources/templates/list", label: "Resource templates" },
+];
+
+function previewCollectionCount(preview: APIMCPPreview | null): number | null {
+  if (!preview) return null;
+  const result = preview.response.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const collectionKey = preview.method === "tools/list" ? "tools" : preview.method === "resources/list" ? "resources" : preview.method === "resources/templates/list" ? "resourceTemplates" : "";
+  if (!collectionKey) return null;
+  const collection = (result as Record<string, unknown>)[collectionKey];
+  return Array.isArray(collection) ? collection.length : null;
+}
+
+export function MCPPreviewView({ product, grants, grantStatus, available, privateEndpointEnabled, onMessage, onNavigate }: {
+  product: APIProduct;
+  grants: APIGrantDefinition[];
+  grantStatus: "loading" | "ready" | "unavailable";
+  available: boolean;
+  privateEndpointEnabled: boolean;
+  onMessage: (message: string) => void;
+  onNavigate: (path: string) => void;
+}) {
+  const [audience, setAudience] = useState<APIMCPPreview["audience"]>("private");
+  const [method, setMethod] = useState<APIMCPPreview["method"]>("tools/list");
+  const [selectedGrants, setSelectedGrants] = useState<string[]>([]);
+  const [preview, setPreview] = useState<APIMCPPreview | null>(null);
+  const [loading, setLoading] = useState(available);
+  const [error, setError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const activeGrants = grants.filter((grant) => grant.state === "active");
+  const endpointEnabled = audience === "public" ? product.public_mcp_enabled : privateEndpointEnabled;
+  const collectionCount = previewCollectionCount(preview);
+
+  useEffect(() => {
+    if (!available) return;
+    let cancelled = false;
+    void api.mcpPreview(product.id, audience, method, audience === "private" ? selectedGrants : []).then((value) => {
+      if (!cancelled) {
+        setPreview(value);
+        setError("");
+      }
+    }).catch((reason: unknown) => {
+      if (!cancelled) {
+        setPreview(null);
+        setError(reason instanceof APIError ? reason.message : "The MCP preview could not be rendered.");
+      }
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [audience, available, method, product.id, refreshKey, selectedGrants]);
+
+  function beginPreviewChange() {
+    setPreview(null);
+    setLoading(available);
+    setError("");
+  }
+
+  function toggleGrant(key: string, checked: boolean) {
+    beginPreviewChange();
+    setSelectedGrants((current) => checked ? [...current, key].sort() : current.filter((value) => value !== key));
+  }
+
+  async function copyResponse() {
+    if (!preview) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(preview.response, null, 2));
+      onMessage("MCP response copied.");
+    } catch {
+      onMessage("MCP response could not be copied.");
+    }
+  }
+
+  return <>
+    <PageHeading eyebrow="Execution" title="MCP preview" description="Inspect the exact read-only JSON-RPC discovery response generated for the current catalog." action={<Button outline disabled={!available || loading} onClick={() => { beginPreviewChange(); setRefreshKey((value) => value + 1); }}><RefreshCw data-slot="icon" className={loading ? "spin" : ""} />Refresh</Button>} />
+    <ToolsWorkspaceTabs active="preview" onNavigate={onNavigate} />
+    <section className="panel mcp-preview-context">
+      <PanelHeader title="Preview context" description="Public discovery is anonymous. Private discovery uses only the simulated grants selected here and never impersonates a customer." />
+      <div className="mcp-preview-controls">
+        <label className="auth-field"><span>Audience</span><Select aria-label="MCP preview audience" value={audience} onChange={(event) => { beginPreviewChange(); const next = event.target.value as APIMCPPreview["audience"]; setAudience(next); if (next === "public") setSelectedGrants([]); }}><option value="private">Private MCP</option><option value="public">Public MCP</option></Select><small>{audience === "private" ? "Authenticated, simulated authorization context" : "Anonymous public projection"}</small></label>
+        <label className="auth-field"><span>Method</span><Select aria-label="MCP preview method" value={method} onChange={(event) => { beginPreviewChange(); setMethod(event.target.value as APIMCPPreview["method"]); }}>{mcpPreviewMethods.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.id}</option>)}</Select><small>Only discovery methods are available; tools/call is never previewed.</small></label>
+      </div>
+      {audience === "private" && <fieldset className="mcp-preview-grants"><legend>Simulated customer grants <Badge color="violet">{selectedGrants.length} selected</Badge></legend>{grantStatus === "loading" ? <p>Loading the active grant registry. Until it is ready, this is an exact no-grant Private MCP context.</p> : grantStatus === "unavailable" ? <p>The active grant registry is unavailable. This preview is limited to the exact no-grant Private MCP context.</p> : activeGrants.length > 0 ? <div>{activeGrants.map((grant) => { const controlID = `mcp-preview-grant-${grant.id}`; return <label key={grant.id} htmlFor={controlID}><input id={controlID} type="checkbox" aria-label={`${grant.display_name} (${grant.key})`} checked={selectedGrants.includes(grant.key)} onChange={(event) => toggleGrant(grant.key, event.target.checked)} /><span><strong>{grant.display_name}</strong><code>{grant.key}</code></span></label>; })}</div> : <p>No active grants are registered. This is an exact no-grant Private MCP context.</p>}</fieldset>}
+      <div className="private-default-note"><LockKeyhole /><span>This preview shares the live MCP response path, performs no tools/call, and never creates or uses a customer token.</span></div>
+    </section>
+    <section className="panel mcp-preview-output">
+      <PanelHeader title="Exact JSON-RPC response" description={preview ? `${preview.method} · ${preview.endpoint}` : "Select a context to render the response."} action={<span className="heading-actions"><Badge color={endpointEnabled ? "green" : "amber"}>{endpointEnabled ? "Endpoint live" : "Endpoint not live"}</Badge><Button outline disabled={!preview || loading} onClick={() => void copyResponse()}><Copy data-slot="icon" />Copy JSON</Button></span>} />
+      {preview && <dl className="mcp-preview-summary"><div><dt>Catalog revision</dt><dd>{product.catalog_revision}</dd></div><div><dt>Protocol</dt><dd><code>{preview.protocol_version}</code></dd></div><div><dt>Items</dt><dd>{collectionCount ?? "—"}</dd></div><div><dt>Generated</dt><dd>{new Date(preview.generated_at).toLocaleString()}</dd></div></dl>}
+      {!available && <div className="capability-unavailable" role="status"><TriangleAlert /><span><strong>Live preview is unavailable in fixture mode.</strong><small>Open the connected console to inspect the current MCP response.</small></span></div>}
+      {error && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Preview unavailable</strong><small>{error}</small></span></div>}
+      {loading && !preview && <div className="empty-row"><RefreshCw className="spin" />Rendering the MCP response…</div>}
+      {preview && <pre className="mcp-preview-json" role="region" aria-label={`Exact ${preview.method} JSON-RPC response`}><code>{JSON.stringify(preview.response, null, 2)}</code></pre>}
+    </section>
+    {preview && <details className="panel advanced-details mcp-preview-request"><summary>View exact JSON-RPC request</summary><pre className="mcp-preview-json"><code>{JSON.stringify(preview.request, null, 2)}</code></pre></details>}
+  </>;
+}
+
 export function RecipesView({ integrations, analyses, recipes, busy, onCreate, onGenerate, onEdit, onRework, onApprove, onPublish }: {
   integrations: APIIntegration[];
   analyses: APIIntegrationAnalysis[];
@@ -49,10 +154,11 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
   onGenerate: (integrationID: string) => void;
   onEdit: (recipe: APIRecipe) => void;
   onRework: (recipe: APIRecipe) => void;
-  onApprove: (recipe: APIRecipe) => void;
+  onApprove: (recipe: APIRecipe) => void | Promise<void>;
   onPublish: (recipe: APIRecipe) => void;
 }) {
   const [selectedIntegrationID, setSelectedIntegrationID] = useState("");
+  const [approvalReview, setApprovalReview] = useState<RecipeApprovalReview | null>(null);
   const activeIntegrationID = activeRecipeIntegrationID(integrations, selectedIntegrationID);
   const selectedAnalysis = activeIntegrationID
     ? analyses
@@ -73,7 +179,9 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
     const scopedIntegration = scopeIDs.length === 1 ? integrations.find((integration) => integration.id === scopeIDs[0]) : undefined;
     const invalidContract = recipe.contract_version !== "product-integration-v2" || recipe.current_revision?.spec_version !== 2;
     const dependencyMismatch = recipeHasScopeDependencyMismatch(recipe);
-    const invalidScope = invalidContract || dependencyMismatch || scopeIDs.length !== 1 || !scopedIntegration;
+    const exactCurrentRevisionAvailable = Boolean(recipe.current_revision && recipe.current_revision.id === recipe.current_revision_id && recipe.current_revision.recipe_id === recipe.id);
+    const approvalCandidate = createRecipeApprovalReview(recipe, integrations);
+    const invalidScope = invalidContract || dependencyMismatch || scopeIDs.length !== 1 || !scopedIntegration || !approvalCandidate;
     const scopeLabel = scopeIDs.length === 0
       ? "Deployment-wide"
       : scopeIDs.length > 1
@@ -83,14 +191,14 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       <span className="settings-icon"><BookOpen /></span>
       <span><strong>{recipe.title}</strong><small>{recipe.outcome} · {scopeLabel}</small></span>
       <span className="tool-badges">
-        {invalidContract ? <Badge color="red">legacy contract</Badge> : dependencyMismatch ? <Badge color="red">scope dependency mismatch</Badge> : invalidScope && <Badge color="red">invalid scope</Badge>}
+        {invalidContract ? <Badge color="red">legacy contract</Badge> : dependencyMismatch ? <Badge color="red">scope dependency mismatch</Badge> : !exactCurrentRevisionAvailable ? <Badge color="red">revision unavailable</Badge> : !approvalCandidate ? <Badge color="red">revision binding mismatch</Badge> : invalidScope && <Badge color="red">invalid scope</Badge>}
         {recipe.needs_attention && <Badge color="amber">needs review</Badge>}
         <Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : "zinc"}>{recipe.state}</Badge>
       </span>
       <span className="table-actions">
         <Button outline disabled={busy || invalidScope} onClick={() => onEdit(recipe)}>Edit</Button>
         {recipe.needs_attention && <Button outline disabled={busy || invalidScope} onClick={() => onRework(recipe)}>Rework</Button>}
-        {recipe.state === "review" && <Button disabled={busy || invalidScope} onClick={() => onApprove(recipe)}>Approve</Button>}
+        {recipe.state === "review" && <Button disabled={busy || invalidScope} onClick={() => setApprovalReview(approvalCandidate)}>Review</Button>}
         {recipe.state === "approved" && <Button disabled={busy || invalidScope} onClick={() => onPublish(recipe)}>Publish</Button>}
       </span>
     </div>;
@@ -121,6 +229,7 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       <PanelHeader title="Deployment-wide and scope exceptions" description="Legacy deployment-wide recipes and records with an invalid or unavailable API scope remain visible for review." />
       {unscopedOrInvalidRecipes.map(renderRecipe)}
     </section>}
+    <RecipeApprovalDialog review={approvalReview} busy={busy} onClose={() => setApprovalReview(null)} onApprove={onApprove} />
   </>;
 }
 
@@ -154,12 +263,16 @@ const aiPromptOrder: APIAIWorkflowPrompt["key"][] = [
   "recipe.brief",
   "recipe.authoring",
   "recipe.review",
+  "documentation.map_enrichment",
+  "sdk.map_enrichment",
+  "sdk.applicability_suggestion",
+  "sdk.sample_review",
 ];
 
 export function AISettingsView({ profiles, prompts, connections, usage, saving, onSave, onConfigure, onEditPrompt, onAddProvider, onConnect, onTest, onNavigate }: { profiles: APIAIWorkloadProfile[]; prompts: APIAIWorkflowPrompt[]; connections: APIAIProviderConnection[]; usage: APIAIProviderUsage[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void; onEditPrompt: (prompt: APIAIWorkflowPrompt) => void; onAddProvider: () => void; onConnect: (provider: APIAIProviderConnection["provider"]) => void; onTest: (connection: APIAIProviderConnection) => void; onNavigate: (path: string) => void }) {
   const primary = connections.filter((connection) => connection.enabled && !connection.is_backup);
   const orderedPrompts = [...prompts].sort((left, right) => aiPromptOrder.indexOf(left.key) - aiPromptOrder.indexOf(right.key));
-  return <><PageHeading eyebrow="Settings" title="AI configuration" action={<Button onClick={onAddProvider}><Plus data-slot="icon" />Add provider</Button>} /><SettingsTabs active="ai" onNavigate={onNavigate} /><SectionHeader title="Workload" /><div className="panel ai-table-panel"><Table label="AI workload" dense><TableHead><TableRow><TableHeader>Name</TableHeader><TableHeader>Provider</TableHeader><TableHeader>Model</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{aiWorkloads.map((workload) => { const profile = profiles.find((item) => item.workload === workload.role); const configurationKey = `${workload.role}:${profile?.revision ?? 0}:${profile?.provider_connection_id ?? ""}:${primary.map((connection) => connection.id).join(",")}`; return <AIWorkloadRow key={configurationKey} workload={workload} profile={profile} connections={primary} saving={saving} onSave={onSave} onConfigure={onConfigure} />; })}</TableBody></Table></div><SectionHeader title="Workflow prompts" description="Versioned instructions for the four core Analysis workflows. DokoSoko always applies its built-in safety policy separately." /><div className="panel ai-table-panel"><Table label="AI workflow prompts" dense><TableHead><TableRow><TableHeader>Workflow</TableHeader><TableHeader>Source and version</TableHeader><TableHeader>Updated</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{orderedPrompts.map((prompt) => <TableRow key={prompt.key}><TableCell><strong>{prompt.label}</strong><small className="ai-table-subline">{prompt.description}</small></TableCell><TableCell><Badge color={prompt.source === "override" ? "violet" : "green"}>{prompt.source === "override" ? "Override" : "Default"} · {prompt.effective_version}</Badge><small className="ai-table-subline">Default {prompt.default_version}</small></TableCell><TableCell>{prompt.updated_at ? new Date(prompt.updated_at).toLocaleString() : "Built in"}</TableCell><TableCell><Button outline onClick={() => onEditPrompt(prompt)}>Edit instructions</Button></TableCell></TableRow>)}{orderedPrompts.length === 0 && <TableRow><TableCell colSpan={4}>Workflow prompts are unavailable.</TableCell></TableRow>}</TableBody></Table></div><SectionHeader title="Providers" />{connections.length === 0 ? <div className="ai-provider-suggestions">{aiProviders.filter((provider) => provider.id !== "openai-compatible").map((provider) => <button type="button" key={provider.id} onClick={() => onConnect(provider.id)}><AIProviderLogo provider={provider.id} /><span><strong>Connect {provider.name}</strong><small>{provider.description}</small></span><ChevronRight /></button>)}</div> : <section className="panel">{connections.map((connection) => { const stats = usage.find((item) => item.provider === connection.provider); return <div className="provider-row" key={connection.id}><AIProviderLogo provider={connection.provider} /><span><strong>{aiProviderLabel(connection.provider)}</strong><small>{stats?.calls ?? 0} calls · {stats?.input_tokens ?? 0} input tokens · {stats?.output_tokens ?? 0} output tokens</small></span>{connection.is_backup && <Badge color="violet">Backup</Badge>}<Badge color={connection.enabled ? "green" : "zinc"}>{connection.enabled ? "Connected" : "Paused"}</Badge><Button outline onClick={() => onTest(connection)}>Test</Button><Button outline onClick={() => onConnect(connection.provider)}>Manage</Button></div>; })}</section>}</>;
+  return <><PageHeading eyebrow="Settings" title="AI configuration" action={<Button onClick={onAddProvider}><Plus data-slot="icon" />Add provider</Button>} /><SettingsTabs active="ai" onNavigate={onNavigate} /><SectionHeader title="Workload" /><div className="panel ai-table-panel"><Table label="AI workload" dense><TableHead><TableRow><TableHeader>Name</TableHeader><TableHeader>Provider</TableHeader><TableHeader>Model</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{aiWorkloads.map((workload) => { const profile = profiles.find((item) => item.workload === workload.role); const configurationKey = `${workload.role}:${profile?.revision ?? 0}:${profile?.provider_connection_id ?? ""}:${primary.map((connection) => connection.id).join(",")}`; return <AIWorkloadRow key={configurationKey} workload={workload} profile={profile} connections={primary} saving={saving} onSave={onSave} onConfigure={onConfigure} />; })}</TableBody></Table></div><SectionHeader title="Workflow prompts" description="Versioned instructions for analysis, recipe, developer-asset enrichment, applicability-suggestion, and sample-review workflows. DokoSoko always applies its built-in safety policy separately." /><div className="panel ai-table-panel"><Table label="AI workflow prompts" dense><TableHead><TableRow><TableHeader>Workflow</TableHeader><TableHeader>Source and version</TableHeader><TableHeader>Updated</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{orderedPrompts.map((prompt) => <TableRow key={prompt.key}><TableCell><strong>{prompt.label}</strong><small className="ai-table-subline">{prompt.description}</small></TableCell><TableCell><Badge color={prompt.source === "override" ? "violet" : "green"}>{prompt.source === "override" ? "Override" : "Default"} · {prompt.effective_version}</Badge><small className="ai-table-subline">Default {prompt.default_version}</small></TableCell><TableCell>{prompt.updated_at ? new Date(prompt.updated_at).toLocaleString() : "Built in"}</TableCell><TableCell><Button outline onClick={() => onEditPrompt(prompt)}>Edit instructions</Button></TableCell></TableRow>)}{orderedPrompts.length === 0 && <TableRow><TableCell colSpan={4}>Workflow prompts are unavailable.</TableCell></TableRow>}</TableBody></Table></div><SectionHeader title="Providers" />{connections.length === 0 ? <div className="ai-provider-suggestions">{aiProviders.filter((provider) => provider.id !== "openai-compatible").map((provider) => <button type="button" key={provider.id} onClick={() => onConnect(provider.id)}><AIProviderLogo provider={provider.id} /><span><strong>Connect {provider.name}</strong><small>{provider.description}</small></span><ChevronRight /></button>)}</div> : <section className="panel">{connections.map((connection) => { const stats = usage.find((item) => item.provider === connection.provider); return <div className="provider-row" key={connection.id}><AIProviderLogo provider={connection.provider} /><span><strong>{aiProviderLabel(connection.provider)}</strong><small>{stats?.calls ?? 0} calls · {stats?.input_tokens ?? 0} input tokens · {stats?.output_tokens ?? 0} output tokens</small></span>{connection.is_backup && <Badge color="violet">Backup</Badge>}<Badge color={connection.enabled ? "green" : "zinc"}>{connection.enabled ? "Connected" : "Paused"}</Badge><Button outline onClick={() => onTest(connection)}>Test</Button><Button outline onClick={() => onConnect(connection.provider)}>Manage</Button></div>; })}</section>}</>;
 }
 
 function AIWorkloadRow({ workload, profile, connections, saving, onSave, onConfigure }: { workload: (typeof aiWorkloads)[number]; profile?: APIAIWorkloadProfile; connections: APIAIProviderConnection[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void }) {

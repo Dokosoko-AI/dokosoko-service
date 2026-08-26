@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("not found")
-	ErrConflict = errors.New("revision conflict")
+	ErrNotFound        = errors.New("not found")
+	ErrConflict        = errors.New("revision conflict")
+	ErrCatalogConflict = errors.New("catalog revision conflict")
 )
 
 const identitySecretOrphanGrace = 15 * time.Minute
@@ -47,4 +48,5 @@ type Store interface {
 	AIRecipeStore
 	IdentityStore
 	ObservabilityStore
+	DeveloperAssetStore
 }

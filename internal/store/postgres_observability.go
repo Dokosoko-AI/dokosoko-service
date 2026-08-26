@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/jackc/pgx/v5"
 )
 
 func (p *Postgres) PublicKnowledge(ctx context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
@@ -109,21 +110,40 @@ func (p *Postgres) AppendAudit(ctx context.Context, event model.AuditEvent) erro
 	return databaseError(persistErr)
 }
 
+const auditEventSelect = `SELECT event_key, coalesce(organisation_id::text, ''), coalesce(product_id::text, ''), actor_id, action, target_type, target_id, coalesce(prior, '{}'::jsonb), coalesce(current, '{}'::jsonb), request_id, outcome, created_at FROM audit_events`
+
+func scanAuditEvent(row pgx.Row) (model.AuditEvent, error) {
+	var value model.AuditEvent
+	var prior, current []byte
+	if err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.ActorID, &value.Action,
+		&value.TargetType, &value.TargetID, &prior, &current, &value.RequestID, &value.Outcome, &value.CreatedAt); err != nil {
+		return model.AuditEvent{}, databaseError(err)
+	}
+	if err := json.Unmarshal(prior, &value.Prior); err != nil {
+		return model.AuditEvent{}, fmt.Errorf("decode audit prior state: %w", err)
+	}
+	if err := json.Unmarshal(current, &value.Current); err != nil {
+		return model.AuditEvent{}, fmt.Errorf("decode audit current state: %w", err)
+	}
+	return value, nil
+}
+
+func (p *Postgres) AuditEvent(ctx context.Context, id string) (model.AuditEvent, error) {
+	return scanAuditEvent(p.pool.QueryRow(ctx, auditEventSelect+` WHERE event_key=$1`, id))
+}
+
 func (p *Postgres) AuditEvents(ctx context.Context, organisationID string) ([]model.AuditEvent, error) {
-	rows, err := p.pool.Query(ctx, `SELECT event_key, coalesce(organisation_id::text, ''), coalesce(product_id::text, ''), actor_id, action, target_type, target_id, coalesce(prior, '{}'::jsonb), coalesce(current, '{}'::jsonb), request_id, outcome, created_at FROM audit_events WHERE organisation_id = $1 ORDER BY created_at DESC`, organisationID)
+	rows, err := p.pool.Query(ctx, auditEventSelect+` WHERE organisation_id = $1 ORDER BY created_at DESC`, organisationID)
 	if err != nil {
 		return nil, databaseError(err)
 	}
 	defer rows.Close()
 	result := make([]model.AuditEvent, 0)
 	for rows.Next() {
-		var value model.AuditEvent
-		var prior, current []byte
-		if err := rows.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.ActorID, &value.Action, &value.TargetType, &value.TargetID, &prior, &current, &value.RequestID, &value.Outcome, &value.CreatedAt); err != nil {
-			return nil, err
+		value, scanErr := scanAuditEvent(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
-		_ = json.Unmarshal(prior, &value.Prior)
-		_ = json.Unmarshal(current, &value.Current)
 		result = append(result, value)
 	}
 	return result, rows.Err()

@@ -24,12 +24,12 @@ import type {
   APIMCPCatalog,
   APIMCPConnection,
   APIMCPImportResult,
+  APIMCPPreview,
   APINativePlugin,
   APIOrganisation,
   APIProduct,
   APIRecipe,
   APIRecipeRevision,
-  APIRecipeSpec,
   APIResourceSet,
   APIRuntimeCredentialSet,
   APIRuntimeCredentialSetInput,
@@ -109,7 +109,7 @@ function cookie(name: string): string {
   return part ? decodeURIComponent(part.slice(prefix.length)) : "";
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const credentials = init?.credentials ?? "same-origin";
   const csrfToken = credentials !== "omit" && !["GET", "HEAD", "OPTIONS"].includes(method) ? cookie("dokosoko_csrf") : "";
@@ -231,7 +231,7 @@ export const api = {
   recipes: async (productID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/recipes`)).items,
   createRecipe: (productID: string, prompt: string, integrationID = "") => request<APIRecipe>(`${productPath(productID)}/recipes`, { method: "POST", body: JSON.stringify(integrationID ? { prompt, integration_id: integrationID } : { prompt }) }),
   recipe: (productID: string, recipeID: string) => request<{ recipe: APIRecipe; revisions: APIRecipeRevision[] }>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`),
-  updateRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string, spec: APIRecipeSpec, visibility: APIVisibility) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`, { method: "PATCH", body: JSON.stringify({ revision, current_revision_id: currentRevisionID, spec, visibility }) }),
+  updateRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string, referenceIDs: string[], visibility: APIVisibility) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`, { method: "PATCH", body: JSON.stringify({ revision, current_revision_id: currentRevisionID, reference_ids: referenceIDs, visibility }) }),
   reworkRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string, instruction: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/rework`, { method: "POST", body: JSON.stringify({ revision, current_revision_id: currentRevisionID, instruction }) }),
   approveRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/approve`, { method: "POST", body: JSON.stringify({ revision, current_revision_id: currentRevisionID }) }),
   publishRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/publish`, { method: "POST", body: JSON.stringify({ revision, current_revision_id: currentRevisionID }) }),
@@ -271,6 +271,11 @@ export const api = {
   createMCPConnection: (productID: string, input: { organisation_id: string; name: string; namespace: string; endpoint: string; access_token: string; forward_user_identity: boolean }) => request<APIMCPConnection>(`${productPath(productID)}/mcp-connections`, { method: "POST", body: JSON.stringify(input) }),
   inspectMCPConnection: (productID: string, connectionID: string) => request<APIMCPCatalog>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/inspect`, { method: "POST" }),
   importMCPTools: (productID: string, connectionID: string, input: { tool_names: string[]; required_grants: string[]; confirmation_required: boolean; timeout_ms: number }) => request<APIMCPImportResult>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/import`, { method: "POST", body: JSON.stringify(input) }),
+  mcpPreview: (productID: string, audience: APIMCPPreview["audience"], method: APIMCPPreview["method"], grants: string[] = []) => {
+    const query = new URLSearchParams({ audience, method });
+    for (const grant of grants) query.append("grant", grant);
+    return request<APIMCPPreview>(`${productPath(productID)}/mcp-preview?${query.toString()}`);
+  },
   setPublicMCP: (productID: string, enabled: boolean, revision: number, acknowledgePublic: boolean) => request<APIProduct>(`${productPath(productID)}/distribution`, {
     method: "PATCH",
     body: JSON.stringify({ public_mcp_enabled: enabled, revision, acknowledge_public: acknowledgePublic }),

@@ -25,7 +25,13 @@ func sdkReferenceInput(input sdkReferenceRequest) platform.SDKReferenceInput {
 	return platform.SDKReferenceInput{Ecosystem: input.Ecosystem, Coordinate: input.Coordinate, ExactVersion: input.ExactVersion, InstallCommand: input.InstallCommand, DocumentationURL: input.DocumentationURL, SourceURL: input.SourceURL, Checksum: input.Checksum, Visibility: input.Visibility, Revision: input.Revision}
 }
 
+func markLegacySDKEndpointDeprecated(w http.ResponseWriter) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Add("Link", `</api/v1/developer-assets>; rel="successor-version"`)
+}
+
 func (s *Server) integrationSDKs(w http.ResponseWriter, r *http.Request, integrationID string) {
+	markLegacySDKEndpointDeprecated(w)
 	switch r.Method {
 	case http.MethodGet:
 		values, err := s.service.Store().SDKReferences(r.Context(), integrationID)
@@ -53,6 +59,7 @@ func (s *Server) integrationSDKs(w http.ResponseWriter, r *http.Request, integra
 }
 
 func (s *Server) integrationSDK(w http.ResponseWriter, r *http.Request, integrationID, referenceID string) {
+	markLegacySDKEndpointDeprecated(w)
 	switch r.Method {
 	case http.MethodPut:
 		var input sdkReferenceRequest

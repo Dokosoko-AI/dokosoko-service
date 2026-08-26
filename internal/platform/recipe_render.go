@@ -52,7 +52,14 @@ func recipeReferences(evidence []model.IntegrationEvidence) []model.RecipeRefere
 func recipeDependencies(evidence []model.IntegrationEvidence) []model.RecipeDependency {
 	values := make([]model.RecipeDependency, 0, len(evidence))
 	for _, item := range evidence {
-		values = append(values, model.RecipeDependency{Kind: item.Kind, ResourceID: item.ResourceID, Version: item.Fingerprint})
+		version := item.Fingerprint
+		if recipeDeveloperAssetSupportingKind(item.Kind) {
+			// Developer-asset versions intentionally retain the exact nested
+			// publication ID, revision, publication hash, attachment hash, and
+			// selected unit hash rather than collapsing them into an opaque digest.
+			version = item.Version
+		}
+		values = append(values, model.RecipeDependency{Kind: item.Kind, ResourceID: item.ResourceID, Version: version})
 	}
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].Kind != values[j].Kind {
@@ -92,7 +99,11 @@ func recipeEvidenceForDependencies(evidence []model.IntegrationEvidence, depende
 	byDependency := make(map[model.RecipeDependency]model.IntegrationEvidence, len(evidence))
 	ambiguous := make(map[model.RecipeDependency]bool)
 	for _, item := range recipeProductEvidence(evidence) {
-		dependency := model.RecipeDependency{Kind: item.Kind, ResourceID: item.ResourceID, Version: item.Fingerprint}
+		version := item.Fingerprint
+		if recipeDeveloperAssetSupportingKind(item.Kind) {
+			version = item.Version
+		}
+		dependency := model.RecipeDependency{Kind: item.Kind, ResourceID: item.ResourceID, Version: version}
 		if _, exists := byDependency[dependency]; exists {
 			ambiguous[dependency] = true
 		}
@@ -547,38 +558,103 @@ func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec 
 		"recipe_spec":            spec,
 		"rendered_markdown":      markdown,
 		"product_evidence":       selectedEvidence,
+		"allowed_evidence_ids":   evidenceIDs(selectedEvidence),
 		"deterministic_findings": findings,
 	}
 	prompt, _ := json.Marshal(reviewInput)
-	result, err := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_review", PromptKey: AIPromptKeyRecipeReview, User: string(prompt), SchemaName: "recipe_review", Schema: recipeReviewSchema, MaxOutput: 4096, Temperature: 0})
+	result, err := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_review", PromptKey: AIPromptKeyRecipeReview, User: string(prompt), SchemaName: "recipe_review", Schema: recipeReviewSchema, MaxOutput: 2048, Temperature: 0})
 	if err != nil {
 		return "AI review was unavailable; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_unavailable", Message: "The advisory review did not complete. Review every claim before approval."})
 	}
 	var response recipeReviewResponse
-	if decodeStrictAIResult(result.JSON, &response) != nil || (response.Recommendation != "pass" && response.Recommendation != "revise") || strings.TrimSpace(response.Summary) == "" || len(response.Summary) > 2000 || containsToolBuilderSecretText(response.Summary) || containsRecipeRawHTML(response.Summary) || recipeContainsURI(response.Summary) {
+	if decodeStrictAIResult(result.JSON, &response) != nil {
 		return "AI review returned an invalid result; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_invalid", Message: "The advisory review was invalid. Review every claim before approval."})
 	}
-	seenFinding := make(map[string]bool)
-	acceptedFindings := 0
-	for _, finding := range response.Findings {
-		finding.Level, finding.Code, finding.Message = strings.ToLower(strings.TrimSpace(finding.Level)), strings.ToLower(strings.TrimSpace(finding.Code)), strings.TrimSpace(finding.Message)
-		if !map[string]bool{"info": true, "warning": true, "error": true}[finding.Level] || finding.Code == "" || len(finding.Code) > 80 || finding.Message == "" || len(finding.Message) > 500 || containsToolBuilderSecretText(finding.Message) || containsRecipeRawHTML(finding.Message) || recipeContainsURI(finding.Message) {
-			continue
-		}
-		if finding.Level == "error" {
-			finding.Level = "warning"
-		}
-		finding.Code = "ai_" + strings.TrimPrefix(finding.Code, "ai_")
-		key := finding.Level + "\x00" + finding.Code + "\x00" + finding.Message
-		if seenFinding[key] {
-			continue
-		}
-		seenFinding[key] = true
-		findings = append(findings, finding)
-		acceptedFindings++
+	advisoryFindings, valid := recipeReviewValidationFindings(response, selectedEvidence)
+	if !valid {
+		return "AI review returned an invalid result; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_invalid", Message: "The advisory review was invalid. Review every claim before approval."})
 	}
-	if response.Recommendation == "revise" && acceptedFindings == 0 {
+	findings = append(findings, advisoryFindings...)
+	if response.Recommendation == "revise" && len(advisoryFindings) == 0 {
 		findings = append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_revise", Message: "The advisory reviewer recommends revision but returned no usable finding; inspect every claim before approval."})
 	}
-	return strings.TrimSpace(response.Summary), findings
+	if response.Recommendation == "revise" {
+		return "Advisory AI review recommends revision; inspect the server-owned findings before approval.", findings
+	}
+	return "Advisory AI review found no additional issue; human review is still required.", findings
+}
+
+var recipeReviewFindingMessages = map[string]string{
+	"delivery_scope":        "The plan includes connector-delivery or platform-administration work instead of only the product integration.",
+	"multiple_capabilities": "The plan appears to cover more than one independently implementable product capability.",
+	"sdk_scope":             "The plan makes an SDK claim without an exact reviewed operation-to-SDK binding.",
+	"non_actionable_step":   "At least one step does not make a tangible change in the consuming project.",
+	"unobservable_check":    "At least one verification check lacks an observable pass condition.",
+	"unsupported_claim":     "At least one material implementation claim is not stated by its selected evidence.",
+	"unsafe_content":        "The plan contains unsafe content or requests credential handling.",
+	"not_minimal":           "The plan contains redundant or nonessential work.",
+	"evidence_gap":          "The selected evidence is insufficient or conflicting for a material instruction.",
+}
+
+// recipeReviewValidationFindings converts the model's closed selection into
+// server-owned findings. Model prose never crosses this boundary, and every
+// persisted finding carries the exact immutable evidence fingerprint that was
+// reviewed. Duplicate codes are merged without changing their first-seen
+// order; malformed or ambiguous evidence fails the whole advisory result.
+func recipeReviewValidationFindings(response recipeReviewResponse, selectedEvidence []model.IntegrationEvidence) ([]model.RecipeValidationFinding, bool) {
+	if response.Recommendation != "pass" && response.Recommendation != "revise" {
+		return nil, false
+	}
+	if len(response.Findings) > 9 || response.Recommendation == "pass" && len(response.Findings) != 0 {
+		return nil, false
+	}
+
+	byID, ambiguous := recipeUniqueEvidenceByID(selectedEvidence)
+	if len(byID) == 0 {
+		return nil, false
+	}
+	for _, item := range selectedEvidence {
+		id := strings.TrimSpace(item.ResourceID)
+		if id == "" || id != item.ResourceID || ambiguous[id] || strings.TrimSpace(item.Kind) == "" || strings.TrimSpace(item.Fingerprint) == "" {
+			return nil, false
+		}
+	}
+	byCode := make(map[string]*model.RecipeValidationFinding, len(response.Findings))
+	seenEvidenceByCode := make(map[string]map[string]bool, len(response.Findings))
+	orderedCodes := make([]string, 0, len(response.Findings))
+	for _, selection := range response.Findings {
+		message, supported := recipeReviewFindingMessages[selection.Code]
+		if !supported || len(selection.EvidenceIDs) == 0 || len(selection.EvidenceIDs) > 8 {
+			return nil, false
+		}
+		finding, exists := byCode[selection.Code]
+		if !exists {
+			orderedCodes = append(orderedCodes, selection.Code)
+			finding = &model.RecipeValidationFinding{Level: "warning", Code: "ai_" + selection.Code, Message: message}
+			byCode[selection.Code] = finding
+			seenEvidenceByCode[selection.Code] = make(map[string]bool, len(selection.EvidenceIDs))
+		}
+		seenInSelection := make(map[string]bool, len(selection.EvidenceIDs))
+		for _, evidenceID := range selection.EvidenceIDs {
+			item, found := byID[evidenceID]
+			if evidenceID == "" || evidenceID != strings.TrimSpace(evidenceID) || !found || ambiguous[evidenceID] || seenInSelection[evidenceID] || strings.TrimSpace(item.Kind) == "" || strings.TrimSpace(item.Fingerprint) == "" {
+				return nil, false
+			}
+			seenInSelection[evidenceID] = true
+			if seenEvidenceByCode[selection.Code][evidenceID] {
+				return nil, false
+			}
+			if len(finding.Evidence) == 8 {
+				return nil, false
+			}
+			finding.Evidence = append(finding.Evidence, model.RecipeEvidenceRef{Kind: item.Kind, ResourceID: item.ResourceID, Fingerprint: item.Fingerprint})
+			seenEvidenceByCode[selection.Code][evidenceID] = true
+		}
+	}
+
+	result := make([]model.RecipeValidationFinding, 0, len(orderedCodes))
+	for _, code := range orderedCodes {
+		result = append(result, *byCode[code])
+	}
+	return result, true
 }

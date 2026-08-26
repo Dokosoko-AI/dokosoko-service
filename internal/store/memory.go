@@ -15,6 +15,7 @@ import (
 
 type Memory struct {
 	mu                               sync.RWMutex
+	developerAssets                  *memoryDeveloperAssets
 	orgs                             map[string]model.Organisation
 	deployment                       model.Deployment
 	hasDeployment                    bool
@@ -88,6 +89,7 @@ func NewMemory() *Memory {
 	docsPublication := model.SourcePublication{ID: "pub_docs_seed", OrganisationID: organisation.ID, ProductID: product.ID, SourceID: "src_docs", CrawlJobID: docsCrawl.ID, Revision: 1, Visibility: model.VisibilityPrivate, ContentHash: "sha256:" + strings.Repeat("1", 64), DocumentCount: 1, ReviewedBy: "seed", ReviewedAt: now, PublishedAt: now}
 	apiPublication := model.SourcePublication{ID: "pub_api_seed", OrganisationID: organisation.ID, ProductID: product.ID, SourceID: "src_api", CrawlJobID: apiCrawl.ID, Revision: 1, Visibility: model.VisibilityPrivate, ContentHash: "sha256:" + strings.Repeat("2", 64), DocumentCount: 1, ReviewedBy: "seed", ReviewedAt: now, PublishedAt: now}
 	return &Memory{
+		developerAssets:          newMemoryDeveloperAssets(),
 		orgs:                     map[string]model.Organisation{organisation.ID: organisation},
 		deployment:               deployment,
 		hasDeployment:            true,

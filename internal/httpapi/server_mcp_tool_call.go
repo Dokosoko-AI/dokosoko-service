@@ -11,6 +11,7 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
@@ -186,6 +187,29 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 	}
 	switch params.Name {
+	case "developer_assets.search":
+		if manifestErr != nil {
+			writeRPCError(w, request.ID, -32603, "Developer-asset publication scope could not be resolved")
+			return
+		}
+		var input platform.DeveloperAssetQueryLabInput
+		if err := decodeArguments(params.Arguments, &input); err != nil {
+			writeRPCError(w, request.ID, -32602, "Developer-asset search arguments are invalid")
+			return
+		}
+		if input.Limit == 0 {
+			input.Limit = 10
+		}
+		if input.Limit > 20 {
+			writeRPCError(w, request.ID, -32602, "Developer-asset search limit cannot exceed 20")
+			return
+		}
+		result, searchErr := s.callDeveloperAssetSearch(ctx, input, public, productManifest)
+		if searchErr != nil {
+			writeRPCErrorData(w, request.ID, -32004, "Developer-asset search could not resolve an exact published scope", map[string]any{"reason": searchErr.Error()})
+			return
+		}
+		writeToolResult(w, request.ID, result)
 	case "integration.recipes.list":
 		if len(params.Arguments) != 0 {
 			writeRPCError(w, request.ID, -32602, "Recipe list arguments must be empty")

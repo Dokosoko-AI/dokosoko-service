@@ -131,9 +131,10 @@ type RecipeDependency struct {
 }
 
 type RecipeValidationFinding struct {
-	Level   string `json:"level"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Level    string              `json:"level"`
+	Code     string              `json:"code"`
+	Message  string              `json:"message"`
+	Evidence []RecipeEvidenceRef `json:"evidence,omitempty"`
 }
 
 type RecipeRevision struct {

@@ -75,6 +75,17 @@ func (m *Memory) AppendAudit(_ context.Context, event model.AuditEvent) error {
 	return nil
 }
 
+func (m *Memory) AuditEvent(_ context.Context, id string) (model.AuditEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, event := range m.audit {
+		if event.ID == id {
+			return memoryClone(event), nil
+		}
+	}
+	return model.AuditEvent{}, ErrNotFound
+}
+
 func (m *Memory) AuditEvents(_ context.Context, organisationID string) ([]model.AuditEvent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

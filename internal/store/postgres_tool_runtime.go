@@ -146,8 +146,43 @@ func (p *Postgres) UpdateImportedTool(ctx context.Context, value model.Tool, exp
 }
 
 func (p *Postgres) MarkImportedToolDrift(ctx context.Context, productID, id string, drifted bool) (model.Tool, error) {
-	query := `WITH updated AS (UPDATE tool_definitions SET upstream_drifted=$3,updated_at=now() WHERE product_id=$1 AND id=$2 AND backend_kind IN ('mcp','native') RETURNING id) ` + toolSelect + ` WHERE t.id IN (SELECT id FROM updated)`
-	return scanTool(p.pool.QueryRow(ctx, query, productID, id, drifted))
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.Tool{}, databaseError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var currentDrifted bool
+	var state string
+	if err := tx.QueryRow(ctx, `SELECT upstream_drifted,state FROM tool_definitions WHERE product_id=$1 AND id=$2 AND backend_kind IN ('mcp','native') FOR UPDATE`, productID, id).Scan(&currentDrifted, &state); err != nil {
+		return model.Tool{}, databaseError(err)
+	}
+	if currentDrifted != drifted {
+		if _, err := tx.Exec(ctx, `UPDATE tool_definitions SET upstream_drifted=$3,updated_at=now() WHERE product_id=$1 AND id=$2`, productID, id, drifted); err != nil {
+			return model.Tool{}, databaseError(err)
+		}
+		if state == "published" {
+			var isDeployment bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployments WHERE id=$1)`, productID).Scan(&isDeployment); err != nil {
+				return model.Tool{}, databaseError(err)
+			}
+			if isDeployment {
+				err = bumpDeploymentCatalog(ctx, tx, productID)
+			} else {
+				err = bumpProductCatalogRevisionTx(ctx, tx, productID)
+			}
+			if err != nil {
+				return model.Tool{}, err
+			}
+		}
+	}
+	value, err := scanTool(tx.QueryRow(ctx, toolSelect+` WHERE t.product_id=$1 AND t.id=$2`, productID, id))
+	if err != nil {
+		return model.Tool{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Tool{}, databaseError(err)
+	}
+	return value, nil
 }
 
 func (p *Postgres) StageNativeTool(ctx context.Context, value model.Tool, expected int64) (model.Tool, error) {

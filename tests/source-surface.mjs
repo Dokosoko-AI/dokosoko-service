@@ -18,11 +18,22 @@ export async function consoleSource() {
     "app/components/console/agent-access-views.tsx",
     "app/components/console/tool-views.tsx",
     "app/components/console/catalog-settings-views.tsx",
+    "app/components/console/developer-assets/api-contracts-view.tsx",
+    "app/components/console/developer-assets/api-resource-publication-history.tsx",
+    "app/components/console/developer-assets/api-resources-workspace.tsx",
+    "app/components/console/developer-assets/developer-asset-navigation.tsx",
+    "app/components/console/developer-assets/developer-asset-ui.tsx",
+    "app/components/console/developer-assets/documentation-collections-view.tsx",
+    "app/components/console/developer-assets/documentation-explorer-view.tsx",
+    "app/components/console/developer-assets/query-lab-view.tsx",
+    "app/components/console/developer-assets/sdk-catalog-view.tsx",
     "app/components/console/console-link.tsx",
     "app/components/console/dialogs/admin-activity-dialogs.tsx",
     "app/components/console/dialogs/ai-configuration-dialogs.tsx",
     "app/components/console/dialogs/mcp-dialogs.tsx",
     "app/components/console/dialogs/publication-dialogs.tsx",
+    "app/components/console/dialogs/recipe-approval-dialog.tsx",
+    "app/components/console/dialogs/recipe-approval-review.ts",
     "app/components/console/dialogs/recipe-dialogs.tsx",
     "app/components/console/dialogs/recipe-spec-editor.ts",
     "app/components/console/dialogs/source-dialogs.tsx",
@@ -39,7 +50,7 @@ export async function consoleSource() {
 }
 
 export async function clientSource() {
-  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts"]);
+  return readModuleSurface(["app/lib/api.ts", "app/lib/api-contracts.ts", "app/lib/api-client.ts", "app/lib/developer-assets-api.ts"]);
 }
 
 export async function stylesSource() {

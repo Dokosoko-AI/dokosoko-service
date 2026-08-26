@@ -23,7 +23,7 @@ test("renders the six primary console destinations as accessible links", () => {
 
   assert.match(html, /<nav aria-label="Main navigation">/);
   for (const [label, path] of [
-    ["APIs", "/integrations"],
+    ["Catalog", "/integrations"],
     ["Identity", "/identity"],
     ["Tools", "/tools"],
     ["Recipes", "/recipes"],
@@ -47,7 +47,7 @@ test("renders the same destination model in the mobile console selector", () => 
 
   assert.match(html, /<select class="mobile-navigation" aria-label="Console section">/);
   assert.match(html, /<option value="recipes" selected="">Recipes<\/option>/);
-  for (const label of ["APIs", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
+  for (const label of ["Catalog", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
     assert.match(html, new RegExp(`>${label}</option>`));
   }
   assert.match(html, /<strong>Developer Platform<\/strong>/);

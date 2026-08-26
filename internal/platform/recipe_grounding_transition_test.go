@@ -25,13 +25,13 @@ type recipeGroundingRaceStore struct {
 	beforeSave func(model.Recipe)
 }
 
-func (r *recipeGroundingRaceStore) SaveRecipe(ctx context.Context, recipe model.Recipe, expectedRevision int64) (model.Recipe, error) {
+func (r *recipeGroundingRaceStore) SaveRecipeTransition(ctx context.Context, recipe model.Recipe, mutation store.RecipeMutation) (model.Recipe, error) {
 	if r.beforeSave != nil {
 		hook := r.beforeSave
 		r.beforeSave = nil
 		hook(recipe)
 	}
-	return r.Store.SaveRecipe(ctx, recipe, expectedRevision)
+	return r.Store.SaveRecipeTransition(ctx, recipe, mutation)
 }
 
 func createTransitionRecipe(t *testing.T, backend store.Store) recipeGroundingTransitionFixture {
@@ -126,7 +126,7 @@ func TestRecipeEditApprovalAndPublicationCheckCurrentGrounding(t *testing.T) {
 		if err := json.Unmarshal(fixture.recipe.CurrentRevision.Spec, &spec); err != nil {
 			t.Fatal(err)
 		}
-		updated, err := fixture.service.UpdateRecipeSpec(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, spec, fixture.recipe.Visibility, fixture.actor)
+		updated, err := fixture.service.UpdateRecipeReferences(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, spec.ReferenceIDs, fixture.recipe.Visibility, fixture.actor)
 		if !errors.Is(err, platform.ErrRecipeGroundingChanged) || updated.State != "outdated" {
 			t.Fatalf("edit result=%#v err=%v", updated, err)
 		}
@@ -192,7 +192,7 @@ func TestRecipeDecisionsRejectStaleOperatorRevision(t *testing.T) {
 	if err := json.Unmarshal(original.CurrentRevision.Spec, &spec); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := fixture.service.UpdateRecipeSpec(fixture.ctx, original.ProductID, original.ID, original.Revision, original.CurrentRevisionID, spec, original.Visibility, fixture.actor)
+	updated, err := fixture.service.UpdateRecipeReferences(fixture.ctx, original.ProductID, original.ID, original.Revision, original.CurrentRevisionID, spec.ReferenceIDs, original.Visibility, fixture.actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,15 @@ func TestRecipeDecisionsRejectStaleOperatorRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bumped, err := fixture.memory.SaveRecipe(fixture.ctx, approved, approved.Revision)
+	var approvedSpec model.RecipeSpec
+	if err := json.Unmarshal(approved.CurrentRevision.Spec, &approvedSpec); err != nil {
+		t.Fatal(err)
+	}
+	reworked, err := fixture.service.UpdateRecipeReferences(fixture.ctx, approved.ProductID, approved.ID, approved.Revision, approved.CurrentRevisionID, approvedSpec.ReferenceIDs, approved.Visibility, fixture.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bumped, err := fixture.service.ApproveRecipe(fixture.ctx, reworked.ProductID, reworked.ID, reworked.Revision, reworked.CurrentRevisionID, fixture.actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +231,7 @@ func TestRecipeDecisionsRejectStaleOperatorRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != "approved" || stored.Revision != bumped.Revision || stored.CurrentRevisionID != approved.CurrentRevisionID {
+	if stored.State != "approved" || stored.Revision != bumped.Revision || stored.CurrentRevisionID != bumped.CurrentRevisionID {
 		t.Fatalf("stale publication changed the recipe: %#v", stored)
 	}
 }
@@ -240,7 +248,21 @@ func TestRecipeTransitionsDetectIntegrationChangeDuringSave(t *testing.T) {
 				fixture.recipe = approved
 			}
 			originalRevisionID := fixture.recipe.CurrentRevisionID
-			racing.beforeSave = func(recipe model.Recipe) { fixture.changeEvidence(t) }
+			action := "recipe." + transition + "d"
+			if transition == "publish" {
+				action = "recipe.published"
+			}
+			auditBefore := fixture.recipeAuditActionCount(t, action)
+			outdatedAuditBefore := fixture.recipeAuditActionCount(t, "recipe.outdated")
+			var catalogAfterEvidence int64
+			racing.beforeSave = func(recipe model.Recipe) {
+				fixture.changeEvidence(t)
+				product, productErr := fixture.memory.Product(fixture.ctx, fixture.recipe.ProductID)
+				if productErr != nil {
+					t.Fatal(productErr)
+				}
+				catalogAfterEvidence = product.CatalogRevision
+			}
 			var result model.Recipe
 			var err error
 			if transition == "approve" {
@@ -252,6 +274,34 @@ func TestRecipeTransitionsDetectIntegrationChangeDuringSave(t *testing.T) {
 				t.Fatalf("raced %s result=%#v err=%v", transition, result, err)
 			}
 			fixture.requireStoredOutdated(t, originalRevisionID)
+			if got := fixture.recipeAuditActionCount(t, action); got != auditBefore {
+				t.Fatalf("raced %s wrote a false lifecycle audit: count %d -> %d", transition, auditBefore, got)
+			}
+			if got := fixture.recipeAuditActionCount(t, "recipe.outdated"); got != outdatedAuditBefore+1 {
+				t.Fatalf("raced %s did not atomically audit withdrawal: count %d -> %d", transition, outdatedAuditBefore, got)
+			}
+			product, productErr := fixture.memory.Product(fixture.ctx, fixture.recipe.ProductID)
+			if productErr != nil {
+				t.Fatal(productErr)
+			}
+			if product.CatalogRevision != catalogAfterEvidence {
+				t.Fatalf("raced %s added a recipe catalog bump: got %d want %d", transition, product.CatalogRevision, catalogAfterEvidence)
+			}
 		})
 	}
+}
+
+func (fixture recipeGroundingTransitionFixture) recipeAuditActionCount(t *testing.T, action string) int {
+	t.Helper()
+	events, err := fixture.memory.AuditEvents(fixture.ctx, "org_acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, event := range events {
+		if event.TargetType == "recipe" && event.TargetID == fixture.recipe.ID && event.Action == action {
+			count++
+		}
+	}
+	return count
 }

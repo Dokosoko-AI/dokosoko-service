@@ -1,7 +1,7 @@
 import {
   ArrowLeft, BookOpen, Check, CheckCircle2, ChevronRight,
   GitBranch, Plus, RefreshCw, Search,
-  ShieldCheck, TerminalSquare, TriangleAlert, XCircle,
+  ShieldCheck, TriangleAlert, XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -11,25 +11,24 @@ import {
   APITool, Distribution, api,
 } from "../../lib/api";
 import {
-  INTEGRATION_RESOURCE_TABS, IntegrationResourceTab, IntegrationTab,
+  IntegrationResourceTab, IntegrationTab,
   integrationPath, integrationValidationPath, sectionPath,
 } from "../../lib/console-routes";
 import { Badge, Button, Dialog } from "../core/control";
-import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader } from "../core/layout";
-import { IntegrationSetupGuide } from "../integrations/IntegrationSetupGuide";
+import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PanelHeader } from "../core/layout";
 import { IntegrationNavigation } from "../integrations/IntegrationNavigation";
 import { IntegrationQuickStart } from "../integrations/IntegrationQuickStart";
 import { IntegrationRuntimeAccess } from "../integrations/IntegrationRuntimeAccess";
 import {
-  ConsoleLink, DocumentationAttachmentResult, EntityLink, Source, analysisMatchesIntegration,
-  apiFamilyKeyFromName, integrationIncludesSourcePublication,
+  ConsoleLink, DocumentationAttachmentResult, Source, apiFamilyKeyFromName,
 } from "./shared";
 import { AuthorizationPolicyWorkspace } from "./integrations/authorization-policy-workspace";
-import { IntegrationSDKsWorkspace } from "./integrations/sdks-workspace";
 import { IntegrationTestWorkspace } from "./integrations/test-workspace";
 import { IntegrationToolsWorkspace } from "./integrations/tools-workspace";
+import { APIResourcesWorkspace } from "./developer-assets/api-resources-workspace";
+import { APIResourcePublicationHistory } from "./developer-assets/api-resource-publication-history";
 
-function IntegrationDirectoryView({ integrations, query, onQueryChange, onCreate, onNavigate }: { integrations: APIIntegration[]; query: string; onQueryChange: (query: string) => void; onCreate: () => void; onNavigate: (path: string) => void }) {
+function IntegrationDirectoryView({ integrations, query, navigation, onQueryChange, onCreate, onNavigate }: { integrations: APIIntegration[]; query: string; navigation?: React.ReactNode; onQueryChange: (query: string) => void; onCreate: () => void; onNavigate: (path: string) => void }) {
   const [showRetired, setShowRetired] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();
   const retiredCount = integrations.filter((integration) => integration.lifecycle === "retired").length;
@@ -41,6 +40,7 @@ function IntegrationDirectoryView({ integrations, query, onQueryChange, onCreate
 
   return <>
     <PageHeading eyebrow="Catalog" title="APIs" action={<Button onClick={onCreate}><Plus data-slot="icon" />Add API</Button>} />
+    {navigation}
     <div className="toolbar integration-toolbar">
       <div className="search-field"><Search /><input aria-label="Search APIs" placeholder="Search APIs…" value={query} onChange={(event) => onQueryChange(event.target.value)} /></div>
       <span className="toolbar-count">{filteredIntegrations.length} API{filteredIntegrations.length === 1 ? "" : "s"}</span>
@@ -62,14 +62,14 @@ function IntegrationDirectoryView({ integrations, query, onQueryChange, onCreate
   </>;
 }
 
-function IntegrationSwitcher({ integrations, integration, activeTab, activeResourceTab, onNavigate }: { integrations: APIIntegration[]; integration: APIIntegration; activeTab: IntegrationTab; activeResourceTab?: IntegrationResourceTab; onNavigate: (path: string) => void }) {
+function IntegrationSwitcher({ integrations, integration, activeTab, onNavigate }: { integrations: APIIntegration[]; integration: APIIntegration; activeTab: IntegrationTab; onNavigate: (path: string) => void }) {
   const optionLabel = (value: APIIntegration) => `${value.display_name} · ${value.version_key} · ${value.family_key}`;
   const [value, setValue] = useState(optionLabel(integration));
 
   function selectIntegration(nextValue: string) {
     setValue(nextValue);
     const selected = integrations.find((candidate) => candidate.id === nextValue || optionLabel(candidate) === nextValue);
-    if (selected && selected.id !== integration.id) onNavigate(integrationPath(selected.id, activeTab, activeResourceTab));
+    if (selected && selected.id !== integration.id) onNavigate(integrationPath(selected.id, activeTab));
   }
 
   if (integrations.length <= 1) return null;
@@ -83,6 +83,7 @@ type IntegrationWorkspaceViewProps = {
   tools: APITool[];
   activeTab: IntegrationTab;
   activeResourceTab: IntegrationResourceTab;
+  live: boolean;
   loading: boolean;
   revisions: APIIntegrationRevision[];
   publishStatus: APIIntegrationPublishStatus | null;
@@ -109,8 +110,7 @@ type IntegrationWorkspaceViewProps = {
   onNavigate: (path: string) => void;
 };
 
-function IntegrationWorkspaceView({ integration, integrations, analyses, tools, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, distribution, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onEditResource, onDuplicateResource, onDetachResource, onInspectRevision, onRuntimeChanged, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
-  const [setupGuideBusy, setSetupGuideBusy] = useState(false);
+function IntegrationWorkspaceView({ integration, integrations, tools, activeTab, loading, revisions, publishStatus, identity, distribution, busy, onEdit, onPublish, onInspectRevision, onRuntimeChanged, onMessage, onNavigate, live }: IntegrationWorkspaceViewProps) {
   if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">API</p><h1>Loading API…</h1><p>Retrieving its configuration and published history.</p></div></section>;
   if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">API</p><h1>API unavailable</h1><p>This API is not available in the current deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 
@@ -118,14 +118,11 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
   const documentationResources = attachedResources.filter((resource) => resource.kind === "documentation");
   const contractResources = attachedResources.filter((resource) => resource.kind === "api");
   const sortedRevisions = [...revisions].sort((left, right) => right.revision - left.revision);
-  const setupGuideAnalysis = analyses
-    .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, integration.id))
-    .sort((left, right) => Date.parse(right.completed_at ?? right.created_at) - Date.parse(left.completed_at ?? left.created_at))[0];
   const publishValidationCodes = new Set(publishStatus?.validations.map((validation) => validation.code) ?? []);
   const setupSteps: Array<{ label: string; detail: string; ready: boolean; path: string }> = [
     { label: "Configure runtime access", detail: "Set the API endpoint and an encrypted runtime credential.", ready: Boolean(publishStatus && !publishValidationCodes.has("access_missing")), path: integrationPath(integration.id, "access") },
-    { label: "Add trusted documentation", detail: "Attach an exact reviewed documentation revision.", ready: documentationResources.length > 0, path: integrationPath(integration.id, "documentation", "documentation") },
-    { label: "Attach the API contract", detail: "Pin the reviewed API reference agents should follow.", ready: contractResources.length > 0, path: integrationPath(integration.id, "documentation", "contracts") },
+    { label: "Add trusted documentation", detail: "Attach an exact reviewed documentation revision.", ready: documentationResources.length > 0, path: integrationPath(integration.id, "documentation") },
+    { label: "Attach the API contract", detail: "Pin the reviewed API reference agents should follow.", ready: contractResources.length > 0, path: integrationPath(integration.id, "documentation") },
     { label: "Configure customer access", detail: "Activate customer identity and define this API's action policy.", ready: Boolean(identity?.configured && identity.state === "active" && publishStatus && !publishValidationCodes.has("authorization_missing")), path: integrationPath(integration.id, "access") },
     { label: "Expose tools", detail: "Attach reviewed API-owned or common tools to this API.", ready: Boolean(publishStatus && !publishValidationCodes.has("tools_missing")), path: integrationPath(integration.id, "tools") },
     { label: "Validate configuration", detail: "Review the server preflight and acceptance scenarios.", ready: Boolean(publishStatus?.ready), path: integrationPath(integration.id, "test") },
@@ -134,34 +131,11 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
   const actionableValidations = publishStatus?.validations.filter((validation) => !setupValidationCodes.has(validation.code)) ?? [];
   const hasChanges = Boolean(publishStatus?.has_changes);
   const canPublish = Boolean(publishStatus?.ready && hasChanges);
-  const resourceLabel = (kind: APIResourceSet["kind"]) => kind === "api" ? "API contract" : "documentation";
   const setupComplete = setupSteps.filter((step) => step.ready).length;
   const validationPath = (tab: string) => integrationValidationPath(integration.id, tab);
-  const integrationID = integration.id;
-
-  async function generateSetupGuide() {
-	setSetupGuideBusy(true);
-	try {
-	  const analysis = await onGenerateSetupGuide(integrationID);
-	  onMessage(analysis.generated_by === "ai_assisted" ? "Setup guide generated from this API's reviewed evidence." : "Setup guide generated deterministically; configure an Analysis model for AI-assisted refinement.");
-	} catch (error) {
-	  onMessage(error instanceof APIError || error instanceof Error ? error.message : "The setup guide could not be generated.");
-	} finally {
-	  setSetupGuideBusy(false);
-	}
-  }
-
-  const renderResourceRows = (resources: typeof attachedResources) => <>
-    {resources.map((resource) => {
-      const source = resourceSets.find((set) => set.id === resource.resource_set_id);
-      return <div className="integration-resource-row" key={resource.resource_set_id}><span className="settings-icon">{resource.kind === "documentation" ? <BookOpen /> : <TerminalSquare />}</span><span><EntityLink entity="resource-set" uid={resource.resource_set_id} onNavigate={onNavigate} className="entity-link"><strong>{resource.name}</strong></EntityLink><small>{resourceLabel(resource.kind)} · {resource.follow_latest ? "follows latest" : `pinned to revision ${resource.resolved_revision?.revision ?? "—"}`}</small></span><Badge color={resource.kind === "documentation" ? "blue" : "violet"}>{resourceLabel(resource.kind)}</Badge><span className="table-actions">{source && <Button outline onClick={() => onEditResource(source)}>New revision</Button>}{source && <Button outline onClick={() => onDuplicateResource(source)}>Duplicate</Button>}<button type="button" className="more" disabled={busy} title={`Detach ${resource.name}`} aria-label={`Detach ${resource.name}`} onClick={() => onDetachResource(integration.id, resource.resource_set_id)}><XCircle /></button></span></div>;
-    })}
-    {resources.length === 0 && <div className="empty-row">Nothing is attached here yet.</div>}
-  </>;
-
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All APIs</ConsoleLink></div>
-    <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} activeResourceTab={activeResourceTab} onNavigate={onNavigate} />
+    <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} onNavigate={onNavigate} />
     <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} action={<span className="heading-actions"><Button outline onClick={() => onEdit(integration)}>Edit</Button>{!publishStatus ? <span className="published-state checking"><RefreshCw />Checking…</span> : canPublish ? <Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish</Button> : hasChanges && !publishStatus.ready ? <Badge color="amber">Setup required</Badge> : <span className="published-state"><CheckCircle2 />Published</span>}</span>} />
     <IntegrationNavigation integrationID={integration.id} integrationName={integration.display_name} activeTab={activeTab} onNavigate={onNavigate} />
 
@@ -173,24 +147,12 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
       validations={actionableValidations.map((validation) => ({ ...validation, path: validationPath(validation.tab) }))}
       onNavigate={onNavigate}
       advanced={<>
-        <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "documentation")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Documentation & SDKs</strong><small>Reviewed sources, API contracts, and exact SDK versions.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("identity")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Customer identity</strong><small>{identity?.configured && identity.state === "active" ? "OIDC customer sign-in active" : identity?.configured ? "OIDC draft not active" : "OIDC not configured"}</small></span><ChevronRight /></ConsoleLink></div>
+        <div className="integration-overview-grid"><ConsoleLink path={integrationPath(integration.id, "documentation")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><BookOpen /></span><span><strong>Resources</strong><small>Exact documentation, API contract, and SDK attachments.</small></span><ChevronRight /></ConsoleLink><ConsoleLink path={sectionPath("identity")} onNavigate={onNavigate} className="integration-shortcut"><span className="settings-icon"><ShieldCheck /></span><span><strong>Customer identity</strong><small>{identity?.configured && identity.state === "active" ? "OIDC customer sign-in active" : identity?.configured ? "OIDC draft not active" : "OIDC not configured"}</small></span><ChevronRight /></ConsoleLink></div>
         <section className="panel"><PanelHeader title="API details" /><dl className="entity-detail-grid"><div><dt>API ID</dt><dd>{integration.id}</dd></div><div><dt>Family</dt><dd>{integration.family_key}</dd></div><div><dt>Version</dt><dd>{integration.version_key}</dd></div><div><dt>Draft revision</dt><dd>{integration.revision}</dd></div><div><dt>Replacement</dt><dd>{integration.replacement_integration_id ?? "—"}</dd></div><div><dt>Sunset</dt><dd>{integration.sunset_at ? new Date(integration.sunset_at).toLocaleDateString() : "—"}</dd></div></dl></section>
       </>}
     />}
 
-    {activeTab === "documentation" && <div className="integration-tab-content">
-      <PageTabs label="Documentation areas">{INTEGRATION_RESOURCE_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, "documentation", tab.id)} onNavigate={onNavigate} className={`page-tab resource-subtab ${activeResourceTab === tab.id ? "active" : ""}`} ariaCurrent={activeResourceTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
-      {activeResourceTab === "documentation" && <>
-        <IntegrationSetupGuide analysis={setupGuideAnalysis} canGenerate={attachedResources.length > 0} busy={setupGuideBusy} onGenerate={generateSetupGuide} />
-        <section className="panel"><PanelHeader title="Documentation ingestion" description="Deployment sources are reusable; attach a reviewed resource revision to this API." action={<span className="heading-actions"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="entity-back-link">All documentation</ConsoleLink><Button onClick={onAddSource}><Plus data-slot="icon" />Add source</Button></span>} />{sources.map((source) => { const publicationAttached = Boolean(source.latestPublication && integrationIncludesSourcePublication(integration, source.latestPublication.id)); return <div className="provider-row documentation-source-row" key={source.id}><span className="settings-icon"><BookOpen /></span><span><EntityLink entity="source" uid={source.id} onNavigate={onNavigate} className="entity-link"><strong>{source.name}</strong></EntityLink><small>{source.kind} · {source.location}</small></span><span className="tool-badges"><Badge color={source.quarantined || source.crawlState === "failed" ? "red" : source.crawlState === "synced" ? "green" : "amber"}>{source.quarantined ? "quarantined" : source.crawlState === "synced" ? `published r${source.latestPublication?.revision ?? 1}` : source.crawlState}</Badge><Badge color={source.visibility === "public" ? "blue" : "zinc"}>{source.visibility}</Badge></span><span className="table-actions">{source.crawlState !== "queued" && source.crawlState !== "running" && <Button outline disabled={busy} onClick={() => onCrawlSource(source.id)}>Crawl</Button>}{source.crawlState === "review" && <Button disabled={busy} onClick={() => onPublishSource(source, integration.id)}>{source.quarantined ? "Inspect" : "Review & attach"}</Button>}{source.crawlState === "synced" && source.latestPublication && (publicationAttached ? <Button outline disabled><Check data-slot="icon" />Attached</Button> : <Button disabled={busy} onClick={() => void onAttachPublishedSource(integration, source)}>Attach to API</Button>)}</span></div>; })}{sources.length === 0 && <div className="empty-row">No documentation source has been ingested.</div>}</section>
-        <section className="panel"><PanelHeader title="Attached documentation" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create set</Button><Button onClick={() => onAttach(integration, "documentation")}>Attach reviewed set</Button></span>} />{renderResourceRows(documentationResources)}</section>
-      </>}
-      {activeResourceTab === "contracts" && <>
-        <div className="notice"><TerminalSquare /><span><strong>Immutable API contracts.</strong> Review each manifest, then pin or follow a reusable contract revision.</span></div>
-        <section className="panel"><PanelHeader title="Attached API contracts" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create contract set</Button><Button onClick={() => onAttach(integration, "api")}>Attach existing</Button></span>} />{renderResourceRows(contractResources)}</section>
-      </>}
-      {activeResourceTab === "sdks" && <IntegrationSDKsWorkspace integration={integration} onMessage={onMessage} />}
-    </div>}
+    {activeTab === "documentation" && <div className="integration-tab-content"><APIResourcesWorkspace integration={integration} live={live} onMessage={onMessage} onNavigate={onNavigate} /></div>}
 
     {activeTab === "access" && <div className="integration-tab-content">
       <IntegrationRuntimeAccess integration={integration} key={integration.id} onMessage={onMessage} onNavigate={onNavigate} onChanged={onRuntimeChanged} />
@@ -205,11 +167,13 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
 
     {activeTab === "test" && <IntegrationTestWorkspace key={`${integration.id}:${publishStatus?.current_manifest_hash ?? ""}`} integration={integration} distribution={distribution} onNavigate={onNavigate} />}
 
-    {activeTab === "history" && <div className="integration-tab-content"><div className="notice"><GitBranch /><span><strong>Published history is immutable.</strong> Each entry preserves the exact documentation, SDKs, access, and tools delivered to agents.</span></div><section className="panel"><PanelHeader title="Published history" />{sortedRevisions.map((revision) => <button type="button" className="integration-revision-row" key={revision.id} onClick={() => onInspectRevision(revision)}><span className="revision-number">r{revision.revision}</span><span><strong>{revision.state}</strong><small>{revision.published_at || revision.created_at ? new Date(revision.published_at ?? revision.created_at).toLocaleString() : "Date unavailable"}</small></span><ChevronRight /></button>)}{sortedRevisions.length === 0 && <div className="empty-row">Nothing has been published yet.</div>}</section></div>}
+    {activeTab === "history" && <div className="integration-tab-content"><div className="notice"><GitBranch /><span><strong>Published history is immutable.</strong> Each entry preserves the exact documentation, SDKs, access, and tools delivered to agents.</span></div><section className="panel"><PanelHeader title="Published history" />{sortedRevisions.map((revision) => <button type="button" className="integration-revision-row" key={revision.id} onClick={() => onInspectRevision(revision)}><span className="revision-number">r{revision.revision}</span><span><strong>{revision.state}</strong><small>{revision.published_at || revision.created_at ? new Date(revision.published_at ?? revision.created_at).toLocaleString() : "Date unavailable"}</small></span><ChevronRight /></button>)}{sortedRevisions.length === 0 && <div className="empty-row">Nothing has been published yet.</div>}</section><APIResourcePublicationHistory integrationID={integration.id} live={live} onMessage={onMessage} /></div>}
   </>;
 }
 
 type IntegrationsViewProps = {
+  live?: boolean;
+  navigation?: React.ReactNode;
   integrations: APIIntegration[];
   analyses: APIIntegrationAnalysis[];
   tools: APITool[];
@@ -230,7 +194,7 @@ type IntegrationsViewProps = {
   onNavigate: (path: string) => void;
 };
 
-export function IntegrationsView({ integrations, analyses, tools, resourceSets, sources, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
+export function IntegrationsView({ live = true, navigation, integrations, analyses, tools, resourceSets, sources, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
   const [query, setQuery] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
   const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
@@ -415,7 +379,7 @@ export function IntegrationsView({ integrations, analyses, tools, resourceSets, 
   ].map((entry) => [String(entry.source_publication_id), entry])).values());
 
   return <>
-    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateSetupGuide={onGenerateSetupGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onNavigate={onNavigate} />}
+    {selectedIntegrationID ? <IntegrationWorkspaceView live={live} integration={selectedIntegration} integrations={integrations} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateSetupGuide={onGenerateSetupGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} query={query} navigation={navigation} onQueryChange={setQuery} onCreate={() => openIntegration()} onNavigate={onNavigate} />}
 
     <Dialog
       open={integrationOpen}

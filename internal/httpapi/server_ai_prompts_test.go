@@ -32,12 +32,31 @@ func TestAIWorkflowPromptAPIUsesOptimisticRevisions(t *testing.T) {
 	if err := json.Unmarshal(listed.Body.Bytes(), &collection); err != nil {
 		t.Fatal(err)
 	}
-	if len(collection.Items) != 4 {
+	if len(collection.Items) != 8 {
 		t.Fatalf("prompt count = %d: %s", len(collection.Items), listed.Body.String())
 	}
+	wantKeys := map[string]bool{
+		"integration.analysis":         false,
+		"recipe.brief":                 false,
+		"recipe.authoring":             false,
+		"recipe.review":                false,
+		"documentation.map_enrichment": false,
+		"sdk.map_enrichment":           false,
+		"sdk.applicability_suggestion": false,
+		"sdk.sample_review":            false,
+	}
 	for _, item := range collection.Items {
-		if item.Source != "default" || item.Revision != 1 || item.UpdatedAt != nil || strings.Contains(item.Instructions, "Trust and execution policy:") {
+		if item.Source != "default" || item.Revision != 1 || item.UpdatedAt != nil || strings.Contains(item.Instructions, "Trust, scope, and execution policy:") {
 			t.Fatalf("unexpected default prompt response: %#v", item)
+		}
+		if _, supported := wantKeys[item.Key]; !supported {
+			t.Fatalf("unexpected prompt key %q", item.Key)
+		}
+		wantKeys[item.Key] = true
+	}
+	for key, found := range wantKeys {
+		if !found {
+			t.Errorf("prompt list omitted %q", key)
 		}
 	}
 

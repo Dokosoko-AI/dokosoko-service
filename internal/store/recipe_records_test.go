@@ -11,6 +11,28 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
+func TestMemoryUpdateProductKeepsDeploymentCatalogCASMirrored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := NewMemory()
+	product, err := memory.Product(ctx, "prod_acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	product.Description = "Updated discovery description."
+	updated, err := memory.UpdateProduct(ctx, product, product.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := memory.Deployment(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Revision != updated.Revision || deployment.CatalogRevision != updated.CatalogRevision || deployment.Description != updated.Description {
+		t.Fatalf("deployment/product mirror diverged: deployment=%#v product=%#v", deployment, updated)
+	}
+}
+
 func TestMemoryCreateRecipeWithRevisionPersistsProductIntegrationContractAtomically(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -87,7 +109,12 @@ func TestMemoryCreateRecipeWithRevisionPersistsProductIntegrationContractAtomica
 		PromptVersion:           "recipe-authoring-v9",
 		PromptHash:              promptHash,
 	}
-	saved, err := memory.CreateRecipeWithRevision(ctx, recipe, revision)
+	product, err := memory.Product(ctx, recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAudit := recipeTestAudit(recipe, "audit_recipe_v2_created", "recipe.created")
+	saved, err := memory.CreateRecipeWithRevision(ctx, recipe, revision, RecipeMutation{ExpectedCatalogRevision: product.CatalogRevision, Audit: &createdAudit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +139,8 @@ func TestMemoryCreateRecipeWithRevisionPersistsProductIntegrationContractAtomica
 	conflictingRecipe.StableURI = "dokosoko://products/acme/recipes/create-payment-rolled-back"
 	conflictingRevision := revision
 	conflictingRevision.RecipeID = conflictingRecipe.ID
-	if _, err := memory.CreateRecipeWithRevision(ctx, conflictingRecipe, conflictingRevision); !errors.Is(err, ErrConflict) {
+	conflictingAudit := recipeTestAudit(conflictingRecipe, "audit_recipe_v2_conflict", "recipe.created")
+	if _, err := memory.CreateRecipeWithRevision(ctx, conflictingRecipe, conflictingRevision, RecipeMutation{ExpectedCatalogRevision: product.CatalogRevision, Audit: &conflictingAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate immutable revision ID error = %v, want conflict", err)
 	}
 	if _, err := memory.Recipe(ctx, conflictingRecipe.ProductID, conflictingRecipe.ID); !errors.Is(err, ErrNotFound) {
@@ -121,13 +149,33 @@ func TestMemoryCreateRecipeWithRevisionPersistsProductIntegrationContractAtomica
 	if _, err := memory.RecipeRevisions(ctx, conflictingRecipe.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("failed aggregate left a revision set behind: %v", err)
 	}
+
+	invalidAuditRecipe := conflictingRecipe
+	invalidAuditRecipe.ID = "recipe_v2_invalid_audit"
+	invalidAuditRecipe.Slug = "create-payment-invalid-audit"
+	invalidAuditRecipe.StableURI = "dokosoko://products/acme/recipes/create-payment-invalid-audit"
+	invalidAuditRevision := revision
+	invalidAuditRevision.ID = "recipe_revision_v2_invalid_audit"
+	invalidAuditRevision.RecipeID = invalidAuditRecipe.ID
+	invalidAudit := recipeTestAudit(invalidAuditRecipe, "audit_recipe_v2_invalid", "recipe.created")
+	invalidAudit.Current = map[string]any{"invalid": make(chan int)}
+	if _, err := memory.CreateRecipeWithRevision(ctx, invalidAuditRecipe, invalidAuditRevision, RecipeMutation{ExpectedCatalogRevision: product.CatalogRevision, Audit: &invalidAudit}); err == nil {
+		t.Fatal("recipe creation accepted a non-JSON audit")
+	}
+	if _, err := memory.Recipe(ctx, invalidAuditRecipe.ProductID, invalidAuditRecipe.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid audit left a recipe behind: %v", err)
+	}
+	if _, err := memory.RecipeRevisions(ctx, invalidAuditRecipe.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid audit left a revision behind: %v", err)
+	}
 }
 
 func TestMemorySaveRecipeTransitionIsAtomicWithCatalogAndAudit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	memory := NewMemory()
-	recipe, err := memory.CreateRecipeWithRevision(ctx, model.Recipe{
+	approvedAt := time.Now().UTC()
+	recipeInput := model.Recipe{
 		ID:              "recipe_transition",
 		OrganisationID:  "org_acme",
 		ProductID:       "prod_acme",
@@ -137,10 +185,18 @@ func TestMemorySaveRecipeTransitionIsAtomicWithCatalogAndAudit(t *testing.T) {
 		Outcome:         "Exercise atomic transitions.",
 		Audience:        "operator",
 		State:           "approved",
+		ApprovedBy:      "root",
+		ApprovedAt:      &approvedAt,
 		Generated:       true,
 		Visibility:      model.VisibilityPrivate,
 		StableURI:       "dokosoko://products/acme/recipes/transition-recipe",
-	}, model.RecipeRevision{
+	}
+	productAtCreate, err := memory.Product(ctx, recipeInput.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAudit := recipeTestAudit(recipeInput, "audit_recipe_transition_created", "recipe.created")
+	recipe, err := memory.CreateRecipeWithRevision(ctx, recipeInput, model.RecipeRevision{
 		ID:          "recipe_transition_revision",
 		RecipeID:    "recipe_transition",
 		SpecVersion: 1,
@@ -148,7 +204,7 @@ func TestMemorySaveRecipeTransitionIsAtomicWithCatalogAndAudit(t *testing.T) {
 		Markdown:    "# Transition recipe\n",
 		GeneratedBy: "human",
 		CreatedBy:   "root",
-	})
+	}, RecipeMutation{ExpectedCatalogRevision: productAtCreate.CatalogRevision, Audit: &createAudit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +233,16 @@ func TestMemorySaveRecipeTransitionIsAtomicWithCatalogAndAudit(t *testing.T) {
 		RequestID:      "request-transition",
 		CreatedAt:      now,
 	}
-	published, err := memory.SaveRecipeTransition(ctx, recipe, recipe.Revision, true, &audit)
+	invalidBinding := recipe
+	invalidBinding.Title = "Rebound transition recipe"
+	invalidBinding.State = "published"
+	invalidBinding.PublishedAt = &now
+	invalidBindingAudit := audit
+	invalidBindingAudit.ID = "audit_recipe_transition_invalid_binding"
+	if _, err := memory.SaveRecipeTransition(ctx, invalidBinding, RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: productBefore.CatalogRevision, Audit: &invalidBindingAudit}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mutable recipe binding error = %v, want conflict", err)
+	}
+	published, err := memory.SaveRecipeTransition(ctx, recipe, RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: productBefore.CatalogRevision, Audit: &audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +264,7 @@ func TestMemorySaveRecipeTransitionIsAtomicWithCatalogAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].ID != audit.ID || events[0].Outcome != "success" {
+	if len(events) != 2 || events[1].ID != audit.ID || events[1].Outcome != "success" {
 		t.Fatalf("transition audit = %#v", events)
 	}
 
@@ -207,23 +272,111 @@ func TestMemorySaveRecipeTransitionIsAtomicWithCatalogAndAudit(t *testing.T) {
 	failed.State = "outdated"
 	rollbackAudit := audit
 	rollbackAudit.ID = "audit_recipe_transition_stale"
-	if _, err := memory.SaveRecipeTransition(ctx, failed, recipe.Revision, true, &rollbackAudit); !errors.Is(err, ErrConflict) {
+	rollbackAudit.Action = "recipe.outdated"
+	if _, err := memory.SaveRecipeTransition(ctx, failed, RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: productAfter.CatalogRevision, Audit: &rollbackAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale transition error = %v, want conflict", err)
 	}
 	assertMemoryRecipeTransitionUnchanged(t, memory, published, deploymentAfter.CatalogRevision, len(events))
 
-	if _, err := memory.SaveRecipeTransition(ctx, failed, published.Revision, true, &audit); !errors.Is(err, ErrConflict) {
+	duplicateAudit := audit
+	duplicateAudit.Action = "recipe.outdated"
+	if _, err := memory.SaveRecipeTransition(ctx, failed, RecipeMutation{ExpectedRevision: published.Revision, ExpectedCatalogRevision: productAfter.CatalogRevision, Audit: &duplicateAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate audit transition error = %v, want conflict", err)
 	}
 	assertMemoryRecipeTransitionUnchanged(t, memory, published, deploymentAfter.CatalogRevision, len(events))
 
 	invalidAudit := rollbackAudit
 	invalidAudit.ID = "audit_recipe_transition_invalid"
+	invalidAudit.Action = "recipe.outdated"
 	invalidAudit.Current = map[string]any{"invalid": make(chan int)}
-	if _, err := memory.SaveRecipeTransition(ctx, failed, published.Revision, true, &invalidAudit); err == nil {
+	if _, err := memory.SaveRecipeTransition(ctx, failed, RecipeMutation{ExpectedRevision: published.Revision, ExpectedCatalogRevision: productAfter.CatalogRevision, Audit: &invalidAudit}); err == nil {
 		t.Fatal("transition accepted a non-JSON audit")
 	}
 	assertMemoryRecipeTransitionUnchanged(t, memory, published, deploymentAfter.CatalogRevision, len(events))
+
+	review := published
+	review.State = "review"
+	review.NeedsAttention = true
+	review.ApprovedBy = ""
+	review.ApprovedAt = nil
+	review.PublishedAt = nil
+	revision := *published.CurrentRevision
+	revision.ID = "recipe_transition_revision_2"
+	revision.Revision = 0
+	revision.Markdown = "# Transition recipe\n\nRevised.\n"
+	revision.CreatedAt = time.Time{}
+	revisionAudit := recipeTestAudit(review, "audit_recipe_transition_reworked", "recipe.reworked")
+	revised, err := memory.SaveRecipeRevision(ctx, review, revision, RecipeMutation{ExpectedRevision: published.Revision, ExpectedCatalogRevision: productAfter.CatalogRevision, Audit: &revisionAudit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revised.State != "review" || revised.CurrentRevision == nil || revised.CurrentRevision.ID != revision.ID {
+		t.Fatalf("revised recipe aggregate = %#v", revised)
+	}
+	deploymentAfterRevision, err := memory.Deployment(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productAfterRevision, err := memory.Product(ctx, recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deploymentAfterRevision.CatalogRevision != deploymentAfter.CatalogRevision+1 || productAfterRevision.CatalogRevision != deploymentAfterRevision.CatalogRevision {
+		t.Fatalf("published edit catalog revisions = deployment %d product %d", deploymentAfterRevision.CatalogRevision, productAfterRevision.CatalogRevision)
+	}
+	duplicateRevisionAudit := recipeTestAudit(revised, "audit_recipe_transition_duplicate_revision", "recipe.reworked")
+	if _, err := memory.SaveRecipeRevision(ctx, revised, revision, RecipeMutation{ExpectedRevision: revised.Revision, ExpectedCatalogRevision: productAfterRevision.CatalogRevision, Audit: &duplicateRevisionAudit}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate revision error = %v, want conflict", err)
+	}
+	deploymentAfterFailedRevision, err := memory.Deployment(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deploymentAfterFailedRevision.CatalogRevision != deploymentAfterRevision.CatalogRevision {
+		t.Fatalf("failed revision bumped catalog to %d, want %d", deploymentAfterFailedRevision.CatalogRevision, deploymentAfterRevision.CatalogRevision)
+	}
+
+	integration, err := memory.CreateIntegration(ctx, model.Integration{ID: "integration_recipe_catalog_race", DeploymentID: recipe.ProductID, OrganisationID: recipe.OrganisationID, FamilyKey: "catalog-race", VersionKey: "v1", DisplayName: "Catalog race"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestHash := "sha256:" + strings.Repeat("c", 64)
+	if _, err := memory.CreateIntegrationRevision(ctx, model.IntegrationRevision{ID: "integration_recipe_catalog_race_revision", IntegrationID: integration.ID, Revision: 1, State: "published", Snapshot: json.RawMessage(`{}`), ManifestHash: manifestHash}); err != nil {
+		t.Fatal(err)
+	}
+	productAfterEvidence, err := memory.Product(ctx, recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsAfterRevision, err := memory.AuditEvents(ctx, recipe.OrganisationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleApproval := revised
+	staleApproval.State = "approved"
+	staleApproval.NeedsAttention = false
+	staleApproval.ApprovedBy = "root"
+	approvedAfterRace := time.Now().UTC()
+	staleApproval.ApprovedAt = &approvedAfterRace
+	staleApprovalAudit := recipeTestAudit(staleApproval, "audit_recipe_catalog_race_approval", "recipe.approved")
+	if _, err := memory.SaveRecipeTransition(ctx, staleApproval, RecipeMutation{ExpectedRevision: revised.Revision, ExpectedCatalogRevision: productAfterRevision.CatalogRevision, Audit: &staleApprovalAudit}); !errors.Is(err, ErrCatalogConflict) {
+		t.Fatalf("stale catalog transition error = %v, want catalog conflict", err)
+	}
+	assertMemoryRecipeTransitionUnchanged(t, memory, revised, productAfterEvidence.CatalogRevision, len(eventsAfterRevision))
+}
+
+func recipeTestAudit(recipe model.Recipe, id, action string) model.AuditEvent {
+	return model.AuditEvent{
+		ID:             id,
+		OrganisationID: recipe.OrganisationID,
+		ProductID:      recipe.ProductID,
+		ActorID:        "root",
+		Action:         action,
+		TargetType:     "recipe",
+		TargetID:       recipe.ID,
+		RequestID:      "request-" + id,
+		CreatedAt:      time.Now().UTC(),
+	}
 }
 
 func assertMemoryRecipeTransitionUnchanged(t *testing.T, memory *Memory, want model.Recipe, catalogRevision int64, auditCount int) {
@@ -318,6 +471,13 @@ func TestLegacyRecipeRecordDefaultsRemainExplicit(t *testing.T) {
 	}
 	if revision.SpecVersion != 1 || string(revision.Spec) != `{}` || revision.IntegrationRevisionID != "" || revision.IntegrationManifestHash != "" {
 		t.Fatalf("legacy revision defaults = %#v", revision)
+	}
+	if _, err := prepareRecipeRevisionRecord(recipe, model.RecipeRevision{
+		GeneratedBy:   "ai",
+		PromptVersion: "recipe-authoring-v9",
+		PromptHash:    "sha256:" + strings.Repeat("b", 64),
+	}); err == nil {
+		t.Fatal("legacy AI revision without model provenance was accepted")
 	}
 }
 

@@ -153,6 +153,11 @@ func (m *Memory) CreateIntegration(_ context.Context, value model.Integration) (
 	m.sdkReferences[value.ID] = make(map[string]model.SDKReference)
 	m.integrationRevisions[value.ID] = make(map[string]model.IntegrationRevision)
 	m.deployment.CatalogRevision++
+	m.deployment.UpdatedAt = now
+	if product, exists := m.products[value.DeploymentID]; exists {
+		product.CatalogRevision, product.UpdatedAt = m.deployment.CatalogRevision, now
+		m.products[value.DeploymentID] = product
+	}
 	return m.integrationLocked(value), nil
 }
 
@@ -171,9 +176,15 @@ func (m *Memory) UpdateIntegration(_ context.Context, value model.Integration, e
 			return model.Integration{}, ErrConflict
 		}
 	}
-	value.CreatedAt, value.Revision, value.UpdatedAt = current.CreatedAt, expected+1, time.Now().UTC()
+	now := time.Now().UTC()
+	value.CreatedAt, value.Revision, value.UpdatedAt = current.CreatedAt, expected+1, now
 	m.integrations[value.ID] = value
 	m.deployment.CatalogRevision++
+	m.deployment.UpdatedAt = now
+	if product, exists := m.products[value.DeploymentID]; exists {
+		product.CatalogRevision, product.UpdatedAt = m.deployment.CatalogRevision, now
+		m.products[value.DeploymentID] = product
+	}
 	return m.integrationLocked(value), nil
 }
 

@@ -96,7 +96,7 @@ test("browser-held tool credentials remain bound to one origin and exact auth co
 });
 
 test("primary console sections have canonical, round-trippable URLs", () => {
-  for (const section of ["product", "identity", "recipes", "sources", "tools", "connections", "distribution", "reporting", "settings"] as const) {
+  for (const section of ["product", "sources", "documents", "collections", "contracts", "sdks", "query-lab", "identity", "recipes", "tools", "connections", "mcp-preview", "distribution", "reporting", "settings"] as const) {
     const path = SECTION_PATHS[section];
     assert.equal(sectionPath(section as keyof typeof SECTION_PATHS), path);
     assert.deepEqual(parseConsolePath(path), { kind: "section", section, path });
@@ -108,7 +108,7 @@ test("primary console sections have canonical, round-trippable URLs", () => {
   assert.equal(parseConsolePath("/identity/authorization").kind, "not-found");
 });
 
-test("tools have canonical catalog, connection, and detail URLs", () => {
+test("tools have canonical catalog, connection, preview, and detail URLs", () => {
   assert.equal(sectionPath("tools"), "/tools");
   assert.deepEqual(parseConsolePath("/tools"), {
     kind: "section",
@@ -120,6 +120,12 @@ test("tools have canonical catalog, connection, and detail URLs", () => {
     kind: "section",
     section: "connections",
     path: "/tools/connections",
+  });
+  assert.equal(sectionPath("mcp-preview"), "/tools/preview");
+  assert.deepEqual(parseConsolePath("/tools/preview"), {
+    kind: "section",
+    section: "mcp-preview",
+    path: "/tools/preview",
   });
 
   const uid = "billing tool/v2";
@@ -197,7 +203,7 @@ test("entity URLs encode UIDs and resolve to their owning section", () => {
 test("API workspaces expose the task-oriented setup tabs with stable, round-trippable URLs", () => {
   assert.deepEqual(INTEGRATION_TABS, [
     { id: "overview", label: "Quick Start" },
-    { id: "documentation", label: "Documentation" },
+    { id: "documentation", label: "Resources" },
     { id: "access", label: "Keys & Access" },
     { id: "tools", label: "Tools" },
     { id: "test", label: "Test" },
@@ -205,7 +211,7 @@ test("API workspaces expose the task-oriented setup tabs with stable, round-trip
   ]);
   assert.deepEqual(INTEGRATION_PRIMARY_TABS, [
     { id: "overview", label: "Quick Start" },
-    { id: "documentation", label: "Documentation" },
+    { id: "documentation", label: "Resources" },
     { id: "access", label: "Keys & Access" },
     { id: "tools", label: "Tools" },
     { id: "test", label: "Test" },

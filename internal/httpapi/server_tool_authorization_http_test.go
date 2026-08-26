@@ -108,7 +108,7 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 	doer := &authorizationDoer{}
 	runtime := toolruntime.NewRuntime(memory, authorizationResolver{}, doer)
 	broker := identity.NewBroker(memory, vault, "https://dokosoko.example", nil, nil, nil)
-	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", IdentityBroker: broker, ToolRuntime: runtime})
+	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", IdentityBroker: broker, ToolRuntime: runtime, AllowDemoTokens: true})
 
 	listed := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"name":"common.check_readiness"`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/authorizationPointRevision":1`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/confirmationRequired":true`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/confirmationChallengeMetaField":"confirmation_challenge"`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/idempotencyKeyRequired":true`) || !strings.Contains(listed.Body.String(), `"com.dokosoko/idempotencyKeyMetaField":"idempotency_key"`) {
@@ -121,6 +121,14 @@ func TestPrivateMCPListAndCallEnforceLiveExactAuthorizationPoint(t *testing.T) {
 				t.Fatalf("denied discovery = %d: %s", response.Code, response.Body.String())
 			}
 		})
+	}
+	previewDenied := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/mcp-preview?audience=private&method=tools%2Flist", "doko_admin_demo", "")
+	if previewDenied.Code != http.StatusOK || strings.Contains(previewDenied.Body.String(), `"name":"common.check_readiness"`) {
+		t.Fatalf("no-grant MCP preview = %d: %s", previewDenied.Code, previewDenied.Body.String())
+	}
+	previewGranted := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/mcp-preview?audience=private&method=tools%2Flist&grant=platform.readiness", "doko_admin_demo", "")
+	if previewGranted.Code != http.StatusOK || !strings.Contains(previewGranted.Body.String(), `"name":"common.check_readiness"`) || doer.calls != 0 {
+		t.Fatalf("granted MCP preview = %d calls=%d: %s", previewGranted.Code, doer.calls, previewGranted.Body.String())
 	}
 	unconfirmed := request(t, handler, http.MethodPost, "/mcp", freshToken, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"platform.check_readiness","arguments":{},"_meta":{"idempotency_key":"stable-mcp-call-001"}}}`)
 	if unconfirmed.Code != http.StatusOK || !strings.Contains(unconfirmed.Body.String(), `"retry_metadata_field":"params._meta.confirmation_challenge"`) || !strings.Contains(unconfirmed.Body.String(), "does not independently prove that a human approved") || doer.calls != 0 {

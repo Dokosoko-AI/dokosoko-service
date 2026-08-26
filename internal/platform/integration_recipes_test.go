@@ -203,7 +203,7 @@ func (d *adversarialRecipeV2Doer) Do(request *http.Request) (*http.Response, err
 	case strings.Contains(string(body), "Recipe authoring contract:"):
 		content = `{"status":"ready","prerequisites":[],"steps":[{"action":"Connect the project to DokoSoko MCP.","expected_result":"MCP discovery succeeds.","evidence_ids":["platform-mcp"]},{"action":"Publish the connector.","expected_result":"The connector is public.","evidence_ids":["platform-mcp"]}],"checks":[{"action":"Inspect MCP discovery.","expected_result":"The tool appears.","evidence_ids":["platform-mcp"]}],"reference_ids":[],"gaps":[]}`
 	case strings.Contains(string(body), "Recipe review contract:"):
-		content = `{"summary":"Review the deterministic product implementation.","recommendation":"pass","findings":[]}`
+		content = `{"recommendation":"pass","findings":[]}`
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"id": "resp_recipe_v2", "model": "fixture",
@@ -244,7 +244,14 @@ func TestRecipeV2RejectsPlatformAIOutputAndUsesProductOnlyFallback(t *testing.T)
 		t.Fatalf("platform delivery output survived validation:\n%s", recipe.CurrentRevision.Markdown)
 	}
 	foundAnalysisPrompt := false
+	foundReviewPrompt := false
 	for _, body := range doer.bodies {
+		if strings.Contains(body, "Recipe review contract:") {
+			foundReviewPrompt = true
+			if !strings.Contains(body, "allowed_evidence_ids") || !strings.Contains(body, fixture.tool.ID) {
+				t.Errorf("recipe review omitted its exact allowed evidence identifiers: %s", body)
+			}
+		}
 		if !strings.Contains(body, "Integration analysis contract:") {
 			continue
 		}
@@ -261,6 +268,9 @@ func TestRecipeV2RejectsPlatformAIOutputAndUsesProductOnlyFallback(t *testing.T)
 	if !foundAnalysisPrompt {
 		t.Fatalf("analysis AI was not invoked: %#v", doer.bodies)
 	}
+	if !foundReviewPrompt {
+		t.Fatalf("recipe review AI was not invoked: %#v", doer.bodies)
+	}
 }
 
 func TestPublicRecipeV2RejectsPrivateSelectedEvidence(t *testing.T) {
@@ -271,7 +281,7 @@ func TestPublicRecipeV2RejectsPrivateSelectedEvidence(t *testing.T) {
 	if err := json.Unmarshal(recipe.CurrentRevision.Spec, &spec); err != nil {
 		t.Fatal(err)
 	}
-	publicRecipe, err := fixture.service.UpdateRecipeSpec(t.Context(), fixture.integration.DeploymentID, recipe.ID, recipe.Revision, recipe.CurrentRevisionID, spec, model.VisibilityPublic, fixture.actor)
+	publicRecipe, err := fixture.service.UpdateRecipeReferences(t.Context(), fixture.integration.DeploymentID, recipe.ID, recipe.Revision, recipe.CurrentRevisionID, spec.ReferenceIDs, model.VisibilityPublic, fixture.actor)
 	if err != nil {
 		t.Fatal(err)
 	}

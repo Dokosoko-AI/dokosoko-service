@@ -110,9 +110,30 @@ func (m *Memory) MarkImportedToolDrift(_ context.Context, productID, id string, 
 	if !ok || (value.BackendKind != "mcp" && value.BackendKind != "native") {
 		return model.Tool{}, ErrNotFound
 	}
+	if value.UpstreamDrifted == drifted {
+		return cloneTool(value), nil
+	}
+	if value.State == "published" {
+		if _, ok := m.products[productID]; !ok {
+			return model.Tool{}, ErrNotFound
+		}
+	}
+	now := time.Now().UTC()
 	value.UpstreamDrifted = drifted
-	value.UpdatedAt = time.Now().UTC()
+	value.UpdatedAt = now
 	m.tools[productID][id] = cloneTool(value)
+	if value.State == "published" {
+		if m.hasDeployment && m.deployment.ID == productID {
+			m.deployment.CatalogRevision++
+			m.deployment.UpdatedAt = now
+			product := m.products[productID]
+			product.CatalogRevision = m.deployment.CatalogRevision
+			product.UpdatedAt = now
+			m.products[productID] = product
+		} else if _, err := m.bumpProductCatalogRevisionLocked(productID, now); err != nil {
+			return model.Tool{}, err
+		}
+	}
 	return cloneTool(value), nil
 }
 

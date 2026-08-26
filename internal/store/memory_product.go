@@ -132,18 +132,23 @@ func (m *Memory) UpdateProduct(_ context.Context, value model.Product, expected 
 	if current.Revision != expected {
 		return model.Product{}, ErrConflict
 	}
+	if m.hasDeployment && m.deployment.ID == value.ID && (m.deployment.Revision != current.Revision || m.deployment.CatalogRevision != current.CatalogRevision) {
+		return model.Product{}, ErrConflict
+	}
+	now := time.Now().UTC()
 	value.Revision = current.Revision + 1
 	value.CatalogRevision = current.CatalogRevision + 1
 	value.CreatedAt = current.CreatedAt
-	value.UpdatedAt = time.Now().UTC()
+	value.UpdatedAt = now
 	m.products[value.ID] = value
+	if m.hasDeployment && m.deployment.ID == value.ID {
+		m.deployment.Description = value.Description
+		m.deployment.PublicMCPEnabled = value.PublicMCPEnabled
+		m.deployment.Revision = value.Revision
+		m.deployment.CatalogRevision = value.CatalogRevision
+		m.deployment.UpdatedAt = now
+	}
 	return value, nil
-}
-
-func (m *Memory) BumpProductCatalogRevision(_ context.Context, productID string) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.bumpProductCatalogRevisionLocked(productID, time.Now().UTC())
 }
 
 func (m *Memory) bumpProductCatalogRevisionLocked(productID string, now time.Time) (int64, error) {

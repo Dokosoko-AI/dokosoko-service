@@ -128,6 +128,7 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 
 	postgres := NewPostgres(pool, "https://dokosoko.example")
 	v2RecipeID, v2RevisionID := storeTestUUID(t), storeTestUUID(t)
+	v2ApprovedAt := time.Now().UTC()
 	v2RecipeInput := model.Recipe{
 		ID:              v2RecipeID,
 		OrganisationID:  organisationID,
@@ -138,8 +139,9 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 		Title:           "Create a payment",
 		Outcome:         "The application creates one payment.",
 		Audience:        "coding agent",
-		State:           "draft",
-		NeedsAttention:  true,
+		State:           "approved",
+		ApprovedBy:      "recipe-reviewer",
+		ApprovedAt:      &v2ApprovedAt,
 		Visibility:      model.VisibilityPrivate,
 		StableURI:       "dokosoko://products/recipe-v2/recipes/create-payment",
 	}
@@ -162,7 +164,12 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 		PromptHash:              promptHash,
 		CreatedBy:               "recipe-author",
 	}
-	v2Recipe, err := postgres.CreateRecipeWithRevision(ctx, v2RecipeInput, v2RevisionInput)
+	var catalogAtCreate int64
+	if err := pool.QueryRow(ctx, `SELECT catalog_revision FROM products WHERE id=$1`, productID).Scan(&catalogAtCreate); err != nil {
+		t.Fatal(err)
+	}
+	createAudit := recipeTestAudit(v2RecipeInput, "audit:"+storeTestUUID(t), "recipe.created")
+	v2Recipe, err := postgres.CreateRecipeWithRevision(ctx, v2RecipeInput, v2RevisionInput, RecipeMutation{ExpectedCatalogRevision: catalogAtCreate, Audit: &createAudit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +183,23 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	if roundTrip.CurrentRevision == nil || roundTrip.CurrentRevision.ID != v2RevisionID {
 		t.Fatalf("created recipe was not hydrated: %#v", roundTrip)
 	}
+	product, err := postgres.Product(ctx, productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	product.Description = "Updated recipe discovery description."
+	product, err = postgres.UpdateProduct(ctx, product, product.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mirroredDeploymentRevision, mirroredDeploymentCatalog int64
+	var mirroredDeploymentDescription string
+	if err := pool.QueryRow(ctx, `SELECT revision,catalog_revision,description FROM deployments WHERE id=$1`, productID).Scan(&mirroredDeploymentRevision, &mirroredDeploymentCatalog, &mirroredDeploymentDescription); err != nil {
+		t.Fatal(err)
+	}
+	if mirroredDeploymentRevision != product.Revision || mirroredDeploymentCatalog != product.CatalogRevision || mirroredDeploymentDescription != product.Description {
+		t.Fatalf("PostgreSQL deployment/product mirror diverged: deployment revision=%d catalog=%d description=%q product=%#v", mirroredDeploymentRevision, mirroredDeploymentCatalog, mirroredDeploymentDescription, product)
+	}
 
 	rolledBackRecipe := v2RecipeInput
 	rolledBackRecipe.ID = storeTestUUID(t)
@@ -183,7 +207,8 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	rolledBackRecipe.StableURI = "dokosoko://products/recipe-v2/recipes/create-payment-rolled-back"
 	rolledBackRevision := v2RevisionInput
 	rolledBackRevision.RecipeID = rolledBackRecipe.ID
-	if _, err := postgres.CreateRecipeWithRevision(ctx, rolledBackRecipe, rolledBackRevision); !errors.Is(err, ErrConflict) {
+	rolledBackAudit := recipeTestAudit(rolledBackRecipe, "audit:"+storeTestUUID(t), "recipe.created")
+	if _, err := postgres.CreateRecipeWithRevision(ctx, rolledBackRecipe, rolledBackRevision, RecipeMutation{ExpectedCatalogRevision: catalogAtCreate, Audit: &rolledBackAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate immutable revision ID error = %v, want conflict", err)
 	}
 	if _, err := postgres.Recipe(ctx, productID, rolledBackRecipe.ID); !errors.Is(err, ErrNotFound) {
@@ -197,9 +222,9 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	if err := pool.QueryRow(ctx, `SELECT catalog_revision FROM products WHERE id=$1`, productID).Scan(&productCatalogBefore); err != nil {
 		t.Fatal(err)
 	}
-	publishedAt := time.Now().UTC()
+	transitionAt := time.Now().UTC()
 	v2Recipe.State = "published"
-	v2Recipe.PublishedAt = &publishedAt
+	v2Recipe.PublishedAt = &transitionAt
 	transitionAudit := model.AuditEvent{
 		ID:             "audit:" + storeTestUUID(t),
 		OrganisationID: organisationID,
@@ -208,12 +233,12 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 		Action:         "recipe.published",
 		TargetType:     "recipe",
 		TargetID:       v2Recipe.ID,
-		Prior:          map[string]any{"state": "draft"},
+		Prior:          map[string]any{"state": "approved"},
 		Current:        map[string]any{"state": "published"},
 		RequestID:      "recipe-transition-test",
-		CreatedAt:      publishedAt,
+		CreatedAt:      transitionAt,
 	}
-	published, err := postgres.SaveRecipeTransition(ctx, v2Recipe, v2Recipe.Revision, true, &transitionAudit)
+	published, err := postgres.SaveRecipeTransition(ctx, v2Recipe, RecipeMutation{ExpectedRevision: v2Recipe.Revision, ExpectedCatalogRevision: productCatalogBefore, Audit: &transitionAudit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,16 +267,19 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	failedTransition.State = "outdated"
 	staleAudit := transitionAudit
 	staleAudit.ID = "audit:" + storeTestUUID(t)
-	if _, err := postgres.SaveRecipeTransition(ctx, failedTransition, v2Recipe.Revision, true, &staleAudit); !errors.Is(err, ErrConflict) {
+	staleAudit.Action = "recipe.outdated"
+	if _, err := postgres.SaveRecipeTransition(ctx, failedTransition, RecipeMutation{ExpectedRevision: v2Recipe.Revision, ExpectedCatalogRevision: productCatalogAfter, Audit: &staleAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale transition error = %v, want conflict", err)
 	}
-	if _, err := postgres.SaveRecipeTransition(ctx, failedTransition, published.Revision, true, &transitionAudit); !errors.Is(err, ErrConflict) {
+	duplicateAudit := transitionAudit
+	duplicateAudit.Action = "recipe.outdated"
+	if _, err := postgres.SaveRecipeTransition(ctx, failedTransition, RecipeMutation{ExpectedRevision: published.Revision, ExpectedCatalogRevision: productCatalogAfter, Audit: &duplicateAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate-audit transition error = %v, want conflict", err)
 	}
 	invalidAudit := staleAudit
 	invalidAudit.ID = "audit:" + storeTestUUID(t)
 	invalidAudit.Current = map[string]any{"invalid": make(chan int)}
-	if _, err := postgres.SaveRecipeTransition(ctx, failedTransition, published.Revision, true, &invalidAudit); err == nil {
+	if _, err := postgres.SaveRecipeTransition(ctx, failedTransition, RecipeMutation{ExpectedRevision: published.Revision, ExpectedCatalogRevision: productCatalogAfter, Audit: &invalidAudit}); err == nil {
 		t.Fatal("transition accepted a non-JSON audit")
 	}
 	unchanged, err := postgres.Recipe(ctx, productID, published.ID)
@@ -273,5 +301,45 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	}
 	if deploymentCatalogRolledBack != deploymentCatalogAfter || productCatalogRolledBack != productCatalogAfter || staleAuditCount != 0 {
 		t.Fatalf("failed transition leaked state: deployment=%d product=%d stale_audits=%d", deploymentCatalogRolledBack, productCatalogRolledBack, staleAuditCount)
+	}
+
+	review := published
+	review.State = "review"
+	review.NeedsAttention = true
+	review.ApprovedBy = ""
+	review.ApprovedAt = nil
+	review.PublishedAt = nil
+	reviewRevision := v2RevisionInput
+	reviewRevision.ID = storeTestUUID(t)
+	reviewRevision.Revision = 0
+	reviewRevision.Markdown = "# Create a payment\n\nRevised.\n"
+	revisionAudit := recipeTestAudit(review, "audit:"+storeTestUUID(t), "recipe.reworked")
+	revised, err := postgres.SaveRecipeRevision(ctx, review, reviewRevision, RecipeMutation{ExpectedRevision: published.Revision, ExpectedCatalogRevision: productCatalogAfter, Audit: &revisionAudit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revised.State != "review" || revised.CurrentRevision == nil || revised.CurrentRevision.ID != reviewRevision.ID {
+		t.Fatalf("revised recipe aggregate = %#v", revised)
+	}
+	var deploymentCatalogAfterRevision, productCatalogAfterRevision int64
+	if err := pool.QueryRow(ctx, `SELECT catalog_revision FROM deployments WHERE id=$1`, productID).Scan(&deploymentCatalogAfterRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT catalog_revision FROM products WHERE id=$1`, productID).Scan(&productCatalogAfterRevision); err != nil {
+		t.Fatal(err)
+	}
+	if deploymentCatalogAfterRevision != deploymentCatalogAfter+1 || productCatalogAfterRevision != deploymentCatalogAfterRevision {
+		t.Fatalf("published edit catalog revisions = deployment %d product %d", deploymentCatalogAfterRevision, productCatalogAfterRevision)
+	}
+	duplicateRevisionAudit := recipeTestAudit(revised, "audit:"+storeTestUUID(t), "recipe.reworked")
+	if _, err := postgres.SaveRecipeRevision(ctx, revised, reviewRevision, RecipeMutation{ExpectedRevision: revised.Revision, ExpectedCatalogRevision: productCatalogAfterRevision, Audit: &duplicateRevisionAudit}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate revision error = %v, want conflict", err)
+	}
+	var deploymentCatalogAfterFailedRevision int64
+	if err := pool.QueryRow(ctx, `SELECT catalog_revision FROM deployments WHERE id=$1`, productID).Scan(&deploymentCatalogAfterFailedRevision); err != nil {
+		t.Fatal(err)
+	}
+	if deploymentCatalogAfterFailedRevision != deploymentCatalogAfterRevision {
+		t.Fatalf("failed revision bumped catalog to %d, want %d", deploymentCatalogAfterFailedRevision, deploymentCatalogAfterRevision)
 	}
 }

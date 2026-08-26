@@ -1,0 +1,151 @@
+{
+  "documentation": {
+    "overview": "1 normalized documentation document(s); 3 section(s); formats: markdown; languages: ts.",
+    "documents": [
+      {
+        "id": "document_d2ecdf33628c7505dfb62764",
+        "kind": "document",
+        "title": "Guide",
+        "summary": "markdown documentation with 3 normalized section(s) at https://docs.example.com/guide.",
+        "aliases": [
+          "Authentication",
+          "Examples",
+          "Guide",
+          "https://docs.example.com/guide"
+        ],
+        "children": [
+          {
+            "id": "section_40cc5ea8f3ec12d25941f936",
+            "kind": "section",
+            "title": "Guide",
+            "summary": "Level 1 documentation heading in document_d2ecdf33628c7505dfb62764.",
+            "aliases": ["guide"],
+            "children": [
+              {
+                "id": "section_888ed706807ec304efab594a",
+                "kind": "section",
+                "title": "Authentication",
+                "summary": "Level 2 documentation heading in document_d2ecdf33628c7505dfb62764.",
+                "aliases": ["authentication"]
+              },
+              {
+                "id": "section_6bfd4d52fc2eb223488a8d67",
+                "kind": "section",
+                "title": "Examples",
+                "summary": "Level 2 documentation heading in document_d2ecdf33628c7505dfb62764.",
+                "aliases": ["examples"]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "topics": [
+      {
+        "id": "topic_b9d90628453938c578c7f826",
+        "kind": "topic",
+        "title": "Authentication",
+        "summary": "Documentation topic present in 1 normalized document(s).",
+        "aliases": ["document_d2ecdf33628c7505dfb62764"]
+      },
+      {
+        "id": "topic_c590b3c924c35c2f24174652",
+        "kind": "topic",
+        "title": "Examples",
+        "summary": "Documentation topic present in 1 normalized document(s).",
+        "aliases": ["document_d2ecdf33628c7505dfb62764"]
+      },
+      {
+        "id": "topic_83ca68be6227af2feb15f227",
+        "kind": "topic",
+        "title": "Guide",
+        "summary": "Documentation topic present in 1 normalized document(s).",
+        "aliases": ["document_d2ecdf33628c7505dfb62764"]
+      }
+    ],
+    "workflows": [
+      {
+        "id": "section_40cc5ea8f3ec12d25941f936",
+        "kind": "concepts",
+        "title": "Guide",
+        "summary": "concepts entry point in documentation document document_d2ecdf33628c7505dfb62764.",
+        "aliases": ["concepts"]
+      },
+      {
+        "id": "section_6bfd4d52fc2eb223488a8d67",
+        "kind": "concepts",
+        "title": "Examples",
+        "summary": "concepts entry point in documentation document document_d2ecdf33628c7505dfb62764.",
+        "aliases": ["concepts"]
+      }
+    ],
+    "authentication": [
+      {
+        "id": "section_888ed706807ec304efab594a",
+        "kind": "authentication",
+        "title": "Authentication",
+        "summary": "authentication entry point in documentation document document_d2ecdf33628c7505dfb62764.",
+        "aliases": ["authentication"]
+      }
+    ],
+    "languages": ["ts"]
+  },
+  "contract": {
+    "overview": "OpenAPI 3.1.0 contract with 1 operation(s), 1 schema(s), and 0 extracted example(s).",
+    "servers": ["https://api.example.com"],
+    "authentication": [
+      {
+        "id": "security_scheme_c41694373770a9cd96d5201f",
+        "kind": "authentication",
+        "title": "bearerAuth",
+        "summary": "bearer / http security scheme defined by the contract.",
+        "aliases": ["bearer", "bearerAuth", "http"]
+      }
+    ],
+    "capabilities": [
+      {
+        "id": "capability_08c07051187ca5d47aa75782",
+        "kind": "capability",
+        "title": "Widgets",
+        "summary": "1 operation(s) grouped under the Widgets capability.",
+        "aliases": ["Widgets"],
+        "children": [
+          {
+            "id": "operation:operation_2f9ecec84e578666304a4809",
+            "kind": "operation",
+            "title": "listWidgets",
+            "summary": "GET operation at /widgets.",
+            "aliases": ["/widgets", "GET", "GET /widgets", "Widgets", "listWidgets"]
+          }
+        ]
+      }
+    ],
+    "operations": [
+      {
+        "id": "operation:operation_2f9ecec84e578666304a4809",
+        "kind": "operation",
+        "title": "listWidgets",
+        "summary": "GET operation at /widgets.",
+        "aliases": ["/widgets", "GET", "GET /widgets", "Widgets", "listWidgets"]
+      }
+    ],
+    "schemas": [
+      {
+        "id": "schema:schema_58488c7bb28eaae930d74906",
+        "kind": "schema",
+        "title": "Widget",
+        "summary": "A widget.",
+        "aliases": ["#/components/schemas/Widget", "Widget"]
+      }
+    ],
+    "errors": [
+      {
+        "id": "operation:operation_2f9ecec84e578666304a4809:response:401",
+        "kind": "error_response",
+        "title": "GET /widgets — 401",
+        "summary": "Unauthorized",
+        "aliases": ["401", "GET /widgets", "listWidgets"]
+      }
+    ]
+  }
+}

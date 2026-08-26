@@ -102,7 +102,7 @@ func toolCatalogExcerpt(value model.Tool, limit int) string {
 	if value.OwnerIntegrationID != "" {
 		fmt.Fprintf(&builder, "\nOwner integration ID: %s", value.OwnerIntegrationID)
 	}
-	fmt.Fprintf(&builder, "\nBackend: %s\nMethod: %s", value.BackendKind, value.HTTPMethod)
+	fmt.Fprintf(&builder, "\nBackend: %s\nUpstream drifted: %t\nMethod: %s", value.BackendKind, value.UpstreamDrifted, value.HTTPMethod)
 	if endpoint := integrationRecipeToolEndpoint(value); endpoint != "" {
 		fmt.Fprintf(&builder, "\nFixed endpoint: %s", endpoint)
 	}
@@ -206,6 +206,10 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 	if integration.Lifecycle == "retired" {
 		return nil, model.Integration{}, ErrRecipeNeedsInput
 	}
+	manifest, err := s.ProductManifestFor(ctx, product.ID, model.CatalogScope{})
+	if err != nil {
+		return nil, model.Integration{}, err
+	}
 	version := strconv.FormatInt(integration.Revision, 10)
 	values := []model.IntegrationEvidence{
 		{Kind: integrationScopeEvidenceKind, ResourceID: integration.ID, Label: integration.DisplayName, Version: version, Visibility: model.VisibilityPrivate, Fingerprint: evidenceFingerprint(integrationScopeEvidenceKind, integration.ID, version)},
@@ -291,6 +295,10 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 		excerpt := scopedAuthorizationExcerpt(point, maxAnalysisToolItem)
 		values = append(values, model.IntegrationEvidence{Kind: "authorization_point", ResourceID: point.ID, Label: point.Key, Excerpt: excerpt, Version: pointVersion, Visibility: model.VisibilityPrivate, Fingerprint: evidenceFingerprint("authorization_point", integration.ID, point.ID, pointVersion, excerpt)})
 	}
+	grants, err := s.store.GrantDefinitions(ctx, product.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, model.Integration{}, err
+	}
 	bindings, err := s.store.IntegrationToolBindings(ctx, integration.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, model.Integration{}, err
@@ -316,11 +324,21 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 		}
 		toolVersion := strconv.FormatInt(binding.ToolRevision, 10)
 		label := recipeToolLabel(tool, &integration)
-		excerpt := "Exact bound tool revision: " + toolVersion + "\n" + toolCatalogExcerpt(tool, min(maxAnalysisToolItem, remaining))
-		excerpt = truncateRunes(excerpt, min(maxAnalysisToolItem, remaining))
+		toolFacts := "Exact bound tool revision: " + toolVersion + "\n" + toolCatalogExcerpt(tool, min(maxAnalysisToolItem, remaining))
+		if tool.BackendKind == "mcp" {
+			if identity, exposed := canonicalMCPToolIdentityFor(manifest, tool); exposed && currentMCPToolAuthorization(identity, points, grants) {
+				toolFacts = "Exact bound tool revision: " + toolVersion + "\nMCP tool name: " + identity.name + "\n" + toolCatalogExcerpt(tool, min(maxAnalysisToolItem, remaining))
+			}
+		}
+		excerpt := truncateRunes(toolFacts, min(maxAnalysisToolItem, remaining))
 		toolRunes += len([]rune(excerpt))
 		values = append(values, model.IntegrationEvidence{Kind: "tool", ResourceID: binding.ToolID, Label: label, Excerpt: excerpt, Version: toolVersion, Visibility: integration.Visibility, Fingerprint: evidenceFingerprint("tool_binding", integration.ID, binding.ToolID, toolVersion, string(integration.Visibility), excerpt)})
 	}
+	developerAssets, err := s.scopedRecipeDeveloperAssetEvidence(ctx, integration, scopedRecipeDeveloperAssetQuery(integration, values))
+	if err != nil {
+		return nil, model.Integration{}, err
+	}
+	values = append(values, developerAssets...)
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].Kind == values[j].Kind {
 			if values[i].Label == values[j].Label {
@@ -468,7 +486,7 @@ func integrationRecipeCapabilityViable(item model.IntegrationEvidence, integrati
 	}
 	switch item.Kind {
 	case "tool":
-		if recipeEvidenceField(item.Excerpt, "Exact bound tool revision") != item.Version || recipeEvidenceField(item.Excerpt, "Scope") != model.ToolScopeAPI || recipeEvidenceField(item.Excerpt, "Owner integration ID") != integrationID || recipeEvidenceField(item.Excerpt, "Backend") == "" {
+		if recipeEvidenceField(item.Excerpt, "Exact bound tool revision") != item.Version || recipeEvidenceField(item.Excerpt, "Scope") != model.ToolScopeAPI || recipeEvidenceField(item.Excerpt, "Owner integration ID") != integrationID || recipeEvidenceField(item.Excerpt, "Backend") == "" || recipeEvidenceField(item.Excerpt, "Upstream drifted") != "false" {
 			return false
 		}
 		if recipeEvidenceField(item.Excerpt, "Input schema") == "" || recipeEvidenceField(item.Excerpt, "Output schema") == "" {
@@ -478,17 +496,13 @@ func integrationRecipeCapabilityViable(item model.IntegrationEvidence, integrati
 		case "http":
 			return recipeEvidenceField(item.Excerpt, "Method") != "" && recipeEvidenceField(item.Excerpt, "Fixed endpoint") != ""
 		case "mcp":
-			return true
+			return recipeEvidenceField(item.Excerpt, "MCP tool name") != ""
 		default:
 			return false
 		}
 	default:
 		return false
 	}
-}
-
-func integrationRecipeSDKViable(item model.IntegrationEvidence) bool {
-	return item.Kind == "sdk" && strings.TrimSpace(item.ResourceID) != "" && item.Version != "" && recipeEvidenceField(item.Excerpt, "Coordinate") != "" && recipeEvidenceField(item.Excerpt, "Exact version") == item.Version && recipeEvidenceField(item.Excerpt, "Install") != ""
 }
 
 func integrationRecipeSelection(evidence []model.IntegrationEvidence, seed model.RecipeSeed) (map[string]model.IntegrationEvidence, bool) {
@@ -510,31 +524,14 @@ func integrationRecipeSelection(evidence []model.IntegrationEvidence, seed model
 		return nil, false
 	}
 	if seed.SDKID != "" {
-		if sdk, exists := byID[seed.SDKID]; !exists || !integrationRecipeSDKViable(sdk) {
-			return nil, false
-		}
+		return nil, false
 	}
 	for id, item := range byID {
-		if recipeCapabilityEvidence(item) && id != capabilityID || item.Kind == "sdk" && id != seed.SDKID {
+		if recipeCapabilityEvidence(item) && id != capabilityID || item.Kind == "sdk" {
 			return nil, false
 		}
 	}
 	return byID, true
-}
-
-func deterministicIntegrationSDKID(evidence []model.IntegrationEvidence) string {
-	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(evidence))
-	result := ""
-	for id, item := range byID {
-		if ambiguous[id] || !integrationRecipeSDKViable(item) {
-			continue
-		}
-		if result != "" {
-			return ""
-		}
-		result = id
-	}
-	return result
 }
 
 func boundedIntegrationRecipeSlug(value string, limit int) string {
@@ -557,7 +554,6 @@ func deterministicIntegrationRecipeSeeds(product model.Product, integration mode
 		toolCapabilityIDs = append(toolCapabilityIDs, capabilityID)
 	}
 	capabilityIDs := toolCapabilityIDs
-	sdkID := deterministicIntegrationSDKID(productEvidence)
 	prefix := integrationRecipePrefix(product, integration)
 	result := make([]model.RecipeSeed, 0, min(len(capabilityIDs), 12))
 	seenSlugs := make(map[string]bool)
@@ -582,10 +578,6 @@ func deterministicIntegrationRecipeSeeds(product model.Product, integration mode
 			Audience:      "coding_agent",
 			CapabilityIDs: []string{item.ResourceID},
 			EvidenceIDs:   []string{item.ResourceID},
-		}
-		if sdkID != "" {
-			seed.SDKID = sdkID
-			seed.EvidenceIDs = append(seed.EvidenceIDs, sdkID)
 		}
 		if _, valid := integrationRecipeSelection(evidence, seed); !valid {
 			continue

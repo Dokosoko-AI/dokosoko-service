@@ -124,23 +124,35 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 	if spec.IntegrationID != selected.ID || spec.SchemaVersion != model.RecipeSpecVersion2 || len(spec.CapabilityIDs) != 1 || len(spec.Steps) < 2 || len(spec.Checks) < 1 {
 		t.Fatalf("generated recipe spec = %#v", spec)
 	}
+	for _, missing := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodPatch, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID, body: `{"reference_ids":[],"visibility":"private"}`},
+		{method: http.MethodPost, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/rework", body: `{"instruction":"Clarify the result."}`},
+		{method: http.MethodPost, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/approve", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/publish", body: `{}`},
+	} {
+		w = request(t, handler, missing.method, missing.path, "doko_admin_demo", missing.body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "revision and current_revision_id are required") {
+			t.Fatalf("missing recipe expectation path=%s status=%d body=%s", missing.path, w.Code, w.Body.String())
+		}
+	}
 
 	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/recipes/"+recipe.ID, "doko_admin_demo", `{"markdown":"# Unstructured override","references":[],"visibility":"private"}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `unknown field \"markdown\"`) {
 		t.Fatalf("legacy Markdown update status=%d body=%s", w.Code, w.Body.String())
 	}
 	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/recipes/"+recipe.ID, "doko_admin_demo", `{"visibility":"private"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "spec is required") {
-		t.Fatalf("missing structured spec status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "reference_ids is required") {
+		t.Fatalf("missing reviewed references status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	if spec.Prerequisites == nil {
-		spec.Prerequisites = []model.RecipeInstruction{}
-	}
 	if spec.ReferenceIDs == nil {
 		spec.ReferenceIDs = []string{}
 	}
-	patchBody, err := json.Marshal(map[string]any{"revision": recipe.Revision, "current_revision_id": recipe.CurrentRevisionID, "spec": spec, "visibility": model.VisibilityPrivate})
+	patchBody, err := json.Marshal(map[string]any{"revision": recipe.Revision, "current_revision_id": recipe.CurrentRevisionID, "reference_ids": spec.ReferenceIDs, "visibility": model.VisibilityPrivate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +177,54 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/recipes/"+recipe.ID, "doko_admin_demo", string(patchBody))
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "recipe_revision_conflict") {
 		t.Fatalf("stale structured recipe update status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	approvePath := "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/approve"
+	staleRevisionBody, err := json.Marshal(map[string]any{"revision": recipe.Revision, "current_revision_id": updated.CurrentRevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, approvePath, "doko_admin_demo", string(staleRevisionBody))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "recipe_revision_conflict") {
+		t.Fatalf("stale approval revision status=%d body=%s", w.Code, w.Body.String())
+	}
+	staleRevisionIDBody, err := json.Marshal(map[string]any{"revision": updated.Revision, "current_revision_id": initialRevision.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, approvePath, "doko_admin_demo", string(staleRevisionIDBody))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "recipe_revision_conflict") {
+		t.Fatalf("stale approval revision ID status=%d body=%s", w.Code, w.Body.String())
+	}
+	approveBody, err := json.Marshal(map[string]any{"revision": updated.Revision, "current_revision_id": updated.CurrentRevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, approvePath, "doko_admin_demo", string(approveBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("approve recipe status=%d body=%s", w.Code, w.Body.String())
+	}
+	var approved model.Recipe
+	if err := json.Unmarshal(w.Body.Bytes(), &approved); err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, approvePath, "doko_admin_demo", string(approveBody))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "recipe_revision_conflict") {
+		t.Fatalf("replayed approval status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	publishPath := "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/publish"
+	publishBody, err := json.Marshal(map[string]any{"revision": approved.Revision, "current_revision_id": approved.CurrentRevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodPost, publishPath, "doko_admin_demo", string(publishBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("publish recipe status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, handler, http.MethodPost, publishPath, "doko_admin_demo", string(publishBody))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "recipe_revision_conflict") {
+		t.Fatalf("replayed publication status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/analyses/"+analysis.ID+"/recipes", "doko_admin_demo", `{"integration_id":"`+other.ID+`"}`)

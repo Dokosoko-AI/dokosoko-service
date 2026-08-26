@@ -3,10 +3,10 @@
 import {
   BookOpen,
   LayoutDashboard,
+  LibraryBig,
   LogOut,
   Radio,
   Settings,
-  Sparkles,
   Users,
   Wrench,
 } from "lucide-react";
@@ -16,18 +16,32 @@ import { type Section, sectionPath } from "../../lib/console-routes";
 import { ThemeToggle } from "../ThemeToggle";
 import { ConsoleLink } from "./console-link";
 
-export type NavigationGroup = "apis" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
+export type NavigationGroup = "catalog" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
 
 export const navigation: Array<{
   id: NavigationGroup;
   label: string;
   icon: typeof LayoutDashboard;
   defaultSection: Section;
-  sections: Array<{ id: Section; label: string }>;
+  sections: Array<{ id: Section; label: string; group?: string }>;
 }> = [
-  { id: "apis", label: "APIs", icon: Sparkles, defaultSection: "product", sections: [{ id: "product", label: "APIs" }] },
+  {
+    id: "catalog",
+    label: "Catalog",
+    icon: LibraryBig,
+    defaultSection: "product",
+    sections: [
+      { id: "product", label: "APIs" },
+      { id: "sources", label: "Sources", group: "Documentation" },
+      { id: "documents", label: "All files", group: "Documentation" },
+      { id: "collections", label: "Collections", group: "Documentation" },
+      { id: "contracts", label: "API contracts", group: "Documentation" },
+      { id: "sdks", label: "SDKs" },
+      { id: "query-lab", label: "Query Lab" },
+    ],
+  },
   { id: "identity", label: "Identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", label: "Customer sign-in" }] },
-  { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }] },
+  { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }, { id: "mcp-preview", label: "MCP preview" }] },
   { id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes", sections: [{ id: "recipes", label: "Recipes" }] },
   { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }] },
   { id: "outbox", label: "Support outbox", icon: LayoutDashboard, defaultSection: "reporting", sections: [{ id: "reporting", label: "Support outbox" }] },
@@ -65,16 +79,23 @@ export function ConsoleSidebar({
           const Icon = item.icon;
           const active = activeNavigationID === item.id;
           return (
-            <ConsoleLink
-              key={item.id}
-              path={sectionPath(item.defaultSection)}
-              onNavigate={onNavigate}
-              className={`nav-item ${active ? "active" : ""}`}
-              ariaCurrent={active ? "page" : undefined}
-            >
-              <Icon />
-              <span>{item.label}</span>
-            </ConsoleLink>
+            <div className="nav-group" key={item.id}>
+              <ConsoleLink
+                path={sectionPath(item.defaultSection)}
+                onNavigate={onNavigate}
+                className={`nav-item ${active ? "active" : ""}`}
+                ariaCurrent={active && item.sections.some((candidate) => candidate.id === section && candidate.id === item.defaultSection) ? "page" : undefined}
+              >
+                <Icon />
+                <span>{item.label}</span>
+              </ConsoleLink>
+              {active && item.sections.length > 1 && <div className="nav-subsections" aria-label={`${item.label} sections`}>
+                {item.sections.map((candidate, index) => <span className="nav-subsection-entry" key={candidate.id}>
+                  {candidate.group && candidate.group !== item.sections[index - 1]?.group && <span className="nav-subsection-label">{candidate.group}</span>}
+                  <ConsoleLink path={sectionPath(candidate.id)} onNavigate={onNavigate} className={`nav-subsection ${section === candidate.id ? "active" : ""}`} ariaCurrent={section === candidate.id ? "page" : undefined}>{candidate.label}</ConsoleLink>
+                </span>)}
+              </div>}
+            </div>
           );
         })}
       </nav>
@@ -127,7 +148,7 @@ export function ConsoleTopbar({
         <select
           className="mobile-navigation"
           aria-label="Console section"
-          value={section === "settings" ? "settings" : activeNavigationID ?? "apis"}
+          value={section === "settings" ? "settings" : activeNavigationID ?? "catalog"}
           onChange={(event) => onGroupChange(event.target.value as NavigationGroup | "settings")}
         >
           {navigation.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}

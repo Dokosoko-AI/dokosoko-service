@@ -1,0 +1,28 @@
+openapi: 3.1.0
+info:
+  title: Billing API
+  version: 2026-08-26
+  description: Create and inspect charges.
+externalDocs:
+  description: Billing guide
+  url: ./billing-guide
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Charge:
+      type: object
+      properties:
+        id:
+          type: string
+paths:
+  /charges:
+    post:
+      operationId: createCharge
+      summary: Create a charge.
+      tags: [Charges]
+      responses:
+        "201":
+          description: Charge created.

@@ -44,7 +44,8 @@ func (s *Service) PublishSource(ctx context.Context, productID, sourceID string,
 	}
 	input.CrawlJobID = strings.TrimSpace(input.CrawlJobID)
 	latestReviewable := len(crawls) > 0 && crawls[0].ID == input.CrawlJobID && crawls[0].FinishedAt != nil && (crawls[0].State == "review" || crawls[0].State == "succeeded")
-	if !latestReviewable || crawls[0].FetchedCount == 0 || input.Revision != current.Revision {
+	completeCoverage := len(crawls) > 0 && crawls[0].FetchedCount > 0 && crawls[0].FailedCount == 0 && crawls[0].SkippedCount == 0
+	if !latestReviewable || !completeCoverage || input.Revision != current.Revision {
 		return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
 	}
 	review, err := s.store.SourceReview(ctx, productID, sourceID, input.CrawlJobID)

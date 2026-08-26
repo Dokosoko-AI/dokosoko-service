@@ -80,7 +80,6 @@ type ProductCatalogStore interface {
 	CreateEnvironment(context.Context, model.Environment) (model.Environment, error)
 	Product(context.Context, string) (model.Product, error)
 	UpdateProduct(context.Context, model.Product, int64) (model.Product, error)
-	BumpProductCatalogRevision(context.Context, string) (int64, error)
 }
 
 // KnowledgeStore owns persistence operations for one cohesive application domain.
@@ -156,11 +155,10 @@ type AIRecipeStore interface {
 	Recipes(context.Context, string) ([]model.Recipe, error)
 	Recipe(context.Context, string, string) (model.Recipe, error)
 	RecipeBySlug(context.Context, string, string) (model.Recipe, error)
-	CreateRecipeWithRevision(context.Context, model.Recipe, model.RecipeRevision) (model.Recipe, error)
-	SaveRecipeTransition(context.Context, model.Recipe, int64, bool, *model.AuditEvent) (model.Recipe, error)
-	SaveRecipe(context.Context, model.Recipe, int64) (model.Recipe, error)
+	CreateRecipeWithRevision(context.Context, model.Recipe, model.RecipeRevision, RecipeMutation) (model.Recipe, error)
+	SaveRecipeTransition(context.Context, model.Recipe, RecipeMutation) (model.Recipe, error)
 	RecipeRevisions(context.Context, string) ([]model.RecipeRevision, error)
-	SaveRecipeRevision(context.Context, model.Recipe, model.RecipeRevision, int64, bool) (model.Recipe, error)
+	SaveRecipeRevision(context.Context, model.Recipe, model.RecipeRevision, RecipeMutation) (model.Recipe, error)
 }
 
 // IdentityStore owns persistence operations for one cohesive application domain.
@@ -195,5 +193,6 @@ type ObservabilityStore interface {
 	PrivateKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
 	RelevantPrivateKnowledge(context.Context, string, []string, string, int) ([]model.KnowledgeRecord, error)
 	AppendAudit(context.Context, model.AuditEvent) error
+	AuditEvent(context.Context, string) (model.AuditEvent, error)
 	AuditEvents(context.Context, string) ([]model.AuditEvent, error)
 }

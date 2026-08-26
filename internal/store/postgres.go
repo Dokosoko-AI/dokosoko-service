@@ -27,7 +27,7 @@ func databaseError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505", "23503":
+		case "23505", "23503", "23514", "23502", "55000":
 			return ErrConflict
 		case "22P02":
 			return ErrNotFound
@@ -124,19 +124,51 @@ func (p *Postgres) Product(ctx context.Context, id string) (model.Product, error
 }
 
 func (p *Postgres) UpdateProduct(ctx context.Context, value model.Product, expected int64) (model.Product, error) {
-	updated, err := scanProduct(p.pool.QueryRow(ctx, `UPDATE products SET description=$2, public_mcp_enabled=$3, revision=revision+1, catalog_revision=catalog_revision+1, updated_at=now() WHERE id=$1 AND revision=$4 RETURNING `+productSelect[len("SELECT "):len(productSelect)-len(" FROM products")], value.ID, value.Description, value.PublicMCPEnabled, expected))
-	if errors.Is(err, ErrNotFound) {
-		if _, lookupErr := p.Product(ctx, value.ID); lookupErr == nil {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return model.Product{}, databaseError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var deploymentRevision, deploymentCatalogRevision int64
+	deploymentErr := tx.QueryRow(ctx, `SELECT revision,catalog_revision FROM deployments WHERE id=$1 FOR UPDATE`, value.ID).Scan(&deploymentRevision, &deploymentCatalogRevision)
+	if deploymentErr != nil && !errors.Is(deploymentErr, pgx.ErrNoRows) {
+		return model.Product{}, databaseError(deploymentErr)
+	}
+	if deploymentErr == nil {
+		var productRevision, productCatalogRevision int64
+		if err := tx.QueryRow(ctx, `SELECT revision,catalog_revision FROM products WHERE id=$1 FOR UPDATE`, value.ID).Scan(&productRevision, &productCatalogRevision); err != nil {
+			return model.Product{}, databaseError(err)
+		}
+		if productRevision != expected || deploymentRevision != expected || productRevision != deploymentRevision || productCatalogRevision != deploymentCatalogRevision {
 			return model.Product{}, ErrConflict
 		}
+		if _, err := tx.Exec(ctx, `UPDATE deployments SET description=$2,public_mcp_enabled=$3,revision=revision+1,catalog_revision=catalog_revision+1,updated_at=now() WHERE id=$1`, value.ID, value.Description, value.PublicMCPEnabled); err != nil {
+			return model.Product{}, databaseError(err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE products SET description=$2,public_mcp_enabled=$3,revision=revision+1,catalog_revision=catalog_revision+1,updated_at=now() WHERE id=$1`, value.ID, value.Description, value.PublicMCPEnabled); err != nil {
+			return model.Product{}, databaseError(err)
+		}
+	} else {
+		result, updateErr := tx.Exec(ctx, `UPDATE products SET description=$2,public_mcp_enabled=$3,revision=revision+1,catalog_revision=catalog_revision+1,updated_at=now() WHERE id=$1 AND revision=$4`, value.ID, value.Description, value.PublicMCPEnabled, expected)
+		if updateErr != nil {
+			return model.Product{}, databaseError(updateErr)
+		}
+		if result.RowsAffected() != 1 {
+			if _, lookupErr := scanProduct(tx.QueryRow(ctx, productSelect+` WHERE id=$1`, value.ID)); lookupErr == nil {
+				return model.Product{}, ErrConflict
+			}
+			return model.Product{}, ErrNotFound
+		}
 	}
-	return updated, err
-}
-
-func (p *Postgres) BumpProductCatalogRevision(ctx context.Context, productID string) (int64, error) {
-	var revision int64
-	err := p.pool.QueryRow(ctx, `UPDATE products SET catalog_revision=catalog_revision+1, updated_at=now() WHERE id=$1 RETURNING catalog_revision`, productID).Scan(&revision)
-	return revision, databaseError(err)
+	updated, err := scanProduct(tx.QueryRow(ctx, productSelect+` WHERE id=$1`, value.ID))
+	if err != nil {
+		return model.Product{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Product{}, databaseError(err)
+	}
+	return updated, nil
 }
 
 func bumpProductCatalogRevisionTx(ctx context.Context, tx pgx.Tx, productID string) error {

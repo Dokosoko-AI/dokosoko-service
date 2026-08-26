@@ -19,6 +19,10 @@ const (
 	AIPromptKeyRecipeBrief         = "recipe.brief"
 	AIPromptKeyRecipeAuthoring     = "recipe.authoring"
 	AIPromptKeyRecipeReview        = "recipe.review"
+	AIPromptKeyDocumentationMap    = "documentation.map_enrichment"
+	AIPromptKeySDKMap              = "sdk.map_enrichment"
+	AIPromptKeySDKApplicability    = "sdk.applicability_suggestion"
+	AIPromptKeySDKSampleReview     = "sdk.sample_review"
 
 	maxAIPromptInstructionsBytes = 32 << 10
 )
@@ -38,29 +42,57 @@ var aiPromptDefinitions = []aiPromptDefinition{
 		key:            AIPromptKeyIntegrationAnalysis,
 		label:          "Integration analysis",
 		description:    "Discovers a small set of product implementation outcomes from reviewed API evidence.",
-		instructions:   integrationAnalysisDefaultInstructionsV4,
-		defaultVersion: integrationAnalysisPromptVersionV4,
+		instructions:   integrationAnalysisDefaultInstructionsV5,
+		defaultVersion: integrationAnalysisPromptVersionV5,
 	},
 	{
 		key:            AIPromptKeyRecipeBrief,
 		label:          "Recipe brief",
 		description:    "Maps one operator outcome to exact product capabilities and evidence.",
-		instructions:   recipeBriefDefaultInstructionsV4,
-		defaultVersion: recipeBriefPromptVersionV4,
+		instructions:   recipeBriefDefaultInstructionsV5,
+		defaultVersion: recipeBriefPromptVersionV5,
 	},
 	{
 		key:            AIPromptKeyRecipeAuthoring,
 		label:          "Recipe authoring",
 		description:    "Builds one bounded, structured product-integration plan from server-owned selections.",
-		instructions:   recipeAuthoringDefaultInstructionsV10,
-		defaultVersion: recipeAuthoringPromptVersionV10,
+		instructions:   recipeAuthoringDefaultInstructionsV11,
+		defaultVersion: recipeAuthoringPromptVersionV11,
 	},
 	{
 		key:            AIPromptKeyRecipeReview,
 		label:          "Recipe review",
 		description:    "Adversarially checks product-only scope, grounding, minimalism, and observable verification.",
-		instructions:   recipeReviewDefaultInstructionsV3,
-		defaultVersion: recipeReviewPromptVersionV3,
+		instructions:   recipeReviewDefaultInstructionsV5,
+		defaultVersion: recipeReviewPromptVersionV5,
+	},
+	{
+		key:            AIPromptKeyDocumentationMap,
+		label:          "Documentation Map enrichment",
+		description:    "Proposes bounded routing metadata from one exact reviewed documentation publication.",
+		instructions:   documentationMapDefaultInstructionsV1,
+		defaultVersion: documentationMapPromptVersionV1,
+	},
+	{
+		key:            AIPromptKeySDKMap,
+		label:          "SDK Map enrichment",
+		description:    "Proposes bounded SDK routing metadata from one exact release content publication.",
+		instructions:   sdkMapDefaultInstructionsV1,
+		defaultVersion: sdkMapPromptVersionV1,
+	},
+	{
+		key:            AIPromptKeySDKApplicability,
+		label:          "SDK applicability suggestion",
+		description:    "Suggests narrowly evidenced SDK-to-API applicability without asserting compatibility.",
+		instructions:   sdkApplicabilityDefaultInstructionsV1,
+		defaultVersion: sdkApplicabilityPromptVersionV1,
+	},
+	{
+		key:            AIPromptKeySDKSampleReview,
+		label:          "SDK sample review",
+		description:    "Adversarially reviews one immutable code sample without executing or rewriting it.",
+		instructions:   sdkSampleReviewDefaultInstructionsV1,
+		defaultVersion: sdkSampleReviewPromptVersionV1,
 	},
 }
 

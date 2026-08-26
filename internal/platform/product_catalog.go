@@ -77,17 +77,42 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, scop
 			return model.ProductManifest{}, revisionErr
 		}
 		var published model.IntegrationRevision
+		var snapshot integrationSnapshot
+		readyAssetRevision := make(map[string]bool)
+		assetReadinessLoaded := false
 		for _, revision := range revisions {
-			if revision.State == "published" && revision.Revision > published.Revision {
-				published = revision
+			if revision.State != "published" || revision.Revision <= published.Revision {
+				continue
 			}
+			var candidate integrationSnapshot
+			if err := json.Unmarshal(revision.Snapshot, &candidate); err != nil {
+				return model.ProductManifest{}, fmt.Errorf("integration %s has an invalid published snapshot: %w", integration.ID, err)
+			}
+			if candidate.DeveloperAssets.SchemaVersion != "" {
+				if !assetReadinessLoaded {
+					publications, publicationErr := s.store.APIDeveloperAssetPublications(ctx, productID, integration.ID)
+					if publicationErr != nil && !errors.Is(publicationErr, store.ErrNotFound) {
+						return model.ProductManifest{}, publicationErr
+					}
+					for _, publication := range publications {
+						ready, readyErr := s.developerAssetPublicationReady(ctx, productID, "api", publication.ID)
+						if readyErr != nil {
+							return model.ProductManifest{}, readyErr
+						}
+						if ready {
+							readyAssetRevision[publication.APIRevisionID] = true
+						}
+					}
+					assetReadinessLoaded = true
+				}
+				if !readyAssetRevision[revision.ID] {
+					continue
+				}
+			}
+			published, snapshot = revision, candidate
 		}
 		if published.ID == "" {
 			continue
-		}
-		var snapshot integrationSnapshot
-		if err := json.Unmarshal(published.Snapshot, &snapshot); err != nil {
-			return model.ProductManifest{}, fmt.Errorf("integration %s has an invalid published snapshot: %w", integration.ID, err)
 		}
 		if snapshot.Visibility == "" {
 			snapshot.Visibility = model.VisibilityPrivate

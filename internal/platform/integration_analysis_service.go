@@ -51,17 +51,14 @@ func (s *Service) analyseIntegration(ctx context.Context, productID, integration
 	}
 	productEvidence := unambiguousIntegrationProductEvidence(evidence)
 	allowedCapabilityIDs := []string(nil)
-	allowedSDKIDs := []string(nil)
 	if selectedIntegration != nil {
 		allowedCapabilityIDs = viableIntegrationRecipeCapabilityIDs(productEvidence, selectedIntegration.ID)
-		allowedSDKIDs = viableIntegrationRecipeSDKIDs(productEvidence)
 	}
 	promptInput := map[string]any{
 		"product":                map[string]any{"name": product.Name, "slug": product.Slug, "description": product.Description},
 		"evidence":               productEvidence,
 		"unknowns":               integrationProductRecipeUnknowns(unknowns),
 		"allowed_capability_ids": allowedCapabilityIDs,
-		"allowed_sdk_ids":        allowedSDKIDs,
 		"allowed_evidence_ids":   evidenceIDs(productEvidence),
 	}
 	if selectedIntegration != nil {
@@ -109,18 +106,6 @@ func viableIntegrationRecipeCapabilityIDs(evidence []model.IntegrationEvidence, 
 	for _, id := range recipeProductCapabilityIDs(evidence) {
 		item, exists := byID[id]
 		if exists && !ambiguous[id] && integrationRecipeCapabilityViable(item, integrationID) {
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
-func viableIntegrationRecipeSDKIDs(evidence []model.IntegrationEvidence) []string {
-	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(evidence))
-	result := make([]string, 0)
-	for _, id := range recipeProductSDKIDs(evidence) {
-		item, exists := byID[id]
-		if exists && !ambiguous[id] && integrationRecipeSDKViable(item) {
 			result = append(result, id)
 		}
 	}
@@ -195,7 +180,6 @@ func integrationAnalysisResponsePlan(response integrationAnalysisAIResponse, fal
 		seed := model.RecipeSeed{
 			Audience:      "coding_agent",
 			CapabilityIDs: append([]string(nil), candidate.CapabilityIDs...),
-			SDKID:         strings.TrimSpace(candidate.SDKID),
 			EvidenceIDs:   append([]string(nil), candidate.EvidenceIDs...),
 		}
 		for index := range seed.CapabilityIDs {
@@ -214,7 +198,6 @@ func integrationAnalysisResponsePlan(response integrationAnalysisAIResponse, fal
 		if !exists {
 			return model.IntegrationPlan{}, false
 		}
-		canonical.SDKID = seed.SDKID
 		canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
 		seenCapabilities[seed.CapabilityIDs[0]] = true
 		plan.Recipes = append(plan.Recipes, canonical)

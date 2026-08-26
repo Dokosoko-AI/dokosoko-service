@@ -14,7 +14,8 @@ func recipeProductEvidence(values []model.IntegrationEvidence) []model.Integrati
 	result := make([]model.IntegrationEvidence, 0, len(values))
 	for _, item := range values {
 		switch item.Kind {
-		case "integration", "resource_set", "source_publication", "sdk", "tool":
+		case "integration", "resource_set", "source_publication", "sdk", "tool",
+			recipeDeveloperAssetDocumentationKind, recipeDeveloperAssetContractKind, recipeDeveloperAssetSDKKind:
 			result = append(result, item)
 		}
 	}
@@ -33,19 +34,6 @@ func recipeProductCapabilityIDs(values []model.IntegrationEvidence) []string {
 	seen := make(map[string]bool)
 	for _, item := range recipeProductEvidence(values) {
 		if recipeCapabilityEvidence(item) && item.ResourceID != "" && !seen[item.ResourceID] {
-			result = append(result, item.ResourceID)
-			seen[item.ResourceID] = true
-		}
-	}
-	sort.Strings(result)
-	return result
-}
-
-func recipeProductSDKIDs(values []model.IntegrationEvidence) []string {
-	result := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, item := range recipeProductEvidence(values) {
-		if item.Kind == "sdk" && item.ResourceID != "" && !seen[item.ResourceID] {
 			result = append(result, item.ResourceID)
 			seen[item.ResourceID] = true
 		}
@@ -272,7 +260,11 @@ func deterministicRecipeSpec(analysis model.IntegrationAnalysis, seed model.Reci
 				ref = append(ref, model.RecipeEvidenceRef{Kind: sdk.Kind, ResourceID: sdk.ResourceID, Fingerprint: sdk.Fingerprint})
 			}
 		case "mcp":
-			implementation = fmt.Sprintf("Add a product client operation for %s that invokes the reviewed product tool with inputs matching its schema.", recipeCode(item.Label))
+			toolName := recipeEvidenceField(item.Excerpt, "MCP tool name")
+			if toolName == "" {
+				return model.RecipeSpec{}, ErrRecipeNeedsInput
+			}
+			implementation = fmt.Sprintf("Add a product client operation for %s that invokes the reviewed product tool %s with inputs matching its schema.", recipeCode(item.Label), recipeCode(toolName))
 		default:
 			return model.RecipeSpec{}, ErrRecipeNeedsInput
 		}

@@ -32,10 +32,12 @@ import { useMCPWorkspaceState } from "./console/use-mcp-workspace";
 import { usePublicationWorkflow } from "./console/use-publication-workflow";
 import { useSourceWorkflow } from "./console/use-source-workflow";
 import { ConsoleSidebar, ConsoleTopbar, navigation } from "./console/workspace-navigation";
+import { CatalogNavigation, DocumentationNavigation } from "./console/developer-assets/developer-asset-navigation";
 
 const AIProviderLogo = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.AIProviderLogo })));
 const AISettingsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.AISettingsView })));
 const MCPConnectionsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.MCPConnectionsView })));
+const MCPPreviewView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.MCPPreviewView })));
 const OutboxView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.OutboxView })));
 const RecipesView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.RecipesView })));
 const RootAccessSettingsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.RootAccessSettingsView })));
@@ -49,6 +51,11 @@ const ToolDetailView = lazy(() => import("./console/tool-views").then((module) =
 const DistributionView = lazy(() => import("./console/agent-access-views").then((module) => ({ default: module.DistributionView })));
 const SourcesView = lazy(() => import("./console/agent-access-views").then((module) => ({ default: module.SourcesView })));
 const IntegrationsView = lazy(() => import("./console/integration-views").then((module) => ({ default: module.IntegrationsView })));
+const DocumentationExplorerView = lazy(() => import("./console/developer-assets/documentation-explorer-view").then((module) => ({ default: module.DocumentationExplorerView })));
+const DocumentationCollectionsView = lazy(() => import("./console/developer-assets/documentation-collections-view").then((module) => ({ default: module.DocumentationCollectionsView })));
+const APIContractsView = lazy(() => import("./console/developer-assets/api-contracts-view").then((module) => ({ default: module.APIContractsView })));
+const SDKCatalogView = lazy(() => import("./console/developer-assets/sdk-catalog-view").then((module) => ({ default: module.SDKCatalogView })));
+const QueryLabView = lazy(() => import("./console/developer-assets/query-lab-view").then((module) => ({ default: module.QueryLabView })));
 
 function deploymentAsProduct(value: APIDeployment): APIProduct {
   return {
@@ -90,6 +97,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const [tools, setTools] = useState<APITool[]>(fixtures?.tools ?? []);
   const [nativePlugins, setNativePlugins] = useState<APINativePlugin[]>([]);
   const [grantDefinitions, setGrantDefinitions] = useState<APIGrantDefinition[]>([]);
+  const [grantDefinitionsStatus, setGrantDefinitionsStatus] = useState<"loading" | "ready" | "unavailable">(fixturePreview ? "ready" : "loading");
   const [identityConfig, setIdentityConfig] = useState<APIIdentity | null>(null);
   const [identityLoading, setIdentityLoading] = useState(!fixturePreview);
   const [identityLoadError, setIdentityLoadError] = useState("");
@@ -133,11 +141,22 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   }, [fixturePreview]);
 
   useEffect(() => {
-    if (fixturePreview || consoleRoute.kind !== "tool-builder") return;
+    const needsGrants = consoleRoute.kind === "tool-builder" || (consoleRoute.kind === "section" && consoleRoute.section === "mcp-preview");
+    if (fixturePreview || !needsGrants) return;
     let cancelled = false;
-    api.grantDefinitions().then((values) => { if (!cancelled) setGrantDefinitions(values); }).catch(() => {});
+    api.grantDefinitions().then((values) => {
+      if (!cancelled) {
+        setGrantDefinitions(values);
+        setGrantDefinitionsStatus("ready");
+      }
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setGrantDefinitionsStatus("unavailable");
+        recordWorkspaceLoadProblem("Grant registry", error);
+      }
+    });
     return () => { cancelled = true; };
-  }, [fixturePreview, consoleRoute.kind, consoleRoute.path]);
+  }, [fixturePreview, consoleRoute.kind, consoleRoute.path, consoleRoute.section, recordWorkspaceLoadProblem]);
 
   useEffect(() => {
     if (fixturePreview || !toolBuilderUID) return;
@@ -281,7 +300,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     } else if (recipeDialog.kind === "edit") {
       const parsed = parseRecipeSpecEditor(value, recipeEditableSpec(recipeDialog.recipe));
       if (!parsed.ok) return;
-      saved = await editRecipe(recipeDialog.recipe, parsed.spec, recipeDialog.visibility);
+      saved = await editRecipe(recipeDialog.recipe, parsed.referenceIDs, recipeDialog.visibility);
     } else {
       saved = await reworkRecipe(recipeDialog.recipe, value);
     }
@@ -311,7 +330,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useEntityDetail({ consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, reportSubmissions, auditEvents, rootUsers });
   const workspaceClass = consoleRoute.kind === "tool-builder" ? "workspace-wide" : section === "identity" || section === "settings" ? "workspace-compact" : "workspace-default";
-  const integrationViewProps = { integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
+  const integrationViewProps = { live: apiConnected, navigation: <CatalogNavigation active="product" onNavigate={navigateToPath} />, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
 
   return <Suspense fallback={<div className="console-loading-boundary"><RefreshCw className="spin" />Loading console…</div>}><div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
@@ -331,11 +350,17 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
             : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} />
             : <>
               {section === "product" && <IntegrationsView {...integrationViewProps} />}
+              {section === "documents" && <DocumentationExplorerView live={apiConnected} sources={sources} onNavigate={navigateToPath} />}
+              {section === "collections" && <DocumentationCollectionsView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
+              {section === "contracts" && <APIContractsView live={apiConnected} integrations={integrations} sources={sources} onMessage={showToast} onNavigate={navigateToPath} />}
+              {section === "sdks" && <SDKCatalogView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
+              {section === "query-lab" && <QueryLabView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "identity" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} onChanged={setIdentityConfig} onMessage={showToast} />}
               {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onApprove={approveRecipe} onPublish={publishRecipe} />}
-              {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
+              {section === "sources" && <SourcesView sources={sources} navigation={<><CatalogNavigation active="sources" onNavigate={navigateToPath} /><DocumentationNavigation active="sources" onNavigate={navigateToPath} /></>} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
               {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
               {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
+              {section === "mcp-preview" && <MCPPreviewView product={product} grants={grantDefinitions} grantStatus={grantDefinitionsStatus} available={apiConnected} privateEndpointEnabled={identityConfig?.configured === true && identityConfig.state === "active"} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "distribution" && <DistributionView enabled={publicMCPEnabled} onEnabledChange={requestMCPChange} resources={visibleResources} resourceFilter={resourceFilter} setResourceFilter={setResourceFilter} onVisibilityChange={requestVisibility} onCopied={showToast} publicEndpoint={publicEndpoint} tenantName={product.name} publicAgentSetup={publicAgentSetup} privateAgentSetup={privateAgentSetup} onConfigureIdentity={() => navigateToSection("identity")} customerAccounts={customerAccounts} customerAccountsStatus={customerAccountsStatus} customerAccountsHaveMore={customerAccountsHaveMore} onUpdateCustomerAccount={updateCustomerAccountState} onLoadMoreCustomerAccounts={loadMoreCustomerAccounts} onOpenSources={() => navigateToSection("sources")} />}
               {section === "reporting" && <OutboxView submissions={reportSubmissions} events={auditEvents} onView={openSupportSubmission} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "overview" && <SettingsView product={product} aiProfiles={aiProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}

@@ -11,11 +11,15 @@ import {
   assertSafeURL,
   boundedResponseText,
   canonicalize,
+  claimJob,
   collectSource,
   completeJob,
+  crawlerLeaseOwner,
   CrawlerJobError,
   failJob,
   fetchRenderedResource,
+  heartbeatJob,
+  IngestionRunError,
   ingestUpload,
   injectionIndicators,
   isDeniedAddress,
@@ -52,6 +56,10 @@ function job(overrides: Partial<Job> = {}): Job {
     source_kind: "website",
     location: "https://docs.example.com",
     visibility: "private",
+    attempt: 1,
+    lease_owner: "crawler-test-worker",
+    lease_expires_at: new Date("2099-01-01T00:00:00Z"),
+    heartbeat_at: new Date("2026-08-26T00:00:00Z"),
     ...overrides,
   };
 }
@@ -125,6 +133,64 @@ test("crawler settings keep localhost disabled by default and validate explicit 
   assert.equal(enabled.allowLocalhostSubdomains, true);
   assert.deepEqual([...enabled.localhostPorts], [8080, 33000]);
   assert.throws(() => loadCrawlerSettings({ DOKOSOKO_CRAWLER_LOCALHOST_PORTS: "0" }), errorCode("crawler_configuration_invalid"));
+});
+
+test("claims queued or expired jobs with an owned lease and clears stale attempt evidence", async () => {
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  let released = false;
+  const claimed = job({
+    attempt: 2,
+    lease_owner: "worker-claim",
+    lease_expires_at: new Date("2099-01-01T00:01:00Z"),
+    heartbeat_at: new Date("2099-01-01T00:00:00Z"),
+  });
+  const client = {
+    query: async (sql: string, values: unknown[] = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("WITH candidate AS")) return { rows: [claimed], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    },
+    release: () => { released = true; },
+  };
+  const pool = { connect: async () => client } as unknown as pg.Pool;
+
+  assert.equal(crawlerLeaseOwner({ DOKOSOKO_CRAWLER_WORKER_ID: "  worker-configured  " }), "worker-configured");
+  assert.equal(await claimJob(pool, "worker-claim", 30_000), claimed);
+  assert.equal(calls[0].sql, "BEGIN");
+  assert.match(calls[1].sql, /state = 'queued'/);
+  assert.match(calls[1].sql, /state = 'running'[\s\S]*lease_expires_at IS NULL/);
+  assert.match(calls[1].sql, /lease_expires_at <= now\(\)/);
+  assert.match(calls[1].sql, /FOR UPDATE SKIP LOCKED/);
+  assert.match(calls[1].sql, /candidate\.state = 'running' THEN job\.attempt \+ 1/);
+  assert.match(calls[1].sql, /lease_owner = \$1/);
+  assert.match(calls[1].sql, /heartbeat_at = now\(\)/);
+  assert.match(calls[1].sql, /cleared_previous_attempt/);
+  assert.match(calls[1].sql, /DELETE FROM crawl_job_documents/);
+  assert.deepEqual(calls[1].values, ["worker-claim", 30_000]);
+  assert.equal(calls[2].sql, "COMMIT");
+  assert.equal(released, true);
+});
+
+test("heartbeats extend only the current unexpired owner lease", async () => {
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  let owned = true;
+  const pool = {
+    query: async (sql: string, values: unknown[] = []) => {
+      calls.push({ sql, values });
+      return { rows: [], rowCount: owned ? 1 : 0 };
+    },
+  } as unknown as pg.Pool;
+  const value = job();
+
+  assert.equal(await heartbeatJob(pool, value, 20_000), true);
+  owned = false;
+  assert.equal(await heartbeatJob(pool, value, 20_000), false);
+  assert.match(calls[0].sql, /heartbeat_at = now\(\)/);
+  assert.match(calls[0].sql, /lease_expires_at = now\(\) \+ \(\$3::integer/);
+  assert.match(calls[0].sql, /state = 'running'/);
+  assert.match(calls[0].sql, /lease_owner = \$2/);
+  assert.match(calls[0].sql, /lease_expires_at > now\(\)/);
+  assert.deepEqual(calls[0].values, [value.id, value.lease_owner, 20_000]);
 });
 
 test("direct fetch connects to the vetted address without a DNS-rebinding lookup", async (t) => {
@@ -375,6 +441,55 @@ test("bounded response reads reject bodies beyond the configured byte budget", a
   await assert.rejects(boundedResponseText(new Response("hello!"), 5), errorCode("source_too_large"));
 });
 
+test("website ingestion records failed, skipped, redirected, and partial coverage explicitly", async (t) => {
+  let origin = "";
+  const server = createServer((request, response) => {
+    if (request.url === "/sitemap.xml") {
+      response.writeHead(200, { "content-type": "application/xml" });
+      response.end(`<urlset><url><loc>${origin}/ok</loc></url><url><loc>${origin.replace("docs.coverage", "other.coverage")}/ignored</loc></url></urlset>`);
+      return;
+    }
+    if (request.url === "/missing") {
+      response.writeHead(500, { "content-type": "text/html" });
+      response.end("<main>temporarily unavailable</main>");
+      return;
+    }
+    if (request.url === "/redirect") {
+      response.writeHead(302, { location: "/final" });
+      response.end();
+      return;
+    }
+    if (request.url === "/ok" || request.url === "/final") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<title>${request.url}</title><main>${"reviewable content ".repeat(20)}</main>`);
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<title>Root</title><main>${"root documentation ".repeat(20)}<a href="/ok">ok</a><a href="/missing">missing</a><a href="/redirect">redirect</a></main>`);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  origin = `http://docs.coverage.localhost:${address.port}`;
+
+  const result = await collectSource(
+    job({ source_kind: "website", location: origin }),
+    settings({ allowLocalhostSubdomains: true, localhostPorts: new Set([address.port]), maxPages: 10, maxBytes: 16_384 }),
+  );
+  assert.equal(result.pages.length, 3);
+  assert.equal(result.failedCount, 1);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.redirectedCount, 1);
+  assert.ok(result.discoveredCount >= 5);
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_sitemap_entry_skipped"));
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_page_redirected" && diagnostic.redirectedTo === `${origin}/final`));
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_partial_coverage"));
+});
+
 test("upload ingestion stays inside its dedicated root and preserves quarantine", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dokosoko-upload-"));
   const outside = await mkdtemp(path.join(os.tmpdir(), "dokosoko-outside-"));
@@ -486,6 +601,9 @@ test("reassesses reused snapshots with the current classifier transactionally", 
       const client = {
         query: async (sql: string, values: unknown[] = []) => {
           calls.push({ sql, values });
+          if (sql.includes("SELECT id::text") && sql.includes("FROM crawl_jobs")) {
+            return { rows: [{ id: job().id }], rowCount: 1 };
+          }
           if (sql.includes("SELECT id::text FROM sources")) {
             return { rows: [{ id: job().source_id }], rowCount: 1 };
           }
@@ -523,8 +641,12 @@ test("reassesses reused snapshots with the current classifier transactionally", 
       assert.equal(calls.at(-1)?.sql, "COMMIT");
       assert.equal(calls.some((call) => call.sql === "ROLLBACK"), false);
 
+      const leaseLock = calls.find((call) => call.sql.includes("FROM crawl_jobs"));
       const sourceLock = calls.find((call) => call.sql.includes("SELECT id::text FROM sources"));
+      assert.ok(leaseLock);
       assert.ok(sourceLock);
+      assert.match(leaseLock.sql, /lease_owner = \$2/);
+      assert.deepEqual(leaseLock.values, [value.id, value.lease_owner]);
       assert.match(sourceLock.sql, /FOR UPDATE/);
       assert.deepEqual(sourceLock.values, [value.source_id, value.organisation_id, value.product_id]);
 
@@ -573,6 +695,7 @@ test("reassesses reused snapshots with the current classifier transactionally", 
         JSON.stringify(scenario.indicators),
       ]);
       assert.match(link.sql, /assessment_state/);
+      assert.ok(calls.indexOf(leaseLock) < calls.indexOf(sourceLock));
       assert.ok(calls.indexOf(sourceLock) < calls.indexOf(snapshotInsert));
       assert.ok(calls.indexOf(snapshotUpdate) < calls.indexOf(lockedDocument));
       if (documentUpdate) assert.ok(calls.indexOf(lockedDocument) < calls.indexOf(documentUpdate));
@@ -585,6 +708,7 @@ test("reassesses reused snapshots with the current classifier transactionally", 
     const client = {
       query: async (sql: string, values: unknown[] = []) => {
         calls.push({ sql, values });
+        if (sql.includes("SELECT id::text") && sql.includes("FROM crawl_jobs")) return { rows: [{ id: job().id }], rowCount: 1 };
         if (sql.includes("SELECT id::text FROM sources")) return { rows: [{ id: job().source_id }], rowCount: 1 };
         if (sql.includes("INSERT INTO source_snapshots")) return { rows: [{ id: "snapshot-new" }], rowCount: 1 };
         if (sql.includes("INSERT INTO knowledge_documents")) return { rows: [{ id: "document-new" }], rowCount: 1 };
@@ -619,6 +743,7 @@ test("reassesses reused snapshots with the current classifier transactionally", 
     const client = {
       query: async (sql: string, values: unknown[] = []) => {
         calls.push({ sql, values });
+        if (sql.includes("SELECT id::text") && sql.includes("FROM crawl_jobs")) return { rows: [{ id: job().id }], rowCount: 1 };
         if (sql.includes("SELECT id::text FROM sources")) return { rows: [{ id: job().source_id }], rowCount: 1 };
         if (sql.includes("INSERT INTO source_snapshots")) return { rows: [], rowCount: 0 };
         if (sql.includes("SELECT id::text FROM source_snapshots")) return { rows: [{ id: "snapshot-orphaned" }], rowCount: 1 };
@@ -672,6 +797,7 @@ test("completion and failure transitions persist review/quarantine and typed err
   const client = {
     query: async (sql: string, values: unknown[] = []) => {
       calls.push({ sql, values });
+      if (sql.includes("SELECT id::text") && sql.includes("FROM crawl_jobs")) return { rows: [{ id: job().id }], rowCount: 1 };
       return { rows: [], rowCount: 1 };
     },
     release: () => { releases++; },
@@ -686,31 +812,138 @@ test("completion and failure transitions persist review/quarantine and typed err
   const value = job({ source_kind: "upload", location: "guide.md" });
   const result = {
     discoveredCount: 1,
+    failedCount: 0,
+    skippedCount: 0,
+    redirectedCount: 0,
+    diagnostics: [],
     pages: [{ url: "upload://source/guide.md", title: "Guide", text: "text", html: "text", contentType: "text/markdown", status: 200, indicators: ["tool_coercion"], rendered: false }],
   };
 
   await completeJob(pool, value, result, 1);
   assert.equal(calls[0].sql, "BEGIN");
-  assert.match(calls[1].sql, /UPDATE sources AS source/);
-  assert.match(calls[1].sql, /WHEN state = 'published' THEN 'published'/);
-  assert.match(calls[1].sql, /source\.state IS DISTINCT FROM assessed\.target_state OR \$3::integer > 0/);
-  assert.deepEqual(calls[1].values, [value.source_id, true, 1]);
-  assert.match(calls[2].sql, /state = 'review'/);
-  assert.deepEqual(calls[2].values, [value.id, 1, 1, 1]);
-  assert.equal(calls[3].sql, "COMMIT");
+  assert.match(calls[1].sql, /FROM crawl_jobs/);
+  assert.match(calls[1].sql, /lease_owner = \$2/);
+  assert.deepEqual(calls[1].values, [value.id, value.lease_owner]);
+  assert.match(calls[2].sql, /UPDATE sources AS source/);
+  assert.match(calls[2].sql, /WHEN state = 'published' THEN 'published'/);
+  assert.match(calls[2].sql, /source\.state IS DISTINCT FROM assessed\.target_state OR \$3::integer > 0/);
+  assert.deepEqual(calls[2].values, [value.source_id, true, 1]);
+  assert.match(calls[3].sql, /state = 'review'/);
+  assert.match(calls[3].sql, /lease_owner = ''/);
+  assert.match(calls[3].sql, /lease_expires_at = null/);
+  assert.deepEqual(calls[3].values.slice(0, 7), [value.id, 1, 1, 1, 0, 0, 0]);
+  assert.equal(calls[3].values[8], value.lease_owner);
+  assert.deepEqual(JSON.parse(calls[3].values[7] as string), {
+    partial: false,
+    counts: { discovered: 1, fetched: 1, failed: 0, skipped: 0, redirected: 0 },
+    items: [],
+  });
+  assert.equal(calls[4].sql, "COMMIT");
   assert.equal(releases, 1);
 
   calls.length = 0;
   await completeJob(pool, value, { ...result, pages: [{ ...result.pages[0], indicators: [] }] }, 0);
-  assert.deepEqual(calls[1].values, [value.source_id, false, 0]);
-  assert.deepEqual(calls[2].values, [value.id, 1, 1, 0]);
-  assert.equal(calls[3].sql, "COMMIT");
+  assert.deepEqual(calls[2].values, [value.source_id, false, 0]);
+  assert.deepEqual(calls[3].values.slice(0, 7), [value.id, 1, 1, 0, 0, 0, 0]);
+  assert.equal(calls[4].sql, "COMMIT");
   assert.equal(releases, 2);
 
+  calls.length = 0;
+  const partial = {
+    ...result,
+    pages: [{ ...result.pages[0], indicators: [] }],
+    discoveredCount: 4,
+    failedCount: 1,
+    skippedCount: 2,
+    redirectedCount: 1,
+    diagnostics: [{ code: "website_partial_coverage", severity: "warning" as const, message: "Partial." }],
+  };
+  await completeJob(pool, value, partial, 0);
+  assert.deepEqual(calls[2].values, [value.source_id, true, 0]);
+  assert.deepEqual(calls[3].values.slice(0, 7), [value.id, 4, 1, 0, 1, 2, 1]);
+  assert.deepEqual(JSON.parse(calls[3].values[7] as string), {
+    partial: true,
+    counts: { discovered: 4, fetched: 1, failed: 1, skipped: 2, redirected: 1 },
+    items: [{ code: "website_partial_coverage", severity: "warning", message: "Partial." }],
+  });
+  assert.equal(releases, 3);
+
   directCalls.length = 0;
-  await failJob(pool, value, new CrawlerJobError("git_source_unsupported", "Use another source kind."));
+  assert.equal(await failJob(pool, value, new CrawlerJobError("git_source_unsupported", "Use another source kind.")), true);
   assert.match(directCalls[0].sql, /state = 'failed'/);
-  assert.deepEqual(directCalls[0].values, [value.id, "git_source_unsupported", "Use another source kind."]);
+  assert.match(directCalls[0].sql, /lease_owner = \$10/);
+  assert.deepEqual(directCalls[0].values.slice(0, 6), [value.id, 0, 0, 1, 0, 0]);
+  assert.deepEqual(directCalls[0].values.slice(7), ["git_source_unsupported", "Use another source kind.", value.lease_owner]);
+  assert.deepEqual(JSON.parse(directCalls[0].values[6] as string), {
+    partial: true,
+    counts: { discovered: 0, fetched: 0, failed: 1, skipped: 0, redirected: 0 },
+    items: [{ code: "git_source_unsupported", severity: "error", message: "Use another source kind." }],
+  });
+});
+
+test("stale workers cannot store, complete, or fail a job after losing its lease", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dokosoko-stale-lease-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  const client = {
+    query: async (sql: string, values: unknown[] = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM crawl_jobs")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    },
+    release: () => undefined,
+  };
+  const pool = {
+    connect: async () => client,
+    query: async (sql: string, values: unknown[] = []) => {
+      calls.push({ sql, values });
+      return { rows: [], rowCount: 0 };
+    },
+  } as unknown as pg.Pool;
+  const value = job({ lease_owner: "expired-worker" });
+  const page = { url: "upload://source/guide.md", title: "Guide", text: "text", html: "text", contentType: "text/markdown", status: 200, indicators: [], rendered: false };
+  const result = { pages: [page], discoveredCount: 1, failedCount: 0, skippedCount: 0, redirectedCount: 0, diagnostics: [] };
+
+  await assert.rejects(storePage(pool, value, page, settings({ dataDir: root })), errorCode("crawler_lease_lost"));
+  assert.equal(calls.some((call) => call.sql.includes("INSERT INTO source_snapshots")), false);
+  calls.length = 0;
+  await assert.rejects(completeJob(pool, value, result, 0), errorCode("crawler_lease_lost"));
+  assert.equal(calls.some((call) => call.sql.includes("UPDATE sources AS source")), false);
+  assert.equal(calls.at(-1)?.sql, "ROLLBACK");
+  calls.length = 0;
+  assert.equal(await failJob(pool, value, new Error("stale")), false);
+  assert.match(calls[0].sql, /lease_owner = \$10/);
+});
+
+test("failed website runs retain partial acquisition counts and diagnostics", async () => {
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  const pool = {
+    query: async (sql: string, values: unknown[] = []) => {
+      calls.push({ sql, values });
+      return { rows: [], rowCount: 1 };
+    },
+  } as unknown as pg.Pool;
+  const value = job();
+  const result = {
+    pages: [],
+    discoveredCount: 4,
+    failedCount: 2,
+    skippedCount: 2,
+    redirectedCount: 1,
+    diagnostics: [{ code: "website_partial_coverage", severity: "warning" as const, message: "No reviewable pages." }],
+  };
+  const error = new IngestionRunError("website_no_content", "No reviewable content.", result);
+
+  assert.equal(await failJob(pool, value, error), true);
+  assert.deepEqual(calls[0].values.slice(0, 6), [value.id, 4, 0, 2, 2, 1]);
+  assert.deepEqual(JSON.parse(calls[0].values[6] as string), {
+    partial: true,
+    counts: { discovered: 4, fetched: 0, failed: 2, skipped: 2, redirected: 1 },
+    items: [
+      { code: "website_no_content", severity: "error", message: "No reviewable content." },
+      { code: "website_partial_coverage", severity: "warning", message: "No reviewable pages." },
+    ],
+  });
 });
 
 test("completion rolls back the source transition when the crawl-job update fails", async () => {
@@ -719,7 +952,8 @@ test("completion rolls back the source transition when the crawl-job update fail
   const client = {
     query: async (sql: string, values: unknown[] = []) => {
       calls.push({ sql, values });
-      if (sql.includes("UPDATE crawl_jobs SET state = 'review'")) throw new Error("simulated crawl-job update failure");
+      if (sql.includes("SELECT id::text") && sql.includes("FROM crawl_jobs")) return { rows: [{ id: job().id }], rowCount: 1 };
+      if (sql.includes("SET state = 'review'")) throw new Error("simulated crawl-job update failure");
       return { rows: [], rowCount: 1 };
     },
     release: () => { released = true; },
@@ -728,14 +962,19 @@ test("completion rolls back the source transition when the crawl-job update fail
   const value = job({ source_kind: "upload", location: "guide.md" });
   const result = {
     discoveredCount: 1,
+    failedCount: 0,
+    skippedCount: 0,
+    redirectedCount: 0,
+    diagnostics: [],
     pages: [{ url: "upload://source/guide.md", title: "Guide", text: "text", html: "text", contentType: "text/markdown", status: 200, indicators: [], rendered: false }],
   };
 
   await assert.rejects(completeJob(pool, value, result, 1), /simulated crawl-job update failure/);
   assert.equal(calls[0].sql, "BEGIN");
-  assert.match(calls[1].sql, /UPDATE sources AS source/);
-  assert.match(calls[2].sql, /UPDATE crawl_jobs SET state = 'review'/);
-  assert.equal(calls[3].sql, "ROLLBACK");
+  assert.match(calls[1].sql, /FROM crawl_jobs/);
+  assert.match(calls[2].sql, /UPDATE sources AS source/);
+  assert.match(calls[3].sql, /SET state = 'review'/);
+  assert.equal(calls[4].sql, "ROLLBACK");
   assert.equal(calls.some((call) => call.sql === "COMMIT"), false);
   assert.equal(released, true);
 });

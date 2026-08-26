@@ -34,7 +34,7 @@ func productRecipeFixture() (model.IntegrationAnalysis, model.RecipeSeed) {
 		Evidence: []model.IntegrationEvidence{
 			{Kind: integrationScopeEvidenceKind, ResourceID: "integration-1", Fingerprint: "scope-v1"},
 			{Kind: "integration", ResourceID: "integration-1", Label: "Payments", Fingerprint: "integration-v1", Visibility: model.VisibilityPublic},
-			{Kind: "tool", ResourceID: "tool-create-payment", Label: "payments.create", Excerpt: "Exact bound tool revision: 1\nDescription: Create one payment.\nScope: api\nOwner integration ID: integration-1\nBackend: http\nMethod: POST\nFixed endpoint: https://api.example.test/payments\nInput schema: {\"type\":\"object\"}\nOutput schema: {\"type\":\"object\"}", Version: "1", Fingerprint: "tool-v1", Visibility: model.VisibilityPublic},
+			{Kind: "tool", ResourceID: "tool-create-payment", Label: "payments.create", Excerpt: "Exact bound tool revision: 1\nDescription: Create one payment.\nScope: api\nOwner integration ID: integration-1\nBackend: http\nUpstream drifted: false\nMethod: POST\nFixed endpoint: https://api.example.test/payments\nInput schema: {\"type\":\"object\"}\nOutput schema: {\"type\":\"object\"}", Version: "1", Fingerprint: "tool-v1", Visibility: model.VisibilityPublic},
 			{Kind: "tool", ResourceID: "tool-refund", Label: "payments.refund", Excerpt: "Description: Refund one payment.\nBackend: http\nMethod: POST\nFixed endpoint: https://api.example.test/refunds", Fingerprint: "refund-v1", Visibility: model.VisibilityPublic},
 		},
 	}
@@ -145,6 +145,21 @@ func TestPublicRecipeEvidenceRejectsSourceQuarantine(t *testing.T) {
 	}
 }
 
+func TestPublicRecipeEvidenceRejectsPrivateOnlyMCPTool(t *testing.T) {
+	t.Parallel()
+	service := New(store.NewMemory())
+	recipe := model.Recipe{CurrentRevision: &model.RecipeRevision{}}
+	evidence := []model.IntegrationEvidence{{
+		Kind:       "tool",
+		ResourceID: "tool-mcp",
+		Visibility: model.VisibilityPublic,
+		Excerpt:    "Backend: mcp\nMCP tool name: payments.custom.create",
+	}}
+	if err := service.validatePublicRecipeEvidence(context.Background(), "prod_acme", recipe, evidence); !errors.Is(err, ErrPublicMCPRecipe) {
+		t.Fatalf("public MCP recipe evidence error = %v", err)
+	}
+}
+
 func TestRecipeMCPExceptionUsesStructuredProductBackend(t *testing.T) {
 	analysis, seed := productRecipeFixture()
 	selected, ok := recipeResolveProductSelection(analysis, seed)
@@ -170,7 +185,7 @@ func TestRecipeMCPExceptionUsesStructuredProductBackend(t *testing.T) {
 	}
 
 	mcpEvidence := append([]model.IntegrationEvidence(nil), analysis.Evidence...)
-	mcpEvidence[2].Excerpt = strings.Replace(mcpEvidence[2].Excerpt, "Backend: http", "Backend: mcp", 1)
+	mcpEvidence[2].Excerpt = strings.Replace(mcpEvidence[2].Excerpt, "Backend: http", "Backend: mcp\nMCP tool name: payments.custom.create", 1)
 	mcpAnalysis := model.IntegrationAnalysis{Evidence: mcpEvidence}
 	selected, ok = recipeResolveProductSelection(mcpAnalysis, seed)
 	if !ok {
@@ -179,6 +194,19 @@ func TestRecipeMCPExceptionUsesStructuredProductBackend(t *testing.T) {
 	allowed, _ = recipeUniqueEvidenceByID(selected)
 	if !recipeIntentMatchesProductSelection("Implement the product MCP operation", seed.Outcome, recipeSelectedCapabilitySupportsMCP(seed, allowed)) {
 		t.Fatal("structured MCP product capability was rejected")
+	}
+	spec, err := deterministicRecipeSpec(mcpAnalysis, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(spec.Steps[0].Action, "`payments.custom.create`") {
+		t.Fatalf("MCP recipe omitted exact discoverable tool name: %#v", spec.Steps)
+	}
+	missingName := mcpAnalysis
+	missingName.Evidence = append([]model.IntegrationEvidence(nil), mcpAnalysis.Evidence...)
+	missingName.Evidence[2].Excerpt = strings.Replace(missingName.Evidence[2].Excerpt, "\nMCP tool name: payments.custom.create", "", 1)
+	if _, err := deterministicRecipeSpec(missingName, seed); !errors.Is(err, ErrRecipeNeedsInput) {
+		t.Fatalf("MCP recipe without an exposed tool name error = %v", err)
 	}
 }
 

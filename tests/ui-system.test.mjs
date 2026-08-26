@@ -132,22 +132,22 @@ test("keeps the Recipes authoring workflow inside the same global route stack", 
   assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-input/);
 });
 
-test("keeps API documentation setup short without bypassing reviewed evidence", async () => {
+test("keeps API Resources attachment-only and pinned to reviewed exact versions", async () => {
   const source = await consoleSource();
-  const guide = await readFile(appFile("app/components/integrations/IntegrationSetupGuide.tsx"), "utf8");
+  const resources = await readFile(appFile("app/components/console/developer-assets/api-resources-workspace.tsx"), "utf8");
 
-  assert.match(source, /sourcePublicationManifestEntry[\s\S]*source_publication_id:[\s\S]*content_hash:/);
-  assert.match(source, /api\.resourceSets\("documentation"\)/);
-  assert.match(source, /api\.attachResourceSet\(integration\.id, resource\.id, revisionID\)/);
-  assert.match(source, /Review & attach/);
-  assert.match(source, /Publish & attach/);
-  assert.match(source, /That exact revision was already attached/);
-  assert.match(source, /onGenerateSetupGuide\(integrationID\)/);
-  assert.match(guide, /title="Setup guide"/);
-  assert.match(guide, /Generate guide/);
-  assert.match(guide, /Refresh guide/);
-  assert.match(guide, /attached, reviewed evidence/);
-  assert.doesNotMatch(guide, /source of truth.*analysis/i);
+  assert.match(source, /activeTab === "documentation"[\s\S]*<APIResourcesWorkspace/);
+  assert.match(resources, /This page contains attachment records only/);
+  assert.match(resources, /Open catalog/);
+  assert.match(resources, /panelKind === "contract" \? "Create in Catalog" : "Create & attach"/);
+  assert.match(resources, /kind === "contract" \? "Create in Catalog" : "Create & attach exact resource"/);
+  assert.match(resources, /Next steps happen in Catalog/);
+  assert.match(resources, /Attach existing/);
+  assert.match(resources, /Change exact/);
+  assert.match(resources, /Detach resource/);
+  assert.match(resources, /no attachment upgrades automatically/);
+  assert.match(resources, /apiResourcePublications/);
+  assert.doesNotMatch(resources, /crawlSource|Crawl source|Documentation ingestion/);
 });
 
 test("limits typography to the owned six-step scale, line heights, and four weights", async () => {

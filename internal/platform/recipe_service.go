@@ -15,6 +15,7 @@ import (
 var ErrRecipeNeedsInput = errors.New("the requested recipe is not supported by the current reviewed product evidence")
 var ErrRecipeGroundingChanged = errors.New("recipe product evidence changed; analyse and regenerate the recipe before continuing")
 var ErrRecipeAnalysisScope = errors.New("the analysis is not scoped to the requested integration")
+var ErrPublicMCPRecipe = errors.New("MCP-backed product recipes are private-only until public custom-tool exposure is supported")
 var errPublicRecipeEvidence = errors.New("public recipes can only depend on public evidence and reference published, non-quarantined public sources")
 
 func recipeProductIntentTextValid(title, outcome string) bool {
@@ -50,7 +51,6 @@ func recipeBriefResponseSeed(response recipeBriefAIResponse, analysis model.Inte
 	}
 	seed := model.RecipeSeed{
 		CapabilityIDs: append([]string(nil), response.CapabilityIDs...),
-		SDKID:         strings.TrimSpace(response.SDKID),
 		EvidenceIDs:   append([]string(nil), response.EvidenceIDs...),
 	}
 	for index := range seed.CapabilityIDs {
@@ -73,7 +73,6 @@ func recipeBriefResponseSeed(response recipeBriefAIResponse, analysis model.Inte
 	if !ok {
 		return model.RecipeSeed{}, false
 	}
-	canonical.SDKID = seed.SDKID
 	canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
 	_ = selected
 	return canonical, true
@@ -85,7 +84,8 @@ func appendUniqueRecipeEvidenceIDs(seed model.RecipeSeed, evidence []model.Integ
 		seen[id] = true
 	}
 	for _, item := range evidence {
-		if item.Kind != "source_publication" || item.ResourceID == "" || seen[item.ResourceID] || len(seed.EvidenceIDs) == 24 {
+		supporting := item.Kind == "integration" || item.Kind == "source_publication" || recipeDeveloperAssetSupportingKind(item.Kind)
+		if !supporting || item.ResourceID == "" || seen[item.ResourceID] || len(seed.EvidenceIDs) == 24 {
 			continue
 		}
 		seed.EvidenceIDs = append(seed.EvidenceIDs, item.ResourceID)
@@ -110,6 +110,11 @@ func recipeAnalysisWithoutPublicationEvidence(analysis model.IntegrationAnalysis
 // fingerprint remain the immutable grounding boundary; retrieved text is only
 // a bounded view over that already-reviewed publication.
 func (s *Service) relevantRecipeAnalysis(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, outcome string) (model.IntegrationAnalysis, error) {
+	var err error
+	analysis, err = s.relevantRecipeDeveloperAssetAnalysis(ctx, product, analysis, outcome)
+	if err != nil {
+		return analysis, err
+	}
 	publicationEvidence := make(map[string]model.IntegrationEvidence)
 	publicationIDs := make([]string, 0)
 	for _, item := range analysis.Evidence {
@@ -177,6 +182,12 @@ func (s *Service) relevantRecipeAnalysis(ctx context.Context, product model.Prod
 
 func (s *Service) prepareRecipeSeed(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed) (model.IntegrationAnalysis, model.RecipeSeed, error) {
 	seed.SDKID = strings.TrimSpace(seed.SDKID)
+	if seed.SDKID != "" {
+		// SDK membership in an Integration does not prove that the SDK exposes
+		// this exact operation. Recipes may use an SDK only after the product
+		// model records a reviewed SDK-to-capability binding.
+		return analysis, seed, ErrRecipeNeedsInput
+	}
 	for index := range seed.CapabilityIDs {
 		seed.CapabilityIDs[index] = strings.TrimSpace(seed.CapabilityIDs[index])
 	}
@@ -198,16 +209,17 @@ func (s *Service) prepareRecipeSeed(ctx context.Context, product model.Product, 
 	if !ok {
 		return analysis, seed, ErrRecipeNeedsInput
 	}
-	canonical.SDKID = seed.SDKID
 	canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
 	seed = canonical
 	if !recipeSeedTextValid(seed) {
 		return analysis, seed, ErrRecipeNeedsInput
 	}
+	selectedDeveloperAssets := selectedRecipeDeveloperAssetEvidence(analysis.Evidence, seed.EvidenceIDs)
 	analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, seed.Outcome)
 	if err != nil {
 		return analysis, seed, err
 	}
+	analysis.Evidence = prioritizeRecipeDeveloperAssetEvidence(analysis.Evidence, selectedDeveloperAssets)
 	seed = appendUniqueRecipeEvidenceIDs(seed, analysis.Evidence)
 	selected, ok := recipeResolveProductSelection(analysis, seed)
 	if !ok {
@@ -262,10 +274,13 @@ func equalRecipeReferences(left, right []model.RecipeReference) bool {
 	return true
 }
 
-func (s *Service) createRecipeRevision(ctx context.Context, product model.Product, recipe model.Recipe, analysis model.IntegrationAnalysis, draft authoredRecipe, review string, actor Actor) (model.Recipe, error) {
+func (s *Service) createRecipeRevision(ctx context.Context, product model.Product, recipe model.Recipe, analysis model.IntegrationAnalysis, draft authoredRecipe, review, auditAction string, actor Actor) (model.Recipe, error) {
 	selectedEvidence, ok := recipeEvidenceForDependencies(analysis.Evidence, recipe.Dependencies)
 	if !ok {
 		return recipe, ErrRecipeGroundingChanged
+	}
+	if recipe.Visibility == model.VisibilityPublic && recipeEvidenceUsesMCP(selectedEvidence) {
+		return recipe, ErrPublicMCPRecipe
 	}
 	if draft.Spec.SchemaVersion != model.RecipeSpecVersion2 || draft.Spec.IntegrationID != recipe.IntegrationID || draft.Spec.Title != recipe.Title || draft.Spec.Outcome != recipe.Outcome {
 		return recipe, errors.New("recipe spec cannot change its integration, title, outcome, or schema")
@@ -315,15 +330,35 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 		PromptHash:              draft.PromptHash,
 		CreatedBy:               actor.ID,
 	}
-	if recipe.Revision == 0 {
-		recipe, err = s.store.CreateRecipeWithRevision(ctx, recipe, value)
+	audit := model.AuditEvent{
+		ID:             randomID("audit"),
+		OrganisationID: recipe.OrganisationID,
+		ProductID:      recipe.ProductID,
+		ActorID:        actor.ID,
+		Action:         auditAction,
+		TargetType:     "recipe",
+		TargetID:       recipe.ID,
+		Current:        map[string]any{"analysis_id": analysis.ID, "integration_id": recipe.IntegrationID, "revision_id": value.ID},
+		RequestID:      recipeAuditRequestID(actor),
+		CreatedAt:      s.now(),
+	}
+	mutation := store.RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit}
+	creating := recipe.Revision == 0
+	if creating {
+		recipe, err = s.store.CreateRecipeWithRevision(ctx, recipe, value, mutation)
 	} else {
-		recipe, err = s.store.SaveRecipeRevision(ctx, recipe, value, recipe.Revision)
+		recipe, err = s.store.SaveRecipeRevision(ctx, recipe, value, mutation)
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrCatalogConflict) {
+			if creating {
+				return recipe, ErrRecipeGroundingChanged
+			}
+			return s.resolveRecipeCatalogConflict(ctx, recipe.ProductID, recipe.ID)
+		}
 		return recipe, err
 	}
-	return s.requireCurrentRecipeGrounding(ctx, product, recipe)
+	return recipe, nil
 }
 
 func (s *Service) createPreparedRecipe(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, instruction string, actor Actor) (model.Recipe, error) {
@@ -379,7 +414,7 @@ func (s *Service) createPreparedRecipe(ctx context.Context, product model.Produc
 	if len(recipe.Dependencies) == 0 {
 		return model.Recipe{}, ErrRecipeNeedsInput
 	}
-	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", actor)
+	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", "recipe.created", actor)
 }
 
 func scopedRecipeCollisionSlug(slug, integrationID, capabilityID string) string {
@@ -452,7 +487,6 @@ func (s *Service) CreateRecipeFromPromptFor(ctx context.Context, productID, inte
 		"product":                map[string]string{"name": product.Name, "description": product.Description},
 		"product_evidence":       productEvidence,
 		"allowed_capability_ids": recipeProductCapabilityIDs(productEvidence),
-		"allowed_sdk_ids":        recipeProductSDKIDs(productEvidence),
 		"allowed_evidence_ids":   evidenceIDs(productEvidence),
 	})
 	result, aiErr := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_brief", PromptKey: AIPromptKeyRecipeBrief, User: string(prompt), SchemaName: "recipe_brief", Schema: recipeBriefSchema, MaxOutput: 2048, Temperature: 0.1})
@@ -467,11 +501,7 @@ func (s *Service) CreateRecipeFromPromptFor(ctx context.Context, productID, inte
 	if !valid {
 		return recipe, ErrRecipeNeedsInput
 	}
-	recipe, runErr = s.createRecipeFromSeed(ctx, product, analysis, seed, instruction, actor)
-	if runErr == nil {
-		runErr = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "recipe.created", TargetType: "recipe", TargetID: recipe.ID, Current: map[string]any{"analysis_id": analysis.ID, "integration_id": integrationID, "contract_version": recipe.ContractVersion, "generated": true}, RequestID: actor.RequestID, CreatedAt: s.now()})
-	}
-	return recipe, runErr
+	return s.createRecipeFromSeed(ctx, product, analysis, seed, instruction, actor)
 }
 
 func (s *Service) GenerateRecipes(ctx context.Context, productID, analysisID string, actor Actor) ([]model.Recipe, error) {
@@ -559,7 +589,7 @@ func (s *Service) generateRecipes(ctx context.Context, productID, analysisID, re
 		existing.Outcome = seed.Outcome
 		existing.Audience = "coding_agent"
 		existing.Dependencies = recipeGroundingDependencies(preparedAnalysis, seed)
-		regrounded, refreshErr := s.createRecipeRevision(ctx, product, existing, preparedAnalysis, draft, "", actor)
+		regrounded, refreshErr := s.createRecipeRevision(ctx, product, existing, preparedAnalysis, draft, "", "recipe.regrounded", actor)
 		if refreshErr != nil {
 			if errors.Is(refreshErr, store.ErrConflict) {
 				winner, winnerErr := s.store.RecipeBySlug(ctx, productID, seed.Slug)
@@ -571,12 +601,10 @@ func (s *Service) generateRecipes(ctx context.Context, productID, analysisID, re
 			return recipes, refreshErr
 		}
 		recipes = append(recipes, regrounded)
-		if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "recipe.regrounded", TargetType: "recipe", TargetID: regrounded.ID, Current: map[string]any{"analysis_id": analysis.ID, "integration_id": integrationID, "revision": regrounded.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
-			return nil, err
+		product, err = s.store.Product(ctx, productID)
+		if err != nil {
+			return recipes, err
 		}
-	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: product.OrganisationID, ProductID: product.ID, ActorID: actor.ID, Action: "recipes.generated", TargetType: "integration_analysis", TargetID: analysis.ID, Current: map[string]any{"integration_id": integrationID, "recipe_count": len(recipes)}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
-		return nil, err
 	}
 	return recipes, nil
 }
@@ -623,13 +651,13 @@ func (s *Service) ReworkRecipe(ctx context.Context, productID, recipeID string, 
 		return recipe, err
 	}
 	recipe.Dependencies = recipeGroundingDependencies(analysis, seed)
-	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", actor)
+	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", "recipe.reworked", actor)
 }
 
-// UpdateRecipeSpec is the only human edit path for v2. Markdown is a canonical
-// rendering and therefore cannot become an independent, drifting source of
-// truth.
-func (s *Service) UpdateRecipeSpec(ctx context.Context, productID, recipeID string, expectedRevision int64, expectedCurrentRevisionID string, spec model.RecipeSpec, visibility model.Visibility, actor Actor) (model.Recipe, error) {
+// UpdateRecipeReferences is the only human edit path for v2. The server keeps
+// ownership of the capability and all instruction prose; an operator may only
+// retain reviewed references and choose distribution visibility.
+func (s *Service) UpdateRecipeReferences(ctx context.Context, productID, recipeID string, expectedRevision int64, expectedCurrentRevisionID string, referenceIDs []string, visibility model.Visibility, actor Actor) (model.Recipe, error) {
 	product, err := s.store.Product(ctx, productID)
 	if err != nil {
 		return model.Recipe{}, err
@@ -648,12 +676,17 @@ func (s *Service) UpdateRecipeSpec(ctx context.Context, productID, recipeID stri
 	if err != nil {
 		return recipe, err
 	}
-	currentSpec, err := decodeRecipeSpec(recipe.CurrentRevision)
+	spec, err := decodeRecipeSpec(recipe.CurrentRevision)
 	if err != nil {
 		return recipe, err
 	}
-	if spec.IntegrationID != currentSpec.IntegrationID || spec.Title != currentSpec.Title || spec.Outcome != currentSpec.Outcome || spec.SDKID != currentSpec.SDKID || !equalStrings(spec.CapabilityIDs, currentSpec.CapabilityIDs) {
-		return recipe, errors.New("edit reference_ids or visibility only; integration, title, outcome, capability, and SDK are immutable")
+	if len(referenceIDs) > 8 {
+		return recipe, errors.New("recipe reference_ids must contain at most 8 reviewed document IDs")
+	}
+	for _, referenceID := range referenceIDs {
+		if referenceID == "" || referenceID != strings.TrimSpace(referenceID) {
+			return recipe, errors.New("recipe reference_ids must be non-empty IDs without surrounding whitespace")
+		}
 	}
 	analysis, err := s.store.IntegrationAnalysis(ctx, productID, recipe.AnalysisID)
 	if err != nil {
@@ -667,17 +700,21 @@ func (s *Service) UpdateRecipeSpec(ctx context.Context, productID, recipeID stri
 	if !ok {
 		return recipe, ErrRecipeGroundingChanged
 	}
-	canonical, canonicalErr := canonicalRecipeInstructions(spec, selectedEvidence)
-	if canonicalErr != nil || !equalRecipeInstructions(spec.Prerequisites, canonical.Prerequisites) || !equalRecipeInstructions(spec.Steps, canonical.Steps) || !equalRecipeInstructions(spec.Checks, canonical.Checks) {
-		return recipe, errors.New("recipe instructions are derived from the reviewed operation; edit reference_ids or visibility only")
-	}
+	spec.ReferenceIDs = append([]string(nil), referenceIDs...)
 	references, ok := selectRecipeReferences(spec.ReferenceIDs, recipeReferences(selectedEvidence))
 	if !ok {
 		return recipe, errors.New("recipe references must select exact reviewed product documents")
 	}
 	recipe.Visibility = visibility
 	draft := authoredRecipe{Spec: spec, References: references, GeneratedBy: "human"}
-	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", actor)
+	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", "recipe.references.updated", actor)
+}
+
+func recipeAuditRequestID(actor Actor) string {
+	if requestID := strings.TrimSpace(actor.RequestID); requestID != "" {
+		return requestID
+	}
+	return randomID("request")
 }
 
 func requireExpectedRecipeRevision(recipe model.Recipe, expectedRevision int64, expectedCurrentRevisionID string) error {
@@ -691,47 +728,48 @@ func requireExpectedRecipeRevision(recipe model.Recipe, expectedRevision int64, 
 	return nil
 }
 
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
 func (s *Service) currentRecipeEvidence(ctx context.Context, product model.Product, recipe model.Recipe, evidenceByScope map[string][]model.IntegrationEvidence) ([]model.IntegrationEvidence, bool, error) {
 	if recipe.ContractVersion != model.RecipeContractProductIntegrationV2 || strings.TrimSpace(recipe.IntegrationID) == "" {
 		return nil, false, nil
 	}
 	cacheKey := recipe.IntegrationID + "\x00" + recipe.Outcome
+	var evidence []model.IntegrationEvidence
 	if evidenceByScope != nil {
-		if evidence, ok := evidenceByScope[cacheKey]; ok {
-			return evidence, true, nil
+		if cached, ok := evidenceByScope[cacheKey]; ok {
+			evidence = append([]model.IntegrationEvidence(nil), cached...)
 		}
 	}
-	evidence, _, err := s.scopedIntegrationEvidence(ctx, product, recipe.IntegrationID)
-	if errors.Is(err, store.ErrNotFound) || errors.Is(err, ErrRecipeNeedsInput) {
-		return nil, false, nil
+	if evidence == nil {
+		var err error
+		evidence, _, err = s.scopedIntegrationEvidence(ctx, product, recipe.IntegrationID)
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, ErrRecipeNeedsInput) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		analysis := model.IntegrationAnalysis{Evidence: evidence}
+		analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, recipe.Outcome)
+		if errors.Is(err, ErrRecipeNeedsInput) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		evidence = analysis.Evidence
+		if evidenceByScope != nil {
+			evidenceByScope[cacheKey] = append([]model.IntegrationEvidence(nil), evidence...)
+		}
 	}
+	integration, err := s.store.Integration(ctx, product.ID, recipe.IntegrationID)
 	if err != nil {
 		return nil, false, err
 	}
-	analysis := model.IntegrationAnalysis{Evidence: evidence}
-	analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, recipe.Outcome)
-	if errors.Is(err, ErrRecipeNeedsInput) {
-		return nil, false, nil
-	}
+	evidence, err = s.restoreRecipeDeveloperAssetDependencies(ctx, integration, evidence, recipe.Dependencies)
 	if err != nil {
 		return nil, false, err
 	}
-	if evidenceByScope != nil {
-		evidenceByScope[cacheKey] = analysis.Evidence
-	}
-	return analysis.Evidence, true, nil
+	return evidence, true, nil
 }
 
 func (s *Service) recipeGroundingCurrent(ctx context.Context, product model.Product, recipe model.Recipe, evidenceByScope map[string][]model.IntegrationEvidence) (bool, error) {
@@ -743,16 +781,10 @@ func (s *Service) recipeGroundingCurrent(ctx context.Context, product model.Prod
 	if !selected {
 		return false, nil
 	}
-	binding, bindingErr := s.currentPublishedRecipeIntegration(ctx, recipe.IntegrationID)
-	if bindingErr != nil {
-		if errors.Is(bindingErr, ErrRecipeNeedsInput) || errors.Is(bindingErr, store.ErrNotFound) {
-			return false, nil
-		}
-		return false, bindingErr
-	}
-	if recipe.CurrentRevision.IntegrationRevisionID != binding.ID || recipe.CurrentRevision.IntegrationManifestHash != binding.ManifestHash {
-		return false, nil
-	}
+	// IntegrationRevisionID and IntegrationManifestHash remain immutable creation
+	// provenance. Currentness is decided by the exact selected evidence below;
+	// otherwise an unrelated attachment added to a later API publication would
+	// invalidate every recipe for that API.
 	spec, specErr := decodeRecipeSpec(recipe.CurrentRevision)
 	if specErr != nil {
 		return false, nil
@@ -775,7 +807,7 @@ func (s *Service) recipeGroundingCurrent(ctx context.Context, product model.Prod
 	}
 	if recipe.State == "published" && recipe.Visibility == model.VisibilityPublic {
 		if err := s.validatePublicRecipeEvidence(ctx, recipe.ProductID, recipe, selectedEvidence); err != nil {
-			if errors.Is(err, errPublicRecipeEvidence) || errors.Is(err, store.ErrNotFound) {
+			if errors.Is(err, ErrPublicMCPRecipe) || errors.Is(err, errPublicRecipeEvidence) || errors.Is(err, store.ErrNotFound) {
 				return false, nil
 			}
 			return false, err
@@ -784,13 +816,28 @@ func (s *Service) recipeGroundingCurrent(ctx context.Context, product model.Prod
 	return true, nil
 }
 
-func (s *Service) markRecipeOutdated(ctx context.Context, recipe model.Recipe) (model.Recipe, error) {
+func (s *Service) markRecipeOutdated(ctx context.Context, product model.Product, recipe model.Recipe) (model.Recipe, error) {
 	if recipe.State == "outdated" && recipe.NeedsAttention && recipe.ApprovedAt == nil && recipe.ApprovedBy == "" && recipe.PublishedAt == nil {
 		return recipe, nil
 	}
+	priorState := recipe.State
 	recipe.State, recipe.NeedsAttention = "outdated", true
 	recipe.ApprovedAt, recipe.ApprovedBy, recipe.PublishedAt = nil, "", nil
-	return s.store.SaveRecipe(ctx, recipe, recipe.Revision)
+	now := s.now()
+	audit := model.AuditEvent{
+		ID:             randomID("audit"),
+		OrganisationID: recipe.OrganisationID,
+		ProductID:      recipe.ProductID,
+		ActorID:        "system:recipe-grounding",
+		Action:         "recipe.outdated",
+		TargetType:     "recipe",
+		TargetID:       recipe.ID,
+		Prior:          map[string]any{"state": priorState},
+		Current:        map[string]any{"state": "outdated", "revision_id": recipe.CurrentRevisionID},
+		RequestID:      "system:recipe-grounding",
+		CreatedAt:      now,
+	}
+	return s.store.SaveRecipeTransition(ctx, recipe, store.RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit})
 }
 
 func (s *Service) requireCurrentRecipeGrounding(ctx context.Context, product model.Product, recipe model.Recipe) (model.Recipe, error) {
@@ -801,11 +848,34 @@ func (s *Service) requireCurrentRecipeGrounding(ctx context.Context, product mod
 	if current {
 		return recipe, nil
 	}
-	recipe, saveErr := s.markRecipeOutdated(ctx, recipe)
+	recipe, saveErr := s.markRecipeOutdated(ctx, product, recipe)
 	if saveErr != nil {
 		return recipe, errors.Join(ErrRecipeGroundingChanged, saveErr)
 	}
 	return recipe, ErrRecipeGroundingChanged
+}
+
+func (s *Service) resolveRecipeCatalogConflict(ctx context.Context, productID, recipeID string) (model.Recipe, error) {
+	recipe, err := s.store.Recipe(ctx, productID, recipeID)
+	if err != nil {
+		return recipe, errors.Join(ErrRecipeGroundingChanged, err)
+	}
+	product, err := s.store.Product(ctx, productID)
+	if err != nil {
+		return recipe, errors.Join(ErrRecipeGroundingChanged, err)
+	}
+	current, err := s.recipeGroundingCurrent(ctx, product, recipe, nil)
+	if err != nil {
+		return recipe, errors.Join(ErrRecipeGroundingChanged, err)
+	}
+	if current {
+		return recipe, store.ErrConflict
+	}
+	outdated, saveErr := s.markRecipeOutdated(ctx, product, recipe)
+	if saveErr != nil {
+		return recipe, errors.Join(ErrRecipeGroundingChanged, saveErr)
+	}
+	return outdated, ErrRecipeGroundingChanged
 }
 
 func (s *Service) ApproveRecipe(ctx context.Context, productID, recipeID string, expectedRevision int64, expectedCurrentRevisionID string, actor Actor) (model.Recipe, error) {
@@ -832,20 +902,24 @@ func (s *Service) ApproveRecipe(ctx context.Context, productID, recipeID string,
 	}
 	now := s.now()
 	recipe.State, recipe.NeedsAttention, recipe.ApprovedBy, recipe.ApprovedAt = "approved", false, actor.ID, &now
-	recipe, err = s.store.SaveRecipe(ctx, recipe, recipe.Revision)
-	if err == nil {
-		recipe, err = s.requireCurrentRecipeGrounding(ctx, product, recipe)
-	}
-	if err == nil {
-		err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: recipe.OrganisationID, ProductID: recipe.ProductID, ActorID: actor.ID, Action: "recipe.approved", TargetType: "recipe", TargetID: recipe.ID, Current: map[string]any{"revision_id": recipe.CurrentRevisionID, "integration_revision_id": recipe.CurrentRevision.IntegrationRevisionID}, RequestID: actor.RequestID, CreatedAt: now})
+	audit := model.AuditEvent{ID: randomID("audit"), OrganisationID: recipe.OrganisationID, ProductID: recipe.ProductID, ActorID: actor.ID, Action: "recipe.approved", TargetType: "recipe", TargetID: recipe.ID, Prior: map[string]any{"state": "review"}, Current: map[string]any{"state": "approved", "revision_id": recipe.CurrentRevisionID, "integration_revision_id": recipe.CurrentRevision.IntegrationRevisionID}, RequestID: recipeAuditRequestID(actor), CreatedAt: now}
+	recipe, err = s.store.SaveRecipeTransition(ctx, recipe, store.RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit})
+	if errors.Is(err, store.ErrCatalogConflict) {
+		return s.resolveRecipeCatalogConflict(ctx, productID, recipeID)
 	}
 	return recipe, err
 }
 
 func (s *Service) validatePublicRecipeEvidence(ctx context.Context, productID string, recipe model.Recipe, selectedEvidence []model.IntegrationEvidence) error {
+	if recipeEvidenceUsesMCP(selectedEvidence) {
+		return ErrPublicMCPRecipe
+	}
 	for _, item := range selectedEvidence {
 		if item.Visibility != model.VisibilityPublic {
 			return errPublicRecipeEvidence
+		}
+		if err := s.validatePublicRecipeDeveloperAssetEvidence(ctx, productID, recipe, item); err != nil {
+			return err
 		}
 	}
 	sources, err := s.store.Sources(ctx, productID)
@@ -877,6 +951,9 @@ func (s *Service) validatePublicRecipeEvidence(ctx context.Context, productID st
 		if item.Kind == "source_publication" && !public[item.ResourceID] {
 			return errPublicRecipeEvidence
 		}
+		if recipeDeveloperAssetSupportingKind(item.Kind) {
+			public[item.ResourceID] = true
+		}
 	}
 	for _, reference := range recipe.CurrentRevision.References {
 		if !public[reference.ResourceID] {
@@ -884,6 +961,15 @@ func (s *Service) validatePublicRecipeEvidence(ctx context.Context, productID st
 		}
 	}
 	return nil
+}
+
+func recipeEvidenceUsesMCP(evidence []model.IntegrationEvidence) bool {
+	for _, item := range evidence {
+		if item.Kind == "tool" && recipeEvidenceField(item.Excerpt, "Backend") == "mcp" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) PublishRecipe(ctx context.Context, productID, recipeID string, expectedRevision int64, expectedCurrentRevisionID string, actor Actor) (model.Recipe, error) {
@@ -920,15 +1006,10 @@ func (s *Service) PublishRecipe(ctx context.Context, productID, recipeID string,
 	}
 	now := s.now()
 	recipe.State, recipe.PublishedAt, recipe.NeedsAttention = "published", &now, false
-	recipe, err = s.store.SaveRecipe(ctx, recipe, recipe.Revision)
-	if err == nil {
-		recipe, err = s.requireCurrentRecipeGrounding(ctx, product, recipe)
-	}
-	if err == nil {
-		if _, bumpErr := s.store.BumpProductCatalogRevision(ctx, productID); bumpErr != nil {
-			return model.Recipe{}, bumpErr
-		}
-		err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: recipe.OrganisationID, ProductID: recipe.ProductID, ActorID: actor.ID, Action: "recipe.published", TargetType: "recipe", TargetID: recipe.ID, Current: map[string]any{"visibility": recipe.Visibility, "stable_uri": recipe.StableURI, "contract_version": recipe.ContractVersion}, RequestID: actor.RequestID, CreatedAt: now})
+	audit := model.AuditEvent{ID: randomID("audit"), OrganisationID: recipe.OrganisationID, ProductID: recipe.ProductID, ActorID: actor.ID, Action: "recipe.published", TargetType: "recipe", TargetID: recipe.ID, Prior: map[string]any{"state": "approved"}, Current: map[string]any{"state": "published", "visibility": recipe.Visibility, "stable_uri": recipe.StableURI, "contract_version": recipe.ContractVersion}, RequestID: recipeAuditRequestID(actor), CreatedAt: now}
+	recipe, err = s.store.SaveRecipeTransition(ctx, recipe, store.RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit})
+	if errors.Is(err, store.ErrCatalogConflict) {
+		return s.resolveRecipeCatalogConflict(ctx, productID, recipeID)
 	}
 	return recipe, err
 }
@@ -949,11 +1030,15 @@ func (s *Service) ReconcileRecipeDrift(ctx context.Context, productID string) ([
 			return nil, currentErr
 		}
 		if !current && (recipes[index].State != "outdated" || !recipes[index].NeedsAttention) {
-			updated, saveErr := s.markRecipeOutdated(ctx, recipes[index])
+			updated, saveErr := s.markRecipeOutdated(ctx, product, recipes[index])
 			if saveErr != nil {
 				return nil, saveErr
 			}
 			recipes[index] = updated
+			product, err = s.store.Product(ctx, productID)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return recipes, nil

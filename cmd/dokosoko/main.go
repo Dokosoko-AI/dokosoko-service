@@ -163,6 +163,9 @@ func run(ctx context.Context) error {
 	supervisor.Start("identity-oauth-retention", func(ctx context.Context) error {
 		return platformService.RunIdentityOAuthRetentionJanitor(ctx, platform.DefaultIdentityOAuthRetentionInterval)
 	})
+	supervisor.Start("developer-asset-retrieval-retention", func(ctx context.Context) error {
+		return platformService.RunDeveloperAssetRetrievalRetentionJanitor(ctx, platform.DefaultDeveloperAssetRetrievalRetentionInterval)
+	})
 	defer func() {
 		stopWorkers()
 		supervisor.Wait()

@@ -27,11 +27,11 @@ const (
 	maxAnalysisToolItem            = 2_000
 )
 
-var integrationAnalysisSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"recipes":{"type":"array","maxItems":12,"items":{"type":"object","additionalProperties":false,"properties":{"capability_ids":{"type":"array","minItems":1,"maxItems":1,"uniqueItems":true,"items":{"type":"string"}},"sdk_id":{"type":"string","maxLength":160},"evidence_ids":{"type":"array","minItems":1,"maxItems":24,"uniqueItems":true,"items":{"type":"string"}}},"required":["capability_ids","sdk_id","evidence_ids"]}}},"required":["recipes"]}`)
+var integrationAnalysisSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"recipes":{"type":"array","maxItems":12,"items":{"type":"object","additionalProperties":false,"properties":{"capability_ids":{"type":"array","minItems":1,"maxItems":1,"uniqueItems":true,"items":{"type":"string"}},"evidence_ids":{"type":"array","minItems":1,"maxItems":24,"uniqueItems":true,"items":{"type":"string"}}},"required":["capability_ids","evidence_ids"]}}},"required":["recipes"]}`)
 
-var recipeBriefSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"status":{"type":"string","enum":["ready","needs_input"]},"capability_ids":{"type":"array","maxItems":1,"uniqueItems":true,"items":{"type":"string"}},"sdk_id":{"type":"string","maxLength":160},"evidence_ids":{"type":"array","maxItems":24,"uniqueItems":true,"items":{"type":"string"}},"gaps":{"type":"array","maxItems":8,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":500}}},"required":["status","capability_ids","sdk_id","evidence_ids","gaps"]}`)
+var recipeBriefSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"status":{"type":"string","enum":["ready","needs_input"]},"capability_ids":{"type":"array","maxItems":1,"uniqueItems":true,"items":{"type":"string"}},"evidence_ids":{"type":"array","maxItems":24,"uniqueItems":true,"items":{"type":"string"}},"gaps":{"type":"array","maxItems":8,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":500}}},"required":["status","capability_ids","evidence_ids","gaps"]}`)
 var recipeAuthoringSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"status":{"type":"string","enum":["ready","needs_input"]},"reference_ids":{"type":"array","maxItems":8,"uniqueItems":true,"items":{"type":"string"}},"gaps":{"type":"array","maxItems":8,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":500}}},"required":["status","reference_ids","gaps"]}`)
-var recipeReviewSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"summary":{"type":"string","minLength":1,"maxLength":2000},"recommendation":{"type":"string","enum":["pass","revise"]},"findings":{"type":"array","maxItems":12,"items":{"type":"object","additionalProperties":false,"properties":{"level":{"type":"string","enum":["info","warning","error"]},"code":{"type":"string","minLength":1,"maxLength":80},"message":{"type":"string","minLength":1,"maxLength":500}},"required":["level","code","message"]}}},"required":["summary","recommendation","findings"]}`)
+var recipeReviewSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"recommendation":{"type":"string","enum":["pass","revise"]},"findings":{"type":"array","maxItems":9,"items":{"type":"object","additionalProperties":false,"properties":{"code":{"type":"string","enum":["delivery_scope","multiple_capabilities","sdk_scope","non_actionable_step","unobservable_check","unsupported_claim","unsafe_content","not_minimal","evidence_gap"]},"evidence_ids":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}},"required":["code","evidence_ids"]}}},"required":["recommendation","findings"]}`)
 var recipeURLPattern = regexp.MustCompile(`(?i)https://[^\s)<>{}"']+`)
 var recipeMarkdownLinkPattern = regexp.MustCompile(`!?\[[^\]\n]*\]\(([^)\s]+)\)`)
 var recipeURISchemePattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]{0,31}):(?://|[^\s])`)
@@ -58,20 +58,22 @@ type recipeAuthoringResponse struct {
 type recipeBriefAIResponse struct {
 	Status        string   `json:"status"`
 	CapabilityIDs []string `json:"capability_ids"`
-	SDKID         string   `json:"sdk_id"`
 	EvidenceIDs   []string `json:"evidence_ids"`
 	Gaps          []string `json:"gaps"`
 }
 
 type recipeReviewResponse struct {
-	Summary        string                          `json:"summary"`
-	Recommendation string                          `json:"recommendation"`
-	Findings       []model.RecipeValidationFinding `json:"findings"`
+	Recommendation string                         `json:"recommendation"`
+	Findings       []recipeReviewFindingSelection `json:"findings"`
+}
+
+type recipeReviewFindingSelection struct {
+	Code        string   `json:"code"`
+	EvidenceIDs []string `json:"evidence_ids"`
 }
 
 type integrationAnalysisAIRecipe struct {
 	CapabilityIDs []string `json:"capability_ids"`
-	SDKID         string   `json:"sdk_id"`
 	EvidenceIDs   []string `json:"evidence_ids"`
 }
 

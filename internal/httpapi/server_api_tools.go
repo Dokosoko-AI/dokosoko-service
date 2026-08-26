@@ -9,6 +9,7 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
@@ -19,16 +20,7 @@ type apiDefaultToolBinding struct {
 }
 
 func validGeneratedToolSegment(value string) bool {
-	if value == "" || len(value) > 63 {
-		return false
-	}
-	for index, char := range value {
-		valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || (index > 0 && (char == '-' || char == '_'))
-		if !valid {
-			return false
-		}
-	}
-	return true
+	return platform.ValidMCPToolSegment(value)
 }
 
 func manifestFamilyCounts(manifest model.ProductManifest) map[string]int {
@@ -140,24 +132,5 @@ func (s *Server) executeAPIDefaultTool(ctx context.Context, w http.ResponseWrite
 }
 
 func canonicalCustomToolName(manifest model.ProductManifest, tool model.Tool) (string, bool) {
-	switch tool.Scope {
-	case "":
-		if !validGeneratedToolSegment(tool.Namespace) || !validGeneratedToolSegment(tool.Name) {
-			return "", false
-		}
-		return tool.Namespace + "." + tool.Name, true
-	case model.ToolScopeCommon:
-		if !validGeneratedToolSegment(tool.Name) {
-			return "", false
-		}
-		return "common." + tool.Name, true
-	case model.ToolScopeAPI:
-		counts := manifestFamilyCounts(manifest)
-		for _, integration := range manifest.Integrations {
-			if integration.ID == tool.OwnerIntegrationID && counts[integration.FamilyKey] == 1 && validGeneratedToolSegment(integration.FamilyKey) && validGeneratedToolSegment(tool.Name) {
-				return integration.FamilyKey + ".custom." + tool.Name, true
-			}
-		}
-	}
-	return "", false
+	return platform.CanonicalMCPToolName(manifest, tool)
 }

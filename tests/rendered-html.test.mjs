@@ -74,6 +74,7 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
+  const generated = await readFile(new URL("../app/lib/control-plane.generated.ts", import.meta.url), "utf8");
 
   assert.match(routes, /label: "AI configuration"/);
   assert.match(routes, /settingsPath/);
@@ -97,7 +98,18 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   assert.match(source, /Backup provider/);
   assert.match(source, /Analysis backup model/);
   assert.doesNotMatch(source, /Assistant backup model|name: "Assistant"/);
-  for (const key of ["integration.analysis", "recipe.brief", "recipe.authoring", "recipe.review"]) assert.match(source, new RegExp(key.replace(".", "\\.")));
+  const promptKeys = [
+    "integration.analysis",
+    "recipe.brief",
+    "recipe.authoring",
+    "recipe.review",
+    "documentation.map_enrichment",
+    "sdk.map_enrichment",
+    "sdk.applicability_suggestion",
+    "sdk.sample_review",
+  ];
+  for (const key of promptKeys) assert.match(source, new RegExp(key.replaceAll(".", "\\.")));
+  assert.match(source, /Versioned instructions for analysis, recipe, developer-asset enrichment, applicability-suggestion, and sample-review workflows/);
   assert.match(source, /Reset to safe default/);
   assert.match(source, /Save new version/);
   assert.match(source, /built-in safety policy cannot be edited or disabled/);
@@ -117,7 +129,8 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   assert.match(api, /operationId: listAIWorkflowPrompts/);
   assert.match(api, /operationId: saveAIWorkflowPromptOverride/);
   assert.match(api, /operationId: resetAIWorkflowPrompt/);
-  assert.match(api, /AIWorkflowPromptKey:[\s\S]*- integration\.analysis[\s\S]*- recipe\.brief[\s\S]*- recipe\.authoring[\s\S]*- recipe\.review/);
+  assert.match(api, /AIWorkflowPromptKey:[\s\S]*- integration\.analysis[\s\S]*- recipe\.brief[\s\S]*- recipe\.authoring[\s\S]*- recipe\.review[\s\S]*- documentation\.map_enrichment[\s\S]*- sdk\.map_enrichment[\s\S]*- sdk\.applicability_suggestion[\s\S]*- sdk\.sample_review/);
+  for (const key of promptKeys) assert.match(generated, new RegExp(`AIWorkflowPromptKey:[^;]*["']${key.replaceAll(".", "\\.")}["']`));
   assert.doesNotMatch(api, /default_instructions:/);
   assert.match(client, /aiPrompts: async/);
   assert.match(client, /saveAIPrompt:[\s\S]*JSON\.stringify\(\{ instructions, revision \}\)/);
@@ -146,15 +159,18 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(source, /disabled=\{busy \|\| !activeIntegrationID\}/);
   assert.match(source, /visibleRecipes = activeIntegrationID[\s\S]*recipeMatchesIntegration\(recipe, activeIntegrationID\)/);
   assert.match(source, /unscopedOrInvalidRecipes\.map\(renderRecipe\)/);
-  assert.match(source, /disabled=\{busy \|\| invalidScope\} onClick=\{\(\) => on(?:Edit|Rework|Approve|Publish)/);
+  assert.match(source, /disabled=\{busy \|\| invalidScope\} onClick=\{\(\) => on(?:Edit|Rework|Publish)/);
+  assert.match(source, /const approvalCandidate = createRecipeApprovalReview\(recipe, integrations\)/);
+  assert.match(source, /setApprovalReview\(approvalCandidate\)/);
+  assert.doesNotMatch(source, /onClick=\{[^}]*onApprove/);
   assert.match(source, /Minimal product-integration steps delivered after the coding agent connects through MCP/);
   assert.match(source, /Each recipe implements one tangible product capability/);
   assert.match(source, /Describe the specific product-integration step/);
-  assert.match(source, /Structured recipe spec \(JSON\)/);
+  assert.match(source, /Reviewed reference IDs \(JSON\)/);
   assert.match(source, /parseRecipeSpecEditor/);
   assert.match(source, /aria-invalid=\{Boolean\(validationError\)\}/);
   assert.match(source, /visibility: recipe\.visibility/);
-  assert.match(source, /parsed\.spec, recipeDialog\.visibility/);
+  assert.match(source, /parsed\.referenceIDs, recipeDialog\.visibility/);
   assert.match(source, /api\.reworkRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id, instruction\)/);
   assert.match(source, /api\.approveRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id\)/);
   assert.match(source, /api\.publishRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id\)/);
@@ -164,24 +180,27 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.doesNotMatch(recipeDialog, /recipe-dialog-error" role="alert"/);
   assert.match(source, /scope dependency mismatch/);
   assert.doesNotMatch(source, /window\.prompt/);
-  assert.doesNotMatch(source, /Recipe Markdown|current_revision\?\.markdown/);
+  for (const detail of ["Canonical Markdown", "Current revision ID", "Integration revision ID", "Integration manifest hash", "Generation provenance", "Validation findings", "References"]) assert.match(source, new RegExp(detail));
+  assert.match(source, /revision\.id !== recipe\.current_revision_id/);
+  assert.match(source, /await onApprove\(recipe\)/);
   assert.doesNotMatch(source, /Start from evidence, not a blank prompt|Review queue|Most used · 30 days/);
   assert.match(styles, /\.recipe-dialog-form \.recipe-spec-editor textarea/);
+  assert.match(styles, /\.dialog-panel:has\(\.recipe-approval-review\)/);
   assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-(?:input|editor)/);
   assert.match(client, /createRecipe/);
   assert.match(client, /integrationID \? \{ prompt, integration_id: integrationID \} : \{ prompt \}/);
-  assert.match(client, /updateRecipe:[\s\S]*JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID, spec, visibility \}\)/);
+  assert.match(client, /updateRecipe:[\s\S]*JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID, reference_ids: referenceIDs, visibility \}\)/);
   assert.match(client, /reworkRecipe:[^\n]+JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID, instruction \}\)/);
   assert.match(client, /approveRecipe:[^\n]+JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID \}\)/);
   assert.match(client, /publishRecipe:[^\n]+JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID \}\)/);
   assert.match(api, /\/api\/v1\/products\/\{product_id\}\/recipes:/);
   assert.match(api, /operationId: createRecipe[\s\S]*integration_id:[\s\S]*omission retains deployment-wide API compatibility/);
-  assert.match(api, /operationId: updateRecipeSpec[\s\S]*raw Markdown is never accepted as an authoring source/);
+  assert.match(api, /operationId: updateRecipeSpec[\s\S]*Raw Markdown and instruction prose are never accepted/);
   assert.match(api, /RecipeSpec:[\s\S]*capability_ids:[\s\S]*prerequisites:[\s\S]*steps:[\s\S]*checks:/);
   assert.match(api, /LegacyRecipeSpec:[\s\S]*immutable legacy-mcp-v1 revision history/);
   assert.match(api, /RecipeRevision:[\s\S]*spec_version:[\s\S]*- 1\n\s+- 2[\s\S]*spec:[\s\S]*LegacyRecipeSpec[\s\S]*RecipeSpec/);
   assert.match(api, /RecipeResultInstruction:[\s\S]*evidence:[\s\S]*minItems: 1\n\s+maxItems: 8/);
-  assert.match(api, /UpdateRecipeRequest:[\s\S]*revision:[\s\S]*current_revision_id:[\s\S]*spec:[\s\S]*visibility:[\s\S]*required:\n\s+- revision\n\s+- current_revision_id\n\s+- spec\n\s+- visibility/);
+  assert.match(api, /UpdateRecipeRequest:[\s\S]*revision:[\s\S]*current_revision_id:[\s\S]*reference_ids:[\s\S]*visibility:[\s\S]*required:\n\s+- revision\n\s+- current_revision_id\n\s+- reference_ids\n\s+- visibility/);
   assert.match(api, /- resources\/list/);
   assert.match(api, /- resources\/read/);
   assert.match(api, /MCPRecipeSummary:[\s\S]*contract_version:[\s\S]*const: product-integration-v2/);
@@ -226,7 +245,7 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   const workspace = componentSource(source, "IntegrationWorkspaceView", "AuthorizationPolicyWorkspace");
   const integrationTabs = routes.slice(routes.indexOf("export const INTEGRATION_TABS"), routes.indexOf("export const INTEGRATION_RESOURCE_TABS"));
 
-  assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "Quick Start" \},\s*\{ id: "documentation", label: "Documentation" \},\s*\{ id: "access", label: "Keys & Access" \},\s*\{ id: "tools", label: "Tools" \},\s*\{ id: "test", label: "Test" \},\s*\{ id: "history", label: "History" \},\s*\];/);
+  assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "Quick Start" \},\s*\{ id: "documentation", label: "Resources" \},\s*\{ id: "access", label: "Keys & Access" \},\s*\{ id: "tools", label: "Tools" \},\s*\{ id: "test", label: "Test" \},\s*\{ id: "history", label: "History" \},\s*\];/);
   for (const removed of ["authorization", "recipes", "delivery", "resources"]) {
     assert.ok(!integrationTabs.includes(`id: "${removed}"`), `${removed} should not remain an API tab`);
     assert.doesNotMatch(workspace, new RegExp(`activeTab === "${removed}"`));
@@ -274,19 +293,30 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.doesNotMatch(client, /setIntegrationAccessConnections|setIntegrationSupportRoute/);
 });
 
-test("uses exact API-owned SDK references without a package lifecycle", async () => {
+test("keeps SDK package and release ownership in Catalog with exact API attachments", async () => {
   const source = await consoleSource();
   const client = await clientSource();
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
-  assert.match(source, /Exact API-owned SDK references/);
-  assert.match(source, /There is no global package catalogue or release workflow/);
-  assert.match(source, /Version ranges and latest tags are rejected/);
+  assert.match(source, /Deployment-owned SDK packages and exact releases/);
+  assert.match(source, /This API keeps only an immutable exact attachment/);
+  assert.match(source, /Read-only compatibility view/);
+  assert.doesNotMatch(source, /Exact API-owned SDK references/);
+  assert.doesNotMatch(source, /There is no global package catalogue or release workflow/);
+  assert.match(source, /Ranges and latest tags are rejected/);
+  assert.match(client, /sdkPackages/);
+  assert.match(client, /createSDKPackage/);
+  assert.match(client, /createSDKRelease/);
+  assert.match(client, /ingestSDKContent/);
+  assert.match(client, /publishSDKContentCandidate/);
+  assert.match(client, /attachAPISDK/);
+  assert.match(client, /changeAPISDK/);
+  assert.match(client, /detachAPISDK/);
+  assert.match(openapi, /\/api\/v1\/developer-assets\/sdk-packages:/);
+  assert.match(openapi, /\/api\/v1\/integrations\/\{integration_id\}\/resources\/sdks:/);
+  // Legacy API SDK endpoints remain a compatibility projection during migration,
+  // but the active UI never treats them as the lifecycle owner.
   assert.match(client, /integrationSDKs/);
-  assert.match(client, /createIntegrationSDK/);
-  assert.match(client, /replaceIntegrationSDK/);
-  assert.match(client, /deleteIntegrationSDK/);
-  assert.doesNotMatch(client, /packageArtifact|packageRelease|retirePackage/);
   assert.match(openapi, /\/api\/v1\/integrations\/\{integration_id\}\/sdks:/);
   assert.match(openapi, /One immutable version; ranges and latest are rejected/);
 });
@@ -296,12 +326,15 @@ test("uses a focused deployment tool catalog and token-based MCP connections", a
   const styles = await stylesSource();
   const catalog = componentSource(source, "ToolsView", "SettingsTabs");
   const connections = componentSource(source, "MCPConnectionsView", "ToolsView");
+  const preview = componentSource(source, "MCPPreviewView", "RecipesView");
 
   assert.match(source, /function ToolsWorkspaceTabs/);
   assert.match(source, /path=\{sectionPath\("tools"\)\}[\s\S]*?>Catalog<\/ConsoleLink>/);
   assert.match(source, /path=\{sectionPath\("connections"\)\}[\s\S]*?>MCP connections<\/ConsoleLink>/);
+  assert.match(source, /path=\{sectionPath\("mcp-preview"\)\}[\s\S]*?>MCP preview<\/ConsoleLink>/);
   assert.match(catalog, /<ToolsWorkspaceTabs active="catalog"/);
   assert.match(connections, /<ToolsWorkspaceTabs active="connections"/);
+  assert.match(preview, /<ToolsWorkspaceTabs active="preview"/);
 
   assert.match(catalog, /<DataTable label="Tool catalog">/);
   assert.match(catalog, /<DataTableHeader className="tool-columns"><span>Tool<\/span><span>Backend<\/span><span>Policy<\/span><span>State<\/span><span>Open<\/span><\/DataTableHeader>/);
@@ -322,6 +355,20 @@ test("uses a focused deployment tool catalog and token-based MCP connections", a
   assert.match(connections, /fixed endpoint uses one encrypted access token/);
   assert.match(connections, /signed user-identity envelope/);
   assert.match(connections, /Inspect tools/);
+
+  assert.match(preview, /title="MCP preview"/);
+  assert.match(source, /server\/discover/);
+  assert.match(source, /tools\/list/);
+  assert.match(source, /resources\/list/);
+  assert.match(source, /resources\/templates\/list/);
+  assert.match(preview, /Simulated customer grants/);
+  assert.match(preview, /Exact JSON-RPC response/);
+  assert.match(preview, /JSON\.stringify\(preview\.response, null, 2\)/);
+  assert.match(preview, /never creates or uses a customer token/);
+  assert.match(preview, /setLoading\(available\)/);
+  assert.match(styles, /\.mcp-preview-json/);
+  assert.match(styles, /\.mcp-preview-grants/);
+  assert.match(source, /\{section === "mcp-preview" && <MCPPreviewView/);
 });
 
 test("keeps API authorization policy authoring in API Access and out of root Tools and Identity", async () => {
@@ -949,24 +996,21 @@ test("uses the real masked runtime-service model for API-local Access", async ()
   assert.match(styles, /\.runtime-credential-management/);
 });
 
-test("leads API documentation with an advisory setup guide", async () => {
+test("keeps the compatible API documentation route focused on explicit resource attachments", async () => {
   const source = await consoleSource();
-  const guide = await readFile(new URL("../app/components/integrations/IntegrationSetupGuide.tsx", import.meta.url), "utf8");
+  const resources = await readFile(new URL("../app/components/console/developer-assets/api-resources-workspace.tsx", import.meta.url), "utf8");
   const styles = await stylesSource();
 
-  assert.match(source, /analysis\.state === "review" && analysisMatchesIntegration\(analysis, integration\.id\)/);
-  assert.match(source, /<IntegrationSetupGuide analysis=\{setupGuideAnalysis\} canGenerate=\{attachedResources\.length > 0\} busy=\{setupGuideBusy\} onGenerate=\{generateSetupGuide\} \/>[\s\S]*Documentation ingestion/);
-	assert.match(source, /onGenerateSetupGuide\(integrationID\)/);
-	assert.match(guide, /analysis\.plan\.summary/);
-  assert.match(guide, /analysis\.plan\.identity\.explanation/);
-  assert.match(guide, /analysis\.plan\.endpoints\.slice\(0, 2\)/);
-  assert.match(guide, /Orientation, not published evidence/);
-  assert.match(guide, /Agents rely only on the reviewed resources attached below/);
-  assert.match(guide, /Advisory draft/);
-	assert.match(guide, /title="Setup guide"/);
-	assert.match(guide, /Generate guide/);
-	assert.match(guide, /Refresh guide/);
-  assert.doesNotMatch(guide, /Publish guide|Approve guide/);
-  assert.match(styles, /\.integration-setup-guide/);
-  assert.match(styles, /\.setup-guide-steps/);
+  assert.match(source, /activeTab === "documentation"[\s\S]*<APIResourcesWorkspace/);
+  assert.match(resources, /This page contains attachment records only/);
+  assert.match(resources, /Select one exact reviewed/);
+  assert.match(resources, /Open catalog/);
+  assert.match(resources, /Attach existing/);
+  assert.match(resources, /panelKind === "contract" \? "Create in Catalog" : "Create & attach"/);
+  assert.match(resources, /This creates only the reusable contract root\. It does not ingest, approve, publish, or attach a contract to this API\./);
+  assert.match(resources, /Next steps happen in Catalog/);
+  assert.doesNotMatch(resources, /Create and review in Catalog/);
+  assert.match(resources, /Change exact/);
+  assert.match(resources, /Detach resource/);
+  assert.match(styles, /\.api-resource-publications/);
 });

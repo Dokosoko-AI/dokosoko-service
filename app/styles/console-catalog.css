@@ -167,6 +167,32 @@
 .capability-unavailable small { color: var(--muted); font-size: var(--text-caption); line-height: 1.45; }
 .mcp-import-failures > span > span { min-width: 0; display: grid; gap: 2px; margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--warning-line); }
 .mcp-import-failures code { overflow-wrap: anywhere; }
+.mcp-preview-context, .mcp-preview-output { overflow: hidden; }
+.mcp-preview-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 18px; border-top: 1px solid var(--line); }
+.mcp-preview-controls .auth-field { margin: 0; }
+.mcp-preview-grants { min-width: 0; display: grid; gap: 10px; margin: 0 18px 18px; padding: 0; border: 0; }
+.mcp-preview-grants > legend { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; color: var(--text); font-size: var(--text-label); font-weight: var(--weight-medium); }
+.mcp-preview-grants > div { overflow: auto; max-height: 240px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-subtle); }
+.mcp-preview-grants label { min-width: 0; display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.mcp-preview-grants label:nth-child(odd) { border-right: 1px solid var(--line); }
+.mcp-preview-grants label > input { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 1px; accent-color: var(--accent); }
+.mcp-preview-grants label > span { min-width: 0; display: grid; gap: 3px; }
+.mcp-preview-grants strong { font-size: var(--text-caption); }
+.mcp-preview-grants code { overflow: hidden; color: var(--accent-strong); font-size: var(--text-caption); text-overflow: ellipsis; white-space: nowrap; }
+.mcp-preview-grants > p { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--muted); background: var(--surface-subtle); font-size: var(--text-caption); }
+.mcp-preview-context > .private-default-note { margin: 0 18px 18px; }
+.mcp-preview-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.mcp-preview-summary > div { min-width: 0; display: grid; gap: 6px; padding: 13px 16px; border-right: 1px solid var(--line); }
+.mcp-preview-summary > div:last-child { border-right: 0; }
+.mcp-preview-summary dt { color: var(--muted); font-size: var(--text-caption); }
+.mcp-preview-summary dd { min-width: 0; overflow: hidden; margin: 0; color: var(--text-strong); font-size: var(--text-body); font-weight: var(--weight-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.mcp-preview-summary code { color: var(--accent-strong); font-size: var(--text-caption); }
+.mcp-preview-json { overflow: auto; max-height: 680px; margin: 0; padding: 18px; color: var(--code-ink); background: var(--code-surface); font: var(--text-caption)/1.65 var(--font-code); tab-size: 2; white-space: pre; }
+.mcp-preview-output > .mcp-preview-json { min-height: 280px; }
+.mcp-preview-output > .capability-unavailable { margin: 18px; }
+.mcp-preview-output > .empty-row { gap: 8px; }
+.mcp-preview-output > .empty-row svg { width: 15px; height: 15px; }
+.mcp-preview-request > .mcp-preview-json { max-height: 360px; }
 .documentation-source-row { grid-template-columns: 42px minmax(200px, 1fr) auto auto; }
 .recipe-scope-body { display: grid; gap: 16px; padding: 18px; }
 .integration-evidence-gaps { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 11px; margin: 0 18px 18px; padding: 14px; border: 1px solid var(--warning-line); border-radius: 9px; color: var(--text); background: var(--warning-soft); }
@@ -337,7 +363,23 @@
 .builder-review-link { border: 1px solid var(--accent-line); border-radius: 9px; background: var(--accent-soft); }
 .dialog-panel:has(.publish-review), .dialog-panel:has(.revision-inspector) { width: min(760px, 100%); }
 .dialog-panel:has(.recipe-dialog-form) { width: min(760px, 100%); }
+.dialog-panel:has(.recipe-approval-review) { width: min(960px, 100%); }
 .recipe-dialog-form .recipe-spec-editor textarea { min-height: 420px; font-family: var(--font-code); }
+.recipe-approval-review { min-width: 0; display: grid; gap: 22px; }
+.recipe-approval-review > section { min-width: 0; display: grid; gap: 10px; }
+.recipe-approval-review h3 { margin: 0; color: var(--text-strong); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.recipe-approval-metadata { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
+.recipe-approval-metadata code { overflow-wrap: anywhere; white-space: normal; }
+.recipe-approval-list { overflow: hidden; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; list-style: none; }
+.recipe-approval-list li { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.recipe-approval-list li:last-child { border-bottom: 0; }
+.recipe-approval-list li > span:last-child { min-width: 0; display: grid; gap: 4px; }
+.recipe-approval-list strong, .recipe-approval-list small { overflow-wrap: anywhere; }
+.recipe-approval-list strong { color: var(--text-strong); font-size: var(--text-body); }
+.recipe-approval-list strong a { color: var(--accent-strong); text-underline-offset: 3px; }
+.recipe-approval-list small { color: var(--muted); font-size: var(--text-caption); line-height: 1.5; }
+.recipe-approval-empty { margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: var(--text-caption); }
+.recipe-approval-markdown { overflow: auto; max-height: 440px; margin: 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; color: var(--code-ink); background: var(--code-surface); font: var(--text-caption)/1.65 var(--font-code); tab-size: 2; white-space: pre-wrap; }
 .publish-review, .revision-inspector { display: grid; gap: 14px; }
 .publish-review-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .publish-review-summary > span { min-width: 0; display: grid; gap: 5px; }
@@ -373,3 +415,12 @@
 .compact-metric small { color: var(--muted); font-size: var(--text-caption); }
 .compact-metric small.positive { color: var(--success); }
 .compact-metric small.warning { color: var(--warning); }
+
+@media (max-width: 720px) {
+  .mcp-preview-controls, .mcp-preview-grants > div, .mcp-preview-summary { grid-template-columns: 1fr; }
+  .mcp-preview-grants label:nth-child(odd), .mcp-preview-summary > div { border-right: 0; }
+  .mcp-preview-summary > div { border-bottom: 1px solid var(--line); }
+  .mcp-preview-summary > div:last-child { border-bottom: 0; }
+  .mcp-preview-output .panel-heading { align-items: flex-start; flex-direction: column; }
+  .mcp-preview-output .heading-actions { width: 100%; justify-content: space-between; }
+}

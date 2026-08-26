@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestCreateCrawlJobLocksSourceBeforeInsert(t *testing.T) {
 	value := model.CrawlJob{ID: "job", OrganisationID: "org", ProductID: "product", SourceID: "source"}
 	query := &recordedRowQuery{rows: [][]any{
 		{"source"},
-		{"job", "org", "product", "source", "queued", 1, 0, 0, 0, "", "", now, nil, nil},
+		{"job", "org", "product", "source", "queued", 1, 0, 0, 0, 0, 0, 0, "", nil, nil, "legacy-v1", "", json.RawMessage(`{}`), "", "", now, nil, nil},
 	}}
 
 	created, err := createCrawlJobWithSourceLock(context.Background(), query, value)

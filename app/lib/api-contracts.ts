@@ -727,6 +727,11 @@ export type APIMCPCatalog = {
   ttl_ms?: number;
 };
 
+export type APIMCPPreview = Omit<Contract.McpPreview, "request" | "response"> & {
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
+};
+
 export type APIMCPImportResult = {
   connection: APIMCPConnection;
   created: APITool[];

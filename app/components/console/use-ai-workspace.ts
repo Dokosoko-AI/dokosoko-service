@@ -11,7 +11,6 @@ import type {
   APIIntegrationAnalysis,
   APIProduct,
   APIRecipe,
-  APIRecipeSpec,
 } from "../../lib/api";
 import {
   type AIWorkload,
@@ -330,12 +329,12 @@ export function useAIWorkspaceState({
     }
   }
 
-  async function editRecipe(recipe: APIRecipe, spec: APIRecipeSpec, visibility: APIRecipe["visibility"]): Promise<APIRecipe | null> {
+  async function editRecipe(recipe: APIRecipe, referenceIDs: string[], visibility: APIRecipe["visibility"]): Promise<APIRecipe | null> {
     setRecipeBusy(true);
     try {
-      const value = await api.updateRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, spec, visibility);
+      const value = await api.updateRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, referenceIDs, visibility);
       setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-      showToast("Human-authored recipe revision saved for review.");
+      showToast("Recipe references and visibility saved for review.");
       return value;
     } catch (error) {
       await handleRecipeMutationError(error, "Could not save this recipe revision.");

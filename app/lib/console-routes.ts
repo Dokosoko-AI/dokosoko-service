@@ -1,4 +1,19 @@
-export type Section = "product" | "identity" | "recipes" | "sources" | "connections" | "tools" | "distribution" | "reporting" | "settings";
+export type Section =
+  | "product"
+  | "sources"
+  | "documents"
+  | "collections"
+  | "contracts"
+  | "sdks"
+  | "query-lab"
+  | "identity"
+  | "recipes"
+  | "connections"
+  | "tools"
+  | "mcp-preview"
+  | "distribution"
+  | "reporting"
+  | "settings";
 
 export type IntegrationTab = "overview" | "documentation" | "access" | "tools" | "test" | "history";
 export type IntegrationResourceTab = "documentation" | "contracts" | "sdks";
@@ -23,7 +38,7 @@ export type ConsoleRoute =
 
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
   { id: "overview", label: "Quick Start" },
-  { id: "documentation", label: "Documentation" },
+  { id: "documentation", label: "Resources" },
   { id: "access", label: "Keys & Access" },
   { id: "tools", label: "Tools" },
   { id: "test", label: "Test" },
@@ -49,11 +64,17 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
 
 export const SECTION_PATHS: Record<Section, string> = {
   product: "/integrations",
+  documents: "/developer-assets/documentation/documents",
+  collections: "/developer-assets/documentation/collections",
+  contracts: "/developer-assets/api-contracts",
+  sdks: "/developer-assets/sdk-packages",
+  "query-lab": "/developer-assets/query-lab",
   identity: "/identity",
   recipes: "/recipes",
   sources: "/integrations/documentation",
   tools: "/tools",
   connections: "/tools/connections",
+  "mcp-preview": "/tools/preview",
   distribution: "/agent-access",
   reporting: "/operations/outbox",
   settings: "/settings",

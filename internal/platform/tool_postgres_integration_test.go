@@ -243,6 +243,34 @@ func TestPostgresMigratedToolLifecycleAndMCPImport(t *testing.T) {
 	if releaseBackend != "mcp" || releaseConnectionID != connection.ID || !jsonObjectIsEmpty(requestMapping) || !jsonObjectIsEmpty(responseMapping) {
 		t.Fatalf("MCP release backend=%q connection=%q request_mapping=%s response_mapping=%s", releaseBackend, releaseConnectionID, requestMapping, responseMapping)
 	}
+	beforeDrift, err := postgres.Product(ctx, productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted, err := postgres.MarkImportedToolDrift(ctx, productID, mcpPublished.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !drifted.UpstreamDrifted || drifted.Revision != mcpPublished.Revision {
+		t.Fatalf("drifted PostgreSQL MCP tool = %#v", drifted)
+	}
+	afterDrift, err := postgres.Product(ctx, productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterDrift.CatalogRevision != beforeDrift.CatalogRevision+1 {
+		t.Fatalf("PostgreSQL drift catalog revision = %d, want %d", afterDrift.CatalogRevision, beforeDrift.CatalogRevision+1)
+	}
+	if _, err := postgres.MarkImportedToolDrift(ctx, productID, mcpPublished.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	afterNoop, err := postgres.Product(ctx, productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterNoop.CatalogRevision != afterDrift.CatalogRevision {
+		t.Fatalf("PostgreSQL no-op drift changed catalog revision to %d", afterNoop.CatalogRevision)
+	}
 }
 
 func migratedPostgresForTest(t *testing.T) (*pgxpool.Pool, *store.Postgres) {

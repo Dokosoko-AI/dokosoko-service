@@ -29,6 +29,7 @@ func productAnalysisTool(integrationID, toolID string) model.IntegrationEvidence
 			"Scope: api\n" +
 			"Owner integration ID: " + integrationID + "\n" +
 			"Backend: http\n" +
+			"Upstream drifted: false\n" +
 			"Method: POST\n" +
 			"Fixed endpoint: https://payments.example.test/v2/charges\n" +
 			`Input schema: {"type":"object","required":["amount"]}` + "\n" +
@@ -87,8 +88,8 @@ func TestDeterministicIntegrationRecipeSeedsSelectExactProductCapabilities(t *te
 		if len(seed.CapabilityIDs) != 1 || seed.CapabilityIDs[0] != "tool-create-charge" {
 			t.Fatalf("seed did not select exactly one product capability: %#v", seed)
 		}
-		if seed.SDKID != "sdk-payments-node" || !reflect.DeepEqual(seed.EvidenceIDs, []string{seed.CapabilityIDs[0], "sdk-payments-node"}) {
-			t.Fatalf("seed did not retain its exact capability/SDK evidence: %#v", seed)
+		if seed.SDKID != "" || !reflect.DeepEqual(seed.EvidenceIDs, []string{seed.CapabilityIDs[0]}) {
+			t.Fatalf("seed inferred SDK applicability without an operation binding: %#v", seed)
 		}
 		if len(seed.EndpointIDs) != 0 {
 			t.Fatalf("product recipe retained a DokoSoko delivery endpoint: %#v", seed)
@@ -159,8 +160,7 @@ func TestIntegrationAnalysisResponseRequiresExactProductSelectionAndAllowsZero(t
 	valid := integrationAnalysisAIResponse{
 		Recipes: []integrationAnalysisAIRecipe{{
 			CapabilityIDs: []string{"tool-create-charge"},
-			SDKID:         "sdk-payments-node",
-			EvidenceIDs:   []string{"tool-create-charge", "sdk-payments-node"},
+			EvidenceIDs:   []string{"tool-create-charge"},
 		}},
 	}
 	plan, ok := integrationAnalysisResponsePlan(valid, fallback, evidence)
@@ -170,7 +170,7 @@ func TestIntegrationAnalysisResponseRequiresExactProductSelectionAndAllowsZero(t
 	if !reflect.DeepEqual(plan.Identity, fallback.Identity) || !reflect.DeepEqual(plan.Endpoints, fallback.Endpoints) {
 		t.Fatalf("AI changed server-owned setup fields: %#v", plan)
 	}
-	if got := plan.Recipes[0]; len(got.CapabilityIDs) != 1 || got.CapabilityIDs[0] != "tool-create-charge" || got.SDKID != "sdk-payments-node" || len(got.EndpointIDs) != 0 {
+	if got := plan.Recipes[0]; len(got.CapabilityIDs) != 1 || got.CapabilityIDs[0] != "tool-create-charge" || got.SDKID != "" || len(got.EndpointIDs) != 0 {
 		t.Fatalf("validated selection was not retained exactly: %#v", got)
 	}
 	if plan.Recipes[0].Title != fallback.Recipes[0].Title || plan.Recipes[0].Outcome != fallback.Recipes[0].Outcome || plan.Recipes[0].Slug != fallback.Recipes[0].Slug || plan.Summary != fallback.Summary {
@@ -193,6 +193,9 @@ func TestIntegrationAnalysisResponseRequiresExactProductSelectionAndAllowsZero(t
 		},
 		{
 			Recipes: []integrationAnalysisAIRecipe{{CapabilityIDs: []string{"tool-create-charge"}, EvidenceIDs: []string{integrationID}}},
+		},
+		{
+			Recipes: []integrationAnalysisAIRecipe{{CapabilityIDs: []string{"tool-create-charge"}, EvidenceIDs: []string{"tool-create-charge", "sdk-payments-node"}}},
 		},
 		{
 			Recipes: []integrationAnalysisAIRecipe{

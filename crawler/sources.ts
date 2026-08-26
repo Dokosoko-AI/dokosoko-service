@@ -24,6 +24,10 @@ export type Job = {
   source_kind: string;
   location: string;
   visibility: "private" | "public";
+  attempt: number;
+  lease_owner: string;
+  lease_expires_at: Date;
+  heartbeat_at: Date;
 };
 
 export type PageRecord = {
@@ -40,7 +44,30 @@ export type PageRecord = {
 export type IngestionResult = {
   pages: PageRecord[];
   discoveredCount: number;
+  failedCount: number;
+  skippedCount: number;
+  redirectedCount: number;
+  diagnostics: IngestionDiagnostic[];
 };
+
+export type IngestionDiagnostic = {
+  code: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+  url?: string;
+  redirectedTo?: string;
+};
+
+export function singlePageIngestionResult(page: PageRecord): IngestionResult {
+  return {
+    pages: [page],
+    discoveredCount: 1,
+    failedCount: 0,
+    skippedCount: 0,
+    redirectedCount: 0,
+    diagnostics: [],
+  };
+}
 
 export function injectionIndicators(text: string, html = ""): string[] {
   const combined = `${text}\n${html}`.toLowerCase();
@@ -278,19 +305,16 @@ export async function ingestOpenAPI(job: Job, settings: CrawlerSettings): Promis
   const document = await boundedResponseText(response, settings.maxBytes);
   const shape = validateOpenAPIDocument(document, job.source_name);
   const indicators = injectionIndicators(document);
-  return {
-    discoveredCount: 1,
-    pages: [{
-      url: canonicalize(url.toString()),
-      title: shape.title,
-      text: document,
-      html: document,
-      contentType: contentType || (shape.format === "json" ? "application/json" : "application/yaml"),
-      status: response.status,
-      indicators,
-      rendered: false,
-    }],
-  };
+  return singlePageIngestionResult({
+    url: canonicalize(url.toString()),
+    title: shape.title,
+    text: document,
+    html: document,
+    contentType: contentType || (shape.format === "json" ? "application/json" : "application/yaml"),
+    status: response.status,
+    indicators,
+    rendered: false,
+  });
 }
 
 const uploadTypes = new Map<string, string>([
@@ -381,19 +405,16 @@ export async function ingestUpload(job: Job, settings: CrawlerSettings): Promise
     }
     const relativePath = path.relative(root, target).split(path.sep).map(encodeURIComponent).join("/");
     const indicators = injectionIndicators(document);
-    return {
-      discoveredCount: 1,
-      pages: [{
-        url: `upload://${job.source_id}/${relativePath}`,
-        title: uploadTitle(document, contentType, path.basename(target)),
-        text: uploadText(document, contentType),
-        html: document,
-        contentType,
-        status: 200,
-        indicators,
-        rendered: false,
-      }],
-    };
+    return singlePageIngestionResult({
+      url: `upload://${job.source_id}/${relativePath}`,
+      title: uploadTitle(document, contentType, path.basename(target)),
+      text: uploadText(document, contentType),
+      html: document,
+      contentType,
+      status: 200,
+      indicators,
+      rendered: false,
+    });
   } catch (error) {
     if (error instanceof CrawlerJobError) throw error;
     throw new CrawlerJobError("upload_unreadable", "The selected upload could not be read.", { cause: error });

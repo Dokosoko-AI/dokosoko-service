@@ -27,6 +27,24 @@ func TestPostgresAIPromptStateOptimisticConcurrency(t *testing.T) {
 	if len(states) != 0 {
 		t.Fatalf("initial persisted prompt states = %#v", states)
 	}
+	for _, key := range []string{
+		"documentation.map_enrichment",
+		"sdk.map_enrichment",
+		"sdk.applicability_suggestion",
+		"sdk.sample_review",
+	} {
+		state, saveErr := postgres.SaveAIPromptState(ctx, model.AIPromptState{
+			ProductID:    productID,
+			Key:          key,
+			Instructions: "Use exact evidence IDs and report uncertainty.",
+		}, 1)
+		if saveErr != nil {
+			t.Fatalf("save developer-asset prompt %q: %v", key, saveErr)
+		}
+		if state.Key != key || state.Revision != 2 {
+			t.Fatalf("developer-asset prompt state = %#v", state)
+		}
+	}
 	atomicKey := "recipe.review"
 	invalidAudit := model.AuditEvent{
 		ID:             "audit_invalid_" + productID,

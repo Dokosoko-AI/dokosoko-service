@@ -134,6 +134,7 @@ type integrationSnapshot struct {
 	AuthorizationPoints      []integrationAuthorizationSnapshot     `json:"authorization_points"`
 	Tools                    []integrationToolSnapshot              `json:"tools"`
 	ServiceConnections       []integrationServiceConnectionSnapshot `json:"service_connections"`
+	DeveloperAssets          integrationDeveloperAssetSnapshot      `json:"developer_assets"`
 }
 
 type integrationPublicationInputSet struct {
@@ -142,6 +143,8 @@ type integrationPublicationInputSet struct {
 	ToolBindings              []model.IntegrationToolBinding
 	RuntimeServiceConnections []model.RuntimeServiceConnection
 	RuntimeCredentialSets     []model.RuntimeCredentialSet
+	DeveloperAssets           integrationDeveloperAssetSnapshot
+	DeveloperAssetValidations []IntegrationPublishValidation
 }
 
 func (s *Service) integrationPublicationInputs(ctx context.Context, integration model.Integration) (integrationPublicationInputSet, error) {
@@ -169,12 +172,17 @@ func (s *Service) integrationPublicationInputs(ctx context.Context, integration 
 	if err != nil {
 		return result, err
 	}
+	result.DeveloperAssets, result.DeveloperAssetValidations, err = s.resolveIntegrationDeveloperAssets(ctx, integration)
+	if err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
 func buildIntegrationSnapshot(integration model.Integration, inputs integrationPublicationInputSet) (json.RawMessage, []IntegrationPublishValidation, error) {
 	grantDefinitions, authorizationPoints, toolBindings := inputs.GrantDefinitions, inputs.AuthorizationPoints, inputs.ToolBindings
 	validations := make([]IntegrationPublishValidation, 0)
+	validations = append(validations, inputs.DeveloperAssetValidations...)
 	resources := make([]integrationResourceSnapshot, 0, len(integration.Resources))
 	for _, link := range integration.Resources {
 		if link.ResolvedRevision == nil {
@@ -201,8 +209,18 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 	if len(integration.Resources) == 0 {
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation or API set is attached.", Tab: "resources"})
 	}
+	// Typed SDK assets are the canonical publication evidence. The deprecated
+	// SDK-reference list is only a compatibility projection of those bindings,
+	// so omit matching IDs instead of publishing the same release twice.
+	typedSDKBindingIDs := make(map[string]bool, len(inputs.DeveloperAssets.SDKs))
+	for _, asset := range inputs.DeveloperAssets.SDKs {
+		typedSDKBindingIDs[asset.BindingID] = true
+	}
 	sdks := make([]integrationSDKSnapshot, 0, len(integration.SDKs))
 	for _, reference := range integration.SDKs {
+		if typedSDKBindingIDs[reference.ID] {
+			continue
+		}
 		if reference.ID == "" || reference.Revision < 1 || reference.IntegrationID != integration.ID || reference.DeploymentID != integration.DeploymentID {
 			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "sdk_reference_unresolved", Message: "An SDK reference does not resolve to this API.", Tab: "resources"})
 			continue
@@ -348,7 +366,7 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No publish-ready API-owned runtime service connection is configured.", Tab: "access"})
 	}
 
-	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, SDKs: sdks, AuthorizationPoints: authorization, Tools: boundTools, ServiceConnections: serviceConnections})
+	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, SDKs: sdks, AuthorizationPoints: authorization, Tools: boundTools, ServiceConnections: serviceConnections, DeveloperAssets: inputs.DeveloperAssets})
 	return snapshot, validations, err
 }
 
@@ -390,7 +408,7 @@ func publishChanges(previous, current json.RawMessage) []IntegrationPublishChang
 	var before, after map[string]any
 	_ = json.Unmarshal(previous, &before)
 	_ = json.Unmarshal(current, &after)
-	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "sdks", "authorization_points", "tools", "service_connections", "support_route_id"}
+	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "sdks", "authorization_points", "tools", "service_connections", "developer_assets", "support_route_id"}
 	changes := make([]IntegrationPublishChange, 0)
 	for _, field := range fields {
 		beforeJSON, _ := json.Marshal(before[field])
@@ -449,6 +467,37 @@ func (s *Service) IntegrationPublishStatus(ctx context.Context, integrationID st
 	return IntegrationPublishStatus{Ready: ready, HasChanges: latest == nil || latest.ManifestHash != hash, CurrentManifestHash: hash, CurrentSnapshot: snapshot, LatestRevision: latest, Changes: changes, Validations: validations}, nil
 }
 
+func (s *Service) activateIntegrationPublication(
+	ctx context.Context,
+	deployment model.Deployment,
+	integration model.Integration,
+	revision model.IntegrationRevision,
+	assetPublication model.APIDeveloperAssetPublication,
+	actor Actor,
+) error {
+	createdAt := s.now()
+	if revision.PublishedAt != nil {
+		createdAt = *revision.PublishedAt
+	}
+	current := map[string]any{
+		"integration_id": integration.ID, "revision": revision.Revision, "manifest_hash": revision.ManifestHash,
+		"developer_asset_publication_id": assetPublication.ID, "developer_asset_snapshot_hash": assetPublication.SnapshotHash,
+	}
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{
+		ID: "integration-publication:" + revision.ID, OrganisationID: deployment.OrganisationID,
+		ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.published",
+		TargetType: "integration_revision", TargetID: revision.ID, Current: current,
+		RequestID: actor.RequestID, Outcome: "success", CreatedAt: createdAt,
+	}); err != nil {
+		return err
+	}
+	if err := s.recordDeveloperAssetPublicationActivation(ctx, deployment, actor, "api", assetPublication.ID, current); err != nil {
+		return err
+	}
+	_, err := s.BuildDeveloperAssetSearchIndex(ctx, "api", assetPublication.ID)
+	return err
+}
+
 func (s *Service) PublishIntegration(ctx context.Context, integrationID string, actor Actor) (model.IntegrationRevision, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
@@ -500,6 +549,13 @@ func (s *Service) PublishIntegration(ctx context.Context, integrationID string, 
 			nextRevision = existing.Revision + 1
 		}
 		if existing.State == "published" && existing.ManifestHash == manifestHash {
+			assetPublication, ensureErr := s.ensureAPIDeveloperAssetPublication(ctx, integration, existing, inputs.DeveloperAssets, actor)
+			if ensureErr != nil {
+				return model.IntegrationRevision{}, ensureErr
+			}
+			if err := s.activateIntegrationPublication(ctx, deployment, integration, existing, assetPublication, actor); err != nil {
+				return model.IntegrationRevision{}, err
+			}
 			return existing, nil
 		}
 	}
@@ -515,7 +571,11 @@ func (s *Service) PublishIntegration(ctx context.Context, integrationID string, 
 		}
 		return model.IntegrationRevision{}, err
 	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.published", TargetType: "integration_revision", TargetID: revision.ID, Current: map[string]any{"integration_id": integration.ID, "revision": revision.Revision, "manifest_hash": revision.ManifestHash}, RequestID: actor.RequestID, CreatedAt: now}); err != nil {
+	assetPublication, err := s.ensureAPIDeveloperAssetPublication(ctx, integration, revision, inputs.DeveloperAssets, actor)
+	if err != nil {
+		return model.IntegrationRevision{}, err
+	}
+	if err := s.activateIntegrationPublication(ctx, deployment, integration, revision, assetPublication, actor); err != nil {
 		return model.IntegrationRevision{}, err
 	}
 	return revision, nil

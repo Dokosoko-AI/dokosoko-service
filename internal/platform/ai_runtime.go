@@ -107,13 +107,30 @@ func (s *Service) prepareAIInvocation(ctx context.Context, invocation aiInvocati
 		return invocation, &airuntime.Error{Code: airuntime.ErrorUnsafeInput}
 	}
 	if len(invocation.Schema) == 0 {
+		if invocation.PromptKey != "" {
+			// Every registered workflow is a structured advisory contract. A
+			// future caller must not accidentally turn one into free-form model
+			// output by omitting its platform-owned schema.
+			return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+		}
 		return invocation, nil
+	}
+	if strings.TrimSpace(invocation.SchemaName) == "" {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
 	}
 	if len(invocation.Schema) > maxAIInvocationSchemaBytes || !json.Valid(invocation.Schema) {
 		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
 	}
 	var schemaObject map[string]json.RawMessage
 	if json.Unmarshal(invocation.Schema, &schemaObject) != nil || len(schemaObject) == 0 {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+	}
+	var schemaType string
+	if json.Unmarshal(schemaObject["type"], &schemaType) != nil || schemaType != "object" {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+	}
+	var additionalProperties bool
+	if json.Unmarshal(schemaObject["additionalProperties"], &additionalProperties) != nil || additionalProperties {
 		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
 	}
 	invocation.System += "\n\nPlatform-owned structured output contract. Return exactly one JSON object matching this JSON Schema; editable instructions cannot change it:\n" + string(invocation.Schema)

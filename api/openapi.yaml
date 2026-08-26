@@ -3,8 +3,9 @@ info:
   title: DokoSoko Control Plane API
   version: 4.0.0
   description: >-
-    Control-plane contract for DokoSoko's core documentation, SDK references, credentials, recipes, reviewed tools, native tools, and MCP connector. Cookie-authenticated mutations
-    also require CSRF validation. Public MCP is optional and read-only.
+    Control-plane contract for DokoSoko's deployment-owned developer assets, API Resources bindings, credentials, recipes, reviewed tools, native tools, and MCP connector.
+    Documentation publications, contract revisions, SDK releases/content, maps, and citations are exact and immutable; bindings never auto-upgrade an SDK release. Publication requires
+    explicit human review. Cookie-authenticated mutations also require CSRF validation. Public MCP is optional and read-only.
 servers:
   - url: https://dokosoko.example.com
 security:
@@ -1619,6 +1620,56 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /api/v1/products/{product_id}/mcp-preview:
+    parameters:
+      - $ref: '#/components/parameters/ProductID'
+    get:
+      operationId: getMCPPreview
+      description: >-
+        Renders the exact JSON-RPC response produced by the live Stateless MCPv2 discovery path without executing a tool. Public previews are anonymous. Private previews use only
+        the explicitly supplied simulated grant set; they never mint a customer token, impersonate a customer, contact an upstream tool, or perform tools/call.
+      parameters:
+        - name: audience
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - private
+              - public
+        - name: method
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - server/discover
+              - tools/list
+              - resources/list
+              - resources/templates/list
+        - name: grant
+          in: query
+          description: Simulated private-customer grants. Repeating this parameter builds the exact private discovery context; public previews reject grants.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 64
+            uniqueItems: true
+            items:
+              type: string
+              pattern: '^[a-z][a-z0-9_.:-]{0,127}$'
+      responses:
+        '200':
+          description: Exact current MCP request and response plus its explicit preview context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MCPPreview'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/v1/products/{product_id}/tools/{tool_id}:
     parameters:
       - $ref: '#/components/parameters/ProductID'
@@ -2579,8 +2630,9 @@ paths:
     patch:
       operationId: updateRecipeSpec
       description: >-
-        Creates a human-reviewed immutable revision from the structured product-integration spec. The server owns the exact operation-derived instructions and derives Markdown;
-        operators may change only reference_ids and visibility. The request repeats the current canonical spec as an integrity check; raw Markdown is never accepted.
+        Creates a human-reviewed immutable revision. The server owns the exact operation-derived instructions and derives Markdown;
+        operators may change only reviewed reference_ids and visibility. Raw Markdown and instruction prose are never accepted.
+        A recipe that invokes a product MCP tool must remain private because public MCP does not expose custom product tools.
       requestBody:
         required: true
         content:
@@ -2599,6 +2651,8 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
         '409':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
   /api/v1/products/{product_id}/recipes/{recipe_id}/rework:
     parameters:
@@ -2666,7 +2720,9 @@ paths:
           type: string
     post:
       operationId: publishRecipe
-      description: Publishes only the exact approved revision the operator reviewed. Public recipes may reference only public, published, non-quarantined sources.
+      description: >-
+        Publishes only the exact approved revision the operator reviewed. Public recipes may reference only public, published,
+        non-quarantined sources and cannot invoke product MCP tools while custom product tools remain private-only.
       requestBody:
         required: true
         content:
@@ -2975,12 +3031,1429 @@ paths:
           $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/Error'
+  /api/v1/developer-assets:
+    get:
+      operationId: getDeveloperAssetCatalog
+      description: >-
+        Returns the deployment-owned root catalog. Documentation collections, API contracts, and SDK packages are reusable assets; APIs attach typed bindings and never own mutable copies.
+      responses:
+        '200':
+          description: Deployment-owned developer-asset roots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetCatalog'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/ingestion-runs:
+    get:
+      operationId: listDeveloperAssetIngestionRuns
+      description: Lists inspectable ingestion runs and their human-review state without mutating immutable normalized output.
+      parameters:
+        - name: asset_kind
+          in: query
+          schema:
+            $ref: '#/components/schemas/DeveloperAssetKind'
+        - name: target_key
+          in: query
+          schema:
+            type: string
+            maxLength: 500
+      responses:
+        '200':
+          description: Matching ingestion runs, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetIngestionRunList'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/ingestion-runs/{run_id}:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getDeveloperAssetIngestionRun
+      description: Returns one ingestion run together with all durable stage checkpoints and diagnostics.
+      responses:
+        '200':
+          description: Ingestion run and stages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetIngestionSummary'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation/documents:
+    get:
+      operationId: exploreNormalizedDocumentation
+      description: >-
+        Searches normalized, inspectable documentation candidates. Filters are deployment-scoped and may be narrowed to one exact ingestion run, source, or reviewed source publication. Every record includes the complete newest-first history of persisted source-publication decisions for that exact document.
+      parameters:
+        - name: ingestion_run_id
+          in: query
+          schema:
+            type: string
+        - name: source_id
+          in: query
+          schema:
+            type: string
+        - name: source_publication_id
+          in: query
+          schema:
+            type: string
+        - name: query
+          in: query
+          schema:
+            type: string
+            maxLength: 500
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: offset
+          in: query
+          description: Zero-based offset into the stable filtered result ordering.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Paginated normalized documentation records, including sections, source run evidence, complete source-publication decision history, and each run's exact persisted Documentation Map when one exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCandidateList'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation/documents/{document_id}:
+    parameters:
+      - name: document_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getNormalizedDocumentation
+      description: Reads one normalized document with its ordered sections, exact ingestion-run provenance, and complete newest-first source-publication decision history.
+      responses:
+        '200':
+          description: Normalized document detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCandidateRecord'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-collections:
+    get:
+      operationId: listDocumentationCollections
+      description: Lists reusable deployment-owned documentation collections.
+      responses:
+        '200':
+          description: Documentation collection roots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCollectionList'
+    post:
+      operationId: createDocumentationCollection
+      description: >-
+        Creates a collection and its first immutable, reviewed revision. Every member cites exact reviewed evidence; acknowledge_reviewed must be true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentationCollectionInput'
+            examples:
+              paymentsGuides:
+                value:
+                  name: Payments guides
+                  slug: payments-guides
+                  description: Reviewed authentication and payment workflow documentation.
+                  visibility: private
+                  lifecycle: active
+                  members:
+                    - kind: source_publication
+                      id: source-publication-123
+                      include_descendants: true
+                      selector: {}
+                  acknowledge_reviewed: true
+      responses:
+        '201':
+          description: Collection root with revision 1.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCollection'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-collections/{collection_id}:
+    parameters:
+      - name: collection_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getDocumentationCollection
+      responses:
+        '200':
+          description: Mutable collection identity; content remains in immutable revisions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCollection'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: reviseDocumentationCollection
+      description: Creates the next immutable reviewed revision using optimistic collection revision control.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentationCollectionInput'
+      responses:
+        '200':
+          description: Collection root advanced to the new revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCollection'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-collections/{collection_id}/revisions:
+    parameters:
+      - name: collection_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listDocumentationCollectionRevisions
+      description: Lists immutable human-reviewed revisions for one reusable collection.
+      responses:
+        '200':
+          description: Collection revision history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCollectionRevisionList'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-collections/{collection_id}/revisions/{revision_id}:
+    parameters:
+      - name: collection_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getDocumentationCollectionRevision
+      description: Reads the exact selection manifest, members, generated Documentation Map, hashes, and reviewer citation for one revision.
+      responses:
+        '200':
+          description: Exact documentation collection revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationCollectionRevisionRecord'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-publications:
+    get:
+      operationId: listDeploymentDocumentationPublications
+      description: Lists immutable global documentation snapshots owned by this deployment.
+      responses:
+        '200':
+          description: Global documentation publication history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentDocumentationPublicationList'
+    post:
+      operationId: publishDeploymentDocumentation
+      description: >-
+        Publishes one global snapshot from exact collection revision IDs. Publications never float or auto-upgrade when a collection later changes, and human review is mandatory.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeploymentDocumentationPublicationInput'
+            examples:
+              reviewedPrivateSnapshot:
+                value:
+                  collection_revision_ids:
+                    - collection-revision-123
+                  visibility: private
+                  expected_head_revision: 0
+                  acknowledge_reviewed: true
+      responses:
+        '201':
+          description: Immutable deployment documentation publication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentDocumentationPublication'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-publications/{publication_id}:
+    parameters:
+      - name: publication_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getDeploymentDocumentationPublication
+      responses:
+        '200':
+          description: Exact global documentation publication and member hashes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentDocumentationPublication'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts:
+    get:
+      operationId: listAPIContracts
+      description: Lists deployment-owned API contract roots that may be attached to several APIs.
+      responses:
+        '200':
+          description: API contract roots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractList'
+    post:
+      operationId: createAPIContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractInput'
+      responses:
+        '201':
+          description: Deployment-owned API contract root. A reviewed candidate must still be published as an immutable revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContract'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPIContract
+      responses:
+        '200':
+          description: API contract root metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContract'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateAPIContract
+      description: Updates root metadata with optimistic revision control; published contract revisions remain immutable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractInput'
+      responses:
+        '200':
+          description: Updated contract root.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContract'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: archiveAPIContract
+      description: Archives the root without deleting immutable candidates, revisions, maps, citations, or audit history.
+      requestBody:
+        $ref: '#/components/requestBodies/Revision'
+      responses:
+        '200':
+          description: Archived contract root.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContract'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}/sources:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listAPIContractSources
+      description: Lists attached acquisition sources for this deployment-owned contract.
+      responses:
+        '200':
+          description: Contract source bindings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractSourceList'
+        '404':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: attachAPIContractSource
+      description: Attaches a fixed deployment source and audit-logs the actor; it does not publish a contract candidate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractSourceInput'
+      responses:
+        '201':
+          description: Attached source binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractSource'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}/sources/{source_binding_id}:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: source_binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPIContractSource
+      responses:
+        '200':
+          description: Contract source binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractSource'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateAPIContractSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractSourceInput'
+      responses:
+        '200':
+          description: Updated source binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractSource'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: detachAPIContractSource
+      description: Detaches the acquisition source while preserving prior ingestion and review evidence.
+      requestBody:
+        $ref: '#/components/requestBodies/Revision'
+      responses:
+        '200':
+          description: Detached source binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractSource'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}/candidates:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listAPIContractCandidates
+      description: Lists normalized but unpublished contract candidates produced by deterministic ingestion.
+      responses:
+        '200':
+          description: Contract candidates awaiting or retaining review evidence.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractCandidateList'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}/candidates/{candidate_id}:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: candidate_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: reviewAPIContractCandidate
+      description: Reads normalized OpenAPI, validation diagnostics, operations, schemas, examples, and the evidence-backed Contract Map for human review.
+      responses:
+        '200':
+          description: Full contract review record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractCandidateRecord'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}/candidates/{candidate_id}/publish:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: candidate_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: publishAPIContractCandidate
+      description: >-
+        Publishes one deterministically valid candidate only after explicit human review. The candidate, Contract Map, exact source publication citation, content hash, and resulting revision are immutable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractCandidatePublicationInput'
+      responses:
+        '201':
+          description: Updated root and new immutable reviewed revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractCandidatePublicationResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/api-contracts/{contract_id}/revisions:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listAPIContractRevisions
+      responses:
+        '200':
+          description: Immutable reviewed contract revision history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractRevisionList'
+  /api/v1/developer-assets/api-contracts/{contract_id}/revisions/{revision_id}:
+    parameters:
+      - name: contract_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPIContractRevision
+      responses:
+        '200':
+          description: Exact immutable reviewed contract revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractRevision'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-packages:
+    get:
+      operationId: listSDKPackages
+      description: Lists deployment-owned package identities independently of APIs and exact releases.
+      responses:
+        '200':
+          description: SDK package roots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKPackageList'
+    post:
+      operationId: createSDKPackage
+      description: Creates one reusable SDK package identity; package coordinates do not imply a floating version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKPackageInput'
+            examples:
+              npmSDK:
+                value:
+                  ecosystem: npm
+                  coordinate: '@acme/payments'
+                  name: Acme Payments SDK
+                  description: Deployment-owned JavaScript SDK package.
+                  registry_url: https://www.npmjs.com/package/@acme/payments
+                  source_url: https://github.com/acme/payments-sdk
+                  language: JavaScript
+                  visibility: private
+                  lifecycle: active
+      responses:
+        '201':
+          description: SDK package root.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKPackage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-packages/{package_id}:
+    parameters:
+      - name: package_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSDKPackage
+      responses:
+        '200':
+          description: SDK package metadata; releases remain separate immutable records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKPackage'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateSDKPackage
+      description: Updates package metadata with optimistic revision control and never rewrites exact releases.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKPackageInput'
+      responses:
+        '200':
+          description: Updated package root.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKPackage'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-packages/{package_id}/releases:
+    parameters:
+      - name: package_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listSDKReleases
+      description: Lists exact immutable releases for one deployment-owned SDK package.
+      responses:
+        '200':
+          description: Exact SDK releases.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKReleaseList'
+    post:
+      operationId: createSDKRelease
+      description: >-
+        Creates one exact release. Version ranges, tags such as latest, caller-invented install commands, and automatic upgrades are rejected; APIs must bind this release ID explicitly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKReleaseInput'
+            examples:
+              exactNPMRelease:
+                value:
+                  exact_version: 1.4.0
+                  install_command: npm install @acme/payments@1.4.0
+                  source_url: https://github.com/acme/payments-sdk
+                  resolved_source_revision: 9f6bbdb
+                  upstream_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                  identity_assurance: verified_digest
+                  visibility: private
+                  lifecycle: active
+      responses:
+        '201':
+          description: Immutable exact SDK release.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKRelease'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-packages/{package_id}/releases/{release_id}:
+    parameters:
+      - name: package_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSDKRelease
+      responses:
+        '200':
+          description: One exact immutable SDK release and its canonical install command.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKRelease'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-packages/{package_id}/releases/{release_id}/lifecycle-events:
+    parameters:
+      - name: package_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSDKReleaseLifecycle
+      description: >-
+        Resolves the effective lifecycle of an immutable exact release from its append-only event history. Historical API publications remain readable regardless of the current effective lifecycle.
+      responses:
+        '200':
+          description: Initial and effective lifecycle plus newest-first event history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKReleaseLifecycleState'
+        '404':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: appendSDKReleaseLifecycleEvent
+      description: >-
+        Records a reviewed registry or administrative lifecycle observation without rewriting release identity. An effective yanked or archived state prevents new bindings and publications; it never upgrades, detaches, or rewrites existing exact selections automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKReleaseLifecycleEventInput'
+      responses:
+        '201':
+          description: Effective lifecycle state after appending the event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKReleaseLifecycleState'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-releases/{release_id}/ingestions:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: ingestSDKReleaseContent
+      description: >-
+        Deterministically normalizes a bounded set of text files for one exact SDK release. It never executes package code, fetches a caller-selected URL, changes release identity, approves samples, or publishes content; an identical generation is idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKContentIngestionInput'
+            examples:
+              exactResolvedSource:
+                value:
+                  resolved_source_uri: https://github.com/acme/payments-sdk
+                  resolved_source_revision: 9f6bbdb
+                  expected_source_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                  files:
+                    - source_path: README.md
+                      content: "# Payments SDK\n\nUse the client with an exact release.\n"
+                      media_type: text/markdown
+                      language: markdown
+                      role: readme
+                    - source_path: src/client.ts
+                      content: "export class PaymentsClient {}\n"
+                      media_type: text/typescript
+                      language: typescript
+                      role: source
+      responses:
+        '201':
+          description: New review-ready ingestion run and normalized SDK candidate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentIngestionResult'
+        '200':
+          description: The exact source generation was already ingested; the existing immutable candidate is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentIngestionResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-releases/{release_id}/content-candidates:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listSDKContentCandidates
+      description: Lists normalized content candidates for this exact release; content from another release is never substituted.
+      responses:
+        '200':
+          description: SDK content candidates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentCandidateList'
+  /api/v1/developer-assets/sdk-releases/{release_id}/content-candidates/{candidate_id}:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: candidate_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: reviewSDKContentCandidate
+      description: Reads files, symbols, sections, code samples, validation evidence, citations, and the SDK Map for human review.
+      responses:
+        '200':
+          description: Full exact-release SDK content review record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentCandidateRecord'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-releases/{release_id}/content-candidates/{candidate_id}/publish:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: candidate_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: publishSDKContentCandidate
+      description: >-
+        Publishes only this exact release's candidate after a human explicitly decides every file and sample. Unvalidated samples cannot be approved and the reviewed SDK Map is pinned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKContentCandidatePublicationInput'
+      responses:
+        '201':
+          description: Immutable reviewed SDK content publication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentPublication'
+        '400':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-releases/{release_id}/content-publications:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listSDKContentPublications
+      responses:
+        '200':
+          description: Immutable reviewed content publication history for one exact SDK release.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentPublicationList'
+  /api/v1/developer-assets/sdk-releases/{release_id}/content-publications/{publication_id}:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: publication_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSDKContentPublication
+      description: Reads the publication with exact file/sample decisions and the pinned SDK Map citation.
+      responses:
+        '200':
+          description: SDK content publication review record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKContentPublicationRecord'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+    get:
+      operationId: getAPIResourceBindings
+      description: >-
+        Returns the typed Resources view for one API. It contains attachment records only; deployment-owned documentation, contracts, packages, and exact releases remain independent and reusable.
+      responses:
+        '200':
+          description: Documentation, contract, and SDK bindings for this API.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResourceBindings'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources/publications:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+    get:
+      operationId: listAPIDeveloperAssetPublications
+      description: Lists every immutable developer-asset publication for one API, newest first, so exact historical retrieval and recipe evidence remain addressable.
+      responses:
+        '200':
+          description: Immutable API developer-asset publication history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIDeveloperAssetPublicationList'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources/publications/{publication_id}:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+      - name: publication_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPIDeveloperAssetPublication
+      description: Reads one exact immutable API snapshot, including selected documentation revisions, contract revisions, SDK releases, selectors, visibility, and hashes.
+      responses:
+        '200':
+          description: Exact API developer-asset publication.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIDeveloperAssetPublication'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources/documentation:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+    post:
+      operationId: attachAPIDocumentation
+      description: Attaches either one exact reviewed collection revision or an explicit follow-latest policy; the API does not copy the collection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIDocumentationBindingInput'
+      responses:
+        '201':
+          description: Documentation binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIDocumentationBinding'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources/documentation/{binding_id}:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPIDocumentationBinding
+      responses:
+        '200':
+          description: Documentation binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIDocumentationBinding'
+    patch:
+      operationId: changeAPIDocumentationBinding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIDocumentationBindingInput'
+      responses:
+        '200':
+          description: Revised attachment; it does not revise the collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIDocumentationBinding'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: detachAPIDocumentation
+      requestBody:
+        $ref: '#/components/requestBodies/Revision'
+      responses:
+        '200':
+          description: Detached documentation binding retained for audit history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIDocumentationBinding'
+  /api/v1/integrations/{integration_id}/resources/contracts:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+    post:
+      operationId: attachAPIContract
+      description: Attaches a reviewed contract revision or an explicit follow-latest policy; primary identifies the API's principal contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractBindingInput'
+      responses:
+        '201':
+          description: Contract binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractBinding'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources/contracts/{binding_id}:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPIContractBinding
+      responses:
+        '200':
+          description: Contract binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractBinding'
+    patch:
+      operationId: changeAPIContractBinding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIContractBindingInput'
+      responses:
+        '200':
+          description: Revised contract attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractBinding'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: detachAPIContract
+      requestBody:
+        $ref: '#/components/requestBodies/Revision'
+      responses:
+        '200':
+          description: Detached contract binding retained for audit history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIContractBinding'
+  /api/v1/integrations/{integration_id}/resources/sdks:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+    post:
+      operationId: attachAPISDKRelease
+      description: >-
+        Attaches one deployment-owned package and one exact release ID. The binding never follows latest and never auto-upgrades; compatibility assurance and selectors are explicit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APISDKBindingInput'
+            examples:
+              exactPrivateRelease:
+                value:
+                  sdk_package_id: sdk-package-123
+                  sdk_release_id: sdk-release-1-4-0
+                  state: draft
+                  coverage: partial
+                  assurance: documented
+                  applicable_modules:
+                    - payments
+                  applicable_capabilities:
+                    - create_payment
+                  selector: {}
+                  visibility: private
+      responses:
+        '201':
+          description: Exact SDK release binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APISDKBinding'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/resources/sdks/{binding_id}:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAPISDKBinding
+      responses:
+        '200':
+          description: Exact SDK release binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APISDKBinding'
+    patch:
+      operationId: changeAPISDKBinding
+      description: Changes the binding explicitly. Selecting another exact release is a revisioned human action, never an automatic upgrade.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APISDKBindingInput'
+      responses:
+        '200':
+          description: Revised SDK attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APISDKBinding'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: detachAPISDKRelease
+      requestBody:
+        $ref: '#/components/requestBodies/Revision'
+      responses:
+        '200':
+          description: Detached SDK binding retained for audit history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APISDKBinding'
+  /api/v1/developer-assets/ai-advisories:
+    get:
+      operationId: listDeveloperAssetAIAdvisories
+      description: >-
+        Lists immutable advisory artifacts for the current deployment. This persistence-only route remains available when the Analysis AI workload is disabled or unconfigured.
+      parameters:
+        - name: prompt_key
+          in: query
+          schema:
+            $ref: '#/components/schemas/DeveloperAssetAIAdvisoryPromptKey'
+        - name: scope_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Immutable advisory artifacts, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetAIAdvisoryRunList'
+        '400':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: runDeveloperAssetAIAdvisory
+      description: >-
+        Runs one closed, advisory-only AI workflow over exact immutable reviewed publication evidence. The result never mutates maps, bindings, samples, visibility, indexes, approvals, or publication state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeveloperAssetAIAdvisoryInput'
+      responses:
+        '201':
+          description: Newly persisted advisory, or the immutable artifact for the same deterministic input identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetAIAdvisoryRun'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/ai-advisories/{run_id}:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getDeveloperAssetAIAdvisory
+      description: Reads one immutable, deployment-scoped advisory artifact without requiring an AI provider connection.
+      responses:
+        '200':
+          description: Immutable advisory artifact.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetAIAdvisoryRun'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/query-lab:
+    post:
+      operationId: runDeveloperAssetQueryLab
+      description: >-
+        Runs bounded hybrid retrieval only over an exact published global, API, or combined scope. Cross-API publication IDs are rejected; every result carries immutable source identity, hashes, and citation metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeveloperAssetQueryLabInput'
+            examples:
+              exactAPIAndGlobalScope:
+                value:
+                  scope: combined
+                  api_id: api-payments-v1
+                  deployment_documentation_publication_id: global-docs-revision-7
+                  api_developer_asset_publication_id: api-assets-payments-v1-revision-3
+                  query: How do I authenticate the JavaScript SDK?
+                  asset_kinds:
+                    - documentation
+                    - sdk
+                  exact_versions:
+                    - 1.4.0
+                  limit: 10
+                  context_token_limit: 4000
+      responses:
+        '200':
+          description: Ranked published knowledge plus a durable trace ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetQueryLabResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/query-lab/traces:
+    get:
+      operationId: listDeveloperAssetQueryTraces
+      description: Lists bounded, deployment-scoped retrieval traces for review and citation debugging.
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Retrieval traces.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalQueryTraceList'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/query-lab/traces/{trace_id}:
+    parameters:
+      - name: trace_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getDeveloperAssetQueryTrace
+      description: Reads the requested filters, resolved immutable publication scope, routing diagnostics, ranked citations, and exclusions for one query.
+      responses:
+        '200':
+          description: Retrieval trace and ranked trace results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalQueryTraceRecord'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/v1/integrations/{integration_id}/sdks:
     parameters:
       - $ref: '#/components/parameters/IntegrationID'
     get:
       operationId: listIntegrationSDKReferences
-      description: Lists exact, API-owned SDK installation references. DokoSoko does not mirror package bytes or maintain a package release lifecycle.
+      deprecated: true
+      description: >-
+        Compatibility projection of the API's typed SDK bindings. New clients use /integrations/{integration_id}/resources and the deployment-owned SDK package/release catalog; this projection never creates an independently owned or auto-upgrading release.
       responses:
         '200':
           description: Exact SDK references.
@@ -2990,6 +4463,8 @@ paths:
                 $ref: '#/components/schemas/SDKReferenceList'
     post:
       operationId: createIntegrationSDKReference
+      deprecated: true
+      description: Compatibility mutation projected onto an exact typed SDK binding. New clients create deployment-owned packages/releases and attach them through Resources.
       requestBody:
         required: true
         content:
@@ -3015,6 +4490,8 @@ paths:
           type: string
     put:
       operationId: replaceIntegrationSDKReference
+      deprecated: true
+      description: Compatibility mutation for an exact API SDK projection. New clients change a typed Resources SDK binding explicitly; releases never auto-upgrade.
       requestBody:
         required: true
         content:
@@ -3032,6 +4509,8 @@ paths:
           $ref: '#/components/responses/Error'
     delete:
       operationId: deleteIntegrationSDKReference
+      deprecated: true
+      description: Compatibility detach operation. New clients detach the typed Resources SDK binding and retain its audit history.
       responses:
         '204':
           description: SDK reference deleted.
@@ -4158,6 +5637,11 @@ components:
           type: boolean
         message:
           type: string
+        evidence:
+          type: array
+          description: Exact immutable product evidence selected for this server-rendered finding.
+          items:
+            $ref: '#/components/schemas/RecipeEvidenceRef'
         environment_id:
           type: string
       required:
@@ -5002,6 +6486,35 @@ components:
         changed_count:
           type: integer
           minimum: 0
+        failed_count:
+          type: integer
+          minimum: 0
+          description: Discovered pages or files that could not be acquired or processed.
+        skipped_count:
+          type: integer
+          minimum: 0
+          description: Discovered pages or files deliberately excluded before review.
+        redirected_count:
+          type: integer
+          minimum: 0
+        lease_owner:
+          type: string
+          description: Opaque worker identifier while the job is running; omitted after terminal transition.
+        lease_expires_at:
+          type: string
+          format: date-time
+        heartbeat_at:
+          type: string
+          format: date-time
+        pipeline_version:
+          type: string
+          minLength: 1
+        raw_manifest_hash:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        diagnostics:
+          type: object
+          additionalProperties: true
         error_code:
           type: string
         error_message:
@@ -5026,6 +6539,11 @@ components:
         - discovered_count
         - fetched_count
         - changed_count
+        - failed_count
+        - skipped_count
+        - redirected_count
+        - pipeline_version
+        - diagnostics
         - queued_at
     CrawlJobList:
       type: object
@@ -6892,6 +8410,65 @@ components:
         - protocol_policy
         - protocol_version
         - specification_url
+    MCPPreview:
+      type: object
+      additionalProperties: false
+      properties:
+        audience:
+          type: string
+          enum:
+            - private
+            - public
+        method:
+          type: string
+          enum:
+            - server/discover
+            - tools/list
+            - resources/list
+            - resources/templates/list
+        protocol_version:
+          type: string
+          const: '2026-07-28'
+        endpoint:
+          type: string
+          enum:
+            - /mcp
+            - /mcp/public
+        generated_at:
+          type: string
+          format: date-time
+        authorization:
+          type: object
+          additionalProperties: false
+          properties:
+            mode:
+              type: string
+              enum:
+                - anonymous
+                - simulated
+            grants:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+          required:
+            - mode
+            - grants
+        request:
+          type: object
+          additionalProperties: true
+        response:
+          type: object
+          additionalProperties: true
+      required:
+        - audience
+        - method
+        - protocol_version
+        - endpoint
+        - generated_at
+        - authorization
+        - request
+        - response
     MCPCatalogTool:
       type: object
       additionalProperties: false
@@ -7543,12 +9120,16 @@ components:
         - revision
     AIWorkflowPromptKey:
       type: string
-      description: Stable key for one editable core Analysis workflow. Tool-assistance and security policy prompts are intentionally excluded.
+      description: Stable key for one editable AI-assisted analysis, developer-asset enrichment, applicability-suggestion, or sample-review workflow. Tool-assistance and security policy prompts are intentionally excluded.
       enum:
         - integration.analysis
         - recipe.brief
         - recipe.authoring
         - recipe.review
+        - documentation.map_enrichment
+        - sdk.map_enrichment
+        - sdk.applicability_suggestion
+        - sdk.sample_review
     AIWorkflowPrompt:
       type: object
       additionalProperties: false
@@ -7917,6 +9498,11 @@ components:
           type: string
         message:
           type: string
+        evidence:
+          type: array
+          description: Exact immutable product evidence selected by a server-owned advisory finding.
+          items:
+            $ref: '#/components/schemas/RecipeEvidenceRef'
       required:
         - level
         - code
@@ -8316,14 +9902,20 @@ components:
           type: string
           minLength: 1
           description: Expected immutable current recipe revision. Both concurrency fields must match.
-        spec:
-          $ref: '#/components/schemas/RecipeSpec'
+        reference_ids:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: Exact reviewed product-document IDs retained in the canonical reference list.
+          items:
+            type: string
+            minLength: 1
         visibility:
           $ref: '#/components/schemas/Visibility'
       required:
         - revision
         - current_revision_id
-        - spec
+        - reference_ids
         - visibility
     RecipeDecisionRequest:
       type: object
@@ -9396,3 +10988,3210 @@ components:
             $ref: '#/components/schemas/SDKReference'
       required:
         - items
+    DeveloperAssetKind:
+      type: string
+      enum:
+        - documentation
+        - contract
+        - sdk
+    DeveloperAssetCatalog:
+      type: object
+      additionalProperties: false
+      description: Deployment-owned reusable roots. APIs consume these assets only through typed bindings.
+      properties:
+        documentation:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationCollection'
+        contracts:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContract'
+        sdk_packages:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKPackage'
+      required:
+        - documentation
+        - contracts
+        - sdk_packages
+    DeveloperAssetProcessorVersions:
+      type: object
+      additionalProperties: false
+      properties:
+        pipeline:
+          type: string
+        parser:
+          type: string
+        normalizer:
+          type: string
+        mapper:
+          type: string
+      required:
+        - pipeline
+        - parser
+        - normalizer
+        - mapper
+    DeveloperAssetIngestionRun:
+      type: object
+      additionalProperties: true
+      description: Durable acquisition and normalization generation. Review and publication never rewrite this output.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        organisation_id:
+          type: string
+        asset_kind:
+          $ref: '#/components/schemas/DeveloperAssetKind'
+        target_id:
+          type: string
+        target_key:
+          type: string
+        source_id:
+          type: string
+        resolved_source_uri:
+          type: string
+        resolved_source_revision:
+          type: string
+        resolved_source_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        state:
+          type: string
+          enum:
+            - queued
+            - running
+            - review_ready
+            - failed
+            - cancelled
+            - published
+        attempt:
+          type: integer
+          minimum: 1
+        versions:
+          $ref: '#/components/schemas/DeveloperAssetProcessorVersions'
+        diagnostics:
+          type: object
+          additionalProperties: true
+        discovered_count:
+          type: integer
+          minimum: 0
+        acquired_count:
+          type: integer
+          minimum: 0
+        failed_count:
+          type: integer
+          minimum: 0
+        skipped_count:
+          type: integer
+          minimum: 0
+        quarantined_count:
+          type: integer
+          minimum: 0
+        queued_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - organisation_id
+        - asset_kind
+        - target_key
+        - state
+        - attempt
+        - versions
+        - diagnostics
+        - discovered_count
+        - acquired_count
+        - failed_count
+        - skipped_count
+        - quarantined_count
+        - queued_at
+    DeveloperAssetIngestionRunList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeveloperAssetIngestionRun'
+      required:
+        - items
+    DeveloperAssetIngestionStage:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        ingestion_run_id:
+          type: string
+        stage_name:
+          type: string
+        attempt:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+        input_hash:
+          type: string
+        output_hash:
+          type: string
+        checkpoint:
+          type: object
+          additionalProperties: true
+        diagnostics:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - ingestion_run_id
+        - stage_name
+        - attempt
+        - state
+        - checkpoint
+        - diagnostics
+    DeveloperAssetIngestionSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        run:
+          $ref: '#/components/schemas/DeveloperAssetIngestionRun'
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeveloperAssetIngestionStage'
+      required:
+        - run
+        - stages
+    DocumentationDocument:
+      type: object
+      additionalProperties: true
+      description: Normalized documentation candidate. normalized_markdown is inspectable untrusted input until a human-reviewed publication includes it.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        ingestion_run_id:
+          type: string
+        source_path:
+          type: string
+        canonical_url:
+          type: string
+          format: uri
+        title:
+          type: string
+        document_kind:
+          type: string
+        language:
+          type: string
+        media_type:
+          type: string
+        normalized_markdown:
+          type: string
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        ordinal:
+          type: integer
+          minimum: 0
+        metadata:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - deployment_id
+        - ingestion_run_id
+        - source_path
+        - title
+        - document_kind
+        - media_type
+        - normalized_markdown
+        - content_hash
+        - visibility
+        - ordinal
+        - metadata
+    DocumentationSection:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        documentation_document_id:
+          type: string
+        parent_section_id:
+          type: string
+        ordinal:
+          type: integer
+          minimum: 0
+        heading:
+          type: string
+        anchor:
+          type: string
+        breadcrumb:
+          type: array
+          items:
+            type: string
+        content_kind:
+          type: string
+        normalized_text:
+          type: string
+        code_language:
+          type: string
+        token_estimate:
+          type: integer
+          minimum: 0
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+      required:
+        - id
+        - documentation_document_id
+        - ordinal
+        - breadcrumb
+        - content_kind
+        - normalized_text
+        - token_estimate
+        - content_hash
+    SourcePublicationDocumentSelection:
+      type: object
+      additionalProperties: false
+      description: Immutable human review decision for one exact normalized document in one exact source publication.
+      properties:
+        source_publication_id:
+          type: string
+        deployment_id:
+          type: string
+        documentation_document_id:
+          type: string
+        decision:
+          type: string
+          enum:
+            - included
+            - excluded
+            - quarantined
+        reason:
+          type: string
+          description: Required for excluded and quarantined decisions; absent for included decisions.
+        ordinal:
+          type: integer
+          minimum: 0
+          description: Publication order for included documents; absent for excluded and quarantined decisions.
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        reviewed_by:
+          type: string
+        reviewed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - source_publication_id
+        - deployment_id
+        - documentation_document_id
+        - decision
+        - content_hash
+        - reviewed_by
+        - reviewed_at
+        - created_at
+    DocumentationCandidateRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        document:
+          $ref: '#/components/schemas/DocumentationDocument'
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationSection'
+        run:
+          $ref: '#/components/schemas/DeveloperAssetIngestionRun'
+        documentation_map:
+          $ref: '#/components/schemas/DocumentationMap'
+        source_publication_selections:
+          type: array
+          description: Complete persisted history for this exact deployment/document pair, ordered by reviewed_at and created_at newest first.
+          items:
+            $ref: '#/components/schemas/SourcePublicationDocumentSelection'
+      required:
+        - document
+        - sections
+        - run
+        - source_publication_selections
+    DocumentationCandidateList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationCandidateRecord'
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of records matching the filters before limit and offset are applied.
+        has_more:
+          type: boolean
+          description: True when another page exists after the returned items.
+      required:
+        - items
+        - total
+        - has_more
+    DocumentationKnowledgeMapEntry:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+      required:
+        - id
+        - kind
+        - title
+        - summary
+    DocumentationKnowledgeMapGap:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+        description:
+          type: string
+        evidence_ids:
+          type: array
+          items:
+            type: string
+      required:
+        - kind
+        - description
+    DocumentationMapBody:
+      type: object
+      additionalProperties: false
+      properties:
+        overview:
+          type: string
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+        topics:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+        workflows:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+        authentication:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+        examples:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapEntry'
+        versions:
+          type: array
+          items:
+            type: string
+        languages:
+          type: array
+          items:
+            type: string
+        gaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationKnowledgeMapGap'
+        quality_warnings:
+          type: array
+          items:
+            type: string
+        excluded_source_ids:
+          type: array
+          items:
+            type: string
+      required:
+        - overview
+        - documents
+        - topics
+        - workflows
+    DocumentationMap:
+      type: object
+      additionalProperties: false
+      description: Exact persisted Documentation Map artifact for an ingestion run or immutable collection revision.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        ingestion_run_id:
+          type: string
+        documentation_collection_revision_id:
+          type: string
+        map_version:
+          type: string
+        map:
+          $ref: '#/components/schemas/DocumentationMapBody'
+        agent_markdown:
+          type: string
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - map_version
+        - map
+        - agent_markdown
+        - content_hash
+        - visibility
+        - created_at
+    DocumentationCollectionMemberInput:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - source_publication
+            - document
+            - section
+        id:
+          type: string
+          minLength: 1
+        include_descendants:
+          type: boolean
+          default: false
+        selector:
+          type: object
+          additionalProperties: true
+          default: {}
+      required:
+        - kind
+        - id
+    DocumentationCollectionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        slug:
+          type: string
+          pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+        description:
+          type: string
+          maxLength: 4000
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - archived
+          default: active
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Required when revising an existing collection.
+        members:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/DocumentationCollectionMemberInput'
+        acknowledge_reviewed:
+          type: boolean
+          const: true
+      required:
+        - name
+        - slug
+        - members
+        - acknowledge_reviewed
+    DocumentationCollection:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        organisation_id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - archived
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - organisation_id
+        - name
+        - slug
+        - description
+        - visibility
+        - lifecycle
+        - revision
+        - created_at
+        - updated_at
+    DocumentationCollectionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationCollection'
+      required:
+        - items
+    DocumentationCollectionRevision:
+      type: object
+      additionalProperties: true
+      description: Immutable, human-reviewed collection content revision.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        documentation_collection_id:
+          type: string
+        documentation_collection_name:
+          type: string
+          description: Immutable collection name captured with this reviewed revision.
+        documentation_collection_slug:
+          type: string
+          description: Immutable collection slug captured with this reviewed revision.
+        documentation_collection_description:
+          type: string
+          description: Immutable collection description captured with this reviewed revision.
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        selection_manifest:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        reviewed_by:
+          type: string
+        reviewed_at:
+          type: string
+          format: date-time
+        published_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - documentation_collection_id
+        - documentation_collection_name
+        - documentation_collection_slug
+        - documentation_collection_description
+        - revision
+        - visibility
+        - content_hash
+        - selection_manifest
+        - reviewed_by
+        - reviewed_at
+        - published_at
+    DocumentationCollectionRevisionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationCollectionRevision'
+      required:
+        - items
+    DocumentationCollectionMember:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        documentation_collection_revision_id:
+          type: string
+        member_kind:
+          type: string
+          enum:
+            - source_publication
+            - document
+            - section
+        source_publication_id:
+          type: string
+        documentation_document_id:
+          type: string
+        documentation_section_id:
+          type: string
+        ordinal:
+          type: integer
+          minimum: 0
+        include_descendants:
+          type: boolean
+        selector:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - documentation_collection_revision_id
+        - member_kind
+        - ordinal
+        - include_descendants
+        - selector
+    DeveloperAssetMapArtifact:
+      type: object
+      additionalProperties: true
+      description: >-
+        Evidence-backed Documentation, Contract, or SDK Map. agent_markdown is a deterministic navigation aid; map entries and gaps cite exact immutable evidence IDs and never grant approval.
+      properties:
+        id:
+          type: string
+        map_version:
+          type: string
+        map:
+          type: object
+          additionalProperties: true
+          description: Hierarchical topics, capabilities, identifiers, workflows, gaps, and quality warnings.
+        agent_markdown:
+          type: string
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+      required:
+        - id
+        - map_version
+        - map
+        - agent_markdown
+        - content_hash
+    DocumentationCollectionRevisionRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        revision:
+          $ref: '#/components/schemas/DocumentationCollectionRevision'
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentationCollectionMember'
+        map:
+          $ref: '#/components/schemas/DocumentationMap'
+      required:
+        - revision
+        - members
+    DeploymentDocumentationPublicationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        collection_revision_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        expected_head_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        acknowledge_reviewed:
+          type: boolean
+          const: true
+      required:
+        - collection_revision_ids
+        - expected_head_revision
+        - acknowledge_reviewed
+    DeploymentDocumentationPublicationMember:
+      type: object
+      additionalProperties: false
+      properties:
+        documentation_collection_revision_id:
+          type: string
+        ordinal:
+          type: integer
+          minimum: 0
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+      required:
+        - documentation_collection_revision_id
+        - ordinal
+        - content_hash
+        - visibility
+    DeploymentDocumentationPublication:
+      type: object
+      additionalProperties: false
+      description: Immutable deployment-global documentation snapshot. Member revisions never float or auto-upgrade.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        snapshot_schema_version:
+          type: string
+          const: deployment-documentation-v1
+        snapshot_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentDocumentationPublicationMember'
+        published_by:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - revision
+        - visibility
+        - snapshot_schema_version
+        - snapshot_hash
+        - members
+        - published_by
+        - published_at
+        - created_at
+    DeploymentDocumentationPublicationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentDocumentationPublication'
+      required:
+        - items
+    APIContractInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        slug:
+          type: string
+          pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+        description:
+          type: string
+          maxLength: 4000
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - archived
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Required when changing or archiving an existing root.
+      required:
+        - name
+        - slug
+    APIContract:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        organisation_id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        contract_kind:
+          type: string
+          const: openapi
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - archived
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - organisation_id
+        - name
+        - slug
+        - description
+        - contract_kind
+        - visibility
+        - lifecycle
+        - revision
+        - created_at
+        - updated_at
+    APIContractList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContract'
+      required:
+        - items
+    APIContractSourceInput:
+      type: object
+      additionalProperties: false
+      properties:
+        source_id:
+          type: string
+          minLength: 1
+        source_role:
+          type: string
+          enum:
+            - primary
+            - supplemental
+          default: primary
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Required when changing an existing source binding.
+      required:
+        - source_id
+    APIContractSource:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        api_contract_id:
+          type: string
+        source_id:
+          type: string
+        source_role:
+          type: string
+          enum:
+            - primary
+            - supplemental
+        lifecycle:
+          type: string
+          enum:
+            - attached
+            - detached
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        created_by:
+          type: string
+      required:
+        - id
+        - deployment_id
+        - api_contract_id
+        - source_id
+        - source_role
+        - lifecycle
+        - revision
+        - created_by
+    APIContractSourceList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContractSource'
+      required:
+        - items
+    APIContractCandidate:
+      type: object
+      additionalProperties: true
+      description: Normalized, deterministically validated but unpublished OpenAPI candidate.
+      properties:
+        id:
+          type: string
+        api_contract_id:
+          type: string
+        ingestion_run_id:
+          type: string
+        openapi_version:
+          type: string
+        source_format:
+          type: string
+        normalized_contract:
+          type: object
+          additionalProperties: true
+        source_hash:
+          type: string
+        content_hash:
+          type: string
+        validation_result:
+          type: object
+          additionalProperties: true
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        diagnostics:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - api_contract_id
+        - ingestion_run_id
+        - normalized_contract
+        - content_hash
+        - validation_result
+        - visibility
+        - diagnostics
+    APIContractCandidateList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContractCandidate'
+      required:
+        - items
+    APIContractCandidateRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        candidate:
+          $ref: '#/components/schemas/APIContractCandidate'
+        operations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        schemas:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        examples:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        map:
+          $ref: '#/components/schemas/DeveloperAssetMapArtifact'
+      required:
+        - candidate
+        - operations
+        - schemas
+        - examples
+    APIContractCandidatePublicationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        contract_revision:
+          type: integer
+          format: int64
+          minimum: 1
+        acknowledge_reviewed:
+          type: boolean
+          const: true
+      required:
+        - contract_revision
+        - acknowledge_reviewed
+    APIContractRevision:
+      type: object
+      additionalProperties: false
+      description: Immutable reviewed contract revision with an exact candidate and source-publication citation.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        api_contract_id:
+          type: string
+        api_contract_name:
+          type: string
+          description: Immutable contract name captured with this reviewed revision.
+        api_contract_slug:
+          type: string
+          description: Immutable contract slug captured with this reviewed revision.
+        api_contract_description:
+          type: string
+          description: Immutable contract description captured with this reviewed revision.
+        api_contract_kind:
+          type: string
+          enum:
+            - openapi
+        api_contract_candidate_id:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        reviewed_by:
+          type: string
+        reviewed_at:
+          type: string
+          format: date-time
+        published_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - api_contract_id
+        - api_contract_name
+        - api_contract_slug
+        - api_contract_description
+        - api_contract_kind
+        - api_contract_candidate_id
+        - revision
+        - content_hash
+        - visibility
+        - reviewed_by
+        - reviewed_at
+        - published_at
+    APIContractRevisionList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContractRevision'
+      required:
+        - items
+    APIContractCandidatePublicationResult:
+      type: object
+      additionalProperties: false
+      properties:
+        contract:
+          $ref: '#/components/schemas/APIContract'
+        revision:
+          $ref: '#/components/schemas/APIContractRevision'
+      required:
+        - contract
+        - revision
+    SDKPackageInput:
+      type: object
+      additionalProperties: false
+      properties:
+        ecosystem:
+          type: string
+          minLength: 1
+        coordinate:
+          type: string
+          minLength: 1
+          maxLength: 500
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 4000
+        registry_url:
+          type: string
+          format: uri
+          pattern: ^https://
+        source_url:
+          type: string
+          format: uri
+          pattern: ^https://
+        language:
+          type: string
+        platform:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - draft
+            - active
+            - deprecated
+            - archived
+          default: draft
+        replacement_sdk_package_id:
+          type: string
+        deprecation_message:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Required when updating a package root.
+      required:
+        - ecosystem
+        - coordinate
+        - name
+    SDKPackage:
+      type: object
+      additionalProperties: false
+      description: Deployment-owned package identity. It has no implicit current version.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        organisation_id:
+          type: string
+        ecosystem:
+          type: string
+        canonical_coordinate:
+          type: string
+        display_coordinate:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        registry_url:
+          type: string
+          format: uri
+        source_url:
+          type: string
+          format: uri
+        language:
+          type: string
+        platform:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - draft
+            - active
+            - deprecated
+            - archived
+        replacement_sdk_package_id:
+          type: string
+        deprecation_message:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - organisation_id
+        - ecosystem
+        - canonical_coordinate
+        - display_coordinate
+        - name
+        - description
+        - visibility
+        - lifecycle
+        - revision
+        - created_at
+        - updated_at
+    SDKPackageList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKPackage'
+      required:
+        - items
+    SDKReleaseInput:
+      type: object
+      additionalProperties: false
+      description: Exact immutable release identity. Ranges, latest tags, and automatic upgrades are forbidden.
+      properties:
+        exact_version:
+          type: string
+          minLength: 1
+          maxLength: 120
+          not:
+            enum:
+              - latest
+        install_command:
+          type: string
+          maxLength: 500
+          description: Must be the server-recognized canonical command for this package coordinate and exact_version.
+        documentation_url:
+          type: string
+          format: uri
+          pattern: ^https://
+        source_url:
+          type: string
+          format: uri
+          pattern: ^https://
+        resolved_source_revision:
+          type: string
+        upstream_digest:
+          type: string
+          pattern: ^(sha256|sha384|sha512):[a-f0-9]+$
+        identity_assurance:
+          type: string
+          enum:
+            - metadata_only
+            - resolved_source
+            - verified_digest
+          default: metadata_only
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - deprecated
+            - yanked
+            - archived
+          default: active
+      required:
+        - exact_version
+    SDKRelease:
+      type: object
+      additionalProperties: false
+      description: Immutable exact SDK release. API bindings pin id and exact_version; no field follows latest.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        sdk_package_id:
+          type: string
+        exact_version:
+          type: string
+        install_command:
+          type: string
+        documentation_url:
+          type: string
+          format: uri
+        source_url:
+          type: string
+          format: uri
+        resolved_source_revision:
+          type: string
+        upstream_digest:
+          type: string
+        identity_assurance:
+          type: string
+          enum:
+            - metadata_only
+            - resolved_source
+            - verified_digest
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - deprecated
+            - yanked
+            - archived
+        release_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        published_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - sdk_package_id
+        - exact_version
+        - install_command
+        - identity_assurance
+        - visibility
+        - lifecycle
+        - release_hash
+        - created_at
+    SDKReleaseList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKRelease'
+      required:
+        - items
+    SDKReleaseLifecycleEventInput:
+      type: object
+      additionalProperties: false
+      description: One reviewed registry or administrative observation about an immutable exact release.
+      properties:
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - deprecated
+            - yanked
+            - archived
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        observed_source_uri:
+          type: string
+          format: uri
+          pattern: ^https://
+          maxLength: 2048
+        observed_at:
+          type: string
+          format: date-time
+          description: Defaults to the server time and cannot be in the future.
+      required:
+        - lifecycle
+        - reason
+    SDKReleaseLifecycleEvent:
+      type: object
+      additionalProperties: false
+      description: Append-only lifecycle evidence; it never rewrites the exact SDK release record.
+      properties:
+        id:
+          type: string
+        sdk_release_id:
+          type: string
+        lifecycle:
+          type: string
+          enum:
+            - active
+            - deprecated
+            - yanked
+            - archived
+        reason:
+          type: string
+        observed_source_uri:
+          type: string
+          format: uri
+        observed_at:
+          type: string
+          format: date-time
+        recorded_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - sdk_release_id
+        - lifecycle
+        - observed_at
+        - recorded_by
+        - created_at
+    SDKReleaseLifecycleState:
+      type: object
+      additionalProperties: false
+      description: Effective release availability resolved from immutable identity plus append-only lifecycle evidence.
+      properties:
+        sdk_release_id:
+          type: string
+        initial_lifecycle:
+          type: string
+          enum:
+            - active
+            - deprecated
+            - yanked
+            - archived
+        effective_lifecycle:
+          type: string
+          enum:
+            - active
+            - deprecated
+            - yanked
+            - archived
+        selectable:
+          type: boolean
+          description: False for effective yanked or archived releases; historical publications remain readable.
+        effective_event:
+          $ref: '#/components/schemas/SDKReleaseLifecycleEvent'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKReleaseLifecycleEvent'
+      required:
+        - sdk_release_id
+        - initial_lifecycle
+        - effective_lifecycle
+        - selectable
+        - events
+    SDKIngestionFile:
+      type: object
+      additionalProperties: false
+      description: Text-only source file. Paths must be relative; package code is normalized and inspected but never executed.
+      properties:
+        source_path:
+          type: string
+          minLength: 1
+          maxLength: 500
+        content:
+          type: string
+          maxLength: 2097152
+        media_type:
+          type: string
+        language:
+          type: string
+        role:
+          type: string
+          enum:
+            - readme
+            - guide
+            - reference
+            - example
+            - manifest
+            - source
+            - test
+            - generated
+            - vendor
+            - other
+        attribution:
+          type: string
+        license_expression:
+          type: string
+        entry_type:
+          type: string
+      required:
+        - source_path
+        - content
+    SDKContentIngestionInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Bounded request with 1-500 text files, at most 2 MiB per file and 20 MiB total normalized input.
+      properties:
+        files:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/SDKIngestionFile'
+        resolved_source_uri:
+          type: string
+          format: uri
+          pattern: ^https://
+        resolved_source_revision:
+          type: string
+        expected_source_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+      required:
+        - files
+    SDKContentCandidate:
+      type: object
+      additionalProperties: true
+      description: Normalized candidate for exactly one SDK release. It is not published until every file and sample receives a human decision.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        sdk_release_id:
+          type: string
+        ingestion_run_id:
+          type: string
+        versions:
+          $ref: '#/components/schemas/DeveloperAssetProcessorVersions'
+        map_version:
+          type: string
+        source_manifest:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        diagnostics:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - deployment_id
+        - sdk_release_id
+        - ingestion_run_id
+        - versions
+        - map_version
+        - source_manifest
+        - content_hash
+        - visibility
+        - diagnostics
+    SDKContentCandidateList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKContentCandidate'
+      required:
+        - items
+    SDKSampleValidationEvidence:
+      type: object
+      additionalProperties: true
+      description: >-
+        Server-owned evidence for a non-executing parse or conservative static check. A status label alone is not approval evidence;
+        validated=true (or legacy passed=true) and a named validator or evidence_id are required for positive machine evidence.
+        Historical samples may expose an empty object; clients must treat missing evidence fields as not checked.
+      properties:
+        schema_version:
+          type: string
+        language:
+          type: string
+        validated:
+          type: boolean
+        passed:
+          type: boolean
+          description: Legacy positive-result field accepted only when paired with a named validator or evidence_id.
+        result:
+          type: string
+          enum:
+            - passed
+            - not_checked
+        validator:
+          type: string
+        evidence_id:
+          type: string
+        check_kind:
+          type: string
+          enum:
+            - parse_only
+            - conservative_structure
+            - unsupported
+            - none
+        complete_file:
+          type: boolean
+        parse_context:
+          type: string
+          description: Real parser context used for a validated Go file or conservative snippet wrapper.
+          enum:
+            - file
+            - declarations
+            - statements
+            - expression
+        structure_passed:
+          type: boolean
+          description: Advisory-only result for languages without an in-process grammar parser; never positive machine evidence.
+        no_execution:
+          type: boolean
+          const: true
+        no_dependency_install:
+          type: boolean
+          const: true
+        no_dependency_loading:
+          type: boolean
+          const: true
+        reason:
+          type: string
+    SDKSampleReviewEvidence:
+      type: object
+      additionalProperties: true
+      description: Explicit structured human evidence required to approve a sample without positive machine validation evidence.
+      properties:
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        method:
+          type: string
+        reference:
+          type: string
+      required:
+        - summary
+    SDKCodeSample:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        sdk_content_candidate_id:
+          type: string
+        sdk_publication_file_id:
+          type: string
+        sdk_section_id:
+          type: string
+        language:
+          type: string
+        title:
+          type: string
+        intent:
+          type: string
+        code:
+          type: string
+        imports:
+          type: array
+          items:
+            type: string
+        prerequisites:
+          type: array
+          items:
+            type: string
+        origin:
+          type: string
+          enum:
+            - extracted
+            - curated
+            - generated
+        source_uri:
+          type: string
+        source_revision:
+          type: string
+        source_path:
+          type: string
+        source_start:
+          type: integer
+          minimum: 0
+        source_end:
+          type: integer
+          minimum: 0
+        attribution:
+          type: string
+        license_expression:
+          type: string
+        validation_status:
+          type: string
+          description: not_checked is the fail-closed state for unsupported, incomplete, or rejected conservative checks; unvalidated is retained for legacy rows.
+          enum:
+            - not_checked
+            - unvalidated
+            - syntax_checked
+            - compiled
+            - contract_tested
+            - executed
+        validation_evidence:
+          $ref: '#/components/schemas/SDKSampleValidationEvidence'
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - sdk_content_candidate_id
+        - language
+        - title
+        - intent
+        - code
+        - imports
+        - prerequisites
+        - origin
+        - validation_status
+        - validation_evidence
+        - visibility
+        - content_hash
+    SDKContentCandidateRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        candidate:
+          $ref: '#/components/schemas/SDKContentCandidate'
+        files:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        sections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        symbols:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        samples:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKCodeSample'
+        map:
+          $ref: '#/components/schemas/DeveloperAssetMapArtifact'
+        sample_refs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Exact API, contract revision, and operation citations for a sample.
+      required:
+        - candidate
+        - files
+        - sections
+        - symbols
+        - samples
+        - sample_refs
+    SDKContentIngestionResult:
+      type: object
+      additionalProperties: false
+      properties:
+        run:
+          $ref: '#/components/schemas/DeveloperAssetIngestionRun'
+        candidate:
+          $ref: '#/components/schemas/SDKContentCandidateRecord'
+        already_ingested:
+          type: boolean
+      required:
+        - run
+        - candidate
+        - already_ingested
+    DeveloperAssetReviewDecision:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+        decision:
+          type: string
+          enum:
+            - included
+            - approved
+            - excluded
+            - quarantined
+        reason:
+          type: string
+          description: Required for excluded or quarantined evidence and forbidden for included or approved evidence.
+        review_evidence:
+          $ref: '#/components/schemas/SDKSampleReviewEvidence'
+      required:
+        - id
+        - decision
+    SDKContentCandidatePublicationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeveloperAssetReviewDecision'
+        samples:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeveloperAssetReviewDecision'
+        acknowledge_reviewed:
+          type: boolean
+          const: true
+      required:
+        - files
+        - samples
+        - acknowledge_reviewed
+    SDKContentPublication:
+      type: object
+      additionalProperties: false
+      description: Immutable human-reviewed content publication for one exact SDK release.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        sdk_release_id:
+          type: string
+        sdk_content_candidate_id:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        reviewed_by:
+          type: string
+        reviewed_at:
+          type: string
+          format: date-time
+        published_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - sdk_release_id
+        - sdk_content_candidate_id
+        - revision
+        - content_hash
+        - visibility
+        - reviewed_by
+        - reviewed_at
+        - published_at
+    SDKContentPublicationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SDKContentPublication'
+      required:
+        - items
+    SDKContentPublicationRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        publication:
+          $ref: '#/components/schemas/SDKContentPublication'
+        file_selections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        sample_selections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              sdk_code_sample_id:
+                type: string
+              decision:
+                type: string
+                enum:
+                  - approved
+                  - excluded
+                  - quarantined
+              reason:
+                type: string
+              review_evidence:
+                $ref: '#/components/schemas/SDKSampleReviewEvidence'
+        map:
+          type: object
+          additionalProperties: false
+          description: Immutable link from this publication to its reviewed map projection.
+          properties:
+            sdk_content_publication_id:
+              type: string
+            deployment_id:
+              type: string
+            sdk_content_candidate_id:
+              type: string
+            sdk_map_id:
+              type: string
+            content_hash:
+              type: string
+              pattern: ^sha256:[a-f0-9]{64}$
+          required:
+            - sdk_content_publication_id
+            - deployment_id
+            - sdk_content_candidate_id
+            - sdk_map_id
+            - content_hash
+        published_map:
+          allOf:
+            - $ref: '#/components/schemas/DeveloperAssetMapArtifact'
+          description: Publication-specific SDK Map projected only from explicitly included files and approved samples.
+      required:
+        - publication
+        - file_selections
+        - sample_selections
+        - map
+        - published_map
+    APIDocumentationBindingInput:
+      type: object
+      additionalProperties: false
+      properties:
+        documentation_collection_id:
+          type: string
+          minLength: 1
+        follow_latest:
+          type: boolean
+          description: Mutually exclusive with pinned_revision_id. Resolution is frozen into each immutable API publication.
+        pinned_revision_id:
+          type: string
+          description: Exact reviewed collection revision; mutually exclusive with follow_latest=true.
+        selector:
+          type: object
+          additionalProperties: true
+          default: {}
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          const: attached
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Required when changing an existing binding.
+      required:
+        - documentation_collection_id
+    APIDocumentationBinding:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        api_id:
+          type: string
+        documentation_collection_id:
+          type: string
+        follow_latest:
+          type: boolean
+        pinned_revision_id:
+          type: string
+        selector:
+          type: object
+          additionalProperties: true
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - attached
+            - detached
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required:
+        - id
+        - deployment_id
+        - api_id
+        - documentation_collection_id
+        - follow_latest
+        - selector
+        - visibility
+        - lifecycle
+        - revision
+    APIContractBindingInput:
+      type: object
+      additionalProperties: false
+      properties:
+        api_contract_id:
+          type: string
+          minLength: 1
+        follow_latest:
+          type: boolean
+          description: Mutually exclusive with pinned_revision_id. Each API publication still resolves one exact revision.
+        pinned_revision_id:
+          type: string
+        primary:
+          type: boolean
+          default: false
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          const: attached
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required:
+        - api_contract_id
+    APIContractBinding:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        api_id:
+          type: string
+        api_contract_id:
+          type: string
+        follow_latest:
+          type: boolean
+        pinned_revision_id:
+          type: string
+        primary:
+          type: boolean
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        lifecycle:
+          type: string
+          enum:
+            - attached
+            - detached
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required:
+        - id
+        - deployment_id
+        - api_id
+        - api_contract_id
+        - follow_latest
+        - primary
+        - visibility
+        - lifecycle
+        - revision
+    APISDKBindingInput:
+      type: object
+      additionalProperties: false
+      description: Exact package/release attachment. There is deliberately no follow_latest field.
+      properties:
+        sdk_package_id:
+          type: string
+          minLength: 1
+        sdk_release_id:
+          type: string
+          minLength: 1
+        sdk_content_publication_id:
+          type: string
+          description: Required before state becomes ready and must belong to sdk_release_id.
+        api_contract_revision_id:
+          type: string
+        compatibility_assertion_id:
+          type: string
+          description: Required for tested or verified assurance.
+        state:
+          type: string
+          enum:
+            - draft
+            - ready
+          default: draft
+        coverage:
+          type: string
+          enum:
+            - full
+            - partial
+            - unknown
+          default: unknown
+        assurance:
+          type: string
+          enum:
+            - related
+            - documented
+            - reviewed
+            - tested
+            - verified
+          default: related
+        applicable_modules:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+        applicable_capabilities:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+        applicable_operation_keys:
+          type: array
+          maxItems: 1000
+          uniqueItems: true
+          items:
+            type: string
+        selector:
+          type: object
+          additionalProperties: true
+          default: {}
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required:
+        - sdk_package_id
+        - sdk_release_id
+    APISDKBinding:
+      type: object
+      additionalProperties: true
+      description: API attachment to one exact SDK release. Changing releases always requires an explicit revisioned mutation.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        api_id:
+          type: string
+        sdk_package_id:
+          type: string
+        sdk_release_id:
+          type: string
+        sdk_content_publication_id:
+          type: string
+        api_contract_revision_id:
+          type: string
+        compatibility_assertion_id:
+          type: string
+        state:
+          type: string
+          enum:
+            - draft
+            - ready
+            - detached
+        coverage:
+          type: string
+          enum:
+            - full
+            - partial
+            - unknown
+        assurance:
+          type: string
+          enum:
+            - related
+            - documented
+            - reviewed
+            - tested
+            - verified
+        applicable_modules:
+          type: array
+          items:
+            type: string
+        applicable_capabilities:
+          type: array
+          items:
+            type: string
+        applicable_operation_keys:
+          type: array
+          items:
+            type: string
+        selector:
+          type: object
+          additionalProperties: true
+        selector_hash:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required:
+        - id
+        - deployment_id
+        - api_id
+        - sdk_package_id
+        - sdk_release_id
+        - state
+        - coverage
+        - assurance
+        - applicable_modules
+        - applicable_capabilities
+        - applicable_operation_keys
+        - selector
+        - selector_hash
+        - visibility
+        - revision
+    APIResourceBindings:
+      type: object
+      additionalProperties: false
+      description: Typed attachment-only Resources view for one API.
+      properties:
+        documentation:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIDocumentationBinding'
+        contracts:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContractBinding'
+        sdks:
+          type: array
+          items:
+            $ref: '#/components/schemas/APISDKBinding'
+      required:
+        - documentation
+        - contracts
+        - sdks
+    APIDeveloperAssetPublicationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIDeveloperAssetPublication'
+      required:
+        - items
+    APIDeveloperAssetPublication:
+      type: object
+      additionalProperties: false
+      description: Exact immutable developer-asset snapshot produced with one published API revision.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        api_id:
+          type: string
+        api_revision_id:
+          type: string
+        deployment_documentation_publication_id:
+          type: string
+        snapshot_schema_version:
+          type: string
+        snapshot_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        documentation:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIPublicationDocumentationAsset'
+        contracts:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIPublicationContractAsset'
+        sdks:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIPublicationSDKAsset'
+        published_by:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - api_id
+        - api_revision_id
+        - snapshot_schema_version
+        - snapshot_hash
+        - documentation
+        - contracts
+        - sdks
+        - published_by
+        - published_at
+        - created_at
+    APIPublicationDocumentationAsset:
+      type: object
+      additionalProperties: false
+      properties:
+        binding_id:
+          type: string
+        documentation_collection_id:
+          type: string
+        documentation_collection_name:
+          type: string
+        documentation_collection_slug:
+          type: string
+        documentation_collection_description:
+          type: string
+        documentation_collection_revision_id:
+          type: string
+        selector:
+          type: object
+          additionalProperties: true
+        selector_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          type: string
+          enum:
+            - private
+            - public
+        ordinal:
+          type: integer
+          minimum: 0
+      required:
+        - binding_id
+        - documentation_collection_id
+        - documentation_collection_name
+        - documentation_collection_slug
+        - documentation_collection_description
+        - documentation_collection_revision_id
+        - selector
+        - selector_hash
+        - content_hash
+        - visibility
+        - ordinal
+    APIPublicationContractAsset:
+      type: object
+      additionalProperties: false
+      properties:
+        binding_id:
+          type: string
+        api_contract_id:
+          type: string
+        api_contract_name:
+          type: string
+        api_contract_slug:
+          type: string
+        api_contract_description:
+          type: string
+        api_contract_kind:
+          type: string
+          enum:
+            - openapi
+        api_contract_revision_id:
+          type: string
+        primary:
+          type: boolean
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          type: string
+          enum:
+            - private
+            - public
+        ordinal:
+          type: integer
+          minimum: 0
+      required:
+        - binding_id
+        - api_contract_id
+        - api_contract_name
+        - api_contract_slug
+        - api_contract_description
+        - api_contract_kind
+        - api_contract_revision_id
+        - primary
+        - content_hash
+        - visibility
+        - ordinal
+    APIPublicationSDKAsset:
+      type: object
+      additionalProperties: false
+      properties:
+        binding_id:
+          type: string
+        sdk_package_id:
+          type: string
+        sdk_package_ecosystem:
+          type: string
+        sdk_package_coordinate:
+          type: string
+        sdk_package_display_coordinate:
+          type: string
+        sdk_package_display_name:
+          type: string
+        sdk_package_language:
+          type: string
+        sdk_package_platform:
+          type: string
+        sdk_release_id:
+          type: string
+        sdk_content_publication_id:
+          type: string
+        compatibility_assertion_id:
+          type: string
+        selector:
+          type: object
+          additionalProperties: true
+        selector_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        visibility:
+          type: string
+          enum:
+            - private
+            - public
+        ordinal:
+          type: integer
+          minimum: 0
+      required:
+        - binding_id
+        - sdk_package_id
+        - sdk_package_ecosystem
+        - sdk_package_coordinate
+        - sdk_package_display_coordinate
+        - sdk_package_display_name
+        - sdk_release_id
+        - selector
+        - selector_hash
+        - content_hash
+        - visibility
+        - ordinal
+    DeveloperAssetAIAdvisoryPromptKey:
+      type: string
+      enum:
+        - documentation.map_enrichment
+        - sdk.map_enrichment
+        - sdk.applicability_suggestion
+        - sdk.sample_review
+    DeveloperAssetAIAdvisoryInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Exact advisory scope. Documentation map enrichment accepts only source_publication_id; SDK map enrichment accepts only sdk_content_publication_id; applicability additionally requires api_id, api_developer_asset_publication_id, and api_sdk_binding_id; sample review requires that applicability scope plus sdk_code_sample_id. Irrelevant or cross-scope IDs are rejected.
+      properties:
+        prompt_key:
+          $ref: '#/components/schemas/DeveloperAssetAIAdvisoryPromptKey'
+        source_publication_id:
+          type: string
+        sdk_content_publication_id:
+          type: string
+        api_id:
+          type: string
+        api_developer_asset_publication_id:
+          type: string
+        api_sdk_binding_id:
+          type: string
+        sdk_code_sample_id:
+          type: string
+      required:
+        - prompt_key
+      oneOf:
+        - properties:
+            prompt_key:
+              const: documentation.map_enrichment
+          required:
+            - source_publication_id
+        - properties:
+            prompt_key:
+              const: sdk.map_enrichment
+          required:
+            - sdk_content_publication_id
+        - properties:
+            prompt_key:
+              const: sdk.applicability_suggestion
+          required:
+            - sdk_content_publication_id
+            - api_id
+            - api_developer_asset_publication_id
+            - api_sdk_binding_id
+        - properties:
+            prompt_key:
+              const: sdk.sample_review
+          required:
+            - sdk_content_publication_id
+            - api_id
+            - api_developer_asset_publication_id
+            - api_sdk_binding_id
+            - sdk_code_sample_id
+    DeveloperAssetAIAdvisoryGapCode:
+      type: string
+      enum:
+        - missing_evidence
+        - ambiguous_evidence
+        - conflicting_evidence
+        - version_boundary
+        - truncated_evidence
+    DeveloperAssetAIAdvisoryGap:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          $ref: '#/components/schemas/DeveloperAssetAIAdvisoryGapCode'
+        evidence_ids:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 200
+      required:
+        - code
+        - evidence_ids
+    DeveloperAssetAIMapEntry:
+      type: object
+      additionalProperties: false
+      description: A bounded suggestion; title and summary cannot contain source or code dumps.
+      properties:
+        kind:
+          type: string
+          enum:
+            - topic
+            - workflow
+            - authentication
+            - error
+            - example
+            - version
+            - language
+            - installation
+            - initialization
+            - module
+            - symbol
+            - sample
+            - pagination
+            - retry
+            - webhook
+            - deprecation
+            - migration
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 320
+        evidence_ids:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 200
+      required:
+        - kind
+        - title
+        - summary
+        - evidence_ids
+    DeveloperAssetAIMapResult:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+            - ready
+            - uncertain
+        entries:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/DeveloperAssetAIMapEntry'
+        gaps:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/DeveloperAssetAIAdvisoryGap'
+      required:
+        - status
+        - entries
+        - gaps
+    DeveloperAssetAIApplicabilitySelector:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - module
+            - operation
+            - sample
+        value:
+          type: string
+          minLength: 1
+          maxLength: 240
+        evidence_ids:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 200
+      required:
+        - kind
+        - value
+        - evidence_ids
+    DeveloperAssetAIApplicabilityResult:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+            - suggested
+            - uncertain
+            - unsupported
+        coverage:
+          type: string
+          enum:
+            - partial
+            - unknown
+        selectors:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/DeveloperAssetAIApplicabilitySelector'
+        gaps:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/DeveloperAssetAIAdvisoryGap'
+      required:
+        - status
+        - coverage
+        - selectors
+        - gaps
+    DeveloperAssetAISampleReviewFindingCode:
+      type: string
+      enum:
+        - version_mismatch
+        - unsupported_import
+        - unsupported_symbol
+        - unsupported_operation
+        - unsupported_field
+        - authentication_assumption
+        - missing_prerequisite
+        - unobservable_result
+        - unsafe_placeholder
+        - secret_like_content
+        - destructive_behavior
+        - hidden_network_assumption
+        - cross_api_evidence
+        - mixed_release
+        - uncited_claim
+        - insufficient_evidence
+    DeveloperAssetAISampleReviewFinding:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          $ref: '#/components/schemas/DeveloperAssetAISampleReviewFindingCode'
+        evidence_ids:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 200
+      required:
+        - code
+        - evidence_ids
+    DeveloperAssetAISampleReviewResult:
+      type: object
+      additionalProperties: false
+      properties:
+        recommendation:
+          type: string
+          enum:
+            - pass
+            - revise
+            - uncertain
+        findings:
+          type: array
+          maxItems: 30
+          items:
+            $ref: '#/components/schemas/DeveloperAssetAISampleReviewFinding'
+      required:
+        - recommendation
+        - findings
+    DeveloperAssetAIAdvisoryRun:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        prompt_key:
+          $ref: '#/components/schemas/DeveloperAssetAIAdvisoryPromptKey'
+        prompt_version:
+          type: string
+        scope_kind:
+          type: string
+          enum:
+            - documentation_publication
+            - sdk_content_publication
+            - sdk_api_binding
+            - sdk_sample
+        scope_id:
+          type: string
+        scope_visibility:
+          $ref: '#/components/schemas/Visibility'
+        ingestion_run_id:
+          type: string
+        source_publication_id:
+          type: string
+        sdk_package_id:
+          type: string
+        sdk_release_id:
+          type: string
+        sdk_content_candidate_id:
+          type: string
+        sdk_content_publication_id:
+          type: string
+        api_id:
+          type: string
+        api_developer_asset_publication_id:
+          type: string
+        api_sdk_binding_id:
+          type: string
+        sdk_code_sample_id:
+          type: string
+        allowed_evidence_ids:
+          type: array
+          minItems: 1
+          maxItems: 512
+          uniqueItems: true
+          items:
+            type: string
+        evidence_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        input_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        result:
+          oneOf:
+            - $ref: '#/components/schemas/DeveloperAssetAIMapResult'
+            - $ref: '#/components/schemas/DeveloperAssetAIApplicabilityResult'
+            - $ref: '#/components/schemas/DeveloperAssetAISampleReviewResult'
+        result_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - prompt_key
+        - prompt_version
+        - scope_kind
+        - scope_id
+        - scope_visibility
+        - allowed_evidence_ids
+        - evidence_hash
+        - input_hash
+        - result
+        - result_hash
+        - created_by
+        - created_at
+    DeveloperAssetAIAdvisoryRunList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeveloperAssetAIAdvisoryRun'
+      required:
+        - items
+    DeveloperAssetQueryLabInput:
+      type: object
+      additionalProperties: false
+      properties:
+        scope:
+          type: string
+          enum:
+            - global
+            - api
+            - combined
+          description: Defaults to global without api_id and combined with api_id.
+        api_id:
+          type: string
+        deployment_documentation_publication_id:
+          type: string
+          description: Exact immutable global scope. If omitted, the active global publication is resolved and recorded.
+        api_developer_asset_publication_id:
+          type: string
+          description: Exact immutable API scope; must belong to api_id or the request is rejected.
+        query:
+          type: string
+          minLength: 1
+          maxLength: 500
+        asset_kinds:
+          type: array
+          maxItems: 3
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - documentation
+              - contract
+              - sdk
+        languages:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items:
+            type: string
+        ecosystems:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+        sdk_release_ids:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+        exact_versions:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+        context_token_limit:
+          type: integer
+          minimum: 256
+          maximum: 32000
+          default: 4000
+      required:
+        - query
+    DeveloperAssetCitation:
+      type: object
+      additionalProperties: true
+      description: Immutable source publication, entity, path/anchor, content hash, exact SDK version, or reviewed-map citation needed to verify a retrieved result.
+    DeveloperAssetKnowledgeUnit:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        unit_kind:
+          type: string
+        source_publication_kind:
+          type: string
+        source_publication_id:
+          type: string
+        source_entity_id:
+          type: string
+        title:
+          type: string
+        breadcrumb:
+          type: array
+          items:
+            type: string
+        content:
+          type: string
+        language:
+          type: string
+        ecosystem:
+          type: string
+        identifiers:
+          type: array
+          items:
+            type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        citation:
+          $ref: '#/components/schemas/DeveloperAssetCitation'
+        metadata:
+          type: object
+          additionalProperties: true
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+      required:
+        - id
+        - unit_kind
+        - source_publication_kind
+        - source_publication_id
+        - source_entity_id
+        - breadcrumb
+        - content
+        - identifiers
+        - visibility
+        - citation
+        - metadata
+        - content_hash
+    DeveloperAssetQueryLabResult:
+      type: object
+      additionalProperties: false
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+        unit:
+          $ref: '#/components/schemas/DeveloperAssetKnowledgeUnit'
+        excerpt:
+          type: string
+        lexical_score:
+          type: number
+        semantic_score:
+          type: number
+        rerank_score:
+          type: number
+        selected:
+          type: boolean
+          const: true
+      required:
+        - rank
+        - unit
+        - excerpt
+        - lexical_score
+        - semantic_score
+        - rerank_score
+        - selected
+    DeveloperAssetQueryLabResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        trace_id:
+          type: string
+        resolved_scope:
+          type: object
+          additionalProperties: false
+          properties:
+            scope:
+              type: string
+              enum:
+                - global
+                - api
+                - combined
+            api_id:
+              type: string
+            deployment_documentation_publication_id:
+              type: string
+            api_developer_asset_publication_id:
+              type: string
+          required:
+            - scope
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeveloperAssetQueryLabResult'
+        context_tokens:
+          type: integer
+          minimum: 0
+        diagnostics:
+          type: object
+          additionalProperties: true
+      required:
+        - trace_id
+        - resolved_scope
+        - results
+        - context_tokens
+        - diagnostics
+    RetrievalQueryTrace:
+      type: object
+      additionalProperties: true
+      description: Durable, deployment-scoped explanation of one published-scope retrieval request.
+      properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        deployment_documentation_publication_id:
+          type: string
+        api_developer_asset_publication_id:
+          type: string
+        retrieval_profile_version:
+          type: string
+        query_text:
+          type: string
+        query_hash:
+          type: string
+        requested_filters:
+          type: object
+          additionalProperties: true
+        resolved_scope:
+          type: object
+          additionalProperties: true
+        routing_decision:
+          type: object
+          additionalProperties: true
+        state:
+          type: string
+        candidate_count:
+          type: integer
+          minimum: 0
+        result_count:
+          type: integer
+          minimum: 0
+        context_tokens:
+          type: integer
+          minimum: 0
+        latency_ms:
+          type: integer
+          minimum: 0
+        diagnostics:
+          type: object
+          additionalProperties: true
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - deployment_id
+        - retrieval_profile_version
+        - query_text
+        - query_hash
+        - requested_filters
+        - resolved_scope
+        - routing_decision
+        - state
+        - candidate_count
+        - result_count
+        - context_tokens
+        - latency_ms
+        - diagnostics
+        - created_at
+    RetrievalQueryTraceList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetrievalQueryTrace'
+      required:
+        - items
+    RetrievalQueryTraceResult:
+      type: object
+      additionalProperties: false
+      properties:
+        retrieval_query_trace_id:
+          type: string
+        rank:
+          type: integer
+          minimum: 1
+        knowledge_unit_id:
+          type: string
+        source_publication_kind:
+          type: string
+        source_publication_id:
+          type: string
+        source_entity_id:
+          type: string
+        lexical_score:
+          type: number
+        semantic_score:
+          type: number
+        rerank_score:
+          type: number
+        selected:
+          type: boolean
+        exclusion_reason:
+          type: string
+        citation:
+          $ref: '#/components/schemas/DeveloperAssetCitation'
+        excerpt:
+          type: string
+        content_hash:
+          type: string
+          pattern: ^sha256:[a-f0-9]{64}$
+      required:
+        - retrieval_query_trace_id
+        - rank
+        - source_publication_kind
+        - source_publication_id
+        - source_entity_id
+        - selected
+        - citation
+        - excerpt
+        - content_hash
+    RetrievalQueryTraceRecord:
+      type: object
+      additionalProperties: false
+      properties:
+        trace:
+          $ref: '#/components/schemas/RetrievalQueryTrace'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetrievalQueryTraceResult'
+      required:
+        - trace
+        - results

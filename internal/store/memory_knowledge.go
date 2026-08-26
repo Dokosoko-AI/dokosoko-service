@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/dokosoko/dokosoko-service/internal/docreview"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"sort"
@@ -150,7 +151,7 @@ func (m *Memory) PublishSource(_ context.Context, productID, sourceID string, ex
 	sort.Slice(jobs, func(i, j int) bool {
 		return jobs[i].QueuedAt.After(jobs[j].QueuedAt) || (jobs[i].QueuedAt.Equal(jobs[j].QueuedAt) && jobs[i].ID > jobs[j].ID)
 	})
-	if len(jobs) == 0 || jobs[0].ID != publication.CrawlJobID || jobs[0].FinishedAt == nil || (jobs[0].State != "review" && jobs[0].State != "succeeded") || jobs[0].FetchedCount == 0 {
+	if len(jobs) == 0 || jobs[0].ID != publication.CrawlJobID || jobs[0].FinishedAt == nil || (jobs[0].State != "review" && jobs[0].State != "succeeded") || jobs[0].FetchedCount == 0 || jobs[0].FailedCount != 0 || jobs[0].SkippedCount != 0 {
 		return model.Source{}, model.SourcePublication{}, ErrConflict
 	}
 	reviewDocs := make(map[string]model.CrawlReviewDocument, len(m.crawlReviewDocuments[publication.CrawlJobID]))
@@ -174,15 +175,6 @@ func (m *Memory) PublishSource(_ context.Context, productID, sourceID string, ex
 	if err != nil || publication.ContentHash != lockedHash {
 		return model.Source{}, model.SourcePublication{}, ErrConflict
 	}
-	for _, existing := range m.sourcePublications[productID] {
-		if existing.SourceID == sourceID && existing.CrawlJobID == publication.CrawlJobID {
-			return model.Source{}, model.SourcePublication{}, ErrConflict
-		}
-	}
-	value.Published = true
-	value.Revision++
-	value.UpdatedAt = time.Now().UTC()
-	m.sources[productID][sourceID] = value
 	publication.OrganisationID = value.OrganisationID
 	publication.ProductID = productID
 	publication.SourceID = sourceID
@@ -190,10 +182,70 @@ func (m *Memory) PublishSource(_ context.Context, productID, sourceID string, ex
 	publication.DocumentCount = len(documentIDs)
 	publication.Revision = 1
 	for _, existing := range m.sourcePublications[productID] {
+		if existing.ID == publication.ID {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+		if existing.SourceID == sourceID && existing.CrawlJobID == publication.CrawlJobID {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
 		if existing.SourceID == sourceID && existing.Revision >= publication.Revision {
 			publication.Revision = existing.Revision + 1
 		}
 	}
+
+	var documentationReview *SourcePublicationDocumentationReview
+	typedRun, hasTypedRun := m.developerAssets.ingestionRuns[publication.CrawlJobID]
+	if !hasTypedRun {
+		// An unbound OpenAPI source can still be reviewed as legacy evidence so
+		// it can subsequently be attached and recrawled for a contract target.
+		// An uploaded OpenAPI contract may also have no new typed run when its
+		// normalized candidate is unchanged. Documentation-producing sources
+		// fail closed without typed output.
+		contractSource := false
+		for _, binding := range m.developerAssets.contractSources {
+			if binding.DeploymentID == productID && binding.SourceID == sourceID && binding.Lifecycle == "attached" {
+				contractSource = true
+				break
+			}
+		}
+		if value.Kind != "openapi" && !contractSource {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+	} else {
+		if typedRun.DeploymentID != productID || typedRun.OrganisationID != value.OrganisationID ||
+			typedRun.SourceID != sourceID || typedRun.ID != publication.CrawlJobID ||
+			typedRun.State != model.DeveloperAssetIngestionReviewReady ||
+			typedRun.AcquiredCount != jobs[0].FetchedCount || typedRun.FailedCount != 0 || typedRun.SkippedCount != 0 {
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+		switch typedRun.AssetKind {
+		case model.DeveloperAssetDocumentation:
+			output, exists := m.developerAssets.documentationOutputs[typedRun.ID]
+			if !exists {
+				return model.Source{}, model.SourcePublication{}, ErrConflict
+			}
+			review, bridgeErr := buildSourcePublicationDocumentationReview(
+				productID, typedRun, publication, output.Documents, output.Map, reviewDocs, documentIDs,
+			)
+			if bridgeErr != nil {
+				return model.Source{}, model.SourcePublication{}, bridgeErr
+			}
+			if _, exists := m.developerAssets.sourcePublicationReviews[publication.ID]; exists {
+				return model.Source{}, model.SourcePublication{}, ErrConflict
+			}
+			documentationReview = &review
+		case model.DeveloperAssetContract:
+			// Contract review remains a separate exact publication step. Its
+			// candidate publisher consumes this legacy source publication and then
+			// transitions the same run to published.
+		default:
+			return model.Source{}, model.SourcePublication{}, ErrConflict
+		}
+	}
+	value.Published = true
+	value.Revision++
+	value.UpdatedAt = time.Now().UTC()
+	m.sources[productID][sourceID] = value
 	if m.sourcePublications[productID] == nil {
 		m.sourcePublications[productID] = make(map[string]model.SourcePublication)
 	}
@@ -207,6 +259,19 @@ func (m *Memory) PublishSource(_ context.Context, productID, sourceID string, ex
 			m.knowledge[productID][index].Published = true
 			m.knowledge[productID][index].Visibility = value.Visibility
 		}
+	}
+	if documentationReview != nil {
+		createdAt := time.Now().UTC()
+		for index := range documentationReview.Selections {
+			documentationReview.Selections[index].CreatedAt = createdAt
+		}
+		documentationReview.MapLink.CreatedAt = createdAt
+		m.developerAssets.sourcePublicationReviews[publication.ID] = memoryClone(*documentationReview)
+		typedRun.State, typedRun.LeaseOwner, typedRun.LeaseExpiresAt, typedRun.HeartbeatAt = model.DeveloperAssetIngestionPublished, "", nil, nil
+		if typedRun.FinishedAt == nil {
+			typedRun.FinishedAt = &createdAt
+		}
+		m.developerAssets.ingestionRuns[typedRun.ID] = memoryClone(typedRun)
 	}
 	return value, publication, nil
 }
@@ -239,6 +304,8 @@ func (m *Memory) CreateCrawlJob(_ context.Context, value model.CrawlJob) (model.
 	}
 	value.State = "queued"
 	value.Attempt = 1
+	value.PipelineVersion = "developer-assets-v2"
+	value.Diagnostics = json.RawMessage(`{}`)
 	value.QueuedAt = time.Now().UTC()
 	m.crawls[value.SourceID] = append(m.crawls[value.SourceID], value)
 	return value, nil

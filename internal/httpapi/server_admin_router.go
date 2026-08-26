@@ -156,6 +156,24 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.integrations(w, r)
 	case len(parts) == 4 && parts[2] == "integrations":
 		s.integration(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "resources":
+		s.apiResourceBindings(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "publications":
+		s.apiDeveloperAssetPublications(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "publications":
+		s.apiDeveloperAssetPublication(w, r, parts[3], parts[6])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "documentation":
+		s.apiDocumentationBindings(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "documentation":
+		s.apiDocumentationBinding(w, r, parts[3], parts[6])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "contracts":
+		s.apiContractBindings(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "contracts":
+		s.apiContractBinding(w, r, parts[3], parts[6])
+	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "sdks":
+		s.apiSDKBindings(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "resources" && parts[5] == "sdks":
+		s.apiSDKBinding(w, r, parts[3], parts[6])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "publish" && r.Method == http.MethodPost:
 		s.publishIntegration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "preflight" && r.Method == http.MethodPost:
@@ -190,6 +208,78 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.integrationSDKs(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "sdks":
 		s.integrationSDK(w, r, parts[3], parts[5])
+	case len(parts) == 3 && parts[2] == "developer-assets":
+		s.developerAssetCatalog(w, r)
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "ingestion-runs":
+		s.developerAssetIngestionRuns(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "ingestion-runs":
+		s.developerAssetIngestionRun(w, r, parts[4])
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation" && parts[4] == "documents":
+		s.developerAssetDocuments(w, r)
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "documentation" && parts[4] == "documents":
+		s.developerAssetDocument(w, r, parts[5])
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "documentation-collections":
+		s.documentationCollections(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation-collections":
+		s.documentationCollection(w, r, parts[4])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "documentation-collections" && parts[5] == "revisions":
+		s.documentationCollectionRevisions(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "documentation-collections" && parts[5] == "revisions":
+		s.documentationCollectionRevision(w, r, parts[4], parts[6])
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "documentation-publications":
+		s.deploymentDocumentationPublications(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation-publications":
+		s.deploymentDocumentationPublication(w, r, parts[4])
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "api-contracts":
+		s.apiContracts(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "api-contracts":
+		s.apiContract(w, r, parts[4])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "sources":
+		s.apiContractSources(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "sources":
+		s.apiContractSource(w, r, parts[4], parts[6])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "candidates":
+		s.apiContractCandidates(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "candidates":
+		s.apiContractCandidate(w, r, parts[4], parts[6])
+	case len(parts) == 8 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "candidates" && parts[7] == "publish":
+		s.publishAPIContractCandidate(w, r, parts[4], parts[6])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "revisions":
+		s.apiContractRevisions(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "api-contracts" && parts[5] == "revisions":
+		s.apiContractRevision(w, r, parts[4], parts[6])
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "sdk-packages":
+		s.sdkPackages(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "sdk-packages":
+		s.sdkPackage(w, r, parts[4])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "sdk-packages" && parts[5] == "releases":
+		s.sdkReleases(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "sdk-packages" && parts[5] == "releases":
+		s.sdkRelease(w, r, parts[4], parts[6])
+	case len(parts) == 8 && parts[2] == "developer-assets" && parts[3] == "sdk-packages" && parts[5] == "releases" && parts[7] == "lifecycle-events":
+		s.sdkReleaseLifecycleEvents(w, r, parts[4], parts[6])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "sdk-releases" && parts[5] == "ingestions":
+		s.sdkContentIngestions(w, r, parts[4])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "sdk-releases" && parts[5] == "content-candidates":
+		s.sdkContentCandidates(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "sdk-releases" && parts[5] == "content-candidates":
+		s.sdkContentCandidate(w, r, parts[4], parts[6])
+	case len(parts) == 8 && parts[2] == "developer-assets" && parts[3] == "sdk-releases" && parts[5] == "content-candidates" && parts[7] == "publish":
+		s.publishSDKContentCandidate(w, r, parts[4], parts[6])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "sdk-releases" && parts[5] == "content-publications":
+		s.sdkContentPublications(w, r, parts[4])
+	case len(parts) == 7 && parts[2] == "developer-assets" && parts[3] == "sdk-releases" && parts[5] == "content-publications":
+		s.sdkContentPublication(w, r, parts[4], parts[6])
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "query-lab":
+		s.developerAssetQueryLab(w, r)
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "ai-advisories":
+		s.developerAssetAIAdvisories(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "ai-advisories":
+		s.developerAssetAIAdvisory(w, r, parts[4])
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "query-lab" && parts[4] == "traces":
+		s.developerAssetQueryTraces(w, r)
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "query-lab" && parts[4] == "traces":
+		s.developerAssetQueryTrace(w, r, parts[5])
 	case len(parts) == 3 && parts[2] == "resource-sets":
 		s.resourceSets(w, r)
 	case len(parts) == 3 && parts[2] == "grant-definitions":
@@ -242,6 +332,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.toolBuilder(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "tools":
 		s.tools(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "mcp-preview":
+		s.mcpPreview(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "tools":
 		s.toolEditorResource(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "tools" && parts[6] == "clone" && r.Method == http.MethodPost:

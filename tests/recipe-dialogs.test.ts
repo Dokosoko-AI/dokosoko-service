@@ -26,9 +26,7 @@ test("recipe editor changes only reviewed reference IDs", () => {
   const result = parseRecipeSpecEditor(JSON.stringify(["doc_errors"]), original);
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.deepEqual(result.spec.reference_ids, ["doc_errors"]);
-  assert.deepEqual(result.spec.steps, original.steps);
-  assert.equal(result.spec.title, original.title);
+  assert.deepEqual(result.referenceIDs, ["doc_errors"]);
 });
 
 test("recipe editor rejects prose, unknown references, duplicates, and excess", () => {

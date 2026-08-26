@@ -21,20 +21,29 @@ type Source struct {
 }
 
 type CrawlJob struct {
-	ID              string     `json:"id"`
-	OrganisationID  string     `json:"organisation_id"`
-	ProductID       string     `json:"product_id"`
-	SourceID        string     `json:"source_id"`
-	State           string     `json:"state"`
-	Attempt         int        `json:"attempt"`
-	DiscoveredCount int        `json:"discovered_count"`
-	FetchedCount    int        `json:"fetched_count"`
-	ChangedCount    int        `json:"changed_count"`
-	ErrorCode       string     `json:"error_code,omitempty"`
-	ErrorMessage    string     `json:"error_message,omitempty"`
-	QueuedAt        time.Time  `json:"queued_at"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	ID              string          `json:"id"`
+	OrganisationID  string          `json:"organisation_id"`
+	ProductID       string          `json:"product_id"`
+	SourceID        string          `json:"source_id"`
+	State           string          `json:"state"`
+	Attempt         int             `json:"attempt"`
+	DiscoveredCount int             `json:"discovered_count"`
+	FetchedCount    int             `json:"fetched_count"`
+	ChangedCount    int             `json:"changed_count"`
+	FailedCount     int             `json:"failed_count"`
+	SkippedCount    int             `json:"skipped_count"`
+	RedirectedCount int             `json:"redirected_count"`
+	LeaseOwner      string          `json:"lease_owner,omitempty"`
+	LeaseExpiresAt  *time.Time      `json:"lease_expires_at,omitempty"`
+	HeartbeatAt     *time.Time      `json:"heartbeat_at,omitempty"`
+	PipelineVersion string          `json:"pipeline_version"`
+	RawManifestHash string          `json:"raw_manifest_hash,omitempty"`
+	Diagnostics     json.RawMessage `json:"diagnostics"`
+	ErrorCode       string          `json:"error_code,omitempty"`
+	ErrorMessage    string          `json:"error_message,omitempty"`
+	QueuedAt        time.Time       `json:"queued_at"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	FinishedAt      *time.Time      `json:"finished_at,omitempty"`
 }
 
 // CrawlReviewDocument is an immutable document candidate produced by one

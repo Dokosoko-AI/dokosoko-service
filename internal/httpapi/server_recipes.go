@@ -14,6 +14,14 @@ import (
 )
 
 func (s *Server) recipeCreationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, platform.ErrRecipeGroundingChanged) {
+		writeError(w, http.StatusConflict, "recipe_grounding_changed", "The reviewed product evidence changed. Reload, analyse, and regenerate the recipe before retrying.", nil)
+		return
+	}
+	if errors.Is(err, platform.ErrPublicMCPRecipe) {
+		writeError(w, http.StatusUnprocessableEntity, "recipe_public_visibility_unsupported", "MCP-backed product recipes are private-only until public custom-tool exposure is supported.", nil)
+		return
+	}
 	if errors.Is(err, platform.ErrRecipeAnalysisScope) {
 		writeError(w, http.StatusBadRequest, "recipe_scope_mismatch", err.Error(), nil)
 		return
@@ -26,7 +34,7 @@ func (s *Server) recipeCreationError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) recipeUpdateError(w http.ResponseWriter, err error) {
-	if errors.Is(err, store.ErrConflict) {
+	if errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrCatalogConflict) {
 		writeError(w, http.StatusConflict, "recipe_revision_conflict", "The recipe changed. Reload it and review the latest revision before saving again.", nil)
 		return
 	}
@@ -204,24 +212,24 @@ func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recip
 		writeJSON(w, http.StatusOK, map[string]any{"recipe": value, "revisions": revisions})
 	case http.MethodPatch:
 		var input struct {
-			Spec              *model.RecipeSpec `json:"spec"`
-			Visibility        model.Visibility  `json:"visibility"`
-			Revision          int64             `json:"revision"`
-			CurrentRevisionID string            `json:"current_revision_id"`
+			ReferenceIDs      *[]string        `json:"reference_ids"`
+			Visibility        model.Visibility `json:"visibility"`
+			Revision          int64            `json:"revision"`
+			CurrentRevisionID string           `json:"current_revision_id"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		if input.Spec == nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "spec is required", nil)
+		if input.ReferenceIDs == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "reference_ids is required", nil)
 			return
 		}
 		if input.Revision < 1 || strings.TrimSpace(input.CurrentRevisionID) == "" {
 			writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
 			return
 		}
-		value, err := s.service.UpdateRecipeSpec(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, *input.Spec, input.Visibility, actor(r))
+		value, err := s.service.UpdateRecipeReferences(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, *input.ReferenceIDs, input.Visibility, actor(r))
 		if err != nil {
 			s.recipeUpdateError(w, err)
 			return

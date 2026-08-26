@@ -1,7 +1,7 @@
 import type { APIRecipe, APIRecipeSpec } from "../../../lib/api";
 
 export type RecipeSpecParseResult =
-  | { ok: true; spec: APIRecipeSpec }
+  | { ok: true; referenceIDs: string[] }
   | { ok: false; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -35,7 +35,7 @@ export function parseRecipeSpecEditor(value: string, original?: APIRecipeSpec): 
     return { ok: false, error: "Reference IDs must reuse references reviewed for this revision." };
   }
 
-  return { ok: true, spec: { ...original, reference_ids: referenceIDs } };
+  return { ok: true, referenceIDs };
 }
 
 export function recipeEditableSpec(recipe: APIRecipe): APIRecipeSpec | undefined {
