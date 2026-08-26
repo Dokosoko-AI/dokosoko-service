@@ -187,8 +187,20 @@ type IntegrationManifestTool struct {
 	Namespace                  string `json:"namespace"`
 	Name                       string `json:"name"`
 	BackendKind                string `json:"backend_kind"`
+	Effect                     string `json:"effect"`
+	IdempotencyMode            string `json:"idempotency_mode"`
+	IdentityRequirement        string `json:"identity_requirement"`
+	StateScope                 string `json:"state_scope"`
+	MaxConcurrency             int    `json:"max_concurrency,omitempty"`
+	MaxResultBytes             int64  `json:"max_result_bytes,omitempty"`
 	ContentHash                string `json:"content_hash"`
 	UpstreamSchemaHash         string `json:"upstream_schema_hash,omitempty"`
+	NativePluginID             string `json:"native_plugin_id,omitempty"`
+	NativeToolID               string `json:"native_tool_id,omitempty"`
+	NativePluginVersion        string `json:"native_plugin_version,omitempty"`
+	NativeSDKVersion           int    `json:"native_sdk_version,omitempty"`
+	NativeManifestHash         string `json:"native_manifest_hash,omitempty"`
+	NativeContractHash         string `json:"native_contract_hash,omitempty"`
 }
 
 type IntegrationManifestAccessConnection struct {

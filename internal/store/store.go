@@ -41,6 +41,7 @@ type Store interface {
 	ProductCatalogStore
 	KnowledgeStore
 	ToolStore
+	NativePluginStateStore
 	MCPStore
 	ExecutionStore
 	ReportingStore

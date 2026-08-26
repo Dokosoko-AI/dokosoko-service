@@ -123,6 +123,10 @@ func (s *Server) publishSource(w http.ResponseWriter, r *http.Request, productID
 func (s *Server) tools(w http.ResponseWriter, r *http.Request, productID string) {
 	switch r.Method {
 	case http.MethodGet:
+		if err := s.syncNativePlugins(r.Context(), productID); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "native_plugin_catalog_unavailable", "Native tool catalog synchronization failed.", nil)
+			return
+		}
 		values, err := s.service.Store().Tools(r.Context(), productID, false)
 		if err != nil {
 			s.storeError(w, err)

@@ -12,7 +12,7 @@ One DokoSoko installation is one vendor deployment. Its integration surface cons
 - `backend_connection` — service-to-service origin, authentication state, and active credential version;
 - `customer_account` — DokoSoko's durable account resource resolved from a trusted external identity;
 - `installation` — a registered customer/environment integration instance;
-- `tool` — a published operation with fixed destination, schemas, and authorization policy;
+- `tool` — a published HTTP, managed MCP, or source-compiled native operation with fixed execution contract, schemas, and authorization policy;
 - optional `package_artifact` and immutable `package_release` records —
   bounded metadata for externally delivered developer artifacts;
 - `integration_package_binding` — compatibility between one Integration draft
@@ -102,13 +102,37 @@ A tool has:
 
 - a stable namespace and name;
 - bounded JSON input and output schemas;
-- one fixed HTTPS destination;
-- an HTTP method or managed MCP operation;
+- one fixed HTTPS destination, managed MCP operation, or exact native source contract;
+- an HTTP method, managed MCP operation, or native tool ID;
 - `required_grants`;
+- explicit effect, identity, and idempotency declarations;
 - an explicit confirmation policy;
 - a timeout and immutable published revision.
 
 For vendor HTTP tools, the destination must share the delegated API origin and execution uses the authenticated user's delegated vendor token. For managed MCP tools, DokoSoko uses either a separately encrypted service credential or a delegated upstream OAuth grant bound to the DokoSoko subject.
+
+For native tools, an operator reviews a Go source package and its dependency
+tree, registers it explicitly, and compiles it into the service. DokoSoko does
+not load uploaded source, binaries, dynamic Go plugins, or WASM at runtime.
+Native code is trusted same-process application code, not sandboxed code. A
+strict source checker rejects direct environment, filesystem, process, SQL,
+socket, cgo, unsafe, assembler, and compiled-artifact use as a governance aid;
+it cannot turn same-process code or unchecked transitive dependencies into an
+untrusted boundary.
+
+A native manifest declares registered configuration in the exclusive
+`DOKOSOKO_PLUGIN_<ID>_<KEY>` namespace, an identity requirement, one state
+scope, effect, confirmation, idempotency, limits, and optional managed HTTPS
+claims. The host passes only plugin-specific opaque identity references. It
+provides one scoped JSON state abstraction backed by one shared table, with
+revision checks, transactions, TTL, quotas, and transactional version upgrades;
+plugins receive no database handle or custom table space. Managed HTTP permits
+only declared public HTTPS destinations. Native tools are Private MCP only.
+
+Source changes stage a new draft Tool revision. Publication pins the plugin ID,
+plugin and SDK versions, manifest hash, and tool-contract hash. Runtime mismatch,
+missing identity, inactive plugin, failed state upgrade, or malformed output
+fails closed.
 
 Before execution DokoSoko checks publication state, schema, confirmation, grants, customer and installation state, destination policy, and upstream schema drift. Any ambiguity fails closed. Request-time destination overrides are forbidden.
 
@@ -183,3 +207,7 @@ The integration is acceptable only while all of these remain true:
 16. AI provider credentials exist once per provider connection and are never returned or copied into workload profiles.
 17. Model output cannot authorize, publish, add an arbitrary reference, or silently select another provider.
 18. Every published recipe has an explicitly approved immutable revision and is removed from discovery when its evidence drifts.
+19. Native tools come only from reviewed source compiled through the explicit registry; there is no runtime binary, source, Go-plugin, or WASM loader.
+20. Native configuration is manifest-registered and plugin-namespaced, identity references are opaque and plugin-specific, and configuration values and raw identity credentials never appear in control-plane responses.
+21. Native persistence uses one host-owned scoped state table and abstraction; plugins receive neither SQL connections nor custom schemas.
+22. Native source and contract pins must match exactly at execution, and native tools remain unavailable to Public MCP.

@@ -312,10 +312,15 @@ func authorizationActionRank(action string) int {
 	}
 }
 
-func minimumHTTPAuthorizationAction(tool model.Tool) (string, bool) {
+func minimumToolAuthorizationAction(tool model.Tool) (string, bool) {
+	if effect := strings.ToLower(strings.TrimSpace(tool.Effect)); authorizationActionRank(effect) > 0 {
+		return effect, true
+	}
 	backendKind := strings.ToLower(strings.TrimSpace(tool.BackendKind))
 	if backendKind != "" && backendKind != "http" {
-		return "", false
+		// A source-managed tool without a valid effect is malformed. Fail closed
+		// if legacy or corrupted data reaches the binding path.
+		return "destructive", true
 	}
 	switch strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)) {
 	case "GET":
@@ -380,8 +385,8 @@ func (s *Service) SetIntegrationToolBindings(ctx context.Context, integrationID 
 		if point.State != "active" {
 			return nil, fmt.Errorf("authorization point %s must be active before it can authorize a tool", point.Key)
 		}
-		if minimumAction, isHTTP := minimumHTTPAuthorizationAction(tool); isHTTP && authorizationActionRank(point.ActionType) < authorizationActionRank(minimumAction) {
-			return nil, fmt.Errorf("authorization point %s action %s is weaker than the minimum %s action required by %s tool %s", point.Key, point.ActionType, minimumAction, strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)), tool.Namespace+"."+tool.Name)
+		if minimumAction, classified := minimumToolAuthorizationAction(tool); classified && authorizationActionRank(point.ActionType) < authorizationActionRank(minimumAction) {
+			return nil, fmt.Errorf("authorization point %s action %s is weaker than the minimum %s action required by tool %s", point.Key, point.ActionType, minimumAction, tool.Namespace+"."+tool.Name)
 		}
 		bindings = append(bindings, model.IntegrationToolBinding{IntegrationID: integrationID, ToolID: tool.ID, ToolRevision: selection.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision, Tool: &tool, AuthorizationPoint: &point, CreatedBy: actor.ID})
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
+	"github.com/dokosoko/dokosoko-service/internal/nativeplugins"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/ratelimit"
@@ -41,6 +42,7 @@ type Server struct {
 	accessRuntime   *accessruntime.Runtime
 	providerRuntime *providerruntime.Runtime
 	mcpBridge       *mcpbridge.Manager
+	nativePlugins   *nativeplugins.Manager
 	reporting       *reporting.Service
 	baseURL         string
 	uploadDirectory string
@@ -61,6 +63,7 @@ type Options struct {
 	AccessRuntime   *accessruntime.Runtime
 	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
+	NativePlugins   *nativeplugins.Manager
 	Reporting       *reporting.Service
 	UploadDirectory string
 	UploadMaxBytes  int64
@@ -91,7 +94,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	if uploadMaxBytes <= 0 {
 		uploadMaxBytes = defaultSourceUploadMaxBytes
 	}
-	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, widgetsEnabled: options.WidgetsEnabled, secureCookies: strings.HasPrefix(baseURL, "https://"), rateLimiter: ratelimit.NewFixedWindow(time.Minute, maxHTTPRateWindows)}
+	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, nativePlugins: options.NativePlugins, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, widgetsEnabled: options.WidgetsEnabled, secureCookies: strings.HasPrefix(baseURL, "https://"), rateLimiter: ratelimit.NewFixedWindow(time.Minute, maxHTTPRateWindows)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)

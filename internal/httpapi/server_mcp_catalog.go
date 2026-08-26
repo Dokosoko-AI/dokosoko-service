@@ -26,6 +26,7 @@ var errToolVersionExcluded = errors.New("tool is excluded from the effective pro
 // second lookup when this read fails or finds no row: doing so would create a
 // publication race that bypasses the version check.
 func (s *Server) executableTool(ctx context.Context, productID, fullName string, selection model.ProductSelectionContext) (model.Tool, error) {
+	_ = s.syncNativePlugins(ctx, productID)
 	available, err := s.service.Store().Tools(ctx, productID, false)
 	if err != nil {
 		return model.Tool{}, err
@@ -214,14 +215,14 @@ func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool m
 	}
 	if policy.Risk == "" {
 		policy.Risk = "low"
-		if tool.HTTPMethod != http.MethodGet {
+		if toolEffect(tool) == "write" {
 			policy.Risk = "medium"
 		}
-		if tool.HTTPMethod == http.MethodDelete {
+		if toolEffect(tool) == "destructive" {
 			policy.Risk = "critical"
 		}
 	}
-	idempotencyKeyRequired := tool.HTTPMethod != http.MethodGet && policy.IdempotencyRequired
+	idempotencyKeyRequired := strings.EqualFold(strings.TrimSpace(tool.IdempotencyMode), "required") || policy.IdempotencyRequired
 	description := tool.Description
 	if policy.ConfirmationRequired {
 		if managed {
@@ -256,14 +257,14 @@ func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool m
 		pointRevision = binding.AuthorizationPointRevision
 		decisionTTL = binding.AuthorizationPoint.DecisionTTLSeconds
 	}
-	method := strings.ToUpper(strings.TrimSpace(tool.HTTPMethod))
+	effect := toolEffect(tool)
 	actionType = strings.ToLower(strings.TrimSpace(actionType))
 	// An authorization point may make an operation more restrictive, but it
-	// must never erase the safety signal inherent in the HTTP method or tool
+	// must never erase the safety signal inherent in the tool effect or tool
 	// policy. This also remains fail-safe if stale data contains an invalid
 	// read binding for a mutation.
-	readOnly := method == http.MethodGet && (actionType == "" || actionType == "read")
-	destructive := strings.EqualFold(strings.TrimSpace(policy.Risk), "critical") || method == http.MethodDelete || actionType == "destructive"
+	readOnly := effect == "read" && (actionType == "" || actionType == "read")
+	destructive := strings.EqualFold(strings.TrimSpace(policy.Risk), "critical") || effect == "destructive" || actionType == "destructive"
 	metadata := map[string]any{
 		"com.dokosoko/toolRevision":                    tool.Revision,
 		"com.dokosoko/integrationIds":                  integrationIDs,
@@ -287,9 +288,23 @@ func customToolDefinitionForAuthorization(manifest model.ProductManifest, tool m
 		"annotations": map[string]any{
 			"readOnlyHint":    readOnly,
 			"destructiveHint": destructive,
-			"idempotentHint":  method == http.MethodGet || policy.IdempotencyRequired,
+			"idempotentHint":  effect == "read" || tool.IdempotencyMode == "supported" || idempotencyKeyRequired,
 		},
 		"_meta": metadata,
+	}
+}
+
+func toolEffect(tool model.Tool) string {
+	if effect := strings.ToLower(strings.TrimSpace(tool.Effect)); effect == "read" || effect == "write" || effect == "destructive" {
+		return effect
+	}
+	switch strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)) {
+	case http.MethodGet:
+		return "read"
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		return "write"
+	default:
+		return "destructive"
 	}
 }
 

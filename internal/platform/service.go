@@ -2,12 +2,18 @@ package platform
 
 import (
 	"errors"
+
 	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
+	"github.com/dokosoko/dokosoko-service/internal/model"
 	secretvault "github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 	"regexp"
 	"time"
 )
+
+type NativeToolCatalog interface {
+	ValidateNativeTool(model.Tool) error
+}
 
 var (
 	ErrConfirmationRequired  = errors.New("public access confirmation required")
@@ -32,6 +38,7 @@ type Service struct {
 	vault                    *secretvault.Vault
 	aiRuntime                airuntime.Runtime
 	aiEnvironmentCredentials map[string]string
+	nativeTools              NativeToolCatalog
 	now                      func() time.Time
 }
 
@@ -53,3 +60,5 @@ func NewWithVaultAndProductBuilderDoer(storage store.Store, vault *secretvault.V
 }
 
 func (s *Service) Store() store.Store { return s.store }
+
+func (s *Service) SetNativeToolCatalog(catalog NativeToolCatalog) { s.nativeTools = catalog }

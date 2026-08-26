@@ -9,7 +9,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIBackendConnection, APICustomerAccount, APIDeployment, APIError, APIGrantDefinition, APIIdentity, APIIntegration, APIProduct, APIResourceSet, APISupportRoute, APITool, APIToolBuilderProposal, APIToolTestAnalysisProposal, APIUser, APIWidget, api } from "../lib/api";
+import { APIAccessConnection, APIAccessCredential, APIAccessDefinition, APIAccessInstance, APIBackendConnection, APICustomerAccount, APIDeployment, APIError, APIGrantDefinition, APIIdentity, APIIntegration, APINativePlugin, APIProduct, APIResourceSet, APISupportRoute, APITool, APIToolBuilderProposal, APIToolTestAnalysisProposal, APIUser, APIWidget, api } from "../lib/api";
 import { sectionPath, settingsPath, toolBuilderPath } from "../lib/console-routes";
 import type { ConsoleFixtures } from "../dev/console-fixtures";
 import { Button } from "./core/control";
@@ -110,6 +110,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const [supportRoutes, setSupportRoutes] = useState<APISupportRoute[]>([]);
   const [sources, setSources] = useState<Source[]>(fixtures?.sources ?? []);
   const [tools, setTools] = useState<APITool[]>(fixtures?.tools ?? []);
+  const [nativePlugins, setNativePlugins] = useState<APINativePlugin[]>([]);
   const [grantDefinitions, setGrantDefinitions] = useState<APIGrantDefinition[]>([]);
   const [toolBuilderSelection, setToolBuilderSelection] = useState<{ uid: string; tool: APITool | null; failed: boolean } | null>(null);
   const [toolBuilderLoadAttempt, setToolBuilderLoadAttempt] = useState(0);
@@ -286,7 +287,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
 	      const detail = error instanceof APIError ? error.message : error instanceof Error ? error.message : "Request failed";
 	      setWorkspaceLoadProblems((current) => current.includes(`${area}: ${detail}`) ? current : [...current, `${area}: ${detail}`]);
 	    };
-	    Promise.all([api.distribution(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id)]).then(async ([distributionValue, remoteSources, remoteTools, remoteMCPConnections]) => {
+	    Promise.all([api.distribution(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id), api.nativePlugins()]).then(async ([distributionValue, remoteSources, remoteTools, remoteMCPConnections, remoteNativePlugins]) => {
 	      const [crawlHistories, publicationHistories] = await Promise.all([
 	        Promise.all(remoteSources.map((source) => api.crawlJobs(product.id, source.id).catch(() => []))),
 	        Promise.all(remoteSources.map((source) => api.sourcePublications(product.id, source.id).catch(() => []))),
@@ -331,6 +332,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
       }));
       setTools(remoteTools);
       setMCPConnections(remoteMCPConnections);
+      setNativePlugins(remoteNativePlugins);
 	    }).catch((error) => recordLoadProblem("Catalog", error)).finally(() => { if (!cancelled) setWorkspaceLoading(false); });
 		    api.analytics(product.id).then((value) => { if (!cancelled) setAnalytics(value); }).catch((error) => recordLoadProblem("Analytics", error));
 		    api.identity().then((value) => {
@@ -423,6 +425,18 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     if (eventValues) setAuditEvents(eventValues);
   }
 
+  async function setNativePluginEnabled(pluginID: string, enabled: boolean) {
+    try {
+      const updated = await api.setNativePluginEnabled(pluginID, enabled);
+      setNativePlugins((items) => items.map((item) => item.id === updated.id ? updated : item));
+      await refreshTools();
+      showToast(`${updated.id} is ${updated.state}.`);
+    } catch (error) {
+      showToast(error instanceof APIError || error instanceof Error ? error.message : "Native plugin state could not be changed.");
+      throw error;
+    }
+  }
+
   async function refreshToolsAfterBuilderSave(savedTool: APITool) {
     setTools((items) => [...items.filter((item) => item.id !== savedTool.id), savedTool]);
     await refreshTools().catch(() => {});
@@ -460,7 +474,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   }
 
   function reviewToolTestProposal(target: APITool, proposal: APIToolTestAnalysisProposal) {
-    if (target.backend_kind === "mcp" || target.state !== "draft") {
+    if ((target.backend_kind ?? "http") !== "http" || target.state !== "draft") {
       showToast("Create an independent HTTP draft before reviewing this proposal in Builder.");
       return;
     }
@@ -509,7 +523,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const toolBuilderContent = consoleRoute.kind !== "tool-builder" ? null
     : consoleRoute.uid && !selectedToolBuilderTool && !toolBuilderLoadFailed ? <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon"><RefreshCw /></span><div><h1>Loading HTTP tool draft</h1><p>Loading the complete endpoint, authentication policy, mappings, and examples…</p></div></section>
     : consoleRoute.uid && toolBuilderLoadFailed ? <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>Complete HTTP tool draft unavailable</h1><p>The complete redacted contract could not be loaded. Catalog summary data is never used as an editable fallback.</p></div><span className="heading-actions"><Button outline onClick={() => { setToolBuilderSelection(null); setToolBuilderLoadAttempt((value) => value + 1); }}><RefreshCw data-slot="icon" />Retry</Button><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></span></section>
-    : consoleRoute.uid && (!selectedToolBuilderTool || selectedToolBuilderTool.backend_kind === "mcp") ? <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>HTTP tool draft unavailable</h1><p>This tool does not exist or is managed through an MCP connection.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>
+    : consoleRoute.uid && (!selectedToolBuilderTool || (selectedToolBuilderTool.backend_kind ?? "http") !== "http") ? <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>HTTP tool draft unavailable</h1><p>This tool does not exist or is source-managed outside the HTTP Tool Builder.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>
     : toolBuilderIntegrationID && !toolBuilderIntegration ? <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>Owning API unavailable</h1><p>This API-owned tool cannot be edited without its exact API context.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>
     : toolBuilderIntegration ? <IntegrationToolBuilderRoute key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}:${activeToolBuilderSeed?.proposal_id ?? "manual"}`} integration={toolBuilderIntegration} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={refreshToolsAfterBuilderSave} onDirtyChange={handleToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}:${activeToolBuilderSeed?.proposal_id ?? "manual"}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={refreshToolsAfterBuilderSave} onDirtyChange={handleToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
@@ -597,7 +611,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
           {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
           {section === "projects" && <AccessView definitions={accessDefinitions} connections={accessConnections} instances={accessInstances} credentials={accessCredentials} integrations={integrations} environments={environments} apiResourceSets={resourceSets.filter((set) => set.kind === "api")} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}
           {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
-          {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} onNavigate={navigateToPath} />}
+          {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
           {section === "releases" && <ConnectorReleasesView versions={productVersions} integrations={integrations} onConfigure={openProductCatalog} onNavigate={navigateToPath} />}
           {section === "runs" && <ActivityHubView runs={integrationRuns} environments={environments} submissions={reportSubmissions} events={auditEvents} analytics={analytics} supportRoutes={supportRoutes} onStart={() => setRunOpen(true)} onComplete={completeIntegrationRun} onView={openSupportSubmission} onRetry={createSupportDeliveryAttempt} onNavigate={navigateToPath} />}
           {section === "reporting" && <ReportingView routes={supportRoutes} integrations={integrations} backendConnections={backendConnections} onChanged={refreshCatalog} onMessage={showToast} onNavigate={navigateToPath} />}

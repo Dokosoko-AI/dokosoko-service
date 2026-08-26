@@ -437,6 +437,9 @@ func (s *Service) UpdateTool(ctx context.Context, productID, toolID string, inpu
 	if current.State != "draft" {
 		return model.Tool{}, errors.New("published tools are immutable; clone the tool to make a new draft")
 	}
+	if current.BackendKind == "native" {
+		return model.Tool{}, errors.New("native tools are source-managed; change the plugin source and restart DokoSoko")
+	}
 	input.OrganisationID, input.ProductID = current.OrganisationID, current.ProductID
 	input, err = normalizeToolEditorInput(ctx, s, current, input)
 	if err != nil {
@@ -505,8 +508,11 @@ func (s *Service) CloneTool(ctx context.Context, productID, toolID string, input
 	if current.State != "draft" && current.State != "published" {
 		return model.Tool{}, errors.New("only draft or published tools can be cloned")
 	}
-	if current.BackendKind != "http" {
+	if current.BackendKind == "mcp" {
 		return model.Tool{}, errors.New("imported MCP tools cannot be cloned; import a distinct upstream tool through its MCP connection")
+	}
+	if current.BackendKind == "native" {
+		return model.Tool{}, errors.New("native tools are source-managed and cannot be cloned")
 	}
 	input.Namespace, input.Name = strings.TrimSpace(input.Namespace), strings.TrimSpace(input.Name)
 	if !toolNamePattern.MatchString(input.Namespace) || !toolNamePattern.MatchString(input.Name) {

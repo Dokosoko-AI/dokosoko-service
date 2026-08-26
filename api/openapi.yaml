@@ -58,6 +58,34 @@ paths:
       responses:
         "200": { description: Deployment updated., content: { application/json: { schema: { $ref: "#/components/schemas/Deployment" } } } }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/native-plugins:
+    get:
+      operationId: listNativePlugins
+      description: Lists source-registered native plugin lifecycle, declared capabilities, tool contracts, and configuration key status. Configuration values are never returned.
+      responses:
+        "200": { description: Native plugin status., content: { application/json: { schema: { $ref: "#/components/schemas/NativePluginList" } } } }
+  /api/v1/native-plugins/{plugin_id}/state:
+    parameters:
+      - name: plugin_id
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$" }
+    patch:
+      operationId: updateNativePluginState
+      description: Enables or disables a source-registered plugin. Environment-disabled plugins cannot be enabled through the API. The change is audit logged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+              required: [enabled]
+      responses:
+        "200": { description: Updated native plugin status., content: { application/json: { schema: { $ref: "#/components/schemas/NativePlugin" } } } }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/environments:
     get:
       operationId: listDeploymentEnvironments
@@ -4005,7 +4033,7 @@ components:
         revision: { type: integer, format: int64, minimum: 1 }
         endpoint: { type: string, format: uri, maxLength: 8192, readOnly: true, description: "Included only on the administrative editor representation of HTTP tools. It is credential-free and any legacy user information, query, or fragment is redacted." }
         endpoint_requires_review: { type: boolean, readOnly: true, description: Present and true only when unsafe legacy endpoint components were redacted or the stored endpoint could not be parsed. }
-        http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE, MCP] }
+        http_method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE, MCP, NATIVE] }
         upstream_auth: { $ref: "#/components/schemas/ToolUpstreamAuth" }
         credential_present: { type: boolean, readOnly: true, description: True when a purpose-bound encrypted upstream credential exists. The credential itself is never returned. False may be omitted. }
         request_mapping: { $ref: "#/components/schemas/ToolRequestMapping" }
@@ -4014,15 +4042,84 @@ components:
         response_example: { $ref: "#/components/schemas/ToolExample" }
         authorization_policy: { $ref: "#/components/schemas/ToolAuthorizationPolicy" }
         timeout_ms: { type: integer, minimum: 100, maximum: 60000 }
-        backend_kind: { type: string, enum: [http, mcp] }
+        backend_kind: { type: string, enum: [http, mcp, native] }
+        effect: { type: string, enum: [read, write, destructive], description: First-class operation effect used by authorization and MCP annotations. }
+        idempotency_mode: { type: string, enum: [none, supported, required] }
+        identity_requirement: { type: string, enum: [none, optional, actor_required, customer_required, actor_and_customer_required, installation_required] }
+        state_scope: { type: string, enum: [none, plugin, actor, customer, installation] }
+        max_concurrency: { type: integer, minimum: 0, maximum: 64 }
+        max_result_bytes: { type: integer, format: int64, minimum: 1, maximum: 1048576 }
         mcp_connection_id: { type: string }
         upstream_tool_name: { type: string }
         upstream_schema_hash: { type: string, description: SHA-256 pin of the imported upstream name and schemas. }
         upstream_annotations: { type: object, additionalProperties: true, description: Stored as untrusted metadata and never treated as local policy. }
         upstream_drifted: { type: boolean, description: When true the tool is removed from discovery and execution fails closed. }
+        native_plugin_id: { type: string, description: Source-registered plugin identifier. }
+        native_tool_id: { type: string, description: Stable tool identifier inside the plugin manifest. }
+        native_plugin_version: { type: string, description: Exact source version pinned by this review revision. }
+        native_sdk_version: { type: integer, minimum: 1 }
+        native_manifest_hash: { type: string, description: SHA-256 pin of the complete plugin manifest. }
+        native_contract_hash: { type: string, description: SHA-256 pin of this native tool contract. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
       required: [id, organisation_id, product_id, namespace, name, description, input_schema, output_schema, state, revision, http_method, authorization_policy, timeout_ms, backend_kind, upstream_drifted, created_at, updated_at]
+    NativePluginConfigStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        key: { type: string }
+        environment: { type: string, description: Exact namespaced environment variable. }
+        type: { type: string, enum: [string, secret, boolean, integer, duration, url] }
+        required: { type: boolean }
+        secret: { type: boolean }
+        description: { type: string }
+        configured: { type: boolean }
+        source: { type: string, enum: [environment] }
+      required: [key, environment, type, required, secret, description, configured]
+    NativePluginToolStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        name: { type: string }
+        effect: { type: string, enum: [read, write, destructive] }
+        identity: { type: string, enum: [none, optional, actor_required, customer_required, actor_and_customer_required, installation_required] }
+        state_scope: { type: string, enum: [none, plugin, actor, customer, installation] }
+        confirmation_required: { type: boolean }
+        idempotency: { type: string, enum: [none, supported, required] }
+      required: [id, name, effect, identity, state_scope, confirmation_required, idempotency]
+    NativePluginNetworkClaim:
+      type: object
+      additionalProperties: false
+      properties:
+        host: { type: string }
+        config_key: { type: string }
+    NativePlugin:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        version: { type: string }
+        sdk_version: { type: integer }
+        description: { type: string }
+        state: { type: string, enum: [discovered, misconfigured, upgrading, active, failed, disabled, incompatible, missing] }
+        state_version: { type: integer, minimum: 0 }
+        manifest_hash: { type: string }
+        required: { type: boolean }
+        managed_by_environment: { type: boolean }
+        configuration: { type: array, items: { $ref: "#/components/schemas/NativePluginConfigStatus" } }
+        tools: { type: array, items: { $ref: "#/components/schemas/NativePluginToolStatus" } }
+        network: { type: array, items: { $ref: "#/components/schemas/NativePluginNetworkClaim" } }
+        capabilities: { type: array, items: { type: string } }
+        last_error_code: { type: string }
+        last_error: { type: string, description: Bounded safe diagnostic category; secret values and internal causes are never returned. }
+      required: [id, version, sdk_version, description, state, state_version, manifest_hash, required, managed_by_environment, configuration, tools, network, capabilities]
+    NativePluginList:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/NativePlugin" } }
+      required: [items]
     ToolList:
       type: object
       additionalProperties: false

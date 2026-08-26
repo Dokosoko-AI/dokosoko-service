@@ -14,7 +14,7 @@ Each integration contract is independently deployable and independently code-gen
 
 The widget is an in-product assistant, not an MCP onboarding screen. A trusted customer backend may attach a small current-view snapshot when it creates the authenticated session—for example, `profile` plus display-ready Plan and Account status facts. The assistant answers from that context and reviewed product knowledge immediately. Opaque customer identifiers never enter model context, and MCP is suggested only when the question indicates a useful automation path.
 
-Runnable reference implementations live under `examples/`. Start with the complete [Go backend integration](examples/go-backend-integration/README.md), which demonstrates authenticated, retry-safe support delivery without requiring an SDK.
+Runnable reference implementations live under `examples/`. Start with the complete [Go backend integration](examples/go-backend-integration/README.md), which demonstrates authenticated, retry-safe support delivery without requiring an SDK. Operators extending a trusted fork can also use the [native tool plugin example](examples/native-tool-plugin/README.md).
 
 ## Customer identity integration (optional)
 
@@ -51,6 +51,27 @@ DokoSoko appends exact, versioned paths to the relevant configured origin:
 Support reporting is private and consent-gated. A user must preview and explicitly approve a bounded report. DokoSoko encrypts it in a durable outbox and sends bug reports and feedback through the same endpoint and credential. Vendors must retain idempotency results and return `409` when a key is reused with a different payload.
 
 Usage, if a vendor chooses to expose it, is an ordinary API operation or tool. It has no privileged hook type.
+
+## Native tool plugins
+
+Native tool plugins are reviewed Go source packages compiled into a DokoSoko
+build. They are intended for trusted self-hosted extensions that benefit from
+in-process Go implementation while retaining ordinary Tool review, grants,
+identity checks, confirmation, idempotency, publication, and audit. Native tools
+are Private MCP capabilities only.
+
+Plugins register deterministic manifests at one explicit composition point.
+The host gives them namespaced configuration, opaque invocation identity, one
+scoped JSON state abstraction, managed HTTPS, structured logging, deadlines,
+and concurrency limits. It does not give them raw tokens, SQL connections, or
+internal DokoSoko objects.
+
+This is not a sandbox: compiled-in Go code has the process's authority if it
+deliberately bypasses the host API. DokoSoko therefore accepts source only,
+forbids dynamic loading and precompiled plugin artifacts, supplies a strict
+source checker as a review aid, and requires the operator to review all source
+and dependencies before rebuilding. See [Native tool plugins](docs/NATIVE_TOOL_PLUGINS.md)
+for the authoring, security, identity, state, and deployment contract.
 
 ## Package metadata and external delivery
 
@@ -201,6 +222,14 @@ Required configuration:
 | `DOKOSOKO_SETUP_TOKEN` | Strong one-time first-run secret. Remove or rotate it after setup. |
 | `DOKOSOKO_PUBLIC_URL` | Exact external origin used for OAuth metadata, MCP endpoints, setup prompts, and copied embed HTML. HTTPS is required outside localhost. |
 
+Native plugin deployment controls are optional:
+
+| Variable | Purpose |
+| --- | --- |
+| `DOKOSOKO_PLUGIN_<PLUGIN_ID>_<KEY>` | One manifest-registered plugin value. The console exposes only the key name and configured/missing state. |
+| `DOKOSOKO_NATIVE_PLUGINS_REQUIRED` | Comma-separated plugin IDs that must be registered and active for startup to succeed. |
+| `DOKOSOKO_NATIVE_PLUGINS_DISABLED` | Comma-separated deployment-owned plugin kill switches. |
+
 Back up PostgreSQL, `dokosoko-data`, `dokosoko-uploads`, and the encryption key as one recovery unit. Production should terminate TLS at a trusted reverse proxy and preserve the configured public origin exactly. Configure the browser-reachable origin here—not an internal container hostname—because copied setup buttons deliberately ignore request `Host` and forwarding headers.
 
 The supplied service and crawler containers run as UID/GID `65532`, drop Linux capabilities, use a read-only root filesystem, and write only to their declared data, upload, and temporary mounts. Compose gives the service 30 seconds to complete its graceful shutdown before termination; keep at least that allowance in other orchestrators.
@@ -231,6 +260,14 @@ export DOKOSOKO_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/d
 go test ./...
 ```
 
+For a native plugin source package, also run its conformance tests and source
+admission check before adding it to the explicit registry:
+
+```bash
+go test ./path/to/plugin
+go run ./cmd/dokosoko-native-plugin-check ./path/to/plugin
+```
+
 The suites cover OAuth resource and PKCE binding, durable customer-account resolution and suspension, fail-closed grants, fixed tool destinations, managed MCP delegation and drift, support consent and idempotent outbox delivery, atomic catalog mutations, cancellation-safe idempotent audits, publication boundaries, access-provider operations, authentication, analytics, crawler isolation, and static console output. GitHub Actions repeats the frontend, PostgreSQL-backed Go, Compose, and container-build checks for every pull request and `main` update.
 
 ## Repository map
@@ -244,6 +281,9 @@ internal/identity/    downstream OAuth, upstream OIDC, customer accounts, grants
 internal/reporting/   encrypted support outbox and delivery
 internal/tools/       policy-bound HTTP tool execution
 internal/mcpbridge/   managed MCP import, delegated OAuth, drift, execution
+internal/nativeplugins/ native plugin registry, lifecycle, catalog, and managed host capabilities
+internal/nativepluginstate/ scoped state binding and upgrade coordination
+nativeplugin/         public native plugin SDK, conformance helpers, and source checker
 internal/access/      provider-owned instance and credential lifecycle
 internal/lifecycle/   process supervision and graceful shutdown coordination
 internal/netpolicy/   shared outbound network and DNS-rebinding policy

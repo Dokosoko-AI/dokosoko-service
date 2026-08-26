@@ -52,7 +52,8 @@ func (r *Runtime) Available(ctx context.Context, productID string, grants map[st
 	}
 	result := make([]model.Tool, 0, len(values))
 	for _, value := range values {
-		if !value.UpstreamDrifted && grantsAllow(value, grants) {
+		_, executable := r.executor(value)
+		if !value.UpstreamDrifted && executable && grantsAllow(value, grants) {
 			result = append(result, value)
 		}
 	}
@@ -116,7 +117,8 @@ func (r *Runtime) AvailableBound(ctx context.Context, productID string, bindings
 	result := make([]model.Tool, 0, len(values))
 	for _, value := range values {
 		candidates := byTool[value.ID]
-		if value.UpstreamDrifted || len(candidates) != 1 || !grantsAllow(value, principal.Grants) || r.authorizeBound(ctx, value, candidates[0], principal, false) != nil {
+		_, executable := r.executor(value)
+		if value.UpstreamDrifted || !executable || len(candidates) != 1 || !grantsAllow(value, principal.Grants) || r.authorizeBound(ctx, value, candidates[0], principal, false) != nil {
 			continue
 		}
 		result = append(result, value)
@@ -130,7 +132,8 @@ func (r *Runtime) find(ctx context.Context, productID, fullName string) (model.T
 		return model.Tool{}, err
 	}
 	for _, value := range values {
-		if value.Namespace+"."+value.Name == fullName {
+		_, executable := r.executor(value)
+		if executable && value.Namespace+"."+value.Name == fullName {
 			return value, nil
 		}
 	}

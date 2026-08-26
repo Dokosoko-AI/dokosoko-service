@@ -390,10 +390,17 @@ func (s *Service) PublishTool(ctx context.Context, productID, toolID string, rev
 	if err != nil {
 		return model.Tool{}, err
 	}
-	if current.BackendKind == "mcp" && current.UpstreamDrifted {
+	if (current.BackendKind == "mcp" || current.BackendKind == "native") && current.UpstreamDrifted {
 		return model.Tool{}, ErrToolDrifted
 	}
-	if err := s.validateStoredHTTPTool(ctx, current); err != nil {
+	if current.BackendKind == "native" {
+		if s.nativeTools == nil {
+			return model.Tool{}, errors.New("native plugin manager is unavailable")
+		}
+		if err := s.nativeTools.ValidateNativeTool(current); err != nil {
+			return model.Tool{}, fmt.Errorf("native tool requires source review before publication: %w", err)
+		}
+	} else if err := s.validateStoredHTTPTool(ctx, current); err != nil {
 		return model.Tool{}, fmt.Errorf("tool requires review before publication: %w", err)
 	}
 	if err := s.validateToolGrantRegistry(ctx, productID, current); err != nil {

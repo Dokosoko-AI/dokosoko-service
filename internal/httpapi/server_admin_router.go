@@ -267,6 +267,10 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.organisations(w, r)
 	case len(parts) == 3 && parts[2] == "deployment":
 		s.deployment(w, r)
+	case len(parts) == 3 && parts[2] == "native-plugins":
+		s.nativePluginStatuses(w, r)
+	case len(parts) == 5 && parts[2] == "native-plugins" && parts[4] == "state" && r.Method == http.MethodPatch:
+		s.nativePluginState(w, r, parts[3])
 	case len(parts) == 3 && parts[2] == "environments":
 		s.deploymentEnvironments(w, r)
 	case len(parts) == 3 && parts[2] == "integrations":

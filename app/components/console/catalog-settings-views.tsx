@@ -11,7 +11,7 @@ import {
   APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAnalytics,
   APIAuditEvent, APIBackendConnection, APIEnvironment, APIError, APIIntegration,
   APIIntegrationAnalysis, APIIntegrationRun, APIIntegrationToolBinding, APIMCPConnection,
-  APIProduct, APIProductVersion, APIProductVersionPin, APIRecipe, APIRecipeReference,
+  APINativePlugin, APIProduct, APIProductVersion, APIProductVersionPin, APIRecipe, APIRecipeReference,
   APIResourceSet, APISupportRoute, APISupportSubmission, APITool, APIUser, api,
 } from "../../lib/api";
 import { SETTINGS_TABS, SettingsTab, entityPath, sectionPath, settingsPath, toolBuilderPath } from "../../lib/console-routes";
@@ -189,11 +189,12 @@ export function MCPConnectionsView({ connections, tools, busy, onAdd, onInspect,
 
 type ToolCatalogFilter = "all" | "published" | "draft" | "drifted" | "retired";
 
-export function ToolsView({ tools, integrations, connections, onNavigate }: { tools: APITool[]; integrations: APIIntegration[]; connections: APIMCPConnection[]; onNavigate: (path: string) => void }) {
+export function ToolsView({ tools, integrations, connections, nativePlugins, onSetNativePluginEnabled, onNavigate }: { tools: APITool[]; integrations: APIIntegration[]; connections: APIMCPConnection[]; nativePlugins: APINativePlugin[]; onSetNativePluginEnabled: (pluginID: string, enabled: boolean) => Promise<void>; onNavigate: (path: string) => void }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ToolCatalogFilter>("all");
   const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
   const [usageStatus, setUsageStatus] = useState<"loading" | "ready" | "partial">("loading");
+  const [pluginBusy, setPluginBusy] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -218,10 +219,30 @@ export function ToolsView({ tools, integrations, connections, onNavigate }: { to
     return matchesQuery && matchesFilter;
   });
   const connectionName = (tool: APITool) => connections.find((connection) => connection.id === tool.mcp_connection_id)?.name ?? "MCP upstream";
+  const backendLabel = (tool: APITool) => tool.backend_kind === "native" ? "Native plugin" : tool.backend_kind === "mcp" ? connectionName(tool) : "HTTP";
+  const backendDetail = (tool: APITool) => tool.backend_kind === "native" ? `${tool.native_plugin_id ?? "source"}@${tool.native_plugin_version ?? "unknown"}` : tool.backend_kind === "mcp" ? tool.upstream_tool_name : `${tool.http_method} · fixed endpoint`;
+
+  async function togglePlugin(plugin: APINativePlugin) {
+    setPluginBusy(plugin.id);
+    try { await onSetNativePluginEnabled(plugin.id, plugin.state !== "active"); }
+    catch { /* ConsoleApp owns the user-visible API error. */ }
+    finally { setPluginBusy(null); }
+  }
 
   return <>
     <PageHeading eyebrow="Capabilities" title="Common tools" description="Create reusable deployment capabilities once, then attach exact published revisions to the APIs that expose them. API-owned tools live only inside their API workspace." action={<span className="heading-actions"><Button outline onClick={() => onNavigate(sectionPath("connections"))}><Share2 data-slot="icon" />Import from MCP</Button><Button color="indigo" onClick={() => onNavigate(toolBuilderPath())}><Plus data-slot="icon" />Create common tool</Button></span>} />
     <ToolsWorkspaceTabs active="catalog" onNavigate={onNavigate} />
+    <section className="panel"><PanelHeader title="Native tool plugins" description="Trusted Go source compiled into this DokoSoko build. Configuration is read from registered namespaced environment keys; values are never shown here." />
+      {nativePlugins.map((plugin) => <div className="provider-row" key={plugin.id}>
+        <span className="settings-icon"><Wrench /></span>
+        <span><strong>{plugin.id} <small>v{plugin.version}</small></strong><small>{plugin.description}</small><small>{plugin.tools.length} tool{plugin.tools.length === 1 ? "" : "s"} · state schema v{plugin.state_version} · SDK {plugin.sdk_version}</small></span>
+        <span><Badge color={plugin.state === "active" ? "green" : plugin.state === "disabled" ? "zinc" : "red"}>{plugin.state}</Badge>{plugin.required && <Badge color="violet">required</Badge>}<small>{plugin.last_error || "Source contract loaded"}</small></span>
+        <span><strong>{plugin.configuration.length ? "Registered config" : "No config"}</strong><small>{plugin.configuration.map((item) => `${item.environment}: ${item.configured ? "configured" : item.required ? "missing" : "optional"}${item.secret ? " (secret)" : ""}`).join(" · ") || "No environment access requested"}</small></span>
+        <Button outline disabled={pluginBusy === plugin.id || plugin.managed_by_environment || plugin.required} onClick={() => togglePlugin(plugin)}>{pluginBusy === plugin.id ? "Updating…" : plugin.state === "active" ? "Disable" : "Enable"}</Button>
+      </div>)}
+      {nativePlugins.length === 0 && <div className="empty-row">No native plugin source packages are registered in this build.</div>}
+      <div className="private-default-note"><ShieldCheck />Native plugins are trusted same-process code, not sandboxed extensions. Tool contracts still require draft review, publication, authorization binding, and exact source-hash matching.</div>
+    </section>
     <dl className="compact-metrics tool-catalog-metrics"><div className="compact-metric"><dt>Total</dt><dd><strong>{commonTools.length}</strong><small>common tools</small></dd></div><div className="compact-metric"><dt>Published</dt><dd><strong>{commonTools.filter((tool) => tool.state === "published").length}</strong><small>eligible to bind</small></dd></div><div className="compact-metric"><dt>Drafts</dt><dd><strong>{commonTools.filter((tool) => tool.state === "draft").length}</strong><small>editable contracts</small></dd></div><div className="compact-metric"><dt>Drifted</dt><dd><strong>{commonTools.filter((tool) => tool.upstream_drifted).length}</strong><small>blocked upstreams</small></dd></div></dl>
     <div className="table-toolbar tool-catalog-toolbar"><label className="table-search"><Search /><span className="sr-only">Search common tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search common tools" /></label><SegmentedControl label="Filter common tools" items={[{ id: "all", label: "All", count: commonTools.length }, { id: "published", label: "Published", count: commonTools.filter((tool) => tool.state === "published").length }, { id: "draft", label: "Drafts", count: commonTools.filter((tool) => tool.state === "draft").length }, { id: "drifted", label: "Drifted", count: commonTools.filter((tool) => tool.upstream_drifted).length }, { id: "retired", label: "Retired", count: commonTools.filter((tool) => tool.state === "retired").length }]} value={filter} onChange={setFilter} /></div>
     <span className="sr-only" role="status" aria-live="polite">{visibleTools.length} tool{visibleTools.length === 1 ? "" : "s"} shown.</span>
@@ -232,15 +253,15 @@ export function ToolsView({ tools, integrations, connections, onNavigate }: { to
         const risk = policy.risk === "critical" || policy.risk === "high" || policy.risk === "medium" ? policy.risk : "low";
         const riskColor = risk === "critical" ? "red" : risk === "high" ? "amber" : risk === "medium" ? "violet" : "zinc";
         return <DataTableRow className={`tool-catalog-columns ${tool.upstream_drifted ? "drifted" : ""}`} key={tool.id}>
-          <span className="resource-name tool-catalog-name"><span className="resource-icon">{tool.backend_kind === "mcp" ? <Share2 /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.description || "No purpose documented"}</small></span></span>
-          <span><strong className="cell-value">{tool.backend_kind === "mcp" ? connectionName(tool) : "HTTP"}</strong><small className="cell-note">{tool.backend_kind === "mcp" ? tool.upstream_tool_name : `${tool.http_method} · fixed endpoint`}</small></span>
+          <span className="resource-name tool-catalog-name"><span className="resource-icon">{tool.backend_kind === "mcp" ? <Share2 /> : tool.backend_kind === "native" ? <Wrench /> : <TerminalSquare />}</span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.description || "No purpose documented"}</small></span></span>
+          <span><strong className="cell-value">{backendLabel(tool)}</strong><small className="cell-note">{backendDetail(tool)}</small></span>
           <span className="tool-policy-cell"><span className="tool-badges"><Badge color={riskColor}>{risk} risk</Badge>{policy.confirmationRequired && <Badge color="amber">confirmation</Badge>}</span><small className="cell-note">{policy.requiredGrants.join(", ") || "No baseline grants"}</small></span>
           <span className="tool-state-cell"><Badge color={tool.state === "published" ? "green" : tool.state === "retired" ? "zinc" : "amber"}>{toolStateLabel(tool)}</Badge>{tool.upstream_drifted && <Badge color="red">schema drift</Badge>}</span>
           <span><strong className="cell-value">{usageStatus === "loading" ? "…" : usageStatus === "partial" ? `≥${usageCounts[tool.id] ?? 0}` : usageCounts[tool.id] ?? 0}</strong><small className="cell-note">current API draft{(usageCounts[tool.id] ?? 0) === 1 ? "" : "s"}{usageStatus === "partial" ? " · partial" : ""}</small></span>
           <span className="table-open-cell"><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow" ariaLabel={`Open ${tool.namespace}.${tool.name}`}><ChevronRight /></ConsoleLink></span>
         </DataTableRow>;
       })}
-      {visibleTools.length === 0 && <DataTableEmpty columns={6}><div className="tool-catalog-empty"><span className="entity-missing-icon"><Wrench /></span><div><h2>{commonTools.length === 0 ? "No common tools yet" : "No matching common tools"}</h2><p>{commonTools.length === 0 ? "Create a fixed HTTP tool or import a reviewed MCP definition for reuse across APIs." : "Change the search or lifecycle filter."}</p></div>{commonTools.length === 0 && <Button color="indigo" onClick={() => onNavigate(toolBuilderPath())}><Plus data-slot="icon" />Create common tool</Button>}</div></DataTableEmpty>}
+      {visibleTools.length === 0 && <DataTableEmpty columns={6}><div className="tool-catalog-empty"><span className="entity-missing-icon"><Wrench /></span><div><h2>{commonTools.length === 0 ? "No common tools yet" : "No matching common tools"}</h2><p>{commonTools.length === 0 ? "Create a fixed HTTP tool, import a reviewed MCP definition, or register trusted native plugin source." : "Change the search or lifecycle filter."}</p></div>{commonTools.length === 0 && <Button color="indigo" onClick={() => onNavigate(toolBuilderPath())}><Plus data-slot="icon" />Create common tool</Button>}</div></DataTableEmpty>}
     </DataTable>
   </>;
 }

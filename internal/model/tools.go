@@ -43,11 +43,23 @@ type Tool struct {
 	AuthorizationPolicy         json.RawMessage     `json:"authorization_policy"`
 	TimeoutMS                   int                 `json:"timeout_ms"`
 	BackendKind                 string              `json:"backend_kind"`
+	Effect                      string              `json:"effect"`
+	IdempotencyMode             string              `json:"idempotency_mode"`
+	IdentityRequirement         string              `json:"identity_requirement"`
+	StateScope                  string              `json:"state_scope"`
+	MaxConcurrency              int                 `json:"max_concurrency"`
+	MaxResultBytes              int64               `json:"max_result_bytes"`
 	MCPConnectionID             string              `json:"mcp_connection_id,omitempty"`
 	UpstreamToolName            string              `json:"upstream_tool_name,omitempty"`
 	UpstreamSchemaHash          string              `json:"upstream_schema_hash,omitempty"`
 	UpstreamAnnotations         json.RawMessage     `json:"upstream_annotations,omitempty"`
 	UpstreamDrifted             bool                `json:"upstream_drifted"`
+	NativePluginID              string              `json:"native_plugin_id,omitempty"`
+	NativeToolID                string              `json:"native_tool_id,omitempty"`
+	NativePluginVersion         string              `json:"native_plugin_version,omitempty"`
+	NativeSDKVersion            int                 `json:"native_sdk_version,omitempty"`
+	NativeManifestHash          string              `json:"native_manifest_hash,omitempty"`
+	NativeContractHash          string              `json:"native_contract_hash,omitempty"`
 	CreatedAt                   time.Time           `json:"created_at"`
 	UpdatedAt                   time.Time           `json:"updated_at"`
 }

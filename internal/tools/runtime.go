@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,7 +130,8 @@ type Runtime struct {
 	store                        Store
 	resolver                     Resolver
 	doer                         Doer
-	mcpExecutor                  MCPExecutor
+	executorMu                   sync.RWMutex
+	executors                    map[string]BackendExecutor
 	credentials                  CredentialResolver
 	privateLocalhostDestinations map[string]struct{}
 	tokenMu                      sync.Mutex
@@ -157,6 +159,19 @@ type MCPExecutor interface {
 	ExecuteMCP(context.Context, model.Tool, map[string]any, Principal) (MCPCallResult, error)
 }
 
+// BackendExecutor is the common runtime dispatch contract. Authorization,
+// schema validation, confirmation and publication checks happen before it is
+// called. Executors may apply additional backend-specific restrictions.
+type BackendExecutor interface {
+	Execute(context.Context, model.Tool, map[string]any, Principal) (any, error)
+	Available(model.Tool) bool
+}
+
+type NativeExecutor interface {
+	ExecuteNative(context.Context, model.Tool, map[string]any, Principal) (any, error)
+	AvailableNative(model.Tool) bool
+}
+
 type MCPCallResult struct {
 	Result map[string]any
 }
@@ -165,10 +180,55 @@ func NewRuntime(store Store, resolver Resolver, doer Doer) *Runtime {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
-	return &Runtime{store: store, resolver: resolver, doer: doer, tokens: make(map[string]cachedOAuthToken), tokenFlights: make(map[string]*oauthTokenFlight), rateLimiter: ratelimit.NewFixedWindow(upstreamConnectionWindow, maxUpstreamRateWindows), connectionInFlight: make(map[string]int), now: func() time.Time { return time.Now().UTC() }}
+	runtime := &Runtime{store: store, resolver: resolver, doer: doer, executors: make(map[string]BackendExecutor), tokens: make(map[string]cachedOAuthToken), tokenFlights: make(map[string]*oauthTokenFlight), rateLimiter: ratelimit.NewFixedWindow(upstreamConnectionWindow, maxUpstreamRateWindows), connectionInFlight: make(map[string]int), now: func() time.Time { return time.Now().UTC() }}
+	runtime.executors["http"] = backendExecutor{execute: runtime.executeHTTPAuthorized, available: func(model.Tool) bool { return true }}
+	return runtime
 }
 
-func (r *Runtime) SetMCPExecutor(executor MCPExecutor)               { r.mcpExecutor = executor }
+func (r *Runtime) RegisterExecutor(kind string, executor BackendExecutor) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" || executor == nil {
+		return
+	}
+	r.executorMu.Lock()
+	defer r.executorMu.Unlock()
+	r.executors[kind] = executor
+}
+
+func (r *Runtime) SetMCPExecutor(executor MCPExecutor) {
+	if executor == nil {
+		return
+	}
+	r.RegisterExecutor("mcp", backendExecutor{execute: func(ctx context.Context, tool model.Tool, arguments map[string]any, principal Principal) (any, error) {
+		return executor.ExecuteMCP(ctx, tool, arguments, principal)
+	}, available: func(model.Tool) bool { return true }})
+}
+
+func (r *Runtime) SetNativeExecutor(executor NativeExecutor) {
+	if executor == nil {
+		return
+	}
+	r.RegisterExecutor("native", backendExecutor{execute: executor.ExecuteNative, available: executor.AvailableNative})
+}
+
+type backendExecutor struct {
+	execute   func(context.Context, model.Tool, map[string]any, Principal) (any, error)
+	available func(model.Tool) bool
+}
+
+func (e backendExecutor) Execute(ctx context.Context, tool model.Tool, arguments map[string]any, principal Principal) (any, error) {
+	return e.execute(ctx, tool, arguments, principal)
+}
+func (e backendExecutor) Available(tool model.Tool) bool {
+	return e.available == nil || e.available(tool)
+}
+
+func (r *Runtime) executor(tool model.Tool) (BackendExecutor, bool) {
+	r.executorMu.RLock()
+	defer r.executorMu.RUnlock()
+	executor, ok := r.executors[strings.ToLower(strings.TrimSpace(tool.BackendKind))]
+	return executor, ok && executor.Available(tool)
+}
 func (r *Runtime) SetCredentialResolver(resolver CredentialResolver) { r.credentials = resolver }
 
 // SetPrivateLocalhostHosts configures the exact development destinations that

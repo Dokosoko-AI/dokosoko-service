@@ -73,9 +73,10 @@ func (m *Memory) CreateTool(_ context.Context, value model.Tool) (model.Tool, er
 		}
 	}
 	value.State = "draft"
-	if value.BackendKind == "mcp" && len(value.UpstreamAuth) == 0 {
+	if (value.BackendKind == "mcp" || value.BackendKind == "native") && len(value.UpstreamAuth) == 0 {
 		value.UpstreamAuth = json.RawMessage(`{"type":"none"}`)
 	}
+	applyToolExecutionDefaults(&value)
 	value.Revision = 1
 	value.CreatedAt = time.Now().UTC()
 	value.UpdatedAt = value.CreatedAt
@@ -90,7 +91,7 @@ func (m *Memory) UpdateImportedTool(_ context.Context, value model.Tool, expecte
 	if !ok {
 		return model.Tool{}, ErrNotFound
 	}
-	if current.Revision != expected || current.BackendKind != "mcp" || current.State == "published" {
+	if current.Revision != expected || (current.BackendKind != "mcp" && current.BackendKind != "native") || current.State == "published" {
 		return model.Tool{}, ErrConflict
 	}
 	value.Scope, value.OwnerIntegrationID = current.Scope, current.OwnerIntegrationID
@@ -106,13 +107,64 @@ func (m *Memory) MarkImportedToolDrift(_ context.Context, productID, id string, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	value, ok := m.tools[productID][id]
-	if !ok || value.BackendKind != "mcp" {
+	if !ok || (value.BackendKind != "mcp" && value.BackendKind != "native") {
 		return model.Tool{}, ErrNotFound
 	}
 	value.UpstreamDrifted = drifted
 	value.UpdatedAt = time.Now().UTC()
 	m.tools[productID][id] = cloneTool(value)
 	return cloneTool(value), nil
+}
+
+func (m *Memory) StageNativeTool(_ context.Context, value model.Tool, expected int64) (model.Tool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.tools[value.ProductID][value.ID]
+	if !ok {
+		return model.Tool{}, ErrNotFound
+	}
+	if current.Revision != expected || current.BackendKind != "native" || current.State == "retired" {
+		return model.Tool{}, ErrConflict
+	}
+	value.Scope, value.OwnerIntegrationID = current.Scope, current.OwnerIntegrationID
+	value.State = "draft"
+	value.Revision = current.Revision + 1
+	value.CreatedAt = current.CreatedAt
+	value.UpdatedAt = time.Now().UTC()
+	value.UpstreamDrifted = false
+	m.tools[value.ProductID][value.ID] = cloneTool(value)
+	return cloneTool(value), nil
+}
+
+func applyToolExecutionDefaults(value *model.Tool) {
+	if value.Effect == "" {
+		switch {
+		case value.BackendKind == "http" && value.HTTPMethod == "GET":
+			value.Effect = "read"
+		case value.BackendKind == "http" && value.HTTPMethod == "DELETE":
+			value.Effect = "destructive"
+		default:
+			value.Effect = "write"
+		}
+	}
+	if value.IdempotencyMode == "" {
+		if value.BackendKind == "http" && value.HTTPMethod == "GET" {
+			value.IdempotencyMode = "supported"
+		} else if value.BackendKind == "http" {
+			value.IdempotencyMode = "required"
+		} else {
+			value.IdempotencyMode = "none"
+		}
+	}
+	if value.IdentityRequirement == "" {
+		value.IdentityRequirement = "none"
+	}
+	if value.StateScope == "" {
+		value.StateScope = "none"
+	}
+	if value.MaxResultBytes == 0 {
+		value.MaxResultBytes = 1 << 20
+	}
 }
 
 func (m *Memory) PublishTool(_ context.Context, productID, id string, expected int64, _ string) (model.Tool, error) {

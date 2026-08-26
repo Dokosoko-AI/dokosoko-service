@@ -18,6 +18,10 @@ func (r *Runtime) executeAuthorized(ctx context.Context, productID, fullName str
 	return r.executeAuthorizedTraced(ctx, productID, fullName, tool, arguments, principal, nil, true)
 }
 
+func (r *Runtime) executeHTTPAuthorized(ctx context.Context, tool model.Tool, arguments map[string]any, principal Principal) (any, error) {
+	return r.executeHTTPAuthorizedTraced(ctx, tool.ProductID, tool.Namespace+"."+tool.Name, tool, arguments, principal, nil, true)
+}
+
 func tracePhase(category, existing string) string {
 	if category == "upstream_authentication_failed" && existing == "token_exchange" {
 		return existing
@@ -43,12 +47,17 @@ func tracePhase(category, existing string) string {
 }
 
 func (r *Runtime) executeAuthorizedTraced(ctx context.Context, productID, fullName string, tool model.Tool, arguments map[string]any, principal Principal, trace *executionTrace, recordAudit bool) (returnValue any, returnErr error) {
-	if tool.BackendKind == "mcp" {
-		if r.mcpExecutor == nil {
-			return nil, errors.New("Stateless MCPv2 bridge is unavailable")
-		}
-		return r.mcpExecutor.ExecuteMCP(ctx, tool, arguments, principal)
+	if tool.BackendKind == "http" {
+		return r.executeHTTPAuthorizedTraced(ctx, productID, fullName, tool, arguments, principal, trace, recordAudit)
 	}
+	executor, ok := r.executor(tool)
+	if !ok {
+		return nil, ErrDenied
+	}
+	return r.executeRegisteredBackend(ctx, productID, fullName, tool, arguments, principal, executor, trace, recordAudit)
+}
+
+func (r *Runtime) executeHTTPAuthorizedTraced(ctx context.Context, productID, fullName string, tool model.Tool, arguments map[string]any, principal Principal, trace *executionTrace, recordAudit bool) (returnValue any, returnErr error) {
 	var err error
 	tool, err = prepareRuntimeTool(tool, principal.EnvironmentID)
 	if err != nil {

@@ -621,13 +621,64 @@ export type APITool = {
   request_example?: Record<string, unknown>;
   response_example?: unknown;
   credential_present?: boolean;
-  backend_kind?: "http" | "mcp";
+  backend_kind?: "http" | "mcp" | "native";
+  effect?: "read" | "write" | "destructive";
+  idempotency_mode?: "none" | "supported" | "required";
+  identity_requirement?: "none" | "optional" | "actor_required" | "customer_required" | "actor_and_customer_required" | "installation_required";
+  state_scope?: "none" | "plugin" | "actor" | "customer" | "installation";
+  max_concurrency?: number;
+  max_result_bytes?: number;
   mcp_connection_id?: string;
   upstream_tool_name?: string;
   upstream_schema_hash?: string;
   upstream_drifted?: boolean;
+  native_plugin_id?: string;
+  native_tool_id?: string;
+  native_plugin_version?: string;
+  native_sdk_version?: number;
+  native_manifest_hash?: string;
+  native_contract_hash?: string;
   created_at?: string;
   updated_at?: string;
+};
+
+export type APINativePluginConfigStatus = {
+  key: string;
+  environment: string;
+  type: "string" | "secret" | "boolean" | "integer" | "duration" | "url";
+  required: boolean;
+  secret: boolean;
+  description: string;
+  configured: boolean;
+  source?: "environment";
+};
+
+export type APINativePluginToolStatus = {
+  id: string;
+  name: string;
+  effect: "read" | "write" | "destructive";
+  identity: "none" | "optional" | "actor_required" | "customer_required" | "actor_and_customer_required" | "installation_required";
+  state_scope: "none" | "plugin" | "actor" | "customer" | "installation";
+  confirmation_required: boolean;
+  idempotency: "none" | "supported" | "required";
+};
+
+export type APINativePlugin = {
+  id: string;
+  version: string;
+  sdk_version: number;
+  description: string;
+  state: "discovered" | "misconfigured" | "upgrading" | "active" | "failed" | "disabled" | "incompatible" | "missing";
+  state_version: number;
+  manifest_hash: string;
+  required: boolean;
+  managed_by_environment: boolean;
+  configuration: APINativePluginConfigStatus[];
+  tools: APINativePluginToolStatus[];
+  network: Array<{ host?: string; config_key?: string }>;
+  capabilities: string[];
+  last_error_code?: string;
+  last_error?: string;
 };
 
 export type APIToolDryRun = {

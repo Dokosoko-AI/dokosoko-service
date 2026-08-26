@@ -106,6 +106,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 	channel, actorKind, actorID := "public_mcp", "anonymous", ""
 	selection := model.ProductSelectionContext{Public: public}
 	if !public {
+		_ = s.syncNativePlugins(r.Context(), productID)
 		principal, _ := r.Context().Value(principalKey).(identity.Principal)
 		channel, actorKind, actorID = "private_mcp", "vendor_user", pseudonym(productID, principal)
 		selection.CustomerAccountID, selection.InstallationID = principal.CustomerAccountID, principal.InstallationID

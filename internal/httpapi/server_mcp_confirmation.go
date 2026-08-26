@@ -169,7 +169,8 @@ func managedToolPolicy(tool model.Tool, binding toolruntime.BoundAuthorization) 
 	if err := json.Unmarshal(tool.AuthorizationPolicy, &policy); err != nil {
 		return false, false, err
 	}
-	return policy.ConfirmationRequired || binding.AuthorizationPoint.ConfirmationRequired, strings.ToUpper(strings.TrimSpace(tool.HTTPMethod)) != http.MethodGet && policy.IdempotencyRequired, nil
+	idempotencyRequired = strings.EqualFold(strings.TrimSpace(tool.IdempotencyMode), "required") || policy.IdempotencyRequired
+	return policy.ConfirmationRequired || binding.AuthorizationPoint.ConfirmationRequired, idempotencyRequired, nil
 }
 
 func writeManagedToolConfirmationRequired(w http.ResponseWriter, id any, challenge managedToolConfirmationChallenge, tool model.Tool, binding toolruntime.BoundAuthorization) {

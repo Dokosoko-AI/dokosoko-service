@@ -12,8 +12,8 @@ Every Integration workspace exposes these primary tabs:
 2. **Resources** — Documentation, API contracts, and optional SDKs & Packages.
 3. **Authorization** — identity binding, grant registry, authorization points,
    service connections, and policy simulation.
-4. **Tools** — reusable HTTP or upstream MCP tools bound to the Integration by
-   exact reviewed revision.
+4. **Tools** — reusable HTTP, upstream MCP, or trusted source-compiled native
+   tools bound to the Integration by exact reviewed revision.
 5. **Recipes** — evidence-grounded guidance generated from published inputs.
 6. **Delivery** — Private MCP, optional Public MCP, widget, agent setup, and
    support/reporting configuration.
@@ -66,11 +66,21 @@ without treating simulated results as real authorization.
 
 ### 4. Build capabilities
 
-Create an HTTP tool or inspect and import an upstream Stateless MCPv2 tool.
+Create an HTTP tool, inspect and import an upstream Stateless MCPv2 tool, or
+inspect a source-managed native Tool staged by the current service build.
 Review the exact input and output schemas, endpoint mapping, authentication
-profile, grants, risk, confirmation, timeout, idempotency, and redaction policy.
+or identity requirement, grants, effect, confirmation, timeout, idempotency,
+state scope, limits, and redaction policy.
 Test the draft and bind an exact reviewed revision to the Integration before
 publication.
+
+Native packages are operator-installed application source, not console uploads.
+Review the package and dependency tree, run its conformance and strict source
+checks, add it to the explicit Go registry, configure only its registered
+`DOKOSOKO_PLUGIN_<ID>_<KEY>` variables, and rebuild. The console displays key
+names and configured/missing state but never values. A native source-contract
+change stages a new draft revision instead of rewriting a publication. See
+[Native tool plugins](NATIVE_TOOL_PLUGINS.md).
 
 Tools are reusable deployment capabilities; they are not owned by a single API.
 Bindings state which published Integration revisions claim compatibility with a
@@ -103,6 +113,10 @@ Conditional checks apply when their capability is configured:
 - private access: identity and access-evaluation allow/deny/expiry/revocation;
 - mutating tools: idempotency and explicit confirmation on the exact call;
 - upstream MCP: authorization, schema pin, drift, timeout, and error handling;
+- native tools: source and dependency review, conformance and source checks,
+  required configuration, identity/no-identity cases, state isolation and
+  upgrade failure, exact source pins, idempotency, timeout, panic, malformed
+  output, and plugin disable behavior;
 - packages: server preflight verifies that every selected package resolves to
   one exact immutable release on an available active artifact; registry-byte,
   declared-digest, provenance or SBOM, and installation verification is a

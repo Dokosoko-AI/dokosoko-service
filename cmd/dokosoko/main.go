@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -24,6 +26,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/lifecycle"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
+	"github.com/dokosoko/dokosoko-service/internal/nativeplugins"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
@@ -105,6 +108,36 @@ func run(ctx context.Context) error {
 	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil, nil)
 	reportingService := reporting.New(persistence, vault)
 	toolProxy.SetMCPExecutor(mcpBridge)
+	nativePluginManager, err := nativeplugins.New(nativeplugins.Registered(), nativeplugins.Options{
+		Environment:           os.LookupEnv,
+		Logger:                log.Default(),
+		State:                 persistence,
+		IdentityKey:           nativePluginIdentityKey(masterKey),
+		Required:              commaSeparatedEnv("DOKOSOKO_NATIVE_PLUGINS_REQUIRED"),
+		DisabledByEnvironment: commaSeparatedEnv("DOKOSOKO_NATIVE_PLUGINS_DISABLED"),
+	})
+	if err != nil {
+		return fmt.Errorf("configure native plugins: %w", err)
+	}
+	if err := nativePluginManager.Start(startupCtx); err != nil {
+		return fmt.Errorf("start native plugins: %w", err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		if err := nativePluginManager.Close(closeCtx); err != nil {
+			log.Printf("native plugin shutdown failed: %v", err)
+		}
+	}()
+	toolProxy.SetNativeExecutor(nativePluginManager)
+	platformService.SetNativeToolCatalog(nativePluginManager)
+	if deployment, deploymentErr := persistence.Deployment(startupCtx); deploymentErr == nil {
+		if err := nativePluginManager.SyncCatalog(startupCtx, persistence, deployment); err != nil {
+			return fmt.Errorf("synchronize native tool catalog: %w", err)
+		}
+	} else if !errors.Is(deploymentErr, store.ErrNotFound) {
+		return fmt.Errorf("load deployment for native tool catalog: %w", deploymentErr)
+	}
 	providerProxy := providerruntime.New(persistence, vault, nil, nil)
 	accessProxy := accessruntime.New(persistence, vault, nil, nil)
 	accessProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
@@ -122,7 +155,7 @@ func run(ctx context.Context) error {
 	handler := httpapi.NewWithOptions(platformService, httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
 		UploadDirectory: uploadDirectory, UploadMaxBytes: uploadMaxBytes,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), WidgetsEnabled: boolEnv("DOKOSOKO_WIDGETS_ENABLED"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, Reporting: reportingService,
+		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), WidgetsEnabled: boolEnv("DOKOSOKO_WIDGETS_ENABLED"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, NativePlugins: nativePluginManager, Reporting: reportingService,
 	})
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -187,6 +220,23 @@ func boolEnv(key string) bool {
 	default:
 		return false
 	}
+}
+
+func commaSeparatedEnv(key string) []string {
+	values := strings.Split(os.Getenv(key), ",")
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func nativePluginIdentityKey(masterKey []byte) []byte {
+	mac := hmac.New(sha256.New, masterKey)
+	_, _ = mac.Write([]byte("dokosoko-native-plugin-identity-key-v1"))
+	return mac.Sum(nil)
 }
 
 func sourceUploadConfig() (string, int64, error) {

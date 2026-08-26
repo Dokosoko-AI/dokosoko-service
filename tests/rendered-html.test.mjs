@@ -257,6 +257,12 @@ test("uses a common-tool catalog at the deployment root and keeps API tools scop
   assert.match(catalog, /<DataTableEmpty columns=\{6\}>/);
   assert.match(catalog, /Import from MCP/);
   assert.match(catalog, /Create common tool/);
+  assert.match(catalog, /title="Native tool plugins"/);
+  assert.match(catalog, /item\.environment/);
+  assert.match(catalog, /item\.configured/);
+  assert.match(catalog, /values are never shown here/);
+  assert.match(catalog, /trusted same-process code, not sandboxed extensions/);
+  assert.match(catalog, /onSetNativePluginEnabled/);
   assert.match(catalog, /entityPath\("tool", tool\.id\)/);
   assert.match(source, /Object\.entries\(result\.rejected\)/);
   assert.match(source, /published tool\$\{result\.drifted\.length === 1 \? "" : "s"\} blocked by schema drift/);
@@ -389,8 +395,8 @@ test("keeps reusable tool authoring in the deployment tool builder and detail", 
   assert.match(detail, /const \[activeTool, setActiveTool\] = useState<APITool \| null>\(null\)/);
   assert.match(detail, /role="tablist"[\s\S]*?role="tab"[\s\S]*?aria-selected/);
   assert.match(detail, /role="tabpanel"[\s\S]*?aria-labelledby="tool-tab-/);
-  assert.match(detail, /activeTool\.backend_kind !== "mcp" && \(owningIntegration \? <Button[\s\S]*?Create another API tool[\s\S]*?: <Button[\s\S]*?Clone as new tool/);
-  assert.match(detail, /activeTool\.backend_kind !== "mcp" && !apiOwned && <Dialog open=\{cloneOpen\}/);
+  assert.match(detail, /activeTool\.backend_kind === "http" && \(owningIntegration \? <Button[\s\S]*?Create another API tool[\s\S]*?: <Button[\s\S]*?Clone as new tool/);
+  assert.match(detail, /backendKind === "http" && !apiOwned && <Dialog open=\{cloneOpen\}/);
   assert.match(detail, /Edit in builder/);
   assert.match(detail, /<textarea readOnly value=\{description\}/);
   assert.match(detail, /<textarea spellCheck=\{false\} readOnly value=\{inputSchema\}/);
@@ -399,7 +405,10 @@ test("keeps reusable tool authoring in the deployment tool builder and detail", 
     assert.ok(detail.includes(label), `${label} should be present in the deployment tool detail`);
   }
   assert.match(detail, /Imported MCP tools must be exercised through their reviewed MCP connection/);
-  assert.match(detail, /const liveTestUnsupported = activeTool\.backend_kind === "mcp"/);
+  assert.match(detail, /const liveTestUnsupported = backendKind !== "http"/);
+  assert.match(detail, /Native tools are source-managed and must be exercised through an authorized Private MCP client/);
+  assert.match(detail, /activeTool\.backend_kind === "native" \? "Native plugin"/);
+  assert.match(detail, /Execution requires the active plugin instance and exact manifest and tool hashes pinned by this revision/);
   assert.match(detail, /const effectiveAuthenticationType = runtimeRevision\?\.authentication_type \?\? upstreamAuthType/);
   assert.match(detail, /const delegatedOAuthLiveTest = effectiveAuthenticationType === "delegated_oauth"/);
   assert.match(detail, /Administrator live tests cannot accept an end-user delegated OAuth token\. Stage 2 is disabled here and no upstream request will be made/);

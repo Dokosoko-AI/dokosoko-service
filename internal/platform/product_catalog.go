@@ -475,7 +475,7 @@ func (s *Service) ProductManifestFor(ctx context.Context, productID string, sele
 		if snapshot.Tools != nil {
 			entry.Tools = make([]model.IntegrationManifestTool, 0, len(snapshot.Tools))
 			for _, tool := range snapshot.Tools {
-				entry.Tools = append(entry.Tools, model.IntegrationManifestTool{ToolID: tool.ToolID, ToolRevision: tool.ToolRevision, AuthorizationPointID: tool.AuthorizationPointID, AuthorizationPointRevision: tool.AuthorizationPointRevision, RuntimeServiceConnectionID: tool.RuntimeServiceConnectionID, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: tool.ContentHash, UpstreamSchemaHash: tool.UpstreamSchemaHash})
+				entry.Tools = append(entry.Tools, model.IntegrationManifestTool{ToolID: tool.ToolID, ToolRevision: tool.ToolRevision, AuthorizationPointID: tool.AuthorizationPointID, AuthorizationPointRevision: tool.AuthorizationPointRevision, RuntimeServiceConnectionID: tool.RuntimeServiceConnectionID, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, Effect: tool.Effect, IdempotencyMode: tool.IdempotencyMode, IdentityRequirement: tool.IdentityRequirement, StateScope: tool.StateScope, MaxConcurrency: tool.MaxConcurrency, MaxResultBytes: tool.MaxResultBytes, ContentHash: tool.ContentHash, UpstreamSchemaHash: tool.UpstreamSchemaHash, NativePluginID: tool.NativePluginID, NativeToolID: tool.NativeToolID, NativePluginVersion: tool.NativePluginVersion, NativeSDKVersion: tool.NativeSDKVersion, NativeManifestHash: tool.NativeManifestHash, NativeContractHash: tool.NativeContractHash})
 			}
 		}
 		if snapshot.ServiceConnections != nil {

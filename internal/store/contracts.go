@@ -6,7 +6,14 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/nativepluginstate"
 )
+
+// NativePluginStateStore is the single host-owned state abstraction exposed
+// to trusted native plugins. Plugins never receive a database handle.
+type NativePluginStateStore interface {
+	nativepluginstate.Backend
+}
 
 // DeploymentCatalogStore owns persistence operations for one cohesive application domain.
 type DeploymentCatalogStore interface {
@@ -153,6 +160,7 @@ type ToolStore interface {
 	RetireTool(context.Context, string, string, int64) (model.Tool, error)
 	UpdateImportedTool(context.Context, model.Tool, int64) (model.Tool, error)
 	MarkImportedToolDrift(context.Context, string, string, bool) (model.Tool, error)
+	StageNativeTool(context.Context, model.Tool, int64) (model.Tool, error)
 	PublishTool(context.Context, string, string, int64, string) (model.Tool, error)
 	CreateToolTestConfirmation(context.Context, model.ToolTestConfirmation) error
 	ConsumeToolTestConfirmation(context.Context, []byte, string, string, int64, []byte, string, string, time.Time) (model.ToolTestConfirmation, error)

@@ -6,6 +6,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/nativeplugin"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,7 @@ type Memory struct {
 	crawlReviewDocuments             map[string][]model.CrawlReviewDocument
 	secrets                          map[string]model.Secret
 	tools                            map[string]map[string]model.Tool
+	nativePluginState                map[nativePluginStateScope]map[string]nativeplugin.StateValue
 	toolRuntimeTargets               map[string]map[int64][]model.ToolRuntimeTarget
 	toolTestConfirmations            map[string]model.ToolTestConfirmation
 	toolTestConfirmationUses         map[string]time.Time
@@ -166,6 +168,7 @@ func NewMemory() *Memory {
 		},
 		secrets:                          make(map[string]model.Secret),
 		tools:                            map[string]map[string]model.Tool{product.ID: {}},
+		nativePluginState:                make(map[nativePluginStateScope]map[string]nativeplugin.StateValue),
 		toolRuntimeTargets:               make(map[string]map[int64][]model.ToolRuntimeTarget),
 		toolTestConfirmations:            make(map[string]model.ToolTestConfirmation),
 		toolTestConfirmationUses:         make(map[string]time.Time),

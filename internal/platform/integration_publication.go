@@ -92,8 +92,20 @@ type integrationToolSnapshot struct {
 	Namespace                  string `json:"namespace"`
 	Name                       string `json:"name"`
 	BackendKind                string `json:"backend_kind"`
+	Effect                     string `json:"effect"`
+	IdempotencyMode            string `json:"idempotency_mode"`
+	IdentityRequirement        string `json:"identity_requirement"`
+	StateScope                 string `json:"state_scope"`
+	MaxConcurrency             int    `json:"max_concurrency,omitempty"`
+	MaxResultBytes             int64  `json:"max_result_bytes,omitempty"`
 	ContentHash                string `json:"content_hash"`
 	UpstreamSchemaHash         string `json:"upstream_schema_hash,omitempty"`
+	NativePluginID             string `json:"native_plugin_id,omitempty"`
+	NativeToolID               string `json:"native_tool_id,omitempty"`
+	NativePluginVersion        string `json:"native_plugin_version,omitempty"`
+	NativeSDKVersion           int    `json:"native_sdk_version,omitempty"`
+	NativeManifestHash         string `json:"native_manifest_hash,omitempty"`
+	NativeContractHash         string `json:"native_contract_hash,omitempty"`
 }
 
 type integrationAccessSnapshot struct {
@@ -282,11 +294,11 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "tool_ownership_invalid", Message: err.Error(), Tab: "tools"})
 			continue
 		}
-		definition, err := json.Marshal(map[string]any{"id": tool.ID, "revision": tool.Revision, "scope": tool.Scope, "owner_integration_id": tool.OwnerIntegrationID, "runtime_service_connection_id": tool.RuntimeServiceConnectionID, "http_path": tool.HTTPPath, "namespace": tool.Namespace, "name": tool.Name, "description": tool.Description, "input_schema": tool.InputSchema, "output_schema": tool.OutputSchema, "http_method": tool.HTTPMethod, "authorization_policy": tool.AuthorizationPolicy, "timeout_ms": tool.TimeoutMS, "backend_kind": tool.BackendKind, "mcp_connection_id": tool.MCPConnectionID, "upstream_tool_name": tool.UpstreamToolName, "upstream_schema_hash": tool.UpstreamSchemaHash})
+		definition, err := json.Marshal(map[string]any{"id": tool.ID, "revision": tool.Revision, "scope": tool.Scope, "owner_integration_id": tool.OwnerIntegrationID, "runtime_service_connection_id": tool.RuntimeServiceConnectionID, "http_path": tool.HTTPPath, "namespace": tool.Namespace, "name": tool.Name, "description": tool.Description, "input_schema": tool.InputSchema, "output_schema": tool.OutputSchema, "http_method": tool.HTTPMethod, "authorization_policy": tool.AuthorizationPolicy, "timeout_ms": tool.TimeoutMS, "backend_kind": tool.BackendKind, "effect": tool.Effect, "idempotency_mode": tool.IdempotencyMode, "identity_requirement": tool.IdentityRequirement, "state_scope": tool.StateScope, "max_concurrency": tool.MaxConcurrency, "max_result_bytes": tool.MaxResultBytes, "mcp_connection_id": tool.MCPConnectionID, "upstream_tool_name": tool.UpstreamToolName, "upstream_schema_hash": tool.UpstreamSchemaHash, "native_plugin_id": tool.NativePluginID, "native_tool_id": tool.NativeToolID, "native_plugin_version": tool.NativePluginVersion, "native_sdk_version": tool.NativeSDKVersion, "native_manifest_hash": tool.NativeManifestHash, "native_contract_hash": tool.NativeContractHash})
 		if err != nil {
 			return nil, validations, err
 		}
-		boundTools = append(boundTools, integrationToolSnapshot{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: binding.AuthorizationPointID, AuthorizationPointRevision: binding.AuthorizationPointRevision, Scope: tool.Scope, OwnerIntegrationID: tool.OwnerIntegrationID, RuntimeServiceConnectionID: tool.RuntimeServiceConnectionID, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, ContentHash: contentHash(definition), UpstreamSchemaHash: tool.UpstreamSchemaHash})
+		boundTools = append(boundTools, integrationToolSnapshot{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: binding.AuthorizationPointID, AuthorizationPointRevision: binding.AuthorizationPointRevision, Scope: tool.Scope, OwnerIntegrationID: tool.OwnerIntegrationID, RuntimeServiceConnectionID: tool.RuntimeServiceConnectionID, Namespace: tool.Namespace, Name: tool.Name, BackendKind: tool.BackendKind, Effect: tool.Effect, IdempotencyMode: tool.IdempotencyMode, IdentityRequirement: tool.IdentityRequirement, StateScope: tool.StateScope, MaxConcurrency: tool.MaxConcurrency, MaxResultBytes: tool.MaxResultBytes, ContentHash: contentHash(definition), UpstreamSchemaHash: tool.UpstreamSchemaHash, NativePluginID: tool.NativePluginID, NativeToolID: tool.NativeToolID, NativePluginVersion: tool.NativePluginVersion, NativeSDKVersion: tool.NativeSDKVersion, NativeManifestHash: tool.NativeManifestHash, NativeContractHash: tool.NativeContractHash})
 	}
 	sort.Slice(boundTools, func(i, j int) bool {
 		if boundTools[i].Namespace == boundTools[j].Namespace {

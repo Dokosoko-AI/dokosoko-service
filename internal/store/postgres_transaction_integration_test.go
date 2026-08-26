@@ -17,7 +17,7 @@ import (
 )
 
 func TestPostgresAuditIdempotencyAndMutationTransactions(t *testing.T) {
-	pool, postgres := migratedPostgresForStoreTest(t)
+	_, postgres := migratedPostgresForStoreTest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -26,13 +26,9 @@ func TestPostgresAuditIdempotencyAndMutationTransactions(t *testing.T) {
 	if _, err := postgres.CreateOrganisation(ctx, model.Organisation{ID: organisationID, Name: "Store contract", Slug: "store-contract-" + organisationID[:8]}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if _, err := pool.Exec(cleanupCtx, `DELETE FROM organisations WHERE id=$1`, organisationID); err != nil {
-			t.Errorf("remove PostgreSQL store contract fixture: %v", err)
-		}
-	})
+	// Audit records are append-only and intentionally prevent deleting their
+	// organisation. IDs are unique, and the configured integration database is
+	// required to be disposable.
 	product, err := postgres.CreateProduct(ctx, model.Product{ID: productID, OrganisationID: organisationID, Name: "Store contract", Slug: "store-contract", DefaultVersionPolicy: "latest"})
 	if err != nil {
 		t.Fatal(err)
