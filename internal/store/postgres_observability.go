@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dokosoko/dokosoko-service/internal/model"
 	"strings"
 	"time"
+
+	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
 func (p *Postgres) PublicKnowledge(ctx context.Context, productID string, publicationIDs []string, query string) ([]model.KnowledgeRecord, error) {
@@ -67,18 +68,6 @@ func (p *Postgres) PrivateKnowledge(ctx context.Context, productID string, publi
 		result = append(result, value)
 	}
 	return result, rows.Err()
-}
-
-func (p *Postgres) AppendAnalytics(ctx context.Context, event model.AnalyticsEvent) error {
-	dimensions, _ := json.Marshal(event.Dimensions)
-	_, err := p.pool.Exec(ctx, `INSERT INTO analytics_events(organisation_id, product_id, event_name, actor_kind, actor_pseudonym, dimensions, value, created_at) VALUES ($1,$2,$3,$4,nullif($5,''),$6,nullif($7,0),$8)`, event.OrganisationID, event.ProductID, event.EventName, event.ActorKind, event.ActorPseudonym, dimensions, event.Value, event.CreatedAt)
-	return databaseError(err)
-}
-
-func (p *Postgres) LLMTokensUsed(ctx context.Context, productID, role string, since time.Time) (int64, error) {
-	var total int64
-	err := p.pool.QueryRow(ctx, `SELECT coalesce(sum(value),0)::bigint FROM analytics_events WHERE product_id=$1 AND created_at >= $2 AND event_name='llm.tokens' AND dimensions->>'role'=$3`, productID, since, role).Scan(&total)
-	return total, databaseError(err)
 }
 
 func (p *Postgres) AppendAudit(ctx context.Context, event model.AuditEvent) error {

@@ -1,4 +1,4 @@
-import { Bot, Check, Copy, Sparkles, TriangleAlert } from "lucide-react";
+import { Check, Copy, Sparkles, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type {
@@ -29,20 +29,19 @@ export const aiWorkloads: Array<{
   role: AIWorkload;
   name: string;
   description: string;
-  icon: typeof Bot;
+  icon: typeof Sparkles;
 }> = [
   { role: "analysis", name: "Analysis", description: "Analyses evidence, writes recipes, and reviews every generated claim.", icon: Sparkles },
-  { role: "assistant", name: "Assistant", description: "Answers quickly from evidence retrieved and authorized by DokoSoko.", icon: Bot },
 ];
 
 export const aiModelDefaults: Record<APIAIProviderConnection["provider"], Record<AIWorkload, string>> = {
-  openai: { analysis: "gpt-5.6-terra", assistant: "gpt-5.6-luna" },
-  google: { analysis: "gemini-3.5-flash", assistant: "gemini-3.5-flash-lite" },
-  anthropic: { analysis: "claude-sonnet-5", assistant: "claude-haiku-4-5" },
-  digitalocean: { analysis: "openai-gpt-5.6-terra", assistant: "openai-gpt-5.6-luna" },
-  xai: { analysis: "grok-4.6", assistant: "grok-4.3" },
-  deepseek: { analysis: "deepseek-v4-pro", assistant: "deepseek-v4-flash" },
-  "openai-compatible": { analysis: "", assistant: "" },
+  openai: { analysis: "gpt-5.6-terra" },
+  google: { analysis: "gemini-3.5-flash" },
+  anthropic: { analysis: "claude-sonnet-5" },
+  digitalocean: { analysis: "openai-gpt-5.6-terra" },
+  xai: { analysis: "grok-4.6" },
+  deepseek: { analysis: "deepseek-v4-pro" },
+  "openai-compatible": { analysis: "" },
 };
 
 export const aiModelOptions: Record<APIAIProviderConnection["provider"], string[]> = {

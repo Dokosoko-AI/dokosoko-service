@@ -258,7 +258,7 @@ test("settings has stable routes for every overview area", () => {
   assert.deepEqual(SETTINGS_TABS, [
     { id: "overview", label: "Overview" },
     { id: "storage", label: "Database & storage" },
-    { id: "ai", label: "AI providers" },
+    { id: "ai", label: "AI configuration" },
     { id: "root", label: "Root access" },
   ]);
   assert.equal(settingsPath(), "/settings");

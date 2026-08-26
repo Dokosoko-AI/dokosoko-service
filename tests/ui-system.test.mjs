@@ -126,14 +126,15 @@ test("keeps the Recipes authoring workflow inside the same global route stack", 
   assert.match(source, /title="Recipes"/);
   assert.match(source, /Generate from evidence/);
   assert.match(source, /Create recipe/);
-  assert.match(source, /recipes\.map\(\(recipe\)/);
+  assert.match(source, /visibleRecipes\.map\(renderRecipe\)/);
+  assert.match(source, /unscopedOrInvalidRecipes\.map\(renderRecipe\)/);
   assert.doesNotMatch(styles, /--workflow-width|\.workflow-frame/);
   assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-input/);
 });
 
 test("keeps API documentation setup short without bypassing reviewed evidence", async () => {
   const source = await consoleSource();
-  const guide = await readFile(appFile("app/components/integrations/IntegrationAgentGuide.tsx"), "utf8");
+  const guide = await readFile(appFile("app/components/integrations/IntegrationSetupGuide.tsx"), "utf8");
 
   assert.match(source, /sourcePublicationManifestEntry[\s\S]*source_publication_id:[\s\S]*content_hash:/);
   assert.match(source, /api\.resourceSets\("documentation"\)/);
@@ -141,7 +142,8 @@ test("keeps API documentation setup short without bypassing reviewed evidence", 
   assert.match(source, /Review & attach/);
   assert.match(source, /Publish & attach/);
   assert.match(source, /That exact revision was already attached/);
-  assert.match(source, /onGenerateAgentGuide\(integrationID\)/);
+  assert.match(source, /onGenerateSetupGuide\(integrationID\)/);
+  assert.match(guide, /title="Setup guide"/);
   assert.match(guide, /Generate guide/);
   assert.match(guide, /Refresh guide/);
   assert.match(guide, /attached, reviewed evidence/);
@@ -236,7 +238,7 @@ test("keeps interactive controls semantic inside shared data tables", async () =
   assert.match(layout, /aria-colspan=\{columns\}/);
   assert.match(source, /<DataTableRow key=\{integration\.id\}/);
   assert.doesNotMatch(source, /<ConsoleLink[^>]*role="row"/);
-  assert.match(source, /<Table label="AI workloads" dense>/);
+  assert.match(source, /<Table label="AI workload" dense>/);
   assert.match(source, /<TableHead><TableRow><TableHeader>Name<\/TableHeader><TableHeader>Provider<\/TableHeader><TableHeader>Model<\/TableHeader><TableHeader>Actions<\/TableHeader>/);
   assert.match(source, /connections\.map\(\(connection\)/);
   assert.doesNotMatch(source, /className="ai-security-rail"/);

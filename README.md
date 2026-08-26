@@ -117,12 +117,19 @@ publication rather than a mutable crawl result.
 
 ## AI providers and recipes
 
-AI remains optional and provider-neutral. Analysis and Assistant workloads can
-select OpenAI, Google, Anthropic, DigitalOcean, xAI, DeepSeek, or a fixed public
-OpenAI-compatible endpoint. Provider credentials, models, token limits, daily
-budgets, and one backup connection remain explicit. Failover occurs only for
-the configured transient failures; invalid configuration, unsafe input,
-exhausted budgets, and invalid output do not fail over.
+AI remains optional and provider-neutral. One Analysis workload powers bounded
+integration planning, tool-authoring assistance, and recipe authoring/review. It
+can select OpenAI, Google, Anthropic, DigitalOcean, xAI, DeepSeek, or a fixed
+public OpenAI-compatible endpoint. Provider credentials, the model, token
+limits, daily budget, and one backup model remain explicit. Failover occurs only
+for configured transient failures; invalid configuration, unsafe input,
+exhausted budgets, and invalid output do not fail over. A retry sends the same
+bounded prompt and reviewed evidence to the configured backup provider once.
+
+The integration-analysis, recipe-brief, recipe-authoring, and recipe-review
+instruction bodies are versioned per product and can be restored to their safe
+defaults. DokoSoko applies its immutable safety policy separately; operators
+cannot edit or disable it through prompt configuration.
 
 Recipes are immutable reviewed Markdown revisions grounded in bounded published
 evidence. Generated content is never published automatically.

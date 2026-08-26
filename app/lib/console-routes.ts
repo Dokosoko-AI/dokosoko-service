@@ -43,7 +43,7 @@ export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; labe
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "storage", label: "Database & storage" },
-  { id: "ai", label: "AI providers" },
+  { id: "ai", label: "AI configuration" },
   { id: "root", label: "Root access" },
 ];
 

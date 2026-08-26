@@ -29,14 +29,3 @@ type KnowledgeRecord struct {
 	Visibility Visibility `json:"visibility"`
 	Published  bool       `json:"published"`
 }
-
-type AnalyticsEvent struct {
-	OrganisationID string         `json:"organisation_id"`
-	ProductID      string         `json:"product_id"`
-	EventName      string         `json:"event_name"`
-	ActorKind      string         `json:"actor_kind"`
-	ActorPseudonym string         `json:"-"`
-	Dimensions     map[string]any `json:"dimensions,omitempty"`
-	Value          float64        `json:"value,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-}

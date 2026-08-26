@@ -23,7 +23,7 @@ type toolTestAnalysisHTTPDoer struct{ calls int }
 func (d *toolTestAnalysisHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 	d.calls++
 	structured, _ := json.Marshal(map[string]any{"reply": "Review the sanitized response shape.", "findings": []any{}, "proposal_json": ""})
-	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 12}})
+	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 12}})
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body)), Request: request}, nil
 }
 

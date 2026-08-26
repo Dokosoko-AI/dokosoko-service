@@ -1,9 +1,6 @@
 package model
 
-import (
-	"encoding/json"
-	"time"
-)
+import "time"
 
 type IntegrationEvidence struct {
 	Kind        string            `json:"kind"`
@@ -22,7 +19,6 @@ type IntegrationUnknown struct {
 	Question string `json:"question"`
 	Why      string `json:"why"`
 	Blocking bool   `json:"blocking"`
-	Answer   string `json:"answer,omitempty"`
 }
 
 type IntegrationEndpointPlan struct {
@@ -48,6 +44,7 @@ type RecipeSeed struct {
 	Outcome     string   `json:"outcome"`
 	Audience    string   `json:"audience"`
 	EndpointIDs []string `json:"endpoint_ids,omitempty"`
+	EvidenceIDs []string `json:"evidence_ids,omitempty"`
 }
 
 type IntegrationPlan struct {
@@ -130,21 +127,4 @@ type Recipe struct {
 	Revision          int64              `json:"revision"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
-}
-
-type AIJob struct {
-	ID             string          `json:"id"`
-	OrganisationID string          `json:"organisation_id"`
-	ProductID      string          `json:"product_id"`
-	Kind           string          `json:"kind"`
-	TargetID       string          `json:"target_id,omitempty"`
-	State          string          `json:"state"`
-	Attempt        int             `json:"attempt"`
-	Input          json.RawMessage `json:"input"`
-	Output         json.RawMessage `json:"output,omitempty"`
-	ErrorCode      string          `json:"error_code,omitempty"`
-	CreatedBy      string          `json:"created_by"`
-	CreatedAt      time.Time       `json:"created_at"`
-	StartedAt      *time.Time      `json:"started_at,omitempty"`
-	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
 }

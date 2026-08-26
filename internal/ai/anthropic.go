@@ -33,13 +33,6 @@ func (a *AnthropicAdapter) GenerateStructured(ctx context.Context, request Struc
 	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, schema)
 }
 
-func (a *AnthropicAdapter) GenerateText(ctx context.Context, request TextRequest) (Result, error) {
-	if err := ValidateRequest(request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens); err != nil {
-		return Result{}, err
-	}
-	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, nil)
-}
-
 func (a *AnthropicAdapter) generate(ctx context.Context, provider ProviderConfig, model, system, user string, maxOutputTokens int, temperature float64, schema map[string]any) (Result, error) {
 	httpClient, err := a.clientFactory(ctx, provider.Endpoint)
 	if err != nil {
@@ -61,9 +54,7 @@ func (a *AnthropicAdapter) generate(ctx context.Context, provider ProviderConfig
 	if temperature > 0 {
 		params.Temperature = anthropicsdk.Float(temperature)
 	}
-	if schema != nil {
-		params.OutputConfig = anthropicsdk.OutputConfigParam{Format: anthropicsdk.JSONOutputFormatParam{Schema: schema}}
-	}
+	params.OutputConfig = anthropicsdk.OutputConfigParam{Format: anthropicsdk.JSONOutputFormatParam{Schema: schema}}
 	started := time.Now()
 	response, err := client.Messages.New(ctx, params)
 	duration := time.Since(started)
@@ -77,8 +68,7 @@ func (a *AnthropicAdapter) generate(ctx context.Context, provider ProviderConfig
 	if response == nil {
 		return Result{}, &Error{Code: ErrorProviderUnavailable, Provider: provider.Provider, Retryable: true}
 	}
-	if finishErr := textFinishReason(string(response.StopReason)); finishErr != nil {
-		finishErr.(*Error).Provider = provider.Provider
+	if finishErr := validateStructuredFinishReason(provider.Provider, string(response.StopReason), "end_turn"); finishErr != nil {
 		return Result{}, finishErr
 	}
 	var output strings.Builder
@@ -89,9 +79,7 @@ func (a *AnthropicAdapter) generate(ctx context.Context, provider ProviderConfig
 	}
 	text := strings.TrimSpace(output.String())
 	result := Result{Text: text, Provider: provider.Provider, RequestedModel: model, ResolvedModel: string(response.Model), RequestID: response.ID, FinishReason: string(response.StopReason), InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, Duration: duration}
-	if schema != nil {
-		result.JSON = json.RawMessage(text)
-	}
+	result.JSON = json.RawMessage(text)
 	return result, nil
 }
 

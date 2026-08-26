@@ -643,7 +643,7 @@ func TestProposeToolDraftUsesSanitizedStructuredAnalysisOutput(t *testing.T) {
 	candidate.Description = "AI proposed catalog lookup."
 	draftJSON, _ := json.Marshal(candidate)
 	structured, _ := json.Marshal(map[string]any{"summary": "Updated the description.", "reply": "Review the candidate before saving.", "draft_json": string(draftJSON)})
-	providerBody, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
+	providerBody, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
 	doer := &toolBuilderAIDoer{response: string(providerBody)}
 	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, doer)
 	actor := platform.Actor{ID: "root", RequestID: "req-builder"}
@@ -681,7 +681,7 @@ func TestProposeToolDraftUsesSanitizedStructuredAnalysisOutput(t *testing.T) {
 	candidate.CredentialPresent = true
 	draftJSON, _ = json.Marshal(candidate)
 	structured, _ = json.Marshal(map[string]any{"summary": "Kept bearer authentication.", "reply": "A credential is still required.", "draft_json": string(draftJSON)})
-	providerBody, _ = json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
+	providerBody, _ = json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
 	doer.response = string(providerBody)
 	spoofedProposal, err := service.ProposeToolDraft(ctx, "prod_acme", platform.ToolDraftProposalInput{ToolDraftContext: platform.ToolDraftContext{Draft: spoofed}, Instruction: "Keep bearer authentication."}, actor)
 	if err != nil {

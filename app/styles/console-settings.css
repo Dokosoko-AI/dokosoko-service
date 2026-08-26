@@ -42,6 +42,7 @@
 .ai-provider-logo.deepseek { background: color-mix(in srgb, var(--surface) 88%, var(--provider-deepseek-soft)); }
 .ai-provider-logo.openai-compatible { color: var(--accent); background: var(--accent-soft); }
 .ai-provider-logo svg { width: 21px; height: 21px; }
+.ai-prompt-editor .core-textarea { min-height: 300px; line-height: 1.55; }
 .ai-table-actions { width: 100%; display: flex; justify-content: flex-end; gap: 7px; }
 .ai-table-actions .core-button { min-width: 62px; }
 .ai-table-subline { display: block; margin-top: 3px; color: var(--subtle); font-size: var(--text-caption); }

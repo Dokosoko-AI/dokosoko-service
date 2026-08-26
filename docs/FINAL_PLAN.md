@@ -70,11 +70,18 @@ upstream schema change blocks execution until reviewed.
 
 ### AI
 
-Analysis and Assistant providers, failover, models, limits, and daily budgets
-remain explicit. Retrieved content is untrusted data, models receive no tools,
-and invalid credentials/configuration, unsafe input, exhausted budgets, or
-invalid output never trigger silent failover. Generated recipes require human
-review and immutable publication.
+The Analysis provider, failover model, limits, and daily budget remain explicit.
+Retrieved content is untrusted data, the model receives no tools, and invalid
+credentials/configuration, unsafe input, exhausted budgets, or invalid output
+never trigger silent failover. A transient-failure retry discloses the same
+bounded prompt and reviewed evidence to the configured backup once. Analysis is
+advisory: generated setup guides, tool drafts, and recipes require deterministic
+validation and human review; recipe publication is immutable and always
+explicit.
+
+The four core analysis and recipe workflows have stable prompt keys. Their
+workflow-specific instructions are versioned and resettable, while the common
+untrusted-input and no-tool safety policy remains server-owned and immutable.
 
 ### Reporting
 

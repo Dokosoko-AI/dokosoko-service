@@ -2,14 +2,24 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
+
+func (s *Server) recipeCreationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, platform.ErrRecipeNeedsInput) {
+		writeError(w, http.StatusUnprocessableEntity, "recipe_evidence_gap", err.Error(), nil)
+		return
+	}
+	s.creationError(w, err)
+}
 
 func (s *Server) publishedRecipes(ctx context.Context, productID string, public bool) ([]model.Recipe, error) {
 	values, err := s.service.ReconcileRecipeDrift(ctx, productID)
@@ -86,19 +96,7 @@ func (s *Server) integrationAnalysis(w http.ResponseWriter, r *http.Request, pro
 		}
 		writeJSON(w, http.StatusOK, value)
 	case http.MethodPatch:
-		var input struct {
-			Answers map[string]string `json:"answers"`
-		}
-		if err := decodeJSON(r.Body, &input); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-			return
-		}
-		value, err := s.service.AnswerIntegrationUnknowns(r.Context(), productID, analysisID, input.Answers, actor(r))
-		if err != nil {
-			s.creationError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, value)
+		writeError(w, http.StatusGone, "analysis_answers_removed", "Analysis unknowns are read-only evidence gaps. Change the evidence or configuration and run a new analysis.", nil)
 	default:
 		w.Header().Set("Allow", "GET, PATCH")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
@@ -123,7 +121,7 @@ func (s *Server) generateRecipes(w http.ResponseWriter, r *http.Request, product
 		values, err = s.service.GenerateRecipesForIntegration(r.Context(), productID, analysisID, input.IntegrationID, actor(r))
 	}
 	if err != nil {
-		s.creationError(w, err)
+		s.recipeCreationError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"items": values})
@@ -149,7 +147,7 @@ func (s *Server) recipes(w http.ResponseWriter, r *http.Request, productID strin
 		}
 		value, err := s.service.CreateRecipeFromPromptFor(r.Context(), productID, input.IntegrationID, input.Prompt, actor(r))
 		if err != nil {
-			s.creationError(w, err)
+			s.recipeCreationError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, value)
@@ -226,31 +224,7 @@ func (s *Server) publishRecipe(w http.ResponseWriter, r *http.Request, productID
 }
 
 func (s *Server) attention(w http.ResponseWriter, r *http.Request, productID string) {
-	recipes, err := s.service.ReconcileRecipeDrift(r.Context(), productID)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	analyses, err := s.service.Store().IntegrationAnalyses(r.Context(), productID)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	attentionRecipes := make([]model.Recipe, 0)
-	for _, recipe := range recipes {
-		if recipe.NeedsAttention {
-			attentionRecipes = append(attentionRecipes, recipe)
-		}
-	}
-	questions := make([]map[string]any, 0)
-	for _, analysis := range analyses {
-		for _, unknown := range analysis.Unknowns {
-			if strings.TrimSpace(unknown.Answer) == "" {
-				questions = append(questions, map[string]any{"analysis_id": analysis.ID, "question": unknown})
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"recipes": attentionRecipes, "questions": questions, "count": len(attentionRecipes) + len(questions)})
+	writeError(w, http.StatusGone, "attention_endpoint_removed", "Read recipe needs_attention state directly. Resolve analysis unknowns by changing evidence or configuration and running a new analysis.", nil)
 }
 
 func operationalSince(w http.ResponseWriter, r *http.Request) (time.Time, bool) {

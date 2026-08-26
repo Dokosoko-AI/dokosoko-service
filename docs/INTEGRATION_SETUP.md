@@ -58,9 +58,11 @@ an administrator reviews and republishes it.
 
 ### 5. Add recipes
 
-Analyse bounded published evidence, resolve unknowns, review citations and
-commands, and publish an immutable recipe revision. Evidence changes make
-affected recipes stale until reviewed; no model output publishes itself.
+Select one API, analyse its bounded published evidence, resolve blocking gaps by
+attaching or configuring the missing evidence, review citations and commands,
+and publish an immutable recipe revision. Analysis unknowns are read-only
+findings, not free-form assertions. Evidence changes make affected recipes stale
+until reviewed; no model output publishes itself.
 
 ### 6. Test and publish
 

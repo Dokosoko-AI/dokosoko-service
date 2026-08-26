@@ -6,12 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http"
+
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/model"
-	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
-	"net/http"
 )
 
 func (s *Server) mcpConnections(w http.ResponseWriter, r *http.Request, productID string) {
@@ -89,43 +89,8 @@ func (s *Server) importMCPConnection(w http.ResponseWriter, r *http.Request, pro
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) llmProfiles(w http.ResponseWriter, r *http.Request, productID string) {
-	switch r.Method {
-	case http.MethodGet:
-		values, err := s.service.Store().LLMProfiles(r.Context(), productID)
-		if err != nil {
-			s.storeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": values})
-	case http.MethodPut:
-		var input struct {
-			OrganisationID      string `json:"organisation_id"`
-			Role                string `json:"role"`
-			Provider            string `json:"provider"`
-			Endpoint            string `json:"endpoint"`
-			Model               string `json:"model"`
-			Credential          string `json:"credential"`
-			EmbeddingDimensions int    `json:"embedding_dimensions"`
-			MaxInputTokens      int    `json:"max_input_tokens"`
-			MaxOutputTokens     int    `json:"max_output_tokens"`
-			DailyTokenBudget    int64  `json:"daily_token_budget"`
-			Enabled             bool   `json:"enabled"`
-		}
-		if err := decodeJSON(r.Body, &input); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-			return
-		}
-		value, err := s.service.SaveLLMProfile(r.Context(), platform.LLMProfileInput{OrganisationID: input.OrganisationID, ProductID: productID, Role: input.Role, Provider: input.Provider, Endpoint: input.Endpoint, Model: input.Model, Credential: input.Credential, EmbeddingDimensions: input.EmbeddingDimensions, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Enabled: input.Enabled}, actor(r))
-		if err != nil {
-			s.creationError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, value)
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
-	}
+func (s *Server) llmProfiles(w http.ResponseWriter, _ *http.Request, _ string) {
+	writeError(w, http.StatusGone, "llm_profiles_removed", "LLM profiles were replaced by Analysis workload profiles. Use /api/v1/products/{product_id}/ai-profiles.", nil)
 }
 
 func pseudonym(productID string, principal identity.Principal) string {
@@ -311,6 +276,12 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.disableIdentityProvider(w, r)
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "llm-profiles":
 		s.llmProfiles(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "products" && parts[4] == "ai-prompts" && r.Method == http.MethodGet:
+		s.aiPromptConfigurations(w, r, parts[3])
+	case len(parts) == 6 && parts[2] == "products" && parts[4] == "ai-prompts" && r.Method == http.MethodPut:
+		s.saveAIPromptOverride(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "ai-prompts" && parts[6] == "reset" && r.Method == http.MethodPost:
+		s.resetAIPromptOverride(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "products" && parts[4] == "ai-profiles" && r.Method == http.MethodGet:
 		s.aiWorkloadProfiles(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "ai-profiles" && r.Method == http.MethodPut:

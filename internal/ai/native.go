@@ -37,15 +37,32 @@ func permissiveObjectSchema(raw json.RawMessage) (map[string]any, error) {
 	return schema, nil
 }
 
-func textFinishReason(value string) error {
+// validateStructuredFinishReason accepts only an explicit, provider-specific
+// successful terminal reason. Structured JSON that happens to parse is still
+// incomplete when the provider reports truncation, and an unknown future reason
+// must fail closed until its semantics are reviewed.
+func validateStructuredFinishReason(provider, value string, successful ...string) error {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "refusal" || strings.Contains(value, "safety") || strings.Contains(value, "prohibited") || strings.Contains(value, "blocklist") {
-		return &Error{Code: ErrorRefusedOutput}
+	for _, candidate := range successful {
+		if value == strings.ToLower(strings.TrimSpace(candidate)) {
+			return nil
+		}
 	}
-	if value == "model_context_window_exceeded" {
-		return &Error{Code: ErrorContextTooLarge}
+
+	code := ErrorInvalidStructuredOutput
+	switch {
+	case value == "refusal",
+		strings.Contains(value, "safety"),
+		strings.Contains(value, "prohibited"),
+		strings.Contains(value, "blocklist"),
+		strings.Contains(value, "content_filter"),
+		value == "recitation",
+		value == "spii":
+		code = ErrorRefusedOutput
+	case value == "model_context_window_exceeded", value == "context_length_exceeded":
+		code = ErrorContextTooLarge
 	}
-	return nil
+	return &Error{Code: code, Provider: provider}
 }
 
 func statusFromResponse(response *http.Response) int {

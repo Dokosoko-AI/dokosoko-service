@@ -157,9 +157,9 @@
   .runtime-metadata-grid { grid-template-columns: 1fr; }
   .runtime-metadata-grid > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .runtime-metadata-grid > div:last-child { border-bottom: 0; }
-  .agent-guide-steps { grid-template-columns: 1fr; }
-  .agent-guide-steps li { border-right: 0; border-bottom: 1px solid var(--line); }
-  .agent-guide-steps li:last-child { border-bottom: 0; }
+  .setup-guide-steps { grid-template-columns: 1fr; }
+  .setup-guide-steps li { border-right: 0; border-bottom: 1px solid var(--line); }
+  .setup-guide-steps li:last-child { border-bottom: 0; }
   .integration-revision-row { grid-template-columns: 46px minmax(0, 1fr); }
   .integration-revision-row > svg { grid-column: 2; grid-row: 1; justify-self: end; }
   .documentation-source-row { grid-template-columns: 38px minmax(0, 1fr) auto; }

@@ -138,14 +138,15 @@ type ReportingStore interface {
 
 // AIRecipeStore owns persistence operations for one cohesive application domain.
 type AIRecipeStore interface {
-	LLMProfiles(context.Context, string) ([]model.LLMProfile, error)
-	SaveLLMProfile(context.Context, model.LLMProfile) (model.LLMProfile, error)
 	AIProviderConnections(context.Context, string) ([]model.AIProviderConnection, error)
 	AIProviderConnection(context.Context, string, string) (model.AIProviderConnection, error)
 	SaveAIProviderConnection(context.Context, model.AIProviderConnection, int64) (model.AIProviderConnection, error)
 	AIWorkloadProfiles(context.Context, string) ([]model.AIWorkloadProfile, error)
 	AIWorkloadProfile(context.Context, string, string) (model.AIWorkloadProfile, error)
 	SaveAIWorkloadProfile(context.Context, model.AIWorkloadProfile, int64) (model.AIWorkloadProfile, error)
+	AIPromptStates(context.Context, string) ([]model.AIPromptState, error)
+	AIPromptState(context.Context, string, string) (model.AIPromptState, error)
+	SaveAIPromptStateAndAudit(context.Context, model.AIPromptState, int64, model.AuditEvent) (model.AIPromptState, error)
 	ReserveAIBudget(context.Context, model.AIBudgetReservation, int64) (bool, error)
 	FinishAIUsage(context.Context, string, model.AIUsageEvent) error
 	AIUsageEvents(context.Context, string, time.Time) ([]model.AIUsageEvent, error)
@@ -158,9 +159,6 @@ type AIRecipeStore interface {
 	SaveRecipe(context.Context, model.Recipe, int64) (model.Recipe, error)
 	RecipeRevisions(context.Context, string) ([]model.RecipeRevision, error)
 	SaveRecipeRevision(context.Context, model.Recipe, model.RecipeRevision, int64) (model.Recipe, error)
-	AIJobs(context.Context, string) ([]model.AIJob, error)
-	AIJob(context.Context, string, string) (model.AIJob, error)
-	SaveAIJob(context.Context, model.AIJob) (model.AIJob, error)
 }
 
 // IdentityStore owns persistence operations for one cohesive application domain.
@@ -193,8 +191,6 @@ type IdentityStore interface {
 type ObservabilityStore interface {
 	PublicKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
 	PrivateKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
-	AppendAnalytics(context.Context, model.AnalyticsEvent) error
-	LLMTokensUsed(context.Context, string, string, time.Time) (int64, error)
 	AppendAudit(context.Context, model.AuditEvent) error
 	AuditEvents(context.Context, string) ([]model.AuditEvent, error)
 }

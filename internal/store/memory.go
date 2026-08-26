@@ -3,13 +3,14 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/nativeplugin"
-	"strings"
-	"sync"
-	"time"
 )
 
 type Memory struct {
@@ -47,20 +48,18 @@ type Memory struct {
 	toolTestRuns                     []model.ToolTestRun
 	mcpConnections                   map[string]map[string]model.MCPConnection
 	reportSubmissions                map[string]map[string]model.ReportSubmission
-	llmProfiles                      map[string]map[string]model.LLMProfile
 	aiProviderConnections            map[string]map[string]model.AIProviderConnection
 	aiWorkloadProfiles               map[string]map[string]model.AIWorkloadProfile
+	aiPromptStates                   map[string]map[string]model.AIPromptState
 	aiBudgetReservations             map[string]model.AIBudgetReservation
 	aiBudgetUsed                     map[string]int64
 	aiUsage                          []model.AIUsageEvent
 	integrationAnalyses              map[string]map[string]model.IntegrationAnalysis
 	recipes                          map[string]map[string]model.Recipe
 	recipeRevisions                  map[string]map[string]model.RecipeRevision
-	aiJobs                           map[string]map[string]model.AIJob
 	knowledge                        map[string][]model.KnowledgeRecord
 	crawls                           map[string][]model.CrawlJob
 	audit                            []model.AuditEvent
-	analytics                        []model.AnalyticsEvent
 	setupDone                        bool
 	roots                            map[string]auth.RootAccount
 	rootEmail                        map[string]string
@@ -130,15 +129,14 @@ func NewMemory() *Memory {
 		managedOperationConfirmationUses: make(map[string]time.Time),
 		mcpConnections:                   map[string]map[string]model.MCPConnection{product.ID: {}},
 		reportSubmissions:                map[string]map[string]model.ReportSubmission{product.ID: {}},
-		llmProfiles:                      map[string]map[string]model.LLMProfile{product.ID: {}},
 		aiProviderConnections:            map[string]map[string]model.AIProviderConnection{product.ID: {}},
 		aiWorkloadProfiles:               map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
+		aiPromptStates:                   map[string]map[string]model.AIPromptState{product.ID: {}},
 		aiBudgetReservations:             make(map[string]model.AIBudgetReservation),
 		aiBudgetUsed:                     make(map[string]int64),
 		integrationAnalyses:              map[string]map[string]model.IntegrationAnalysis{product.ID: {}},
 		recipes:                          map[string]map[string]model.Recipe{product.ID: {}},
 		recipeRevisions:                  make(map[string]map[string]model.RecipeRevision),
-		aiJobs:                           map[string]map[string]model.AIJob{product.ID: {}},
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},

@@ -158,7 +158,7 @@ func toolTestAnalysisProviderResult(t *testing.T, tool model.Tool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 40}})
+	body, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 40}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func toolTestAnalysisAdvisoryProviderResult(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
+	body, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +492,7 @@ func TestAnalyseToolTestRunRejectsUnsafeProviderProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	structured, _ := json.Marshal(map[string]any{"reply": "Review the proposed description.", "findings": []any{}, "proposal_json": string(proposal)})
-	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
+	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": string(structured)}}}, "usage": map[string]any{"total_tokens": 20}})
 	fixture.doer.result = string(body)
 	result, err := fixture.service.AnalyseToolTestRun(context.Background(), fixture.tool.ProductID, fixture.tool.ID, fixture.run.ID, platform.ToolTestAnalysisInput{
 		Revision: fixture.tool.Revision, EvidenceHash: platform.ToolTestAnalysisEvidenceHash(fixture.run), ConsentToSend: true, Question: "Should the non-secret contract change?",

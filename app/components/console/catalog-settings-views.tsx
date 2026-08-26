@@ -5,7 +5,7 @@ import {
 import { useState } from "react";
 
 import type {
-  APIAIProviderConnection, APIAIProviderUsage, APIAIWorkloadProfile, APIAuditEvent,
+  APIAIProviderConnection, APIAIProviderUsage, APIAIWorkflowPrompt, APIAIWorkloadProfile, APIAuditEvent,
   APIIntegration, APIIntegrationAnalysis, APIMCPConnection, APINativePlugin,
   APIProduct, APIRecipe, APISupportSubmission, APITool, APIUser,
 } from "../../lib/api";
@@ -13,10 +13,12 @@ import { SETTINGS_TABS, type SettingsTab, entityPath, sectionPath, settingsPath,
 import { Badge, Button } from "../core/control";
 import { Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../core";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader, SectionHeader } from "../core/layout";
+import { IntegrationEvidenceGaps } from "../integrations/IntegrationEvidenceGaps";
 import { toolIsCommon } from "../integrations/tool-scope";
 import {
   type AIWorkload, ConsoleLink, EntityLink, SettingsCard, aiModelDefaults,
-  aiModelOptions, aiProviderLabel, aiProviders, aiWorkloads, toolPolicy, toolStateLabel,
+  activeRecipeIntegrationID, aiModelOptions, aiProviderLabel, aiProviders, aiWorkloads, analysisMatchesIntegration,
+  recipeMatchesIntegration, toolPolicy, toolStateLabel,
 } from "./shared";
 
 function ToolsWorkspaceTabs({ active, onNavigate }: { active: "catalog" | "connections"; onNavigate: (path: string) => void }) {
@@ -43,14 +45,84 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
   analyses: APIIntegrationAnalysis[];
   recipes: APIRecipe[];
   busy: boolean;
-  onCreate: () => void;
-  onGenerate: () => void;
+  onCreate: (integrationID: string) => void;
+  onGenerate: (integrationID: string) => void;
   onEdit: (recipe: APIRecipe) => void;
   onRework: (recipe: APIRecipe) => void;
   onApprove: (recipe: APIRecipe) => void;
   onPublish: (recipe: APIRecipe) => void;
 }) {
-  return <><PageHeading eyebrow="Authoring" title="Recipes" action={<span className="heading-actions"><Button outline disabled={busy || analyses.length === 0} onClick={onGenerate}><Sparkles data-slot="icon" />Generate from evidence</Button><Button onClick={onCreate}><Plus data-slot="icon" />Create recipe</Button></span>} /><section className="panel"><PanelHeader title="Setup and usage recipes" description="Reviewed guidance grounded in published documentation and API evidence." />{recipes.map((recipe) => <div className="provider-row" key={recipe.id}><span className="settings-icon"><BookOpen /></span><span><strong>{recipe.title}</strong><small>{recipe.outcome} · {integrations.find((integration) => recipe.dependencies.some((dependency) => dependency.resource_id === integration.id))?.display_name ?? recipe.audience}</small></span>{recipe.needs_attention && <Badge color="amber">needs review</Badge>}<Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : "zinc"}>{recipe.state}</Badge><span className="table-actions"><Button outline onClick={() => onEdit(recipe)}>Edit</Button>{recipe.needs_attention && <Button outline onClick={() => onRework(recipe)}>Rework</Button>}{recipe.state === "review" && <Button onClick={() => onApprove(recipe)}>Approve</Button>}{recipe.state === "approved" && <Button onClick={() => onPublish(recipe)}>Publish</Button>}</span></div>)}{recipes.length === 0 && <div className="empty-row">No recipes yet.</div>}</section></>;
+  function recipeScopeIDs(recipe: APIRecipe) {
+    return recipe.dependencies.filter((dependency) => dependency.kind === "integration_scope").map((dependency) => dependency.resource_id);
+  }
+
+  const [selectedIntegrationID, setSelectedIntegrationID] = useState("");
+  const activeIntegrationID = activeRecipeIntegrationID(integrations, selectedIntegrationID);
+  const selectedAnalysis = activeIntegrationID
+    ? analyses
+      .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, activeIntegrationID))
+      .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]
+    : undefined;
+  const visibleRecipes = activeIntegrationID
+    ? recipes.filter((recipe) => recipeMatchesIntegration(recipe, activeIntegrationID))
+    : [];
+  const unscopedOrInvalidRecipes = recipes.filter((recipe) => {
+    const scopeIDs = recipeScopeIDs(recipe);
+    return scopeIDs.length !== 1 || !integrations.some((integration) => integration.id === scopeIDs[0]);
+  });
+
+  function renderRecipe(recipe: APIRecipe) {
+    const scopeIDs = recipeScopeIDs(recipe);
+    const scopedIntegration = scopeIDs.length === 1 ? integrations.find((integration) => integration.id === scopeIDs[0]) : undefined;
+    const invalidScope = scopeIDs.length > 1 || (scopeIDs.length === 1 && !scopedIntegration);
+    const scopeLabel = scopeIDs.length === 0
+      ? "Deployment-wide"
+      : scopeIDs.length > 1
+        ? "Multiple API scopes"
+        : scopedIntegration?.display_name ?? "Unknown API scope";
+    return <div className="provider-row" key={recipe.id}>
+      <span className="settings-icon"><BookOpen /></span>
+      <span><strong>{recipe.title}</strong><small>{recipe.outcome} · {scopeLabel}</small></span>
+      <span className="tool-badges">
+        {invalidScope && <Badge color="red">invalid scope</Badge>}
+        {recipe.needs_attention && <Badge color="amber">needs review</Badge>}
+        <Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : "zinc"}>{recipe.state}</Badge>
+      </span>
+      <span className="table-actions">
+        <Button outline disabled={busy || invalidScope} onClick={() => onEdit(recipe)}>Edit</Button>
+        {recipe.needs_attention && <Button outline disabled={busy || invalidScope} onClick={() => onRework(recipe)}>Rework</Button>}
+        {recipe.state === "review" && <Button disabled={busy || invalidScope} onClick={() => onApprove(recipe)}>Approve</Button>}
+        {recipe.state === "approved" && <Button disabled={busy || invalidScope} onClick={() => onPublish(recipe)}>Publish</Button>}
+      </span>
+    </div>;
+  }
+
+  return <>
+    <PageHeading
+      eyebrow="Authoring"
+      title="Recipes"
+      action={<span className="heading-actions">
+        <Button outline disabled={busy || !activeIntegrationID} onClick={() => onGenerate(activeIntegrationID)}><Sparkles data-slot="icon" />Generate from evidence</Button>
+        <Button disabled={busy || !activeIntegrationID} onClick={() => onCreate(activeIntegrationID)}><Plus data-slot="icon" />Create recipe</Button>
+      </span>}
+    />
+    <section className="panel">
+      <PanelHeader title="Recipe scope" description="Every generated recipe is grounded in one API's exact reviewed evidence." />
+      <div className="recipe-scope-body">
+        <label className="auth-field"><span>API</span><Select aria-label="Recipe API" value={activeIntegrationID} onChange={(event) => setSelectedIntegrationID(event.target.value)}><option value="">Choose an API</option>{integrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name} · {integration.version_key}</option>)}</Select></label>
+        <IntegrationEvidenceGaps unknowns={selectedAnalysis?.unknowns ?? []} />
+      </div>
+    </section>
+    <section className="panel">
+      <PanelHeader title="Setup and usage recipes" description="Reviewed guidance grounded in published documentation and API evidence." />
+      {visibleRecipes.map(renderRecipe)}
+      {visibleRecipes.length === 0 && <div className="empty-row">{activeIntegrationID ? "No recipes for this API yet." : "Choose an API to review its recipes."}</div>}
+    </section>
+    {unscopedOrInvalidRecipes.length > 0 && <section className="panel">
+      <PanelHeader title="Deployment-wide and scope exceptions" description="Legacy deployment-wide recipes and records with an invalid or unavailable API scope remain visible for review." />
+      {unscopedOrInvalidRecipes.map(renderRecipe)}
+    </section>}
+  </>;
 }
 
 export function OutboxView({ submissions, events, onView, onNavigate }: { submissions: APISupportSubmission[]; events: APIAuditEvent[]; onView: (submission: APISupportSubmission) => void; onNavigate: (path: string) => void }) {
@@ -63,7 +135,7 @@ function SettingsTabs({ active, onNavigate }: { active: SettingsTab; onNavigate:
 
 export function SettingsView({ product, aiProfiles, rootUsers, currentUser, onDoctor, onAddRoot, onRevokeRoot, onNavigate }: { product: APIProduct; aiProfiles: APIAIWorkloadProfile[]; rootUsers: APIUser[]; currentUser: APIUser | null; onDoctor: () => void; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
   const activeRoots = rootUsers.filter((user) => !user.revoked_at);
-  return <><PageHeading eyebrow="Administration" title="Settings" action={<Button outline onClick={onDoctor}>Run system doctor</Button>} /><SettingsTabs active="overview" onNavigate={onNavigate} /><div className="settings-grid"><button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("storage"))}><SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted secret storage" status="Healthy" /></button><button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("ai"))}><SettingsCard icon={<Bot />} title="AI providers" detail={`${aiProfiles.filter((profile) => profile.enabled).length} active workload${aiProfiles.filter((profile) => profile.enabled).length === 1 ? "" : "s"}`} status="Manage" /></button><button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("root"))}><SettingsCard icon={<ShieldCheck />} title="Root access" detail={`${activeRoots.length} MFA-protected administrator${activeRoots.length === 1 ? "" : "s"}`} status="Secure" /></button></div><section className="panel"><PanelHeader title="Deployment" /><dl className="entity-detail-grid"><div><dt>Name</dt><dd>{product.name}</dd></div><div><dt>Catalog revision</dt><dd>{product.catalog_revision}</dd></div><div><dt>Public MCP</dt><dd>{product.public_mcp_enabled ? "Enabled" : "Disabled"}</dd></div></dl></section><RootAccessPanel rootUsers={rootUsers} currentUser={currentUser} onAddRoot={onAddRoot} onRevokeRoot={onRevokeRoot} onNavigate={onNavigate} /></>;
+  return <><PageHeading eyebrow="Administration" title="Settings" action={<Button outline onClick={onDoctor}>Run system doctor</Button>} /><SettingsTabs active="overview" onNavigate={onNavigate} /><div className="settings-grid"><button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("storage"))}><SettingsCard icon={<Database />} title="Database & storage" detail="PostgreSQL migrations and encrypted secret storage" status="Healthy" /></button><button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("ai"))}><SettingsCard icon={<Bot />} title="AI configuration" detail={`${aiProfiles.filter((profile) => profile.enabled).length} active workload${aiProfiles.filter((profile) => profile.enabled).length === 1 ? "" : "s"} · versioned prompts`} status="Manage" /></button><button type="button" className="settings-button" onClick={() => onNavigate(settingsPath("root"))}><SettingsCard icon={<ShieldCheck />} title="Root access" detail={`${activeRoots.length} MFA-protected administrator${activeRoots.length === 1 ? "" : "s"}`} status="Secure" /></button></div><section className="panel"><PanelHeader title="Deployment" /><dl className="entity-detail-grid"><div><dt>Name</dt><dd>{product.name}</dd></div><div><dt>Catalog revision</dt><dd>{product.catalog_revision}</dd></div><div><dt>Public MCP</dt><dd>{product.public_mcp_enabled ? "Enabled" : "Disabled"}</dd></div></dl></section><RootAccessPanel rootUsers={rootUsers} currentUser={currentUser} onAddRoot={onAddRoot} onRevokeRoot={onRevokeRoot} onNavigate={onNavigate} /></>;
 }
 
 function RootAccessPanel({ rootUsers, currentUser, onAddRoot, onRevokeRoot, onNavigate }: { rootUsers: APIUser[]; currentUser: APIUser | null; onAddRoot: () => void; onRevokeRoot: (user: APIUser) => void; onNavigate: (path: string) => void }) {
@@ -78,9 +150,17 @@ export function StorageSettingsView({ onNavigate }: { onNavigate: (path: string)
   return <><PageHeading eyebrow="Settings" title="Database & storage" /><SettingsTabs active="storage" onNavigate={onNavigate} /><section className="panel"><PanelHeader title="Storage status" action={<Badge color="green">Healthy</Badge>} /><div className="contract-grid"><span><small>Primary database</small><strong>Connected</strong></span><span><small>Secret storage</small><strong>Encrypted</strong></span><span><small>Schema</small><strong>Current</strong></span></div></section></>;
 }
 
-export function AISettingsView({ profiles, connections, usage, saving, onSave, onConfigure, onAddProvider, onConnect, onTest, onNavigate }: { profiles: APIAIWorkloadProfile[]; connections: APIAIProviderConnection[]; usage: APIAIProviderUsage[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void; onAddProvider: () => void; onConnect: (provider: APIAIProviderConnection["provider"]) => void; onTest: (connection: APIAIProviderConnection) => void; onNavigate: (path: string) => void }) {
+const aiPromptOrder: APIAIWorkflowPrompt["key"][] = [
+  "integration.analysis",
+  "recipe.brief",
+  "recipe.authoring",
+  "recipe.review",
+];
+
+export function AISettingsView({ profiles, prompts, connections, usage, saving, onSave, onConfigure, onEditPrompt, onAddProvider, onConnect, onTest, onNavigate }: { profiles: APIAIWorkloadProfile[]; prompts: APIAIWorkflowPrompt[]; connections: APIAIProviderConnection[]; usage: APIAIProviderUsage[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void; onEditPrompt: (prompt: APIAIWorkflowPrompt) => void; onAddProvider: () => void; onConnect: (provider: APIAIProviderConnection["provider"]) => void; onTest: (connection: APIAIProviderConnection) => void; onNavigate: (path: string) => void }) {
   const primary = connections.filter((connection) => connection.enabled && !connection.is_backup);
-  return <><PageHeading eyebrow="Settings" title="AI providers" action={<Button onClick={onAddProvider}><Plus data-slot="icon" />Add provider</Button>} /><SettingsTabs active="ai" onNavigate={onNavigate} /><SectionHeader title="Workloads" /><div className="panel ai-table-panel"><Table label="AI workloads" dense><TableHead><TableRow><TableHeader>Name</TableHeader><TableHeader>Provider</TableHeader><TableHeader>Model</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{aiWorkloads.map((workload) => <AIWorkloadRow key={workload.role} workload={workload} profile={profiles.find((item) => item.workload === workload.role)} connections={primary} saving={saving} onSave={onSave} onConfigure={onConfigure} />)}</TableBody></Table></div><SectionHeader title="Providers" />{connections.length === 0 ? <div className="ai-provider-suggestions">{aiProviders.filter((provider) => provider.id !== "openai-compatible").map((provider) => <button type="button" key={provider.id} onClick={() => onConnect(provider.id)}><AIProviderLogo provider={provider.id} /><span><strong>Connect {provider.name}</strong><small>{provider.description}</small></span><ChevronRight /></button>)}</div> : <section className="panel">{connections.map((connection) => { const stats = usage.find((item) => item.provider === connection.provider); return <div className="provider-row" key={connection.id}><AIProviderLogo provider={connection.provider} /><span><strong>{aiProviderLabel(connection.provider)}</strong><small>{stats?.calls ?? 0} calls · {stats?.input_tokens ?? 0} input tokens · {stats?.output_tokens ?? 0} output tokens</small></span>{connection.is_backup && <Badge color="violet">Backup</Badge>}<Badge color={connection.enabled ? "green" : "zinc"}>{connection.enabled ? "Connected" : "Paused"}</Badge><Button outline onClick={() => onTest(connection)}>Test</Button><Button outline onClick={() => onConnect(connection.provider)}>Manage</Button></div>; })}</section>}</>;
+  const orderedPrompts = [...prompts].sort((left, right) => aiPromptOrder.indexOf(left.key) - aiPromptOrder.indexOf(right.key));
+  return <><PageHeading eyebrow="Settings" title="AI configuration" action={<Button onClick={onAddProvider}><Plus data-slot="icon" />Add provider</Button>} /><SettingsTabs active="ai" onNavigate={onNavigate} /><SectionHeader title="Workload" /><div className="panel ai-table-panel"><Table label="AI workload" dense><TableHead><TableRow><TableHeader>Name</TableHeader><TableHeader>Provider</TableHeader><TableHeader>Model</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{aiWorkloads.map((workload) => { const profile = profiles.find((item) => item.workload === workload.role); const configurationKey = `${workload.role}:${profile?.revision ?? 0}:${profile?.provider_connection_id ?? ""}:${primary.map((connection) => connection.id).join(",")}`; return <AIWorkloadRow key={configurationKey} workload={workload} profile={profile} connections={primary} saving={saving} onSave={onSave} onConfigure={onConfigure} />; })}</TableBody></Table></div><SectionHeader title="Workflow prompts" description="Versioned instructions for the four core Analysis workflows. DokoSoko always applies its built-in safety policy separately." /><div className="panel ai-table-panel"><Table label="AI workflow prompts" dense><TableHead><TableRow><TableHeader>Workflow</TableHeader><TableHeader>Source and version</TableHeader><TableHeader>Updated</TableHeader><TableHeader>Actions</TableHeader></TableRow></TableHead><TableBody>{orderedPrompts.map((prompt) => <TableRow key={prompt.key}><TableCell><strong>{prompt.label}</strong><small className="ai-table-subline">{prompt.description}</small></TableCell><TableCell><Badge color={prompt.source === "override" ? "violet" : "green"}>{prompt.source === "override" ? "Override" : "Default"} · {prompt.effective_version}</Badge><small className="ai-table-subline">Default {prompt.default_version}</small></TableCell><TableCell>{prompt.updated_at ? new Date(prompt.updated_at).toLocaleString() : "Built in"}</TableCell><TableCell><Button outline onClick={() => onEditPrompt(prompt)}>Edit instructions</Button></TableCell></TableRow>)}{orderedPrompts.length === 0 && <TableRow><TableCell colSpan={4}>Workflow prompts are unavailable.</TableCell></TableRow>}</TableBody></Table></div><SectionHeader title="Providers" />{connections.length === 0 ? <div className="ai-provider-suggestions">{aiProviders.filter((provider) => provider.id !== "openai-compatible").map((provider) => <button type="button" key={provider.id} onClick={() => onConnect(provider.id)}><AIProviderLogo provider={provider.id} /><span><strong>Connect {provider.name}</strong><small>{provider.description}</small></span><ChevronRight /></button>)}</div> : <section className="panel">{connections.map((connection) => { const stats = usage.find((item) => item.provider === connection.provider); return <div className="provider-row" key={connection.id}><AIProviderLogo provider={connection.provider} /><span><strong>{aiProviderLabel(connection.provider)}</strong><small>{stats?.calls ?? 0} calls · {stats?.input_tokens ?? 0} input tokens · {stats?.output_tokens ?? 0} output tokens</small></span>{connection.is_backup && <Badge color="violet">Backup</Badge>}<Badge color={connection.enabled ? "green" : "zinc"}>{connection.enabled ? "Connected" : "Paused"}</Badge><Button outline onClick={() => onTest(connection)}>Test</Button><Button outline onClick={() => onConnect(connection.provider)}>Manage</Button></div>; })}</section>}</>;
 }
 
 function AIWorkloadRow({ workload, profile, connections, saving, onSave, onConfigure }: { workload: (typeof aiWorkloads)[number]; profile?: APIAIWorkloadProfile; connections: APIAIProviderConnection[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void }) {

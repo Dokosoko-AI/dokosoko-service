@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -45,6 +46,30 @@ func TestCompatibleAdapterNormalizesStructuredResultsWithoutCredentialLeakage(t 
 	}
 }
 
+func TestCompatibleAdapterRejectsIncompleteAndUnknownStructuredResults(t *testing.T) {
+	for _, finishReason := range []string{"length", "future_reason", ""} {
+		t.Run(firstNonEmpty(finishReason, "missing"), func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"id":    "completion-1",
+				"model": "resolved-model",
+				"choices": []any{map[string]any{
+					"finish_reason": finishReason,
+					"message":       map[string]string{"content": `{"ok":true}`},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			doer := &responseDoer{status: http.StatusOK, body: string(body)}
+			adapter := NewCompatibleAdapter(fixedTestFactory(doer))
+			_, err = adapter.GenerateStructured(context.Background(), StructuredRequest{Provider: ProviderConfig{Provider: "openai-compatible", Endpoint: "https://provider.example", Credential: "secret"}, Model: "model", System: "System", User: "User", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 32})
+			if Code(err) != ErrorInvalidStructuredOutput || Retryable(err) {
+				t.Fatalf("finish reason %q was not rejected safely: err=%v code=%q retryable=%t", finishReason, err, Code(err), Retryable(err))
+			}
+		})
+	}
+}
+
 func TestCompatibleAdapterNormalizesProviderErrors(t *testing.T) {
 	for _, test := range []struct {
 		status int
@@ -59,7 +84,7 @@ func TestCompatibleAdapterNormalizesProviderErrors(t *testing.T) {
 	} {
 		doer := &responseDoer{status: test.status, body: test.body}
 		adapter := NewCompatibleAdapter(fixedTestFactory(doer))
-		_, err := adapter.GenerateText(context.Background(), TextRequest{Provider: ProviderConfig{Provider: "openai-compatible", Endpoint: "https://provider.example", Credential: "secret"}, Model: "model", System: "System", User: "User", MaxOutputTokens: 32})
+		_, err := adapter.GenerateStructured(context.Background(), StructuredRequest{Provider: ProviderConfig{Provider: "openai-compatible", Endpoint: "https://provider.example", Credential: "secret"}, Model: "model", System: "System", User: "User", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 32})
 		if Code(err) != test.code {
 			t.Errorf("status %d code = %q, want %q", test.status, Code(err), test.code)
 		}

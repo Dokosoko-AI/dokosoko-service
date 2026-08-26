@@ -36,17 +36,10 @@ func (a *OpenAIAdapter) GenerateStructured(ctx context.Context, request Structur
 	if name == "" {
 		name = "result"
 	}
-	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, &responses.ResponseTextConfigParam{Format: responses.ResponseFormatTextConfigParamOfJSONSchema(name, schema)})
+	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, responses.ResponseTextConfigParam{Format: responses.ResponseFormatTextConfigParamOfJSONSchema(name, schema)})
 }
 
-func (a *OpenAIAdapter) GenerateText(ctx context.Context, request TextRequest) (Result, error) {
-	if err := ValidateRequest(request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens); err != nil {
-		return Result{}, err
-	}
-	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, nil)
-}
-
-func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, model, system, user string, maxOutputTokens int, temperature float64, textConfig *responses.ResponseTextConfigParam) (Result, error) {
+func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, model, system, user string, maxOutputTokens int, temperature float64, textConfig responses.ResponseTextConfigParam) (Result, error) {
 	httpClient, err := a.clientFactory(ctx, provider.Endpoint)
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
@@ -67,9 +60,7 @@ func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	if temperature > 0 {
 		params.Temperature = openaisdk.Float(temperature)
 	}
-	if textConfig != nil {
-		params.Text = *textConfig
-	}
+	params.Text = textConfig
 	started := time.Now()
 	response, err := client.Responses.New(ctx, params)
 	duration := time.Since(started)
@@ -83,15 +74,12 @@ func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	if response == nil {
 		return Result{}, &Error{Code: ErrorProviderUnavailable, Provider: provider.Provider, Retryable: true}
 	}
-	if finishErr := textFinishReason(firstNonEmpty(response.IncompleteDetails.Reason, string(response.Status))); finishErr != nil {
-		finishErr.(*Error).Provider = provider.Provider
+	if finishErr := validateStructuredFinishReason(provider.Provider, firstNonEmpty(response.IncompleteDetails.Reason, string(response.Status)), "completed"); finishErr != nil {
 		return Result{}, finishErr
 	}
 	text := strings.TrimSpace(response.OutputText())
 	result := Result{Text: text, Provider: provider.Provider, RequestedModel: model, ResolvedModel: string(response.Model), RequestID: response.ID, FinishReason: string(response.Status), InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, Duration: duration}
-	if textConfig != nil {
-		result.JSON = json.RawMessage(text)
-	}
+	result.JSON = json.RawMessage(text)
 	return result, nil
 }
 

@@ -74,7 +74,6 @@ func (m *Memory) AIWorkloadProfiles(_ context.Context, productID string) ([]mode
 	}
 	result := make([]model.AIWorkloadProfile, 0, len(values))
 	for _, value := range values {
-		value.Hardening = append([]byte(nil), value.Hardening...)
 		result = append(result, value)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Workload < result[j].Workload })
@@ -88,7 +87,6 @@ func (m *Memory) AIWorkloadProfile(_ context.Context, productID, workload string
 	if !ok {
 		return model.AIWorkloadProfile{}, ErrNotFound
 	}
-	value.Hardening = append([]byte(nil), value.Hardening...)
 	return value, nil
 }
 
@@ -122,7 +120,6 @@ func (m *Memory) SaveAIWorkloadProfile(_ context.Context, value model.AIWorkload
 		value.Revision, value.CreatedAt = 1, now
 	}
 	value.UpdatedAt = now
-	value.Hardening = append([]byte(nil), value.Hardening...)
 	values[value.Workload] = value
 	return value, nil
 }

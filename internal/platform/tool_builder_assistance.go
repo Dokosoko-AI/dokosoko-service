@@ -112,7 +112,6 @@ func (s *Service) ProposeToolDraft(ctx context.Context, productID string, input 
 		Schema:        toolBuilderProposalOutputSchema,
 		MaxOutput:     4096,
 		Temperature:   0,
-		ActorKind:     "administrator",
 	})
 	if err != nil {
 		return ToolDraftProposal{}, err
@@ -184,7 +183,6 @@ func (s *Service) AnalyseToolDraft(ctx context.Context, productID string, input 
 		Schema:        toolBuilderAnalysisOutputSchema,
 		MaxOutput:     2048,
 		Temperature:   0,
-		ActorKind:     "administrator",
 	})
 	findings := append([]ToolDraftFinding(nil), validation.Findings...)
 	summary := "Deterministic validation complete."

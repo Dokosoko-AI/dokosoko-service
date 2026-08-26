@@ -16,7 +16,7 @@ import {
 } from "../../lib/console-routes";
 import { Badge, Button, Dialog } from "../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PageTabs, PanelHeader } from "../core/layout";
-import { IntegrationAgentGuide } from "../integrations/IntegrationAgentGuide";
+import { IntegrationSetupGuide } from "../integrations/IntegrationSetupGuide";
 import { IntegrationNavigation } from "../integrations/IntegrationNavigation";
 import { IntegrationQuickStart } from "../integrations/IntegrationQuickStart";
 import { IntegrationRuntimeAccess } from "../integrations/IntegrationRuntimeAccess";
@@ -99,7 +99,7 @@ type IntegrationWorkspaceViewProps = {
   onCrawlSource: (sourceID: string) => void;
   onPublishSource: (source: Source, attachIntegrationID?: string) => void;
   onAttachPublishedSource: (integration: APIIntegration, source: Source) => Promise<void>;
-  onGenerateAgentGuide: (integrationID: string) => Promise<APIIntegrationAnalysis>;
+  onGenerateSetupGuide: (integrationID: string) => Promise<APIIntegrationAnalysis>;
   onEditResource: (resource: APIResourceSet) => void;
   onDuplicateResource: (resource: APIResourceSet) => void;
   onDetachResource: (integrationID: string, resourceSetID: string) => void;
@@ -109,8 +109,8 @@ type IntegrationWorkspaceViewProps = {
   onNavigate: (path: string) => void;
 };
 
-function IntegrationWorkspaceView({ integration, integrations, analyses, tools, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, distribution, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateAgentGuide, onEditResource, onDuplicateResource, onDetachResource, onInspectRevision, onRuntimeChanged, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
-  const [guideBusy, setGuideBusy] = useState(false);
+function IntegrationWorkspaceView({ integration, integrations, analyses, tools, activeTab, activeResourceTab, loading, revisions, publishStatus, identity, resourceSets, sources, distribution, busy, onEdit, onPublish, onAttach, onCreateResource, onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onEditResource, onDuplicateResource, onDetachResource, onInspectRevision, onRuntimeChanged, onMessage, onNavigate }: IntegrationWorkspaceViewProps) {
+  const [setupGuideBusy, setSetupGuideBusy] = useState(false);
   if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">API</p><h1>Loading API…</h1><p>Retrieving its configuration and published history.</p></div></section>;
   if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">API</p><h1>API unavailable</h1><p>This API is not available in the current deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 
@@ -118,7 +118,7 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
   const documentationResources = attachedResources.filter((resource) => resource.kind === "documentation");
   const contractResources = attachedResources.filter((resource) => resource.kind === "api");
   const sortedRevisions = [...revisions].sort((left, right) => right.revision - left.revision);
-  const agentGuideAnalysis = analyses
+  const setupGuideAnalysis = analyses
     .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, integration.id))
     .sort((left, right) => Date.parse(right.completed_at ?? right.created_at) - Date.parse(left.completed_at ?? left.created_at))[0];
   const publishValidationCodes = new Set(publishStatus?.validations.map((validation) => validation.code) ?? []);
@@ -139,15 +139,15 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
   const validationPath = (tab: string) => integrationValidationPath(integration.id, tab);
   const integrationID = integration.id;
 
-  async function generateAgentGuide() {
-	setGuideBusy(true);
+  async function generateSetupGuide() {
+	setSetupGuideBusy(true);
 	try {
-	  const analysis = await onGenerateAgentGuide(integrationID);
-	  onMessage(analysis.generated_by === "ai_assisted" ? "Agent guide generated from this API's reviewed evidence." : "Agent guide generated deterministically; configure an analysis model for AI-assisted refinement.");
+	  const analysis = await onGenerateSetupGuide(integrationID);
+	  onMessage(analysis.generated_by === "ai_assisted" ? "Setup guide generated from this API's reviewed evidence." : "Setup guide generated deterministically; configure an Analysis model for AI-assisted refinement.");
 	} catch (error) {
-	  onMessage(error instanceof APIError || error instanceof Error ? error.message : "The agent guide could not be generated.");
+	  onMessage(error instanceof APIError || error instanceof Error ? error.message : "The setup guide could not be generated.");
 	} finally {
-	  setGuideBusy(false);
+	  setSetupGuideBusy(false);
 	}
   }
 
@@ -181,7 +181,7 @@ function IntegrationWorkspaceView({ integration, integrations, analyses, tools, 
     {activeTab === "documentation" && <div className="integration-tab-content">
       <PageTabs label="Documentation areas">{INTEGRATION_RESOURCE_TABS.map((tab) => <ConsoleLink key={tab.id} path={integrationPath(integration.id, "documentation", tab.id)} onNavigate={onNavigate} className={`page-tab resource-subtab ${activeResourceTab === tab.id ? "active" : ""}`} ariaCurrent={activeResourceTab === tab.id ? "page" : undefined}>{tab.label}</ConsoleLink>)}</PageTabs>
       {activeResourceTab === "documentation" && <>
-        <IntegrationAgentGuide analysis={agentGuideAnalysis} canGenerate={attachedResources.length > 0} busy={guideBusy} onGenerate={generateAgentGuide} />
+        <IntegrationSetupGuide analysis={setupGuideAnalysis} canGenerate={attachedResources.length > 0} busy={setupGuideBusy} onGenerate={generateSetupGuide} />
         <section className="panel"><PanelHeader title="Documentation ingestion" description="Deployment sources are reusable; attach a reviewed resource revision to this API." action={<span className="heading-actions"><ConsoleLink path={sectionPath("sources")} onNavigate={onNavigate} className="entity-back-link">All documentation</ConsoleLink><Button onClick={onAddSource}><Plus data-slot="icon" />Add source</Button></span>} />{sources.map((source) => { const publicationAttached = Boolean(source.latestPublication && integrationIncludesSourcePublication(integration, source.latestPublication.id)); return <div className="provider-row documentation-source-row" key={source.id}><span className="settings-icon"><BookOpen /></span><span><EntityLink entity="source" uid={source.id} onNavigate={onNavigate} className="entity-link"><strong>{source.name}</strong></EntityLink><small>{source.kind} · {source.location}</small></span><span className="tool-badges"><Badge color={source.quarantined || source.crawlState === "failed" ? "red" : source.crawlState === "synced" ? "green" : "amber"}>{source.quarantined ? "quarantined" : source.crawlState === "synced" ? `published r${source.latestPublication?.revision ?? 1}` : source.crawlState}</Badge><Badge color={source.visibility === "public" ? "blue" : "zinc"}>{source.visibility}</Badge></span><span className="table-actions">{source.crawlState !== "queued" && source.crawlState !== "running" && <Button outline disabled={busy} onClick={() => onCrawlSource(source.id)}>Crawl</Button>}{source.crawlState === "review" && <Button disabled={busy} onClick={() => onPublishSource(source, integration.id)}>{source.quarantined ? "Inspect" : "Review & attach"}</Button>}{source.crawlState === "synced" && source.latestPublication && (publicationAttached ? <Button outline disabled><Check data-slot="icon" />Attached</Button> : <Button disabled={busy} onClick={() => void onAttachPublishedSource(integration, source)}>Attach to API</Button>)}</span></div>; })}{sources.length === 0 && <div className="empty-row">No documentation source has been ingested.</div>}</section>
         <section className="panel"><PanelHeader title="Attached documentation" action={<span className="heading-actions"><Button outline onClick={onCreateResource}><Plus data-slot="icon" />Create set</Button><Button onClick={() => onAttach(integration, "documentation")}>Attach reviewed set</Button></span>} />{renderResourceRows(documentationResources)}</section>
       </>}
@@ -224,13 +224,13 @@ type IntegrationsViewProps = {
   onCrawlSource: (sourceID: string) => void;
   onPublishSource: (source: Source, attachIntegrationID?: string) => void;
   onAttachPublishedSource: (integrationID: string, source: Source, publication: APISourcePublication) => Promise<DocumentationAttachmentResult>;
-  onGenerateAgentGuide: (integrationID: string) => Promise<APIIntegrationAnalysis>;
+  onGenerateSetupGuide: (integrationID: string) => Promise<APIIntegrationAnalysis>;
   onChanged: () => Promise<void>;
   onMessage: (message: string) => void;
   onNavigate: (path: string) => void;
 };
 
-export function IntegrationsView({ integrations, analyses, tools, resourceSets, sources, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateAgentGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
+export function IntegrationsView({ integrations, analyses, tools, resourceSets, sources, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
   const [query, setQuery] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
   const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
@@ -415,7 +415,7 @@ export function IntegrationsView({ integrations, analyses, tools, resourceSets, 
   ].map((entry) => [String(entry.source_publication_id), entry])).values());
 
   return <>
-    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateAgentGuide={onGenerateAgentGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onNavigate={onNavigate} />}
+    {selectedIntegrationID ? <IntegrationWorkspaceView integration={selectedIntegration} integrations={integrations} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateSetupGuide={onGenerateSetupGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onNavigate={onNavigate} />}
 
     <Dialog
       open={integrationOpen}

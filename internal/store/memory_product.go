@@ -71,12 +71,11 @@ func (m *Memory) CreateProduct(_ context.Context, value model.Product) (model.Pr
 	m.tools[value.ID] = make(map[string]model.Tool)
 	m.mcpConnections[value.ID] = make(map[string]model.MCPConnection)
 	m.reportSubmissions[value.ID] = make(map[string]model.ReportSubmission)
-	m.llmProfiles[value.ID] = make(map[string]model.LLMProfile)
 	m.aiProviderConnections[value.ID] = make(map[string]model.AIProviderConnection)
 	m.aiWorkloadProfiles[value.ID] = make(map[string]model.AIWorkloadProfile)
+	m.aiPromptStates[value.ID] = make(map[string]model.AIPromptState)
 	m.integrationAnalyses[value.ID] = make(map[string]model.IntegrationAnalysis)
 	m.recipes[value.ID] = make(map[string]model.Recipe)
-	m.aiJobs[value.ID] = make(map[string]model.AIJob)
 	return value, nil
 }
 

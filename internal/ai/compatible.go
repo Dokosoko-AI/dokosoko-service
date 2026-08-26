@@ -50,17 +50,10 @@ func (a *CompatibleAdapter) GenerateStructured(ctx context.Context, request Stru
 	if err := ValidateRequest(request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens); err != nil {
 		return Result{}, err
 	}
-	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, true)
+	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature)
 }
 
-func (a *CompatibleAdapter) GenerateText(ctx context.Context, request TextRequest) (Result, error) {
-	if err := ValidateRequest(request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens); err != nil {
-		return Result{}, err
-	}
-	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, false)
-}
-
-func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfig, model, system, user string, maxOutputTokens int, temperature float64, structured bool) (Result, error) {
+func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfig, model, system, user string, maxOutputTokens int, temperature float64) (Result, error) {
 	client, endpoint, err := a.clientFactory(ctx, provider.Endpoint)
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
@@ -74,9 +67,7 @@ func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfi
 		},
 	}
 	payload[a.maxTokensField] = maxOutputTokens
-	if structured {
-		payload["response_format"] = map[string]string{"type": "json_object"}
-	}
+	payload["response_format"] = map[string]string{"type": "json_object"}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
@@ -127,10 +118,11 @@ func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfi
 	if choice.Message.Refusal != "" {
 		return Result{}, &Error{Code: ErrorRefusedOutput, Provider: provider.Provider}
 	}
-	result := Result{Text: strings.TrimSpace(choice.Message.Content), Provider: provider.Provider, RequestedModel: model, ResolvedModel: completion.Model, RequestID: firstNonEmpty(response.Header.Get("x-request-id"), completion.ID), FinishReason: choice.FinishReason, InputTokens: completion.Usage.PromptTokens, OutputTokens: completion.Usage.CompletionTokens, Duration: duration}
-	if structured {
-		result.JSON = json.RawMessage(result.Text)
+	if finishErr := validateStructuredFinishReason(provider.Provider, choice.FinishReason, "stop"); finishErr != nil {
+		return Result{}, finishErr
 	}
+	result := Result{Text: strings.TrimSpace(choice.Message.Content), Provider: provider.Provider, RequestedModel: model, ResolvedModel: completion.Model, RequestID: firstNonEmpty(response.Header.Get("x-request-id"), completion.ID), FinishReason: choice.FinishReason, InputTokens: completion.Usage.PromptTokens, OutputTokens: completion.Usage.CompletionTokens, Duration: duration}
+	result.JSON = json.RawMessage(result.Text)
 	return result, nil
 }
 

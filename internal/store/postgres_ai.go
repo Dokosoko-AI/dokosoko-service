@@ -62,11 +62,11 @@ func (p *Postgres) SaveAIProviderConnection(ctx context.Context, value model.AIP
 
 func scanAIWorkloadProfile(row interface{ Scan(...any) error }) (model.AIWorkloadProfile, error) {
 	var value model.AIWorkloadProfile
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Workload, &value.ProviderConnectionID, &value.Model, &value.MaxInputTokens, &value.MaxOutputTokens, &value.DailyTokenBudget, &value.Hardening, &value.Enabled, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.Workload, &value.ProviderConnectionID, &value.Model, &value.MaxInputTokens, &value.MaxOutputTokens, &value.DailyTokenBudget, &value.Enabled, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const aiWorkloadProfileColumns = `id::text,organisation_id::text,product_id::text,workload,provider_connection_id::text,model,max_input_tokens,max_output_tokens,daily_token_budget,hardening,enabled,revision,created_at,updated_at`
+const aiWorkloadProfileColumns = `id::text,organisation_id::text,product_id::text,workload,provider_connection_id::text,model,max_input_tokens,max_output_tokens,daily_token_budget,enabled,revision,created_at,updated_at`
 
 func (p *Postgres) AIWorkloadProfiles(ctx context.Context, productID string) ([]model.AIWorkloadProfile, error) {
 	rows, err := p.pool.Query(ctx, `SELECT `+aiWorkloadProfileColumns+` FROM ai_workload_profiles WHERE product_id=$1 ORDER BY workload`, productID)
@@ -90,10 +90,10 @@ func (p *Postgres) AIWorkloadProfile(ctx context.Context, productID, workload st
 }
 
 func (p *Postgres) SaveAIWorkloadProfile(ctx context.Context, value model.AIWorkloadProfile, expectedRevision int64) (model.AIWorkloadProfile, error) {
-	updated, err := scanAIWorkloadProfile(p.pool.QueryRow(ctx, `INSERT INTO ai_workload_profiles(id,organisation_id,product_id,workload,provider_connection_id,model,max_input_tokens,max_output_tokens,daily_token_budget,hardening,enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		ON CONFLICT (product_id,workload) DO UPDATE SET provider_connection_id=excluded.provider_connection_id,model=excluded.model,max_input_tokens=excluded.max_input_tokens,max_output_tokens=excluded.max_output_tokens,daily_token_budget=excluded.daily_token_budget,hardening=excluded.hardening,enabled=excluded.enabled,revision=ai_workload_profiles.revision+1,updated_at=now()
-		WHERE ai_workload_profiles.revision=$12
-		RETURNING `+aiWorkloadProfileColumns, value.ID, value.OrganisationID, value.ProductID, value.Workload, value.ProviderConnectionID, value.Model, value.MaxInputTokens, value.MaxOutputTokens, value.DailyTokenBudget, value.Hardening, value.Enabled, expectedRevision))
+	updated, err := scanAIWorkloadProfile(p.pool.QueryRow(ctx, `INSERT INTO ai_workload_profiles(id,organisation_id,product_id,workload,provider_connection_id,model,max_input_tokens,max_output_tokens,daily_token_budget,enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (product_id,workload) DO UPDATE SET provider_connection_id=excluded.provider_connection_id,model=excluded.model,max_input_tokens=excluded.max_input_tokens,max_output_tokens=excluded.max_output_tokens,daily_token_budget=excluded.daily_token_budget,enabled=excluded.enabled,revision=ai_workload_profiles.revision+1,updated_at=now()
+		WHERE ai_workload_profiles.revision=$11
+		RETURNING `+aiWorkloadProfileColumns, value.ID, value.OrganisationID, value.ProductID, value.Workload, value.ProviderConnectionID, value.Model, value.MaxInputTokens, value.MaxOutputTokens, value.DailyTokenBudget, value.Enabled, expectedRevision))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.AIWorkloadProfile(ctx, value.ProductID, value.Workload); lookupErr == nil {
 			return model.AIWorkloadProfile{}, ErrConflict

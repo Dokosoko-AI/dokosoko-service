@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   analysisMatchesIntegration,
+  activeRecipeIntegrationID,
   apiFamilyKeyFromName,
   buildAgentSetupEmbedHTML,
   integrationIncludesSourcePublication,
+  recipeAnalysisIsFreshlyRunning,
   recipeMatchesIntegration,
   sourcePublicationManifestEntry,
   toolPolicy,
@@ -17,6 +19,8 @@ import { APIError, type APIIntegration, type APIIntegrationAnalysis, type APIRec
 test("console domain helpers keep integration-scoped analysis and recipes isolated", () => {
   const analysis = { evidence: [{ kind: "integration_scope", resource_id: "integration-a" }] } as APIIntegrationAnalysis;
   const recipe = { dependencies: [{ kind: "integration_scope", resource_id: "integration-a" }] } as APIRecipe;
+  const ambiguousAnalysis = { evidence: [{ kind: "integration_scope", resource_id: "integration-a" }, { kind: "integration_scope", resource_id: "integration-b" }] } as APIIntegrationAnalysis;
+  const ambiguousRecipe = { dependencies: [{ kind: "integration_scope", resource_id: "integration-a" }, { kind: "integration_scope", resource_id: "integration-b" }] } as APIRecipe;
   const generalAnalysis = { evidence: [] } as unknown as APIIntegrationAnalysis;
   const generalRecipe = { dependencies: [] } as unknown as APIRecipe;
 
@@ -24,8 +28,39 @@ test("console domain helpers keep integration-scoped analysis and recipes isolat
   assert.equal(analysisMatchesIntegration(analysis, "integration-b"), false);
   assert.equal(recipeMatchesIntegration(recipe, "integration-a"), true);
   assert.equal(recipeMatchesIntegration(recipe, "integration-b"), false);
+  assert.equal(analysisMatchesIntegration(ambiguousAnalysis, "integration-a"), false);
+  assert.equal(recipeMatchesIntegration(ambiguousRecipe, "integration-a"), false);
+  assert.equal(analysisMatchesIntegration(ambiguousAnalysis), false);
+  assert.equal(recipeMatchesIntegration(ambiguousRecipe), false);
   assert.equal(analysisMatchesIntegration(generalAnalysis), true);
   assert.equal(recipeMatchesIntegration(generalRecipe), true);
+});
+
+test("recipe generation waits only for a recent running analysis", () => {
+  const now = Date.parse("2026-08-26T12:00:00Z");
+  const analysis = {
+    state: "running",
+    created_at: "2026-08-26T11:59:00Z",
+  } as unknown as APIIntegrationAnalysis;
+
+  assert.equal(recipeAnalysisIsFreshlyRunning(undefined, now), false);
+  assert.equal(recipeAnalysisIsFreshlyRunning({ ...analysis, state: "review" }, now), false);
+  assert.equal(recipeAnalysisIsFreshlyRunning({ ...analysis, state: "failed" }, now), false);
+  assert.equal(recipeAnalysisIsFreshlyRunning(analysis, now), true);
+  assert.equal(recipeAnalysisIsFreshlyRunning({ ...analysis, created_at: "2026-08-26T11:55:00Z" }, now), true);
+  assert.equal(recipeAnalysisIsFreshlyRunning({ ...analysis, created_at: "2026-08-26T11:54:59Z" }, now), false);
+  assert.equal(recipeAnalysisIsFreshlyRunning({ ...analysis, created_at: "not-a-date" }, now), false);
+});
+
+test("recipe scope is automatic only when the deployment has one API", () => {
+  const first = { id: "integration-first" } as APIIntegration;
+  const second = { id: "integration-second" } as APIIntegration;
+
+  assert.equal(activeRecipeIntegrationID([], ""), "");
+  assert.equal(activeRecipeIntegrationID([first], ""), first.id);
+  assert.equal(activeRecipeIntegrationID([first, second], ""), "");
+  assert.equal(activeRecipeIntegrationID([first, second], second.id), second.id);
+  assert.equal(activeRecipeIntegrationID([first, second], "missing"), "");
 });
 
 test("console domain helpers normalize API keys and bind exact source publications", () => {

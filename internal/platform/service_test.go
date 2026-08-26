@@ -32,7 +32,7 @@ type aiFailoverDoer struct {
 func (d *aiFailoverDoer) Do(request *http.Request) (*http.Response, error) {
 	d.requests = append(d.requests, request.URL.String())
 	status := http.StatusOK
-	body := `{"id":"resp_backup","model":"gpt-5.6-luna","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"description\":\"A grounded answer from the backup provider.\"}","annotations":[]}]}],"usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}}`
+	body := `{"id":"resp_backup","model":"gpt-5.6-terra","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"description\":\"A grounded answer from the backup provider.\"}","annotations":[]}]}],"usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}}`
 	if request.URL.Host == "primary.example.com" {
 		status = d.primaryStatus
 		body = `{"error":{"type":"provider_error"}}`
@@ -59,10 +59,10 @@ func configureAIPrimaryAndBackup(t *testing.T, primaryStatus int) (*store.Memory
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.SaveAIProviderConnection(ctx, platform.AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: "openai", Credential: "backup-secret", Enabled: true, IsBackup: true, BackupModels: map[string]string{"analysis": "gpt-5.6-terra", "assistant": "gpt-5.6-luna"}}, actor); err != nil {
+	if _, err = service.SaveAIProviderConnection(ctx, platform.AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: "openai", Credential: "backup-secret", Enabled: true, IsBackup: true, BackupModels: map[string]string{"analysis": "gpt-5.6-terra"}}, actor); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "assistant", ProviderConnectionID: primary.ID, Model: "primary-assistant", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
+	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "analysis", ProviderConnectionID: primary.ID, Model: "primary-analysis", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
 		t.Fatal(err)
 	}
 	return memory, service, product, actor, doer
@@ -123,7 +123,7 @@ func (d *productBuilderDoer) Do(request *http.Request) (*http.Response, error) {
 	d.requestBody, _ = io.ReadAll(request.Body)
 	response := d.response
 	if response == "" {
-		response = `{"choices":[{"message":{"content":"{\"assignments\":[{\"input_index\":0,\"capability_slug\":\"voice\",\"capability_name\":\"Voice API\",\"api_version\":\"v3\",\"confidence\":0.94,\"evidence\":\"The artifact describes voice calling.\"}]}"}}]}`
+		response = `{"choices":[{"finish_reason":"stop","message":{"content":"{\"assignments\":[{\"input_index\":0,\"capability_slug\":\"voice\",\"capability_name\":\"Voice API\",\"api_version\":\"v3\",\"confidence\":0.94,\"evidence\":\"The artifact describes voice calling.\"}]}"}}]}`
 	}
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response)), Header: make(http.Header)}, nil
 }
@@ -265,14 +265,18 @@ func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doer := &productBuilderDoer{response: `{"choices":[{"message":{"content":"{\"description\":\"Build voice and messaging integrations with version-matched APIs, SDKs, documentation, and authorized tools.\"}"}}]}`}
+	doer := &productBuilderDoer{response: `{"choices":[{"finish_reason":"stop","message":{"content":"{\"description\":\"Build voice and messaging integrations with version-matched APIs, SDKs, documentation, and authorized tools.\"}"}}]}`}
 	service := platform.NewWithVaultAndProductBuilderDoer(memory, vault, doer)
 	actor := platform.Actor{ID: "root_description", RequestID: "req_description"}
 	product, err := service.CreateProduct(ctx, "org_acme", "Communications Platform", "communications-description", actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SaveLLMProfile(ctx, platform.LLMProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Role: "assistant", Provider: "openai-compatible", Endpoint: "https://llm.example.com", Model: "description-1", Credential: "provider-secret", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
+	connection, err := service.SaveAIProviderConnection(ctx, platform.AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: "openai-compatible", Endpoint: "https://llm.example.com", Credential: "provider-secret", Enabled: true}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "analysis", ProviderConnectionID: connection.ID, Model: "description-1", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, actor); err != nil {
 		t.Fatal(err)
 	}
 	rewritten, err := service.RewriteProductDescription(ctx, product.ID, "Voice API v3 and Messages API v2 for developers.", actor)
@@ -292,23 +296,23 @@ func TestProductDescriptionAIRewriteReturnsAnUnsavedDraft(t *testing.T) {
 	if doer.authorization != "Bearer provider-secret" || bytes.Contains(doer.requestBody, []byte("provider-secret")) || !bytes.Contains(doer.requestBody, []byte("never invent capabilities")) {
 		t.Fatalf("rewrite request was not hardened: auth=%q body=%s", doer.authorization, doer.requestBody)
 	}
-	used, err := memory.LLMTokensUsed(ctx, product.ID, "assistant", time.Now().UTC().Add(-24*time.Hour))
-	if err != nil || used <= 0 {
-		t.Fatalf("rewrite token accounting = %d err=%v", used, err)
+	usage, err := memory.AIUsageEvents(ctx, product.ID, time.Now().UTC().Add(-24*time.Hour))
+	if err != nil || len(usage) != 1 || usage[0].Workload != "analysis" || usage[0].InputTokens+usage[0].OutputTokens <= 0 {
+		t.Fatalf("rewrite token accounting = %#v err=%v", usage, err)
 	}
 	audits, err := memory.AuditEvents(ctx, product.OrganisationID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	encodedAudits, _ := json.Marshal(audits)
-	if !bytes.Contains(encodedAudits, []byte("mcp-product-description-v1")) || bytes.Contains(encodedAudits, []byte("Voice API v3 and Messages API v2 for developers.")) {
+	if !bytes.Contains(encodedAudits, []byte("mcp-product-description-v2")) || bytes.Contains(encodedAudits, []byte("Voice API v3 and Messages API v2 for developers.")) {
 		t.Fatalf("rewrite audit omitted prompt version or retained raw draft: %s", encodedAudits)
 	}
-	supportProfile, err := memory.AIWorkloadProfile(ctx, product.ID, "assistant")
+	analysisProfile, err := memory.AIWorkloadProfile(ctx, product.ID, "analysis")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "assistant", ProviderConnectionID: supportProfile.ProviderConnectionID, Model: supportProfile.Model, MaxInputTokens: supportProfile.MaxInputTokens, MaxOutputTokens: supportProfile.MaxOutputTokens, DailyTokenBudget: 1, Enabled: true, Revision: supportProfile.Revision}, actor); err != nil {
+	if _, err = service.SaveAIWorkloadProfile(ctx, platform.AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "analysis", ProviderConnectionID: analysisProfile.ProviderConnectionID, Model: analysisProfile.Model, MaxInputTokens: analysisProfile.MaxInputTokens, MaxOutputTokens: analysisProfile.MaxOutputTokens, DailyTokenBudget: 1, Enabled: true, Revision: analysisProfile.Revision}, actor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.RewriteProductDescription(ctx, product.ID, "A second bounded draft.", actor); err == nil || !strings.Contains(err.Error(), "daily token budget") {

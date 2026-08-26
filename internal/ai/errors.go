@@ -19,6 +19,7 @@ const (
 	ErrorRefusedOutput           ErrorCode = "refused_output"
 	ErrorBudgetExhausted         ErrorCode = "budget_exhausted"
 	ErrorInvalidConfiguration    ErrorCode = "invalid_configuration"
+	ErrorUnsafeInput             ErrorCode = "unsafe_input"
 )
 
 type Error struct {

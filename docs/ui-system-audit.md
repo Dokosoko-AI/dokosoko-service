@@ -40,7 +40,7 @@ The normalised contract is now:
 | `/agent-access` | Agent access | `DistributionView` | Header, public MCP block, setup blocks, resource `DataTable`. |
 | `/operations/outbox` | Support outbox | `OutboxView` | Header, plaintext queued reports and recent audit. |
 | `/settings` | Settings overview | `SettingsView` | Header, shared settings tabs, settings collection, identity and administrator panels. |
-| `/settings/ai` | AI providers | `AISettingsView` | Header, shared settings tabs, workload and provider tables. |
+| `/settings/ai` | AI configuration | `AISettingsView` | Header, shared settings tabs, workload, prompt, and provider tables. |
 
 ### Context and entity routes
 

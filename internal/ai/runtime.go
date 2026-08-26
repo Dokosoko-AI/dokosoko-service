@@ -49,43 +49,6 @@ func (r *Registry) GenerateStructured(ctx context.Context, request StructuredReq
 	return result, nil
 }
 
-func (r *Registry) GenerateText(ctx context.Context, request TextRequest) (Result, error) {
-	adapter, err := r.adapter(request.Provider.Provider)
-	if err != nil {
-		return Result{}, err
-	}
-	return adapter.GenerateText(ctx, request)
-}
-
-func (r *Registry) StreamText(ctx context.Context, request TextRequest) (TextStream, error) {
-	result, err := r.GenerateText(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	return &singleResultStream{result: result}, nil
-}
-
-type singleResultStream struct {
-	result Result
-	read   bool
-	err    error
-}
-
-func (s *singleResultStream) Next() bool {
-	if s.read || s.err != nil {
-		return false
-	}
-	s.read = true
-	return true
-}
-
-func (s *singleResultStream) Result() Result { return s.result }
-func (s *singleResultStream) Err() error     { return s.err }
-func (s *singleResultStream) Close() error {
-	s.read = true
-	return nil
-}
-
 var _ Runtime = (*Registry)(nil)
 
 func ValidateRequest(provider ProviderConfig, model, system, user string, maxOutputTokens int) error {

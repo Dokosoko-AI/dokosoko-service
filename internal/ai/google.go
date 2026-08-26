@@ -32,13 +32,6 @@ func (a *GoogleAdapter) GenerateStructured(ctx context.Context, request Structur
 	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, schema)
 }
 
-func (a *GoogleAdapter) GenerateText(ctx context.Context, request TextRequest) (Result, error) {
-	if err := ValidateRequest(request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens); err != nil {
-		return Result{}, err
-	}
-	return a.generate(ctx, request.Provider, request.Model, request.System, request.User, request.MaxOutputTokens, request.Temperature, nil)
-}
-
 func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, model, system, user string, maxOutputTokens int, temperature float64, schema map[string]any) (Result, error) {
 	httpClient, err := a.clientFactory(ctx, provider.Endpoint)
 	if err != nil {
@@ -54,10 +47,8 @@ func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, m
 		value := float32(temperature)
 		config.Temperature = &value
 	}
-	if schema != nil {
-		config.ResponseMIMEType = "application/json"
-		config.ResponseJsonSchema = schema
-	}
+	config.ResponseMIMEType = "application/json"
+	config.ResponseJsonSchema = schema
 	started := time.Now()
 	response, err := client.Models.GenerateContent(ctx, model, genai.Text(user), config)
 	duration := time.Since(started)
@@ -75,8 +66,7 @@ func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	if len(response.Candidates) > 0 && response.Candidates[0] != nil {
 		finishReason = string(response.Candidates[0].FinishReason)
 	}
-	if finishErr := textFinishReason(finishReason); finishErr != nil {
-		finishErr.(*Error).Provider = provider.Provider
+	if finishErr := validateStructuredFinishReason(provider.Provider, finishReason, "stop"); finishErr != nil {
 		return Result{}, finishErr
 	}
 	text := strings.TrimSpace(response.Text())
@@ -85,9 +75,7 @@ func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, m
 		result.InputTokens = int64(response.UsageMetadata.PromptTokenCount)
 		result.OutputTokens = int64(response.UsageMetadata.CandidatesTokenCount)
 	}
-	if schema != nil {
-		result.JSON = json.RawMessage(text)
-	}
+	result.JSON = json.RawMessage(text)
 	return result, nil
 }
 

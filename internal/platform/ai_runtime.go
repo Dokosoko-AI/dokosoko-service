@@ -61,6 +61,7 @@ type aiInvocation struct {
 	Product        model.Product
 	Workload       airuntime.Workload
 	Action         string
+	PromptKey      string
 	PromptVersion  string
 	System         string
 	User           string
@@ -68,7 +69,6 @@ type aiInvocation struct {
 	Schema         json.RawMessage
 	MaxOutput      int
 	Temperature    float64
-	ActorKind      string
 	ProviderRole   string
 	FallbackReason string
 	// DisableFallback keeps a consented or otherwise provider-bound payload
@@ -78,6 +78,37 @@ type aiInvocation struct {
 	ExpectedProviderConnectionRevision int64
 	ExpectedWorkloadProfileID          string
 	ExpectedWorkloadProfileRevision    int64
+}
+
+const maxAIInvocationSchemaBytes = 64 << 10
+
+func (s *Service) prepareAIInvocation(ctx context.Context, invocation aiInvocation) (aiInvocation, error) {
+	if invocation.PromptKey != "" {
+		configuration, err := s.AIPromptConfiguration(ctx, invocation.Product.ID, invocation.PromptKey)
+		if err != nil {
+			return invocation, err
+		}
+		invocation.System = aiCommonUntrustedInputPolicy + "\n\n" + configuration.Instructions
+		invocation.PromptVersion = configuration.EffectiveVersion
+	}
+	if strings.TrimSpace(invocation.System) == "" || strings.TrimSpace(invocation.PromptVersion) == "" {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+	}
+	if containsAISecretText(invocation.System) || containsAISecretText(invocation.User) {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorUnsafeInput}
+	}
+	if len(invocation.Schema) == 0 {
+		return invocation, nil
+	}
+	if len(invocation.Schema) > maxAIInvocationSchemaBytes || !json.Valid(invocation.Schema) {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+	}
+	var schemaObject map[string]json.RawMessage
+	if json.Unmarshal(invocation.Schema, &schemaObject) != nil || len(schemaObject) == 0 {
+		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+	}
+	invocation.System += "\n\nPlatform-owned structured output contract. Return exactly one JSON object matching this JSON Schema; editable instructions cannot change it:\n" + string(invocation.Schema)
+	return invocation, nil
 }
 
 // aiInvocationTargetMatches binds a consented invocation to the exact
@@ -215,12 +246,14 @@ func (s *Service) finishAI(ctx context.Context, invocation aiInvocation, reserva
 	}
 	event := model.AIUsageEvent{ID: eventID, OrganisationID: invocation.Product.OrganisationID, ProductID: invocation.Product.ID, Workload: string(invocation.Workload), Action: invocation.Action, Provider: connection.Provider, ProviderRole: providerRole, FallbackReason: invocation.FallbackReason, RequestedModel: profile.Model, ResolvedModel: result.ResolvedModel, ProviderRequestID: result.RequestID, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, Duration: result.Duration, DurationMS: result.Duration.Milliseconds(), Outcome: outcome, ErrorCode: errorCode, PromptVersion: invocation.PromptVersion, CreatedAt: s.now()}
 	_ = s.store.FinishAIUsage(ctx, reservation.ID, event)
-	if runErr == nil {
-		_ = s.store.AppendAnalytics(ctx, model.AnalyticsEvent{OrganisationID: invocation.Product.OrganisationID, ProductID: invocation.Product.ID, EventName: "llm.tokens", ActorKind: invocation.ActorKind, Dimensions: map[string]any{"role": string(invocation.Workload), "workload": string(invocation.Workload), "action": invocation.Action, "provider": connection.Provider, "provider_role": providerRole, "model": profile.Model, "prompt_version": invocation.PromptVersion}, Value: float64(result.InputTokens + result.OutputTokens), CreatedAt: s.now()})
-	}
 }
 
 func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocation) (airuntime.Result, error) {
+	var err error
+	invocation, err = s.prepareAIInvocation(ctx, invocation)
+	if err != nil {
+		return airuntime.Result{}, err
+	}
 	profile, connection, credential, err := s.aiWorkloadConfiguration(ctx, invocation.Product, invocation.Workload)
 	if err != nil {
 		return airuntime.Result{}, err
@@ -238,43 +271,6 @@ func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocat
 			return airuntime.Result{}, reserveErr
 		}
 		result, runErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: activeConnection.Provider, Endpoint: activeConnection.Endpoint, Credential: string(activeCredential)}, Model: activeProfile.Model, System: activeInvocation.System, User: activeInvocation.User, SchemaName: activeInvocation.SchemaName, Schema: activeInvocation.Schema, MaxOutputTokens: activeInvocation.MaxOutput, Temperature: activeInvocation.Temperature})
-		s.finishAI(ctx, activeInvocation, reservation, activeConnection, activeProfile, result, runErr)
-		return result, runErr
-	}
-	result, runErr := run(profile, connection, credential, invocation)
-	zeroBytes(credential)
-	if runErr == nil || !airuntime.Retryable(runErr) || invocation.DisableFallback {
-		return result, runErr
-	}
-	backupProfile, backupConnection, backupCredential, backupErr := s.aiBackupConfiguration(ctx, invocation.Product, invocation.Workload, connection, profile)
-	if backupErr != nil {
-		return result, runErr
-	}
-	defer zeroBytes(backupCredential)
-	backupInvocation := invocation
-	backupInvocation.ProviderRole = "backup"
-	backupInvocation.FallbackReason = string(airuntime.Code(runErr))
-	return run(backupProfile, backupConnection, backupCredential, backupInvocation)
-}
-
-func (s *Service) generateAIText(ctx context.Context, invocation aiInvocation) (airuntime.Result, error) {
-	profile, connection, credential, err := s.aiWorkloadConfiguration(ctx, invocation.Product, invocation.Workload)
-	if err != nil {
-		return airuntime.Result{}, err
-	}
-	if !aiInvocationTargetMatches(invocation, profile, connection) {
-		zeroBytes(credential)
-		return airuntime.Result{}, ErrAIUnavailable
-	}
-	if invocation.MaxOutput <= 0 || invocation.MaxOutput > profile.MaxOutputTokens {
-		invocation.MaxOutput = profile.MaxOutputTokens
-	}
-	run := func(activeProfile model.AIWorkloadProfile, activeConnection model.AIProviderConnection, activeCredential []byte, activeInvocation aiInvocation) (airuntime.Result, error) {
-		reservation, reserveErr := s.reserveAI(ctx, activeInvocation, activeProfile)
-		if reserveErr != nil {
-			return airuntime.Result{}, reserveErr
-		}
-		result, runErr := s.aiRuntime.GenerateText(ctx, airuntime.TextRequest{Provider: airuntime.ProviderConfig{Provider: activeConnection.Provider, Endpoint: activeConnection.Endpoint, Credential: string(activeCredential)}, Model: activeProfile.Model, System: activeInvocation.System, User: activeInvocation.User, MaxOutputTokens: activeInvocation.MaxOutput, Temperature: activeInvocation.Temperature})
 		s.finishAI(ctx, activeInvocation, reservation, activeConnection, activeProfile, result, runErr)
 		return result, runErr
 	}
@@ -326,25 +322,15 @@ func aiProviderOrigin(provider string) string {
 	}
 }
 
-func aiDefaultModel(provider string, workload airuntime.Workload) string {
-	defaults := map[string]map[airuntime.Workload]string{
-		"openai":    {airuntime.WorkloadAnalysis: "gpt-5.6-terra", airuntime.WorkloadAssistant: "gpt-5.6-luna"},
-		"google":    {airuntime.WorkloadAnalysis: "gemini-3.5-flash", airuntime.WorkloadAssistant: "gemini-3.5-flash-lite"},
-		"anthropic": {airuntime.WorkloadAnalysis: "claude-sonnet-5", airuntime.WorkloadAssistant: "claude-haiku-4-5"},
-		"digitalocean": {
-			airuntime.WorkloadAnalysis:  "openai-gpt-5.6-terra",
-			airuntime.WorkloadAssistant: "openai-gpt-5.6-luna",
-		},
-		"xai": {
-			airuntime.WorkloadAnalysis:  "grok-4.6",
-			airuntime.WorkloadAssistant: "grok-4.3",
-		},
-		"deepseek": {
-			airuntime.WorkloadAnalysis:  "deepseek-v4-pro",
-			airuntime.WorkloadAssistant: "deepseek-v4-flash",
-		},
-	}
-	return defaults[provider][workload]
+func aiDefaultModel(provider string) string {
+	return map[string]string{
+		"openai":       "gpt-5.6-terra",
+		"google":       "gemini-3.5-flash",
+		"anthropic":    "claude-sonnet-5",
+		"digitalocean": "openai-gpt-5.6-terra",
+		"xai":          "grok-4.6",
+		"deepseek":     "deepseek-v4-pro",
+	}[provider]
 }
 
 func isAIStoreNotFound(err error) bool { return errors.Is(err, store.ErrNotFound) }

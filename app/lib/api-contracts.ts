@@ -812,21 +812,6 @@ export type APICustomerAccountPage = {
 
 export type APISupportSubmission = Contract.SupportSubmission;
 
-export type APILLMProfile = {
-  id: string;
-  role: "embedding" | "extraction" | "reranking" | "evaluation" | "assistant";
-  provider: string;
-  endpoint: string;
-  model: string;
-  embedding_dimensions?: number;
-  max_input_tokens: number;
-  max_output_tokens: number;
-  daily_token_budget: number;
-  hardening: Record<string, boolean>;
-  enabled: boolean;
-  revision: number;
-};
-
 export type APIAIProviderConnection = {
   id: string;
   organisation_id: string;
@@ -836,7 +821,7 @@ export type APIAIProviderConnection = {
   managed_by: "console" | "environment";
   enabled: boolean;
   is_backup: boolean;
-  backup_models: Partial<Record<"analysis" | "assistant", string>>;
+  backup_models: Partial<Record<"analysis", string>>;
   last_tested_at?: string;
   last_error_code?: string;
   revision: number;
@@ -848,18 +833,21 @@ export type APIAIWorkloadProfile = {
   id: string;
   organisation_id: string;
   product_id: string;
-  workload: "analysis" | "assistant";
+  workload: "analysis";
   provider_connection_id: string;
   model: string;
   max_input_tokens: number;
   max_output_tokens: number;
   daily_token_budget: number;
-  hardening: Record<string, boolean>;
   enabled: boolean;
   revision: number;
   created_at: string;
   updated_at: string;
 };
+
+export type APIAIWorkflowPromptKey = Contract.AiWorkflowPromptKey;
+
+export type APIAIWorkflowPrompt = Contract.AiWorkflowPrompt;
 
 export type APIIntegrationAnalysis = {
   id: string;
@@ -875,7 +863,7 @@ export type APIIntegrationAnalysis = {
     endpoints: Array<{ name: string; method: string; path: string; purpose: string; identity: string; evidence: string[] }>;
     recipes: Array<{ slug: string; title: string; outcome: string; audience: string; endpoint_ids?: string[] }>;
   };
-  unknowns: Array<{ id: string; question: string; why: string; blocking: boolean; answer?: string }>;
+  unknowns: Array<{ id: string; question: string; why: string; blocking: boolean }>;
   error_code?: string;
   revision: number;
   created_at: string;
@@ -911,7 +899,7 @@ export type APIRecipe = {
 };
 
 export type APIAIWorkloadUsage = {
-  workload: APIAIWorkloadProfile["workload"];
+  workload: Contract.AiUsageWorkload;
   calls: number;
   errors: number;
   input_tokens: number;

@@ -5,29 +5,8 @@ import (
 	"time"
 )
 
-type LLMProfile struct {
-	ID                  string          `json:"id"`
-	OrganisationID      string          `json:"organisation_id"`
-	ProductID           string          `json:"product_id"`
-	Role                string          `json:"role"`
-	Provider            string          `json:"provider"`
-	Endpoint            string          `json:"endpoint"`
-	Model               string          `json:"model"`
-	CredentialID        string          `json:"-"`
-	EmbeddingDimensions int             `json:"embedding_dimensions,omitempty"`
-	MaxInputTokens      int             `json:"max_input_tokens"`
-	MaxOutputTokens     int             `json:"max_output_tokens"`
-	DailyTokenBudget    int64           `json:"daily_token_budget"`
-	Hardening           json.RawMessage `json:"hardening"`
-	Enabled             bool            `json:"enabled"`
-	Revision            int64           `json:"revision"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-}
-
-// AIProviderConnection owns one provider credential and its transport
-// boundary. Workload profiles reference this record so the same credential is
-// not copied between Analysis and Assistant.
+// AIProviderConnection owns one provider credential and its transport boundary.
+// The Analysis workload references this record instead of copying credentials.
 type AIProviderConnection struct {
 	ID             string          `json:"id"`
 	OrganisationID string          `json:"organisation_id"`
@@ -47,20 +26,46 @@ type AIProviderConnection struct {
 }
 
 type AIWorkloadProfile struct {
-	ID                   string          `json:"id"`
-	OrganisationID       string          `json:"organisation_id"`
-	ProductID            string          `json:"product_id"`
-	Workload             string          `json:"workload"`
-	ProviderConnectionID string          `json:"provider_connection_id"`
-	Model                string          `json:"model"`
-	MaxInputTokens       int             `json:"max_input_tokens"`
-	MaxOutputTokens      int             `json:"max_output_tokens"`
-	DailyTokenBudget     int64           `json:"daily_token_budget"`
-	Hardening            json.RawMessage `json:"hardening"`
-	Enabled              bool            `json:"enabled"`
-	Revision             int64           `json:"revision"`
-	CreatedAt            time.Time       `json:"created_at"`
-	UpdatedAt            time.Time       `json:"updated_at"`
+	ID                   string    `json:"id"`
+	OrganisationID       string    `json:"organisation_id"`
+	ProductID            string    `json:"product_id"`
+	Workload             string    `json:"workload"`
+	ProviderConnectionID string    `json:"provider_connection_id"`
+	Model                string    `json:"model"`
+	MaxInputTokens       int       `json:"max_input_tokens"`
+	MaxOutputTokens      int       `json:"max_output_tokens"`
+	DailyTokenBudget     int64     `json:"daily_token_budget"`
+	Enabled              bool      `json:"enabled"`
+	Revision             int64     `json:"revision"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+// AIPromptState is the mutable state for one server-owned prompt definition.
+// Empty Instructions selects the server default while retaining the revision,
+// so resetting an override cannot reintroduce an earlier revision (the ABA
+// problem). Labels, descriptions, defaults, versions, and immutable safety
+// policy remain owned by the server binary.
+type AIPromptState struct {
+	ProductID    string    `json:"product_id"`
+	Key          string    `json:"key"`
+	Instructions string    `json:"instructions,omitempty"`
+	Revision     int64     `json:"revision"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// AIPromptConfiguration is the effective administrative view assembled from a
+// server-owned definition and an optional persisted override.
+type AIPromptConfiguration struct {
+	Key              string     `json:"key"`
+	Label            string     `json:"label"`
+	Description      string     `json:"description"`
+	Instructions     string     `json:"instructions"`
+	DefaultVersion   string     `json:"default_version"`
+	EffectiveVersion string     `json:"effective_version"`
+	Source           string     `json:"source"`
+	Revision         int64      `json:"revision"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
 }
 
 // AIBudgetReservation makes daily limits concurrency-safe. The caller must

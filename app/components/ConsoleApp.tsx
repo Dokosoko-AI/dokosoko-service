@@ -119,7 +119,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const adminWorkspace = useAdminActivityWorkspace({ currentUser, apiConnected, showToast });
   const { reportSubmissions, setReportSubmissions, rootUsers, setRootUsers, setRootOpen, setRootRecoveryCodes, auditEvents, setAuditEvents, openSupportSubmission, revokeRootUser } = adminWorkspace;
   const aiWorkspace = useAIWorkspaceState({ product, fixturePreview, onLoadProblem: recordWorkspaceLoadProblem, showToast });
-  const { aiConnections, aiProfiles, analyses, recipes, aiProviderUsage, recipeBusy, llmBusy, setProviderPickerOpen, openAIConnection, openLLMProfile, testAIConnection, saveAIWorkloadSelection, createRecipe, generateRecipesFromEvidence, generateIntegrationAgentGuide, reworkRecipe, editRecipe, approveRecipe, publishRecipe, runSystemDoctor } = aiWorkspace;
+  const { aiConnections, aiProfiles, aiPrompts, analyses, recipes, aiProviderUsage, recipeBusy, workloadBusy, setProviderPickerOpen, openAIConnection, openAIWorkload, openAIPrompt, testAIConnection, saveAIWorkloadSelection, createRecipe, generateRecipesFromEvidence, generateIntegrationSetupGuide, reworkRecipe, editRecipe, approveRecipe, publishRecipe, runSystemDoctor } = aiWorkspace;
   const sourceWorkspace = useSourceWorkflow({ product, apiConnected, sources, setSources, refreshCatalog, showToast });
   const { setAddSourceOpen, crawlSource, attachReviewedSourcePublication, publishSource } = sourceWorkspace;
   const toolBuilderUID = consoleRoute.kind === "tool-builder" ? consoleRoute.uid : undefined;
@@ -256,11 +256,9 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     navigateToPath(toolBuilderPath(target.id));
   }
 
-  function beginRecipeCreation() {
+  function beginRecipeCreation(integrationID: string) {
     const prompt = window.prompt("What should this recipe help a developer accomplish?")?.trim();
     if (!prompt) return;
-    const integrationID = integrations.length === 1 ? integrations[0].id : window.prompt(`API ID (${integrations.map((item) => item.id).join(", ")})`)?.trim() ?? "";
-    if (!integrationID) return;
     void createRecipe(prompt, integrationID);
   }
 
@@ -298,7 +296,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useEntityDetail({ consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, reportSubmissions, auditEvents, rootUsers });
   const workspaceClass = consoleRoute.kind === "tool-builder" ? "workspace-wide" : section === "identity" || section === "settings" ? "workspace-compact" : "workspace-default";
-  const integrationViewProps = { integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateAgentGuide: generateIntegrationAgentGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
+  const integrationViewProps = { integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
 
   return <Suspense fallback={<div className="console-loading-boundary"><RefreshCw className="spin" />Loading console…</div>}><div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
@@ -319,7 +317,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
             : <>
               {section === "product" && <IntegrationsView {...integrationViewProps} />}
               {section === "identity" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} onChanged={setIdentityConfig} onMessage={showToast} />}
-              {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={() => generateRecipesFromEvidence()} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onApprove={approveRecipe} onPublish={publishRecipe} />}
+              {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onApprove={approveRecipe} onPublish={publishRecipe} />}
               {section === "sources" && <SourcesView sources={sources} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
               {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
               {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
@@ -327,7 +325,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
               {section === "reporting" && <OutboxView submissions={reportSubmissions} events={auditEvents} onView={openSupportSubmission} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "overview" && <SettingsView product={product} aiProfiles={aiProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "storage" && <StorageSettingsView onNavigate={navigateToPath} />}
-              {section === "settings" && settingsTab === "ai" && <AISettingsView profiles={aiProfiles} connections={aiConnections} usage={aiProviderUsage} saving={llmBusy} onSave={saveAIWorkloadSelection} onConfigure={openLLMProfile} onAddProvider={() => setProviderPickerOpen(true)} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
+              {section === "settings" && settingsTab === "ai" && <AISettingsView profiles={aiProfiles} prompts={aiPrompts} connections={aiConnections} usage={aiProviderUsage} saving={workloadBusy} onSave={saveAIWorkloadSelection} onConfigure={openAIWorkload} onEditPrompt={openAIPrompt} onAddProvider={() => setProviderPickerOpen(true)} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "root" && <RootAccessSettingsView rootUsers={rootUsers} currentUser={currentUser ?? null} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
             </>}
         </ViewStack>

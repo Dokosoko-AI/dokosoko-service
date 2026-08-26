@@ -68,17 +68,19 @@ test("keeps the rendered navigation destinations backed by canonical routes", as
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: var\(--space-section\); \}/);
 });
 
-test("gives AI providers a dedicated, guarded settings workspace", async () => {
+test("gives AI configuration a dedicated, guarded settings workspace", async () => {
   const source = await consoleSource();
+  const client = await clientSource();
   const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
-  assert.match(routes, /label: "AI providers"/);
+  assert.match(routes, /label: "AI configuration"/);
   assert.match(routes, /settingsPath/);
-  assert.match(source, /title="AI providers"/);
+  assert.match(source, /title="AI configuration"/);
   assert.doesNotMatch(source, /Two models, two clear jobs|AI ready|workloads enabled/);
-  assert.match(source, /title="Workloads"/);
+  assert.match(source, /title="Workload"/);
+  assert.match(source, /title="Workflow prompts"/);
   assert.match(source, /title="Providers"/);
   assert.doesNotMatch(source, /Choose one strong model for analysis|Fetching, retrieval, authorization/);
   assert.match(source, /OpenAI-compatible/);
@@ -93,6 +95,13 @@ test("gives AI providers a dedicated, guarded settings workspace", async () => {
     assert.match(source, new RegExp(`provider === "${provider}"`));
   }
   assert.match(source, /Backup provider/);
+  assert.match(source, /Analysis backup model/);
+  assert.doesNotMatch(source, /Assistant backup model|name: "Assistant"/);
+  for (const key of ["integration.analysis", "recipe.brief", "recipe.authoring", "recipe.review"]) assert.match(source, new RegExp(key.replace(".", "\\.")));
+  assert.match(source, /Reset to safe default/);
+  assert.match(source, /Save new version/);
+  assert.match(source, /built-in safety policy cannot be edited or disabled/);
+  assert.doesNotMatch(source, /defaultInstructions|default_instructions/);
   assert.doesNotMatch(source, /<Badge[^>]*>Native<\/Badge>|<Badge[^>]*>Custom<\/Badge>/);
   assert.match(source, /title=\{`Configure \$\{/);
   assert.match(source, /Leave blank to keep the stored credential/);
@@ -101,8 +110,18 @@ test("gives AI providers a dedicated, guarded settings workspace", async () => {
   assert.match(styles, /\.ai-table-panel/);
   assert.match(styles, /\.ai-provider-suggestions/);
   assert.match(styles, /\.ai-provider-logo/);
-  assert.match(api, /Credential-redacted role-based AI profiles/);
-  assert.match(api, /AIWorkload:\n\s+type: string\n\s+enum:\n\s+- analysis\n\s+- assistant/);
+  assert.match(api, /Removed legacy endpoint[\s\S]*'410':/);
+  assert.doesNotMatch(api, /^ {4}(?:SaveLLMProfileRequest|LLMHardening|LLMProfile|LLMProfileList):/m);
+  assert.match(api, /AIWorkload:\n\s+type: string\n\s+enum:\n\s+- analysis/);
+  assert.match(api, /\/api\/v1\/products\/\{product_id\}\/ai-prompts:/);
+  assert.match(api, /operationId: listAIWorkflowPrompts/);
+  assert.match(api, /operationId: saveAIWorkflowPromptOverride/);
+  assert.match(api, /operationId: resetAIWorkflowPrompt/);
+  assert.match(api, /AIWorkflowPromptKey:[\s\S]*- integration\.analysis[\s\S]*- recipe\.brief[\s\S]*- recipe\.authoring[\s\S]*- recipe\.review/);
+  assert.doesNotMatch(api, /default_instructions:/);
+  assert.match(client, /aiPrompts: async/);
+  assert.match(client, /saveAIPrompt:[\s\S]*JSON\.stringify\(\{ instructions, revision \}\)/);
+  assert.match(client, /resetAIPrompt:[\s\S]*JSON\.stringify\(\{ revision \}\)/);
   assert.match(api, /provider_role:\n\s+type: string\n\s+enum:\n\s+- primary\n\s+- backup/);
   assert.match(api, /endpoint:\n\s+type: string\n\s+format: uri\n\s+description: Fixed HTTPS provider origin/);
   for (const provider of ["digitalocean", "xai", "deepseek"]) assert.match(api, new RegExp(provider));
@@ -119,22 +138,49 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(routes, /recipes: "\/recipes"/);
   for (const label of ["Create recipe", "Generate from evidence", "Setup and usage recipes", "Approve", "Publish", "Rework"]) assert.match(source, new RegExp(label));
   assert.match(source, /What should this recipe help a developer accomplish/);
+  assert.match(source, /aria-label="Recipe API"/);
+  assert.match(source, /activeRecipeIntegrationID\(integrations, selectedIntegrationID\)/);
+  assert.doesNotMatch(source, /disabled=\{busy \|\| analyses\.length/);
+  assert.match(source, /disabled=\{busy \|\| !activeIntegrationID\}/);
+  assert.match(source, /visibleRecipes = activeIntegrationID[\s\S]*recipeMatchesIntegration\(recipe, activeIntegrationID\)/);
+  assert.match(source, /unscopedOrInvalidRecipes\.map\(renderRecipe\)/);
+  assert.match(source, /disabled=\{busy \|\| invalidScope\} onClick=\{\(\) => on(?:Edit|Rework|Approve|Publish)/);
   assert.match(source, /Reviewed guidance grounded in published documentation and API evidence/);
   assert.match(source, /What should the AI rework/);
   assert.doesNotMatch(source, /Start from evidence, not a blank prompt|Review queue|Most used · 30 days/);
   assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-input/);
   assert.match(client, /createRecipe/);
+  assert.match(client, /integrationID \? \{ prompt, integration_id: integrationID \} : \{ prompt \}/);
   assert.match(api, /\/api\/v1\/products\/\{product_id\}\/recipes:/);
-  assert.match(api, /operationId: createRecipe/);
+  assert.match(api, /operationId: createRecipe[\s\S]*integration_id:[\s\S]*omission retains deployment-wide API compatibility/);
   assert.match(api, /- resources\/list/);
   assert.match(api, /- resources\/read/);
 });
 
-test("recovers stale recipe analysis and refreshes outdated evidence", async () => {
+test("keeps read-only integration evidence gaps visible", async () => {
   const source = await consoleSource();
-  assert.match(source, /staleRunning/);
-  assert.match(source, /recipe\.state === "outdated"/);
-  assert.match(source, /Date\.now\(\) - runningSince > 5 \* 60 \* 1000/);
+  const gaps = await readFile(new URL("../app/components/integrations/IntegrationEvidenceGaps.tsx", import.meta.url), "utf8");
+  const guide = await readFile(new URL("../app/components/integrations/IntegrationSetupGuide.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /<IntegrationEvidenceGaps unknowns=\{selectedAnalysis\?\.unknowns \?\? \[\]\}/);
+  assert.match(guide, /<IntegrationEvidenceGaps unknowns=\{analysis\.unknowns\}/);
+  assert.match(gaps, /unknown\.question/);
+  assert.match(gaps, /unknown\.why/);
+  assert.match(gaps, /Evidence gaps block generation/);
+  assert.match(gaps, /then generate again to run a fresh analysis/);
+  assert.match(gaps, /<section className="integration-evidence-gaps" aria-labelledby=\{headingID\}>/);
+  assert.match(gaps, /<h3 id=\{headingID\}>/);
+  assert.doesNotMatch(gaps, /role=\{blockingCount/);
+});
+
+test("refreshes scoped evidence before recipe generation without duplicating active analysis", async () => {
+  const source = await consoleSource();
+  const domain = await readFile(new URL("../app/lib/console-domain.ts", import.meta.url), "utf8");
+  assert.match(source, /recipeAnalysisIsFreshlyRunning\(latestAnalysis\)/);
+  assert.match(source, /const analysis = await api\.analyseIntegration\(product\.id, integrationID\)/);
+  assert.match(source, /analysis\.state === "review" && analysisMatchesIntegration\(analysis, activeIntegrationID\)/);
+  assert.match(domain, /analysis\?\.state !== "running"/);
+  assert.match(domain, /scopes\.length === 1 && scopes\[0\]\.resource_id === integrationID/);
 });
 
 test("uses an API directory and a complete onboarding workspace", async () => {
@@ -865,23 +911,24 @@ test("uses the real masked runtime-service model for API-local Access", async ()
   assert.match(styles, /\.runtime-credential-management/);
 });
 
-test("leads API documentation with an advisory agent guide", async () => {
+test("leads API documentation with an advisory setup guide", async () => {
   const source = await consoleSource();
-  const guide = await readFile(new URL("../app/components/integrations/IntegrationAgentGuide.tsx", import.meta.url), "utf8");
+  const guide = await readFile(new URL("../app/components/integrations/IntegrationSetupGuide.tsx", import.meta.url), "utf8");
   const styles = await stylesSource();
 
   assert.match(source, /analysis\.state === "review" && analysisMatchesIntegration\(analysis, integration\.id\)/);
-  assert.match(source, /<IntegrationAgentGuide analysis=\{agentGuideAnalysis\} canGenerate=\{attachedResources\.length > 0\} busy=\{guideBusy\} onGenerate=\{generateAgentGuide\} \/>[\s\S]*Documentation ingestion/);
-	assert.match(source, /onGenerateAgentGuide\(integrationID\)/);
+  assert.match(source, /<IntegrationSetupGuide analysis=\{setupGuideAnalysis\} canGenerate=\{attachedResources\.length > 0\} busy=\{setupGuideBusy\} onGenerate=\{generateSetupGuide\} \/>[\s\S]*Documentation ingestion/);
+	assert.match(source, /onGenerateSetupGuide\(integrationID\)/);
 	assert.match(guide, /analysis\.plan\.summary/);
   assert.match(guide, /analysis\.plan\.identity\.explanation/);
   assert.match(guide, /analysis\.plan\.endpoints\.slice\(0, 2\)/);
   assert.match(guide, /Orientation, not published evidence/);
   assert.match(guide, /Agents rely only on the reviewed resources attached below/);
   assert.match(guide, /Advisory draft/);
+	assert.match(guide, /title="Setup guide"/);
 	assert.match(guide, /Generate guide/);
 	assert.match(guide, /Refresh guide/);
   assert.doesNotMatch(guide, /Publish guide|Approve guide/);
-  assert.match(styles, /\.integration-agent-guide/);
-  assert.match(styles, /\.agent-guide-steps/);
+  assert.match(styles, /\.integration-setup-guide/);
+  assert.match(styles, /\.setup-guide-steps/);
 });

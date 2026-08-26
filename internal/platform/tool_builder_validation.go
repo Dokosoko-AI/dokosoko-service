@@ -26,7 +26,7 @@ func toolBuilderFinding(level, code, field, message string) ToolDraftFinding {
 }
 
 func containsToolBuilderSecretText(value string) bool {
-	if toolBuilderSecretAssignment.MatchString(value) || toolBuilderJWTValue.MatchString(value) || toolBuilderKnownSecretValue.MatchString(value) || toolBuilderURLUserInfo.MatchString(value) {
+	if toolBuilderSecretAssignment.MatchString(value) || toolBuilderJWTValue.MatchString(value) || toolBuilderKnownSecretValue.MatchString(value) || toolBuilderURLUserInfo.MatchString(value) || aiSecretAssignment.MatchString(value) || aiAWSAccessKey.MatchString(value) || aiPEMPrivateKey.MatchString(value) {
 		return true
 	}
 	nonValues := map[string]bool{"authentication": true, "authorization": true, "credential": true, "credentials": true, "token": true, "tokens": true}

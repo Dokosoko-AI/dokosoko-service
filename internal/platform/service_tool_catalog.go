@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dokosoko/dokosoko-service/internal/model"
-	"github.com/dokosoko/dokosoko-service/internal/store"
-	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/dokosoko/dokosoko-service/internal/model"
+	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
 type ToolInput struct {
@@ -62,128 +62,6 @@ func (s *Service) normalizeToolOwnership(ctx context.Context, product model.Prod
 	default:
 		return "", "", errors.New("tool scope must be common or api")
 	}
-}
-
-type LLMProfileInput struct {
-	OrganisationID      string
-	ProductID           string
-	Role                string
-	Provider            string
-	Endpoint            string
-	Model               string
-	Credential          string
-	EmbeddingDimensions int
-	MaxInputTokens      int
-	MaxOutputTokens     int
-	DailyTokenBudget    int64
-	Enabled             bool
-}
-
-func (s *Service) SaveLLMProfile(ctx context.Context, input LLMProfileInput, actor Actor) (model.LLMProfile, error) {
-	input.Role, input.Provider = strings.ToLower(strings.TrimSpace(input.Role)), strings.ToLower(strings.TrimSpace(input.Provider))
-	input.Endpoint, input.Model, input.Credential = strings.TrimSpace(input.Endpoint), strings.TrimSpace(input.Model), strings.TrimSpace(input.Credential)
-	roles := map[string]bool{"embedding": true, "extraction": true, "reranking": true, "evaluation": true, "assistant": true}
-	if !roles[input.Role] || input.Provider == "" || input.Model == "" || !validHTTPSBaseOrigin(input.Endpoint) {
-		return model.LLMProfile{}, errors.New("LLM role, provider, model, and fixed HTTPS endpoint are required")
-	}
-	if input.Role == "embedding" && (input.EmbeddingDimensions < 64 || input.EmbeddingDimensions > 8192) {
-		return model.LLMProfile{}, errors.New("embedding dimensions must be between 64 and 8192")
-	}
-	if input.Role != "embedding" {
-		input.EmbeddingDimensions = 0
-	}
-	if input.MaxInputTokens < 256 || input.MaxInputTokens > 1_000_000 || input.MaxOutputTokens < 1 || input.MaxOutputTokens > 32_768 || input.DailyTokenBudget < 0 || input.DailyTokenBudget > 10_000_000_000 {
-		return model.LLMProfile{}, errors.New("LLM token limits or daily budget are outside supported bounds")
-	}
-	profiles, _ := s.store.LLMProfiles(ctx, input.ProductID)
-	var current model.LLMProfile
-	for _, profile := range profiles {
-		if profile.Role == input.Role {
-			current = profile
-			break
-		}
-	}
-	if current.ID != "" && current.Provider != input.Provider && input.Credential == "" {
-		return model.LLMProfile{}, errors.New("changing the AI provider requires a new credential")
-	}
-	profileID, credentialID := current.ID, current.CredentialID
-	var err error
-	if profileID == "" {
-		profileID, err = randomUUID()
-		if err != nil {
-			return model.LLMProfile{}, err
-		}
-	}
-	if input.Credential != "" {
-		if s.vault == nil {
-			return model.LLMProfile{}, errors.New("LLM credential encryption is not configured")
-		}
-		credentialID, err = randomUUID()
-		if err != nil {
-			return model.LLMProfile{}, err
-		}
-		encrypted, err := s.vault.Encrypt([]byte(input.Credential), input.OrganisationID+":llm:"+credentialID)
-		if err != nil {
-			return model.LLMProfile{}, err
-		}
-		if _, err := s.store.CreateSecret(ctx, model.Secret{ID: credentialID, OrganisationID: input.OrganisationID, Name: "llm-" + input.Role + "-" + credentialID, Purpose: "llm_provider", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
-			return model.LLMProfile{}, err
-		}
-	}
-	if input.Enabled && credentialID == "" {
-		return model.LLMProfile{}, errors.New("an encrypted provider credential is required before enabling an LLM profile")
-	}
-	hardening := json.RawMessage(`{"context_is_untrusted":true,"tool_calls_disabled":true,"authorization_disabled":true,"require_citations":true,"no_answer_on_low_confidence":true}`)
-	value, err := s.store.SaveLLMProfile(ctx, model.LLMProfile{ID: profileID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Role: input.Role, Provider: input.Provider, Endpoint: input.Endpoint, Model: input.Model, CredentialID: credentialID, EmbeddingDimensions: input.EmbeddingDimensions, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Hardening: hardening, Enabled: input.Enabled})
-	if err != nil {
-		return model.LLMProfile{}, err
-	}
-	workloads := map[string]string{"extraction": "analysis", "evaluation": "analysis", "assistant": "assistant"}
-	if workload := workloads[input.Role]; workload != "" {
-		connections, connectionErr := s.store.AIProviderConnections(ctx, input.ProductID)
-		if connectionErr != nil && !errors.Is(connectionErr, store.ErrNotFound) {
-			return model.LLMProfile{}, connectionErr
-		}
-		var connection model.AIProviderConnection
-		for _, candidate := range connections {
-			if candidate.Provider == input.Provider {
-				connection = candidate
-				break
-			}
-		}
-		connectionRevision := connection.Revision
-		if connection.ID == "" {
-			connection.ID, err = randomUUID()
-			if err != nil {
-				return model.LLMProfile{}, err
-			}
-		}
-		if input.Credential == "" && connection.CredentialID != "" {
-			credentialID = connection.CredentialID
-		}
-		connection, err = s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connection.ID, OrganisationID: input.OrganisationID, DeploymentID: input.ProductID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: true, BackupModels: json.RawMessage(`{}`), LastTestedAt: connection.LastTestedAt, LastErrorCode: connection.LastErrorCode}, connectionRevision)
-		if err != nil {
-			return model.LLMProfile{}, err
-		}
-		currentAIProfile, profileErr := s.store.AIWorkloadProfile(ctx, input.ProductID, workload)
-		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
-			return model.LLMProfile{}, profileErr
-		}
-		aiProfileID, aiProfileRevision := currentAIProfile.ID, currentAIProfile.Revision
-		if aiProfileID == "" {
-			aiProfileID, err = randomUUID()
-			if err != nil {
-				return model.LLMProfile{}, err
-			}
-		}
-		if _, err = s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: aiProfileID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Workload: workload, ProviderConnectionID: connection.ID, Model: input.Model, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Hardening: hardening, Enabled: input.Enabled}, aiProfileRevision); err != nil {
-			return model.LLMProfile{}, err
-		}
-	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "llm.profile.saved", TargetType: "llm_profile", TargetID: value.ID, Current: map[string]any{"role": value.Role, "provider": value.Provider, "model": value.Model, "enabled": value.Enabled, "credential_rotated": input.Credential != "", "hardening": map[string]bool{"context_is_untrusted": true, "tool_calls_disabled": true, "authorization_disabled": true, "require_citations": true}}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
-		return model.LLMProfile{}, err
-	}
-	return value, nil
 }
 
 func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) (model.Tool, error) {

@@ -141,8 +141,7 @@ func run(ctx context.Context) error {
 		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
 		Endpoint: os.Getenv("DOKOSOKO_AI_ENDPOINT"),
 		Models: map[airuntime.Workload]string{
-			airuntime.WorkloadAnalysis:  os.Getenv("DOKOSOKO_AI_MODEL_ANALYSIS"),
-			airuntime.WorkloadAssistant: os.Getenv("DOKOSOKO_AI_MODEL_ASSISTANT"),
+			airuntime.WorkloadAnalysis: os.Getenv("DOKOSOKO_AI_MODEL_ANALYSIS"),
 		},
 	}); err != nil {
 		return fmt.Errorf("configure AI: %w", err)

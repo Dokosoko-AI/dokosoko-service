@@ -23,15 +23,27 @@ export type Source = {
 };
 
 const integrationRecipeScopeKind = "integration_scope";
+const recipeAnalysisRunningTimeoutMS = 5 * 60 * 1000;
 
 export function analysisMatchesIntegration(analysis: APIIntegrationAnalysis, integrationID?: string) {
   const scopes = analysis.evidence.filter((item) => item.kind === integrationRecipeScopeKind);
-  return integrationID ? scopes.some((item) => item.resource_id === integrationID) : scopes.length === 0;
+  return integrationID ? scopes.length === 1 && scopes[0].resource_id === integrationID : scopes.length === 0;
 }
 
 export function recipeMatchesIntegration(recipe: APIRecipe, integrationID?: string) {
   const scopes = recipe.dependencies.filter((item) => item.kind === integrationRecipeScopeKind);
-  return integrationID ? scopes.some((item) => item.resource_id === integrationID) : scopes.length === 0;
+  return integrationID ? scopes.length === 1 && scopes[0].resource_id === integrationID : scopes.length === 0;
+}
+
+export function activeRecipeIntegrationID(integrations: APIIntegration[], selectedIntegrationID: string) {
+  if (integrations.some((integration) => integration.id === selectedIntegrationID)) return selectedIntegrationID;
+  return integrations.length === 1 ? integrations[0].id : "";
+}
+
+export function recipeAnalysisIsFreshlyRunning(analysis: APIIntegrationAnalysis | undefined, now = Date.now()) {
+  if (analysis?.state !== "running") return false;
+  const startedAt = Date.parse(analysis.created_at);
+  return Number.isFinite(startedAt) && now - startedAt <= recipeAnalysisRunningTimeoutMS;
 }
 
 export function apiFamilyKeyFromName(value: string) {

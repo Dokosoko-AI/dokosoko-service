@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -84,6 +85,55 @@ func TestNativeProvidersSatisfyOneStructuredContract(t *testing.T) {
 	}
 }
 
+func TestNativeProvidersRejectIncompleteAndUnknownStructuredResults(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		adapter  Adapter
+	}{
+		{
+			name:     "openai truncated",
+			provider: "openai",
+			adapter:  NewOpenAIAdapter(fixtureHTTPFactory(`{"id":"resp_1","model":"gpt-test","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"ok\":true}","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}`, nil)),
+		},
+		{
+			name:     "openai unknown",
+			provider: "openai",
+			adapter:  NewOpenAIAdapter(fixtureHTTPFactory(`{"id":"resp_1","model":"gpt-test","status":"future_status","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"ok\":true}","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}`, nil)),
+		},
+		{
+			name:     "anthropic truncated",
+			provider: "anthropic",
+			adapter:  NewAnthropicAdapter(fixtureHTTPFactory(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"max_tokens","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":3}}`, nil)),
+		},
+		{
+			name:     "anthropic unknown",
+			provider: "anthropic",
+			adapter:  NewAnthropicAdapter(fixtureHTTPFactory(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"{\"ok\":true}"}],"stop_reason":"future_reason","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":3}}`, nil)),
+		},
+		{
+			name:     "google truncated",
+			provider: "google",
+			adapter:  NewGoogleAdapter(fixtureHTTPFactory(`{"candidates":[{"content":{"role":"model","parts":[{"text":"{\"ok\":true}"}]},"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"totalTokenCount":13},"modelVersion":"gemini-test","responseId":"response-1"}`, nil)),
+		},
+		{
+			name:     "google unknown",
+			provider: "google",
+			adapter:  NewGoogleAdapter(fixtureHTTPFactory(`{"candidates":[{"content":{"role":"model","parts":[{"text":"{\"ok\":true}"}]},"finishReason":"FUTURE_REASON"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"totalTokenCount":13},"modelVersion":"gemini-test","responseId":"response-1"}`, nil)),
+		},
+	}
+	request := StructuredRequest{Model: "fixture-model", System: "Return JSON.", User: "Return an object.", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 16}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request.Provider = ProviderConfig{Provider: test.provider, Endpoint: "https://provider.example", Credential: "provider-secret"}
+			_, err := test.adapter.GenerateStructured(context.Background(), request)
+			if Code(err) != ErrorInvalidStructuredOutput || Retryable(err) {
+				t.Fatalf("finish reason was not rejected safely: err=%v code=%q retryable=%t", err, Code(err), Retryable(err))
+			}
+		})
+	}
+}
+
 func TestNativeProvidersNormalizeRateLimitsAndTimeouts(t *testing.T) {
 	providers := []struct {
 		name      string
@@ -98,12 +148,12 @@ func TestNativeProvidersNormalizeRateLimitsAndTimeouts(t *testing.T) {
 		"anthropic": `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`,
 		"google":    `{"error":{"code":429,"message":"slow down","status":"RESOURCE_EXHAUSTED"}}`,
 	}
-	request := TextRequest{Model: "fixture-model", System: "Return text.", User: "Hello.", MaxOutputTokens: 16}
+	request := StructuredRequest{Model: "fixture-model", System: "Return JSON.", User: "Return an object.", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 16}
 	for _, provider := range providers {
 		t.Run(provider.name+"_rate_limit", func(t *testing.T) {
 			adapter := provider.rateLimit(fixtureHTTPErrorFactory(http.StatusTooManyRequests, rateLimitBodies[provider.name]))
 			request.Provider = ProviderConfig{Provider: provider.name, Endpoint: "https://provider.example", Credential: "provider-secret"}
-			_, err := adapter.GenerateText(context.Background(), request)
+			_, err := adapter.GenerateStructured(context.Background(), request)
 			if Code(err) != ErrorRateLimited || !Retryable(err) {
 				t.Fatalf("normalized rate limit = %v (code %q, retryable %v)", err, Code(err), Retryable(err))
 			}
@@ -111,7 +161,7 @@ func TestNativeProvidersNormalizeRateLimitsAndTimeouts(t *testing.T) {
 		t.Run(provider.name+"_timeout", func(t *testing.T) {
 			adapter := provider.rateLimit(fixtureHTTPTransportErrorFactory(context.DeadlineExceeded))
 			request.Provider = ProviderConfig{Provider: provider.name, Endpoint: "https://provider.example", Credential: "provider-secret"}
-			_, err := adapter.GenerateText(context.Background(), request)
+			_, err := adapter.GenerateStructured(context.Background(), request)
 			if Code(err) != ErrorTimeout || !Retryable(err) {
 				t.Fatalf("normalized timeout = %v (code %q, retryable %v)", err, Code(err), Retryable(err))
 			}

@@ -121,16 +121,14 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 		if !input.Enabled {
 			return model.AIProviderConnection{}, errors.New("enable a provider before using it as backup")
 		}
-		for _, workload := range []airuntime.Workload{airuntime.WorkloadAnalysis, airuntime.WorkloadAssistant} {
-			modelID := strings.TrimSpace(input.BackupModels[string(workload)])
-			if modelID == "" {
-				modelID = aiDefaultModel(input.Provider, workload)
-			}
-			if modelID == "" || len(modelID) > 160 || strings.IndexFunc(modelID, func(value rune) bool { return value < 0x20 || value == 0x7f }) >= 0 {
-				return model.AIProviderConnection{}, errors.New("choose valid Analysis and Assistant models for the backup provider")
-			}
-			backupModels[string(workload)] = modelID
+		modelID := strings.TrimSpace(input.BackupModels[string(airuntime.WorkloadAnalysis)])
+		if modelID == "" {
+			modelID = aiDefaultModel(input.Provider)
 		}
+		if modelID == "" || len(modelID) > 160 || strings.IndexFunc(modelID, func(value rune) bool { return value < 0x20 || value == 0x7f }) >= 0 {
+			return model.AIProviderConnection{}, errors.New("choose a valid Analysis model for the backup provider")
+		}
+		backupModels[string(airuntime.WorkloadAnalysis)] = modelID
 	}
 	backupModelsJSON, _ := json.Marshal(backupModels)
 	value, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: input.OrganisationID, DeploymentID: input.DeploymentID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: input.Enabled, IsBackup: input.IsBackup, BackupModels: backupModelsJSON, LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, input.Revision)
@@ -160,7 +158,7 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 	input.Workload = strings.ToLower(strings.TrimSpace(input.Workload))
 	input.Model = strings.TrimSpace(input.Model)
 	if !airuntime.ValidWorkload(input.Workload) {
-		return model.AIWorkloadProfile{}, errors.New("AI workload must be analysis or assistant")
+		return model.AIWorkloadProfile{}, errors.New("AI workload must be analysis")
 	}
 	if input.MaxInputTokens < 256 || input.MaxInputTokens > 1_000_000 || input.MaxOutputTokens < 1 || input.MaxOutputTokens > 32_768 || input.DailyTokenBudget < 0 || input.DailyTokenBudget > 10_000_000_000 {
 		return model.AIWorkloadProfile{}, errors.New("AI token limits or daily budget are outside supported bounds")
@@ -180,7 +178,7 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 		return model.AIWorkloadProfile{}, errors.New("the backup provider cannot also be selected as a primary workload provider")
 	}
 	if input.Model == "" {
-		input.Model = aiDefaultModel(connection.Provider, airuntime.Workload(input.Workload))
+		input.Model = aiDefaultModel(connection.Provider)
 	}
 	if input.Model == "" || len(input.Model) > 160 || strings.IndexFunc(input.Model, func(value rune) bool { return value < 0x20 || value == 0x7f }) >= 0 {
 		return model.AIWorkloadProfile{}, errors.New("AI model ID is invalid")
@@ -199,8 +197,7 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 			return model.AIWorkloadProfile{}, err
 		}
 	}
-	hardening := json.RawMessage(`{"context_is_untrusted":true,"tool_calls_disabled":true,"authorization_disabled":true,"require_citations":true,"no_answer_on_low_confidence":true}`)
-	value, err := s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: profileID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Workload: input.Workload, ProviderConnectionID: connection.ID, Model: input.Model, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Hardening: hardening, Enabled: input.Enabled}, input.Revision)
+	value, err := s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: profileID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Workload: input.Workload, ProviderConnectionID: connection.ID, Model: input.Model, MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens, DailyTokenBudget: input.DailyTokenBudget, Enabled: input.Enabled}, input.Revision)
 	if err != nil {
 		return model.AIWorkloadProfile{}, err
 	}
@@ -263,30 +260,23 @@ func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironme
 		return err
 	}
 	s.aiEnvironmentCredentials[config.Provider] = config.APIKey
-	for _, workload := range []airuntime.Workload{airuntime.WorkloadAnalysis, airuntime.WorkloadAssistant} {
-		currentProfile, profileErr := s.store.AIWorkloadProfile(ctx, deployment.ID, string(workload))
-		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
-			return profileErr
-		}
-		profileID := currentProfile.ID
-		if profileID == "" {
-			profileID, err = randomUUID()
-			if err != nil {
-				return err
-			}
-		}
-		modelID := strings.TrimSpace(config.Models[workload])
-		if modelID == "" {
-			modelID = aiDefaultModel(config.Provider, workload)
-		}
-		maxOutput := 4096
-		if workload == airuntime.WorkloadAssistant {
-			maxOutput = 1024
-		}
-		hardening := json.RawMessage(`{"context_is_untrusted":true,"tool_calls_disabled":true,"authorization_disabled":true,"require_citations":true,"no_answer_on_low_confidence":true}`)
-		if _, err = s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: profileID, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, Workload: string(workload), ProviderConnectionID: connection.ID, Model: modelID, MaxInputTokens: 128000, MaxOutputTokens: maxOutput, DailyTokenBudget: 0, Hardening: hardening, Enabled: true}, currentProfile.Revision); err != nil {
+	currentProfile, profileErr := s.store.AIWorkloadProfile(ctx, deployment.ID, string(airuntime.WorkloadAnalysis))
+	if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
+		return profileErr
+	}
+	profileID := currentProfile.ID
+	if profileID == "" {
+		profileID, err = randomUUID()
+		if err != nil {
 			return err
 		}
+	}
+	modelID := strings.TrimSpace(config.Models[airuntime.WorkloadAnalysis])
+	if modelID == "" {
+		modelID = aiDefaultModel(config.Provider)
+	}
+	if _, err = s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: profileID, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, Workload: string(airuntime.WorkloadAnalysis), ProviderConnectionID: connection.ID, Model: modelID, MaxInputTokens: 128000, MaxOutputTokens: 4096, DailyTokenBudget: 0, Enabled: true}, currentProfile.Revision); err != nil {
+		return err
 	}
 	return nil
 }
@@ -321,12 +311,10 @@ func (s *Service) TestAIProviderConnection(ctx context.Context, deploymentID, co
 		_ = json.Unmarshal(connection.BackupModels, &backupModels)
 		if candidate := strings.TrimSpace(backupModels[string(airuntime.WorkloadAnalysis)]); candidate != "" {
 			modelID = candidate
-		} else if candidate := strings.TrimSpace(backupModels[string(airuntime.WorkloadAssistant)]); candidate != "" {
-			modelID = candidate
 		}
 	}
 	if modelID == "" {
-		modelID = aiDefaultModel(connection.Provider, airuntime.WorkloadAnalysis)
+		modelID = aiDefaultModel(connection.Provider)
 	}
 	if modelID == "" {
 		return connection, errors.New("configure a workload model before testing an OpenAI-compatible provider")

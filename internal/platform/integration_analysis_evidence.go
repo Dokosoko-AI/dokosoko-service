@@ -19,6 +19,14 @@ type integrationSourceExcerpt struct {
 	References []model.RecipeReference
 }
 
+// evidenceText keeps operator-authored prose inside one canonical evidence
+// field. Deterministic recipe code parses only server-emitted field lines; a
+// newline in a description must never be able to introduce a forged field such
+// as "Fixed endpoint:" or "Required grants:" ahead of the authoritative one.
+func evidenceText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
 func recipeReferenceKind(label, location string) string {
 	if strings.Contains(strings.ToLower(label), "code") || strings.Contains(strings.ToLower(label), "sample") || strings.Contains(strings.ToLower(location), "github.com") {
 		return "code"
@@ -78,7 +86,7 @@ func integrationCatalogExcerpt(value model.Integration, limit int) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Family: %s\nVersion: %s\nLifecycle: %s", value.FamilyKey, value.VersionKey, value.Lifecycle)
 	if strings.TrimSpace(value.Description) != "" {
-		fmt.Fprintf(&builder, "\nDescription: %s", value.Description)
+		fmt.Fprintf(&builder, "\nDescription: %s", evidenceText(value.Description))
 	}
 	for _, resource := range value.Resources {
 		fmt.Fprintf(&builder, "\n\nResource: %s (%s)", resource.Name, resource.Kind)
@@ -91,7 +99,7 @@ func integrationCatalogExcerpt(value model.Integration, limit int) string {
 
 func toolCatalogExcerpt(value model.Tool, limit int) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Description: %s\nBackend: %s\nMethod: %s", value.Description, value.BackendKind, value.HTTPMethod)
+	fmt.Fprintf(&builder, "Description: %s\nBackend: %s\nMethod: %s", evidenceText(value.Description), value.BackendKind, value.HTTPMethod)
 	if value.BackendKind == "http" && strings.TrimSpace(value.BaseURL) != "" {
 		fmt.Fprintf(&builder, "\nFixed endpoint: %s", value.BaseURL)
 	}
@@ -120,7 +128,7 @@ func recipeToolLabel(value model.Tool, integration *model.Integration) string {
 }
 
 func automaticToolEvidence(integration model.Integration, name, description, inputSchema, details, version string) model.IntegrationEvidence {
-	excerpt := "Description: " + description + "\nInput schema: " + inputSchema
+	excerpt := "Description: " + evidenceText(description) + "\nInput schema: " + inputSchema
 	if details != "" {
 		excerpt += "\n" + details
 	}
@@ -193,7 +201,7 @@ func scopedSDKExcerpt(reference model.SDKReference, limit int) string {
 }
 
 func scopedAuthorizationExcerpt(point model.AuthorizationPoint, limit int) string {
-	return truncateRunes(fmt.Sprintf("Description: %s\nAction: %s\nRequired grants: %s\nConfirmation required: %t\nDecision TTL seconds: %d\nState: %s", point.Description, point.ActionType, strings.Join(point.RequiredGrants, ", "), point.ConfirmationRequired, point.DecisionTTLSeconds, point.State), limit)
+	return truncateRunes(fmt.Sprintf("Description: %s\nAction: %s\nRequired grants: %s\nConfirmation required: %t\nDecision TTL seconds: %d\nState: %s", evidenceText(point.Description), point.ActionType, strings.Join(point.RequiredGrants, ", "), point.ConfirmationRequired, point.DecisionTTLSeconds, point.State), limit)
 }
 
 func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.Product, integrationID string) ([]model.IntegrationEvidence, model.Integration, error) {
@@ -250,7 +258,7 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 	sort.Strings(publicationIDs)
 	documentRunes := 0
 	for _, publicationID := range publicationIDs {
-		remaining := maxAnalysisDocumentRunes - documentRunes
+		remaining := maxAnalysisScopedDocumentRunes - documentRunes
 		if remaining <= 0 {
 			break
 		}
@@ -447,7 +455,7 @@ func (s *Service) deterministicIntegrationPlan(ctx context.Context, product mode
 	if plan.Identity.Mode == "oauth2" {
 		plan.Endpoints = append(plan.Endpoints, model.IntegrationEndpointPlan{Name: "access-evaluation", Method: "POST", Path: "/v1/access/evaluations", Purpose: "Resolve the authenticated customer to bounded grants before private authorization.", Identity: "oauth2", Evidence: evidenceIDs(evidence)})
 	}
-	plan.Recipes = []model.RecipeSeed{{Slug: "connect-" + slugify(product.Slug) + "-to-mcp", Title: "Connect " + product.Name + " to MCP", Outcome: "An MCP client can discover the connector and verify access.", Audience: "developer", EndpointIDs: recipeEndpointIDs}}
+	plan.Recipes = []model.RecipeSeed{{Slug: "connect-" + slugify(product.Slug) + "-to-mcp", Title: "Connect " + product.Name + " to MCP", Outcome: "An MCP client can discover the connector and verify access.", Audience: "developer", EndpointIDs: recipeEndpointIDs, EvidenceIDs: evidenceIDs(evidence)}}
 	if integration != nil {
 		plan = namespaceIntegrationRecipes(plan, product, *integration)
 	}
@@ -475,52 +483,61 @@ func evidenceIDs(evidence []model.IntegrationEvidence) []string {
 }
 
 func normalizeIntegrationPlan(plan model.IntegrationPlan, fallback model.IntegrationPlan, evidence []model.IntegrationEvidence) model.IntegrationPlan {
-	allowedEvidence := make(map[string]bool, len(evidence)*2)
+	// Transport and identity are platform security policy, not model-authored
+	// content. The model may improve the narrative and propose recipes, but it
+	// cannot add an endpoint, change a method/path, downgrade authentication, or
+	// invent issuer/audience/grant values.
+	allowedEvidence := make(map[string]bool, len(evidence))
 	for _, item := range evidence {
-		allowedEvidence[item.ResourceID], allowedEvidence[item.Fingerprint] = true, true
+		allowedEvidence[item.ResourceID] = item.ResourceID != ""
 	}
 	if strings.TrimSpace(plan.Summary) == "" || len(plan.Summary) > 1000 {
 		plan.Summary = fallback.Summary
 	}
-	if !map[string]bool{"none": true, "oauth2": true, "api_key": true, "service_account": true}[plan.Identity.Mode] || strings.TrimSpace(plan.Identity.Explanation) == "" {
-		plan.Identity = fallback.Identity
+	plan.Identity = fallback.Identity
+	plan.Endpoints = append([]model.IntegrationEndpointPlan(nil), fallback.Endpoints...)
+	allowedEndpoints := make(map[string]bool, len(fallback.Endpoints))
+	for _, endpoint := range fallback.Endpoints {
+		allowedEndpoints[endpoint.Name] = true
 	}
-	methods := map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
-	cleanEndpoints := make([]model.IntegrationEndpointPlan, 0, len(plan.Endpoints))
-	seenEndpoint := make(map[string]bool)
-	for _, endpoint := range plan.Endpoints {
-		endpoint.Name = slugify(endpoint.Name)
-		endpoint.Method = strings.ToUpper(strings.TrimSpace(endpoint.Method))
-		endpoint.Path = strings.TrimSpace(endpoint.Path)
-		if endpoint.Name == "" || seenEndpoint[endpoint.Name] || !methods[endpoint.Method] || !strings.HasPrefix(endpoint.Path, "/") || strings.HasPrefix(endpoint.Path, "//") || len(endpoint.Path) > 500 || len(endpoint.Purpose) > 1000 {
-			continue
-		}
-		seenEndpoint[endpoint.Name] = true
-		filtered := endpoint.Evidence[:0]
-		for _, id := range endpoint.Evidence {
-			if allowedEvidence[id] {
-				filtered = append(filtered, id)
-			}
-		}
-		endpoint.Evidence = filtered
-		if len(evidence) > 0 && len(endpoint.Evidence) == 0 {
-			continue
-		}
-		cleanEndpoints = append(cleanEndpoints, endpoint)
-		if len(cleanEndpoints) == 24 {
-			break
-		}
-	}
-	if len(cleanEndpoints) == 0 {
-		cleanEndpoints = fallback.Endpoints
-	}
-	plan.Endpoints = cleanEndpoints
 	cleanRecipes := make([]model.RecipeSeed, 0, len(plan.Recipes))
 	seenRecipe := make(map[string]bool)
 	for _, seed := range plan.Recipes {
 		seed.Slug = slugify(seed.Slug)
 		seed.Title, seed.Outcome, seed.Audience = strings.TrimSpace(seed.Title), strings.TrimSpace(seed.Outcome), strings.TrimSpace(seed.Audience)
-		if seed.Slug == "" || seenRecipe[seed.Slug] || seed.Title == "" || seed.Outcome == "" || len(seed.Title) > 160 || len(seed.Outcome) > 1000 || len(seed.Audience) > 80 {
+		endpointIDs := make([]string, 0, len(seed.EndpointIDs))
+		seenEndpointID := make(map[string]bool, len(seed.EndpointIDs))
+		for _, rawEndpointID := range seed.EndpointIDs {
+			endpointID := strings.TrimSpace(rawEndpointID)
+			if allowedEndpoints[endpointID] && !seenEndpointID[endpointID] {
+				endpointIDs = append(endpointIDs, endpointID)
+				seenEndpointID[endpointID] = true
+			}
+		}
+		seed.EndpointIDs = endpointIDs
+		endpointEvidence := make(map[string]bool)
+		for _, endpoint := range fallback.Endpoints {
+			if !seenEndpointID[endpoint.Name] {
+				continue
+			}
+			for _, evidenceID := range endpoint.Evidence {
+				endpointEvidence[evidenceID] = true
+			}
+		}
+		evidenceIDs := make([]string, 0, len(seed.EvidenceIDs))
+		seenEvidenceID := make(map[string]bool, len(seed.EvidenceIDs))
+		validEvidenceSelection := true
+		for _, rawEvidenceID := range seed.EvidenceIDs {
+			evidenceID := strings.TrimSpace(rawEvidenceID)
+			if evidenceID == "" || !allowedEvidence[evidenceID] || !endpointEvidence[evidenceID] || seenEvidenceID[evidenceID] {
+				validEvidenceSelection = false
+				break
+			}
+			evidenceIDs = append(evidenceIDs, evidenceID)
+			seenEvidenceID[evidenceID] = true
+		}
+		seed.EvidenceIDs = evidenceIDs
+		if seed.Slug == "" || seenRecipe[seed.Slug] || seed.Title == "" || seed.Outcome == "" || seed.Audience == "" || len(seed.Title) > 160 || len(seed.Outcome) > 1000 || len(seed.Audience) > 80 || len(seed.EndpointIDs) == 0 || !validEvidenceSelection {
 			continue
 		}
 		seenRecipe[seed.Slug] = true

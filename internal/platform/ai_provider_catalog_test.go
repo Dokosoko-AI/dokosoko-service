@@ -33,7 +33,7 @@ func (d *providerCatalogFailoverDoer) Do(request *http.Request) (*http.Response,
 		status = http.StatusServiceUnavailable
 		body = `{"error":{"type":"provider_error"}}`
 	} else if request.URL.Host == "api.x.ai" {
-		body = `{"id":"resp_backup","model":"grok-4.3","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"description\":\"Grounded backup provider answer.\"}","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}}`
+		body = `{"id":"resp_backup","model":"grok-4.6","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"description\":\"Grounded backup provider answer.\"}","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}}`
 	}
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
@@ -90,10 +90,10 @@ func TestFirstClassProvidersCanServeAsAuditedBackups(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.SaveAIProviderConnection(ctx, AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: provider, Credential: "backup-secret", Enabled: true, IsBackup: true, BackupModels: map[string]string{"analysis": aiDefaultModel(provider, airuntime.WorkloadAnalysis), "assistant": aiDefaultModel(provider, airuntime.WorkloadAssistant)}}, Actor{ID: "root"}); err != nil {
+			if _, err = service.SaveAIProviderConnection(ctx, AIProviderConnectionInput{OrganisationID: product.OrganisationID, DeploymentID: product.ID, Provider: provider, Credential: "backup-secret", Enabled: true, IsBackup: true, BackupModels: map[string]string{"analysis": aiDefaultModel(provider)}}, Actor{ID: "root"}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = service.SaveAIWorkloadProfile(ctx, AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "assistant", ProviderConnectionID: primary.ID, Model: "primary-assistant", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, Actor{ID: "root"}); err != nil {
+			if _, err = service.SaveAIWorkloadProfile(ctx, AIWorkloadProfileInput{OrganisationID: product.OrganisationID, ProductID: product.ID, Workload: "analysis", ProviderConnectionID: primary.ID, Model: "primary-analysis", MaxInputTokens: 4096, MaxOutputTokens: 1024, DailyTokenBudget: 10000, Enabled: true}, Actor{ID: "root"}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -132,16 +132,15 @@ func TestFirstClassCompatibleProviderCatalog(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		provider       string
-		origin         string
-		analysisModel  string
-		assistantModel string
-		path           string
-		result         string
+		provider      string
+		origin        string
+		analysisModel string
+		path          string
+		result        string
 	}{
-		{provider: "digitalocean", origin: "https://inference.do-ai.run", analysisModel: "openai-gpt-5.6-terra", assistantModel: "openai-gpt-5.6-luna", path: "/v1/chat/completions", result: `{"id":"chat_do","model":"openai-gpt-5.6-terra","choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":8,"completion_tokens":3}}`},
-		{provider: "xai", origin: "https://api.x.ai", analysisModel: "grok-4.6", assistantModel: "grok-4.3", path: "/v1/responses", result: `{"id":"resp_xai","model":"grok-4.6","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"ok\":true}","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`},
-		{provider: "deepseek", origin: "https://api.deepseek.com", analysisModel: "deepseek-v4-pro", assistantModel: "deepseek-v4-flash", path: "/v1/chat/completions", result: `{"id":"chat_deepseek","model":"deepseek-v4-pro","choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":8,"completion_tokens":3}}`},
+		{provider: "digitalocean", origin: "https://inference.do-ai.run", analysisModel: "openai-gpt-5.6-terra", path: "/v1/chat/completions", result: `{"id":"chat_do","model":"openai-gpt-5.6-terra","choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":8,"completion_tokens":3}}`},
+		{provider: "xai", origin: "https://api.x.ai", analysisModel: "grok-4.6", path: "/v1/responses", result: `{"id":"resp_xai","model":"grok-4.6","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"ok\":true}","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`},
+		{provider: "deepseek", origin: "https://api.deepseek.com", analysisModel: "deepseek-v4-pro", path: "/v1/chat/completions", result: `{"id":"chat_deepseek","model":"deepseek-v4-pro","choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":8,"completion_tokens":3}}`},
 	}
 	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)
 
@@ -176,7 +175,7 @@ func TestFirstClassCompatibleProviderCatalog(t *testing.T) {
 			if test.provider == "deepseek" && !strings.Contains(doer.body, `"max_tokens":256`) {
 				t.Fatalf("DeepSeek token limit contract = %s", doer.body)
 			}
-			if aiDefaultModel(test.provider, airuntime.WorkloadAnalysis) != test.analysisModel || aiDefaultModel(test.provider, airuntime.WorkloadAssistant) != test.assistantModel {
+			if aiDefaultModel(test.provider) != test.analysisModel {
 				t.Fatal("provider defaults do not match the catalog contract")
 			}
 		})
