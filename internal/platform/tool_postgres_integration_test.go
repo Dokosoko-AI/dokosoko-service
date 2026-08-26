@@ -112,7 +112,7 @@ func TestPostgresMigratedToolLifecycleAndMCPImport(t *testing.T) {
 		}
 	})
 	if _, err := postgres.CreateProduct(ctx, model.Product{
-		ID: productID, OrganisationID: organisationID, Name: "Tool lifecycle", Slug: "tool-lifecycle", DefaultVersionPolicy: "latest",
+		ID: productID, OrganisationID: organisationID, Name: "Tool lifecycle", Slug: "tool-lifecycle",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -203,14 +203,14 @@ func TestPostgresMigratedToolLifecycleAndMCPImport(t *testing.T) {
 		t.Fatalf("retired connection auth type=%q config=%s credential=%v", authenticationType, authConfig, credentialSecretID)
 	}
 
-	manager := mcpbridge.New(storage, vault, "https://dokosoko.example", postgresMCPResolver{}, postgresMCPDoer{t: t})
+	manager := mcpbridge.New(storage, vault, postgresMCPResolver{}, postgresMCPDoer{t: t})
 	connection, err := manager.CreateConnection(ctx, mcpbridge.ConnectionInput{
 		OrganisationID: organisationID,
 		ProductID:      productID,
 		Name:           "Regression MCP",
 		Namespace:      "upstream",
 		Endpoint:       "https://mcp.vendor.example/v2",
-		AuthMode:       "none",
+		AccessToken:    "regression-access-token",
 	}, mcpbridge.Actor{RequestID: "postgres-mcp-connection"})
 	if err != nil {
 		t.Fatal(err)

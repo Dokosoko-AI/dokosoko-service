@@ -26,28 +26,11 @@ type Memory struct {
 	resourceSets                     map[string]model.ResourceSet
 	resourceSetRevisions             map[string]map[string]model.ResourceSetRevision
 	integrationResourceLinks         map[string]map[string]model.IntegrationResourceLink
-	packageArtifacts                 map[string]model.PackageArtifact
-	packageReleases                  map[string]map[string]model.PackageRelease
-	integrationPackageLinks          map[string]map[string]model.IntegrationPackageBinding
+	sdkReferences                    map[string]map[string]model.SDKReference
 	grantDefinitions                 map[string]model.GrantDefinition
 	authorizationPoints              map[string]map[string]model.AuthorizationPoint
 	integrationToolLinks             map[string]map[string]model.IntegrationToolBinding
-	accessDefinitions                map[string]model.AccessDefinition
-	accessConnections                map[string]model.AccessConnection
-	integrationAccessLinks           map[string]map[string]bool
-	accessInstances                  map[string]model.AccessInstance
-	instanceIntegrationLinks         map[string]map[string]bool
-	accessCredentials                map[string]model.AccessCredential
-	backendConnections               map[string]model.BackendConnection
-	supportRoutes                    map[string]model.SupportRoute
-	integrationSupportRoutes         map[string]string
 	products                         map[string]model.Product
-	productVersions                  map[string]map[string]model.ProductVersion
-	productVersionPins               map[string]map[string]model.ProductVersionPin
-	productVersionPinHistory         map[string][]model.ProductVersionPinHistory
-	productInstallations             map[string]map[string]model.ProductInstallation
-	productDefinitions               map[string]model.ProductDefinition
-	productBuilds                    map[string]map[string]model.ProductBuild
 	envs                             map[string]map[string]model.Environment
 	sources                          map[string]map[string]model.Source
 	sourcePublications               map[string]map[string]model.SourcePublication
@@ -63,12 +46,6 @@ type Memory struct {
 	managedOperationConfirmationUses map[string]time.Time
 	toolTestRuns                     []model.ToolTestRun
 	mcpConnections                   map[string]map[string]model.MCPConnection
-	mcpGrants                        map[string]map[string]model.MCPUserGrant
-	mcpAuthStates                    map[string]model.MCPAuthorizationState
-	providers                        map[string]map[string]model.Provider
-	projects                         map[string]map[string]model.Project
-	leases                           map[string]map[string]model.CredentialLease
-	integrationRuns                  map[string]map[string]model.IntegrationRun
 	reportSubmissions                map[string]map[string]model.ReportSubmission
 	llmProfiles                      map[string]map[string]model.LLMProfile
 	aiProviderConnections            map[string]map[string]model.AIProviderConnection
@@ -80,12 +57,6 @@ type Memory struct {
 	recipes                          map[string]map[string]model.Recipe
 	recipeRevisions                  map[string]map[string]model.RecipeRevision
 	aiJobs                           map[string]map[string]model.AIJob
-	widgets                          map[string]model.Widget
-	widgetSecrets                    map[string]model.WidgetSecret
-	widgetSecretDigests              map[string]string
-	widgetBootstraps                 map[string]model.WidgetBootstrap
-	widgetSessions                   map[string]model.WidgetSession
-	widgetAgentMessages              map[string][]model.WidgetAgentMessage
 	knowledge                        map[string][]model.KnowledgeRecord
 	crawls                           map[string][]model.CrawlJob
 	audit                            []model.AuditEvent
@@ -106,8 +77,8 @@ type Memory struct {
 func NewMemory() *Memory {
 	now := time.Now().UTC()
 	organisation := model.Organisation{ID: "org_acme", Name: "Acme", Slug: "acme", Revision: 1, CreatedAt: now, UpdatedAt: now}
-	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Description: "Build voice and messaging integrations with Acme APIs, SDKs, documentation, and managed tools.", DefaultVersionPolicy: "latest", CatalogRevision: 1, Revision: 1, CreatedAt: now, UpdatedAt: now}
-	deployment := model.Deployment{ID: product.ID, OrganisationID: product.OrganisationID, Name: product.Name, Slug: product.Slug, Description: product.Description, DefaultReleasePolicy: product.DefaultVersionPolicy, CatalogRevision: product.CatalogRevision, Revision: product.Revision, CreatedAt: now, UpdatedAt: now}
+	product := model.Product{ID: "prod_acme", OrganisationID: "org_acme", Name: "Acme Platform", Slug: "acme", Description: "Build voice and messaging integrations with Acme APIs, SDKs, documentation, and managed tools.", CatalogRevision: 1, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	deployment := model.Deployment{ID: product.ID, OrganisationID: product.OrganisationID, Name: product.Name, Slug: product.Slug, Description: product.Description, CatalogRevision: product.CatalogRevision, Revision: product.Revision, CreatedAt: now, UpdatedAt: now}
 	environment := model.Environment{ID: "env_prod", OrganisationID: organisation.ID, ProductID: product.ID, Name: "Production", Slug: "production", IsProduction: true, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	sources := map[string]model.Source{
 		"src_docs": {ID: "src_docs", OrganisationID: "org_acme", ProductID: product.ID, Name: "Developer documentation", Kind: "website", Location: "https://docs.acme.dev", Visibility: model.VisibilityPrivate, Published: true, Revision: 1, CreatedAt: now, UpdatedAt: now},
@@ -130,28 +101,11 @@ func NewMemory() *Memory {
 		resourceSets:             make(map[string]model.ResourceSet),
 		resourceSetRevisions:     make(map[string]map[string]model.ResourceSetRevision),
 		integrationResourceLinks: make(map[string]map[string]model.IntegrationResourceLink),
-		packageArtifacts:         make(map[string]model.PackageArtifact),
-		packageReleases:          make(map[string]map[string]model.PackageRelease),
-		integrationPackageLinks:  make(map[string]map[string]model.IntegrationPackageBinding),
+		sdkReferences:            make(map[string]map[string]model.SDKReference),
 		grantDefinitions:         make(map[string]model.GrantDefinition),
 		authorizationPoints:      make(map[string]map[string]model.AuthorizationPoint),
 		integrationToolLinks:     make(map[string]map[string]model.IntegrationToolBinding),
-		accessDefinitions:        make(map[string]model.AccessDefinition),
-		accessConnections:        make(map[string]model.AccessConnection),
-		integrationAccessLinks:   make(map[string]map[string]bool),
-		accessInstances:          make(map[string]model.AccessInstance),
-		instanceIntegrationLinks: make(map[string]map[string]bool),
-		accessCredentials:        make(map[string]model.AccessCredential),
-		backendConnections:       make(map[string]model.BackendConnection),
-		supportRoutes:            make(map[string]model.SupportRoute),
-		integrationSupportRoutes: make(map[string]string),
 		products:                 map[string]model.Product{product.ID: product},
-		productVersions:          map[string]map[string]model.ProductVersion{product.ID: {}},
-		productVersionPins:       map[string]map[string]model.ProductVersionPin{product.ID: {}},
-		productVersionPinHistory: map[string][]model.ProductVersionPinHistory{product.ID: {}},
-		productInstallations:     map[string]map[string]model.ProductInstallation{product.ID: {}},
-		productDefinitions:       make(map[string]model.ProductDefinition),
-		productBuilds:            map[string]map[string]model.ProductBuild{product.ID: {}},
 		envs:                     map[string]map[string]model.Environment{product.ID: {environment.ID: environment}},
 		sources:                  map[string]map[string]model.Source{product.ID: sources},
 		sourcePublications: map[string]map[string]model.SourcePublication{product.ID: {
@@ -175,12 +129,6 @@ func NewMemory() *Memory {
 		managedOperationConfirmations:    make(map[string]model.ManagedOperationConfirmation),
 		managedOperationConfirmationUses: make(map[string]time.Time),
 		mcpConnections:                   map[string]map[string]model.MCPConnection{product.ID: {}},
-		mcpGrants:                        make(map[string]map[string]model.MCPUserGrant),
-		mcpAuthStates:                    make(map[string]model.MCPAuthorizationState),
-		providers:                        map[string]map[string]model.Provider{product.ID: {}},
-		projects:                         map[string]map[string]model.Project{product.ID: {}},
-		leases:                           map[string]map[string]model.CredentialLease{product.ID: {}},
-		integrationRuns:                  map[string]map[string]model.IntegrationRun{product.ID: {}},
 		reportSubmissions:                map[string]map[string]model.ReportSubmission{product.ID: {}},
 		llmProfiles:                      map[string]map[string]model.LLMProfile{product.ID: {}},
 		aiProviderConnections:            map[string]map[string]model.AIProviderConnection{product.ID: {}},
@@ -191,12 +139,6 @@ func NewMemory() *Memory {
 		recipes:                          map[string]map[string]model.Recipe{product.ID: {}},
 		recipeRevisions:                  make(map[string]map[string]model.RecipeRevision),
 		aiJobs:                           map[string]map[string]model.AIJob{product.ID: {}},
-		widgets:                          make(map[string]model.Widget),
-		widgetSecrets:                    make(map[string]model.WidgetSecret),
-		widgetSecretDigests:              make(map[string]string),
-		widgetBootstraps:                 make(map[string]model.WidgetBootstrap),
-		widgetSessions:                   make(map[string]model.WidgetSession),
-		widgetAgentMessages:              make(map[string][]model.WidgetAgentMessage),
 		knowledge: map[string][]model.KnowledgeRecord{product.ID: {
 			{ID: "doc_api_keys", ProductID: product.ID, SourceID: "src_docs", Title: "Create an API key", Text: "Create an API key in the Acme dashboard under Developer settings. Store it server-side and rotate it regularly.", URL: "https://docs.acme.dev/api-keys", Visibility: model.VisibilityPrivate, Published: true},
 			{ID: "doc_internal", ProductID: product.ID, SourceID: "src_api", Title: "Internal administration", Text: "Private operator-only administration reference.", URL: "https://docs.acme.dev/internal", Visibility: model.VisibilityPrivate, Published: true},

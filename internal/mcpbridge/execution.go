@@ -32,21 +32,12 @@ func (m *Manager) ExecuteMCP(ctx context.Context, tool model.Tool, arguments map
 	if err != nil || connection.State != "active" || connection.ProtocolVersion != model.StatelessMCPv2Protocol || tool.UpstreamDrifted {
 		return toolruntime.MCPCallResult{}, ErrInvalidConnection
 	}
-	var bearer string
-	switch connection.AuthMode {
-	case "none":
-	case "service":
-		bearer, err = m.connectionBearer(ctx, connection)
-	case "delegated_oauth":
-		bearer, err = m.delegatedBearer(ctx, connection, principal)
-	default:
-		err = ErrUnsupportedAuth
-	}
+	bearer, err := m.connectionBearer(ctx, connection)
 	if err != nil {
 		return toolruntime.MCPCallResult{}, err
 	}
 	timeout := time.Duration(tool.TimeoutMS) * time.Millisecond
-	raw, err := m.invoke(ctx, connection, "tools/call", tool.UpstreamToolName, map[string]any{"name": tool.UpstreamToolName, "arguments": arguments}, bearer, timeout)
+	raw, err := m.invoke(ctx, connection, "tools/call", tool.UpstreamToolName, map[string]any{"name": tool.UpstreamToolName, "arguments": arguments}, bearer, &principal, timeout)
 	if err != nil {
 		return toolruntime.MCPCallResult{}, err
 	}

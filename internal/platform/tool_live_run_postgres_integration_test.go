@@ -36,7 +36,7 @@ func TestPostgresToolTestConfirmationAndSanitizedEvidence(t *testing.T) {
 		defer cleanupCancel()
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM organisations WHERE id=$1`, organisationID)
 	})
-	if _, err := postgres.CreateProduct(ctx, model.Product{ID: productID, OrganisationID: organisationID, Name: "Live test", Slug: "live-test", DefaultVersionPolicy: "latest"}); err != nil {
+	if _, err := postgres.CreateProduct(ctx, model.Product{ID: productID, OrganisationID: organisationID, Name: "Live test", Slug: "live-test"}); err != nil {
 		t.Fatal(err)
 	}
 	storage := noAuditStore{Store: postgres}

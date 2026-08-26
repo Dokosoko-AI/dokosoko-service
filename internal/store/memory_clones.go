@@ -53,31 +53,11 @@ func cloneToolRuntimeTargets(values []model.ToolRuntimeTarget) []model.ToolRunti
 }
 
 func cloneMCPConnection(value model.MCPConnection) model.MCPConnection {
-	value.Scopes = append([]string(nil), value.Scopes...)
 	value.Config = append([]byte(nil), value.Config...)
 	if value.LastSyncedAt != nil {
 		lastSynced := *value.LastSyncedAt
 		value.LastSyncedAt = &lastSynced
 	}
-	return value
-}
-
-func cloneMCPGrant(value model.MCPUserGrant) model.MCPUserGrant {
-	value.Scopes = append([]string(nil), value.Scopes...)
-	if value.RevokedAt != nil {
-		revoked := *value.RevokedAt
-		value.RevokedAt = &revoked
-	}
-	return value
-}
-
-func cloneMCPAuthorizationState(value model.MCPAuthorizationState) model.MCPAuthorizationState {
-	value.Digest = append([]byte(nil), value.Digest...)
-	return value
-}
-
-func cloneProvider(value model.Provider) model.Provider {
-	value.Config = append([]byte(nil), value.Config...)
 	return value
 }
 

@@ -16,7 +16,7 @@ Run these from the repository root unless another working directory is shown.
 - `pnpm run verify` is the primary repository verification. It runs type checking, lint, the production console build, console tests, crawler tests, and the root Go suite. `pnpm run test:all` is only an alias.
 - PostgreSQL integration tests run only when a test database URL documented in `README.md` is present. For store, migration, transaction, locking, or PostgreSQL-specific changes, run `go test ./...` against a disposable PostgreSQL 17 database with pgvector; a passing memory-only run is not sufficient.
 - `docker compose config` validates Compose shape. Container changes also require both image builds used by `.github/workflows/ci.yml`.
-- For `examples/go-backend-integration`, run `go test ./...` (or `make test`) from that directory. For `examples/mcp-acceptance-client`, run `go test ./...` from that directory. These suites are outside the root module.
+- For `examples/mcp-acceptance-client`, run `go test ./...` from that directory. This suite is outside the root module.
 
 ## Change constraints
 

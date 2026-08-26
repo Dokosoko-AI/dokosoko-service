@@ -47,7 +47,7 @@ export default defineConfig(async () => {
   return {
     server: {
       ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
-      ...(devAPIProxy ? { proxy: Object.fromEntries(["/api", "/oauth", "/mcp", "/artifacts", "/widgets", "/healthz", "/readyz"].map((path) => [path, { target: devAPIProxy, changeOrigin: false }])) } : {}),
+      ...(devAPIProxy ? { proxy: Object.fromEntries(["/api", "/oauth", "/mcp", "/artifacts", "/healthz", "/readyz"].map((path) => [path, { target: devAPIProxy, changeOrigin: false }])) } : {}),
     },
     plugins: [
       vinext(),

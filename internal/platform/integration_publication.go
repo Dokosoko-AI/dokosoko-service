@@ -46,28 +46,18 @@ type integrationResourceSnapshot struct {
 	SourcePublications []documentationManifestEntry `json:"source_publications,omitempty"`
 }
 
-type integrationPackageSnapshot struct {
-	PackageArtifactID            string           `json:"package_artifact_id"`
-	PackageReleaseID             string           `json:"package_release_id"`
-	Name                         string           `json:"name"`
-	Ecosystem                    string           `json:"ecosystem"`
-	Coordinate                   string           `json:"coordinate"`
-	Version                      string           `json:"version"`
-	PURL                         string           `json:"purl"`
-	RegistryURL                  string           `json:"registry_url"`
-	SourceURL                    string           `json:"source_url,omitempty"`
-	Language                     string           `json:"language,omitempty"`
-	Platform                     string           `json:"platform,omitempty"`
-	InstallCommand               string           `json:"install_command"`
-	Digest                       string           `json:"digest"`
-	ProvenanceURL                string           `json:"provenance_url,omitempty"`
-	SBOMURL                      string           `json:"sbom_url,omitempty"`
-	Visibility                   model.Visibility `json:"visibility"`
-	Lifecycle                    string           `json:"lifecycle"`
-	ReplacementPackageArtifactID string           `json:"replacement_package_artifact_id,omitempty"`
-	DeprecationMessage           string           `json:"deprecation_message,omitempty"`
-	SunsetAt                     *time.Time       `json:"sunset_at,omitempty"`
-	ContentHash                  string           `json:"content_hash"`
+type integrationSDKSnapshot struct {
+	ID               string           `json:"id"`
+	Ecosystem        string           `json:"ecosystem"`
+	Coordinate       string           `json:"coordinate"`
+	ExactVersion     string           `json:"exact_version"`
+	InstallCommand   string           `json:"install_command"`
+	DocumentationURL string           `json:"documentation_url,omitempty"`
+	SourceURL        string           `json:"source_url,omitempty"`
+	Checksum         string           `json:"checksum,omitempty"`
+	Visibility       model.Visibility `json:"visibility"`
+	Revision         int64            `json:"revision"`
+	ContentHash      string           `json:"content_hash"`
 }
 
 type integrationAuthorizationSnapshot struct {
@@ -108,16 +98,6 @@ type integrationToolSnapshot struct {
 	NativeContractHash         string `json:"native_contract_hash,omitempty"`
 }
 
-type integrationAccessSnapshot struct {
-	ConnectionID             string `json:"connection_id"`
-	ConnectionRevision       int64  `json:"connection_revision"`
-	AccessDefinitionID       string `json:"access_definition_id"`
-	AccessDefinitionRevision int64  `json:"access_definition_revision"`
-	EnvironmentID            string `json:"environment_id,omitempty"`
-	State                    string `json:"state"`
-	ContentHash              string `json:"content_hash"`
-}
-
 type integrationServiceConnectionRevisionSnapshot struct {
 	RevisionID         string          `json:"revision_id"`
 	Revision           int64           `json:"revision"`
@@ -150,22 +130,18 @@ type integrationSnapshot struct {
 	ReplacementIntegrationID string                                 `json:"replacement_integration_id,omitempty"`
 	SunsetAt                 *time.Time                             `json:"sunset_at,omitempty"`
 	Resources                []integrationResourceSnapshot          `json:"resource_sets"`
-	Packages                 []integrationPackageSnapshot           `json:"packages"`
+	SDKs                     []integrationSDKSnapshot               `json:"sdks"`
 	AuthorizationPoints      []integrationAuthorizationSnapshot     `json:"authorization_points"`
 	Tools                    []integrationToolSnapshot              `json:"tools"`
 	ServiceConnections       []integrationServiceConnectionSnapshot `json:"service_connections"`
-	AccessConnections        []integrationAccessSnapshot            `json:"access_connections"`
-	AccessConnectionIDs      []string                               `json:"access_connection_ids,omitempty"`
-	SupportRouteID           string                                 `json:"support_route_id,omitempty"`
 }
 
 type integrationPublicationInputSet struct {
-	GrantDefinitions              []model.GrantDefinition
-	AuthorizationPoints           []model.AuthorizationPoint
-	ToolBindings                  []model.IntegrationToolBinding
-	ProviderManagementConnections []model.AccessConnection
-	RuntimeServiceConnections     []model.RuntimeServiceConnection
-	RuntimeCredentialSets         []model.RuntimeCredentialSet
+	GrantDefinitions          []model.GrantDefinition
+	AuthorizationPoints       []model.AuthorizationPoint
+	ToolBindings              []model.IntegrationToolBinding
+	RuntimeServiceConnections []model.RuntimeServiceConnection
+	RuntimeCredentialSets     []model.RuntimeCredentialSet
 }
 
 func (s *Service) integrationPublicationInputs(ctx context.Context, integration model.Integration) (integrationPublicationInputSet, error) {
@@ -185,15 +161,6 @@ func (s *Service) integrationPublicationInputs(ctx context.Context, integration 
 		return result, err
 	}
 	result.ToolBindings = bindings
-	connections := make([]model.AccessConnection, 0, len(integration.AccessConnections))
-	for _, connectionID := range integration.AccessConnections {
-		connection, connectionErr := s.store.AccessConnection(ctx, integration.DeploymentID, connectionID)
-		if connectionErr != nil {
-			return result, connectionErr
-		}
-		connections = append(connections, connection)
-	}
-	result.ProviderManagementConnections = connections
 	result.RuntimeServiceConnections, err = s.store.RuntimeServiceConnections(ctx, integration.DeploymentID, integration.ID)
 	if err != nil {
 		return result, err
@@ -205,7 +172,7 @@ func (s *Service) integrationPublicationInputs(ctx context.Context, integration 
 	return result, nil
 }
 
-func buildIntegrationSnapshot(integration model.Integration, inputs integrationPublicationInputSet, now time.Time) (json.RawMessage, []IntegrationPublishValidation, error) {
+func buildIntegrationSnapshot(integration model.Integration, inputs integrationPublicationInputSet) (json.RawMessage, []IntegrationPublishValidation, error) {
 	grantDefinitions, authorizationPoints, toolBindings := inputs.GrantDefinitions, inputs.AuthorizationPoints, inputs.ToolBindings
 	validations := make([]IntegrationPublishValidation, 0)
 	resources := make([]integrationResourceSnapshot, 0, len(integration.Resources))
@@ -234,31 +201,27 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 	if len(integration.Resources) == 0 {
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation or API set is attached.", Tab: "resources"})
 	}
-	packages := make([]integrationPackageSnapshot, 0, len(integration.Packages))
-	for _, binding := range integration.Packages {
-		if binding.Artifact == nil || binding.Artifact.ID != binding.PackageArtifactID || binding.Release == nil || binding.Release.PackageArtifactID != binding.PackageArtifactID || binding.Release.ID != binding.PackageReleaseID {
-			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "package_release_unresolved", Message: "A package binding has no resolvable exact release.", Tab: "resources"})
+	sdks := make([]integrationSDKSnapshot, 0, len(integration.SDKs))
+	for _, reference := range integration.SDKs {
+		if reference.ID == "" || reference.Revision < 1 || reference.IntegrationID != integration.ID || reference.DeploymentID != integration.DeploymentID {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "sdk_reference_unresolved", Message: "An SDK reference does not resolve to this API.", Tab: "resources"})
 			continue
 		}
-		if integration.Visibility == model.VisibilityPublic && binding.Release.Visibility != model.VisibilityPublic {
-			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "private_package_on_public_integration", Message: fmt.Sprintf("%s is private and cannot be published on a public integration", binding.Release.ArtifactName), Tab: "resources"})
+		if integration.Visibility == model.VisibilityPublic && reference.Visibility != model.VisibilityPublic {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "private_sdk_on_public_integration", Message: fmt.Sprintf("%s is private and cannot be published on a public API", reference.Coordinate), Tab: "resources"})
 			continue
 		}
-		if unavailable := packageArtifactUnavailableMessage(*binding.Artifact, now); unavailable != "" {
-			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "package_artifact_unavailable", Message: unavailable, Tab: "resources"})
+		canonical, err := json.Marshal(map[string]any{"id": reference.ID, "ecosystem": reference.Ecosystem, "coordinate": reference.Coordinate, "exact_version": reference.ExactVersion, "install_command": reference.InstallCommand, "documentation_url": reference.DocumentationURL, "source_url": reference.SourceURL, "checksum": reference.Checksum, "visibility": reference.Visibility, "revision": reference.Revision})
+		if err != nil {
+			return nil, validations, err
 		}
-		release := binding.Release
-		artifact := binding.Artifact
-		packages = append(packages, integrationPackageSnapshot{PackageArtifactID: binding.PackageArtifactID, PackageReleaseID: binding.PackageReleaseID, Name: release.ArtifactName, Ecosystem: release.Ecosystem, Coordinate: release.Coordinate, Version: release.Version, PURL: release.PURL, RegistryURL: release.RegistryURL, SourceURL: release.SourceURL, Language: release.Language, Platform: release.Platform, InstallCommand: release.InstallCommand, Digest: release.Digest, ProvenanceURL: release.ProvenanceURL, SBOMURL: release.SBOMURL, Visibility: release.Visibility, Lifecycle: artifact.Lifecycle, ReplacementPackageArtifactID: artifact.ReplacementPackageArtifactID, DeprecationMessage: artifact.DeprecationMessage, SunsetAt: artifact.SunsetAt, ContentHash: release.ContentHash})
+		sdks = append(sdks, integrationSDKSnapshot{ID: reference.ID, Ecosystem: reference.Ecosystem, Coordinate: reference.Coordinate, ExactVersion: reference.ExactVersion, InstallCommand: reference.InstallCommand, DocumentationURL: reference.DocumentationURL, SourceURL: reference.SourceURL, Checksum: reference.Checksum, Visibility: reference.Visibility, Revision: reference.Revision, ContentHash: contentHash(canonical)})
 	}
-	sort.Slice(packages, func(i, j int) bool {
-		if packages[i].Ecosystem == packages[j].Ecosystem {
-			if packages[i].Coordinate == packages[j].Coordinate {
-				return packages[i].PackageReleaseID < packages[j].PackageReleaseID
-			}
-			return packages[i].Coordinate < packages[j].Coordinate
+	sort.Slice(sdks, func(i, j int) bool {
+		if sdks[i].Ecosystem == sdks[j].Ecosystem {
+			return sdks[i].Coordinate < sdks[j].Coordinate
 		}
-		return packages[i].Ecosystem < packages[j].Ecosystem
+		return sdks[i].Ecosystem < sdks[j].Ecosystem
 	})
 	authorization := make([]integrationAuthorizationSnapshot, 0, len(authorizationPoints))
 	for _, point := range authorizationPoints {
@@ -385,50 +348,7 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No publish-ready API-owned runtime service connection is configured.", Tab: "access"})
 	}
 
-	accessConnections := make([]integrationAccessSnapshot, 0, len(inputs.ProviderManagementConnections))
-	seenAccessConnections := make(map[string]bool, len(inputs.ProviderManagementConnections))
-	for _, connection := range inputs.ProviderManagementConnections {
-		definition := connection.Definition
-		if connection.ID == "" || seenAccessConnections[connection.ID] || connection.Revision < 1 || connection.State != "active" || definition == nil || definition.ID != connection.AccessDefinitionID || definition.Revision < 1 || definition.State != "active" {
-			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "provider_management_connection_unresolved", Message: "An optional provider-management connection does not resolve to one exact active connection and service-definition revision.", Tab: "access"})
-			continue
-		}
-		seenAccessConnections[connection.ID] = true
-		// ManagementSecretID is intentionally excluded. Config is the bounded,
-		// non-secret JSON configuration accepted separately from management
-		// credentials; only its canonical digest enters the public manifest.
-		canonical, err := json.Marshal(struct {
-			ConnectionID             string          `json:"connection_id"`
-			ConnectionRevision       int64           `json:"connection_revision"`
-			AccessDefinitionID       string          `json:"access_definition_id"`
-			AccessDefinitionRevision int64           `json:"access_definition_revision"`
-			EnvironmentID            string          `json:"environment_id,omitempty"`
-			Name                     string          `json:"name"`
-			Region                   string          `json:"region,omitempty"`
-			BaseURL                  string          `json:"base_url"`
-			Config                   json.RawMessage `json:"config"`
-			State                    string          `json:"state"`
-			ServiceKey               string          `json:"service_key"`
-			InstanceCardinality      string          `json:"instance_cardinality"`
-			CredentialScope          string          `json:"credential_scope"`
-			ManagementAuthType       string          `json:"management_auth_type"`
-			APIResourceSetID         string          `json:"api_resource_set_id,omitempty"`
-			Operations               json.RawMessage `json:"operations"`
-			DefinitionState          string          `json:"definition_state"`
-		}{ConnectionID: connection.ID, ConnectionRevision: connection.Revision, AccessDefinitionID: definition.ID, AccessDefinitionRevision: definition.Revision, EnvironmentID: connection.EnvironmentID, Name: connection.Name, Region: connection.Region, BaseURL: connection.BaseURL, Config: connection.Config, State: connection.State, ServiceKey: definition.ServiceKey, InstanceCardinality: definition.InstanceCardinality, CredentialScope: definition.CredentialScope, ManagementAuthType: definition.ManagementAuthType, APIResourceSetID: definition.APIResourceSetID, Operations: definition.Operations, DefinitionState: definition.State})
-		if err != nil {
-			return nil, validations, err
-		}
-		accessConnections = append(accessConnections, integrationAccessSnapshot{ConnectionID: connection.ID, ConnectionRevision: connection.Revision, AccessDefinitionID: definition.ID, AccessDefinitionRevision: definition.Revision, EnvironmentID: connection.EnvironmentID, State: connection.State, ContentHash: contentHash(canonical)})
-	}
-	sort.Slice(accessConnections, func(i, j int) bool { return accessConnections[i].ConnectionID < accessConnections[j].ConnectionID })
-	if len(accessConnections) != len(integration.AccessConnections) {
-		validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "provider_management_connection_selection_incomplete", Message: "Every selected optional provider-management connection must resolve to an exact immutable manifest entry.", Tab: "access"})
-	}
-	if integration.SupportRouteID == "" {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "support_inherited", Message: "Bug reports and feedback use the deployment default, if one is configured.", Tab: "overview"})
-	}
-	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, Packages: packages, AuthorizationPoints: authorization, Tools: boundTools, ServiceConnections: serviceConnections, AccessConnections: accessConnections, AccessConnectionIDs: integration.AccessConnections, SupportRouteID: integration.SupportRouteID})
+	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, SDKs: sdks, AuthorizationPoints: authorization, Tools: boundTools, ServiceConnections: serviceConnections})
 	return snapshot, validations, err
 }
 
@@ -470,7 +390,7 @@ func publishChanges(previous, current json.RawMessage) []IntegrationPublishChang
 	var before, after map[string]any
 	_ = json.Unmarshal(previous, &before)
 	_ = json.Unmarshal(current, &after)
-	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "packages", "authorization_points", "tools", "service_connections", "access_connections", "access_connection_ids", "support_route_id"}
+	fields := []string{"family_key", "version_key", "display_name", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at", "resource_sets", "sdks", "authorization_points", "tools", "service_connections", "support_route_id"}
 	changes := make([]IntegrationPublishChange, 0)
 	for _, field := range fields {
 		beforeJSON, _ := json.Marshal(before[field])
@@ -498,7 +418,7 @@ func (s *Service) IntegrationPublishStatus(ctx context.Context, integrationID st
 	if err != nil {
 		return IntegrationPublishStatus{}, err
 	}
-	snapshot, validations, err := buildIntegrationSnapshot(integration, inputs, s.now())
+	snapshot, validations, err := buildIntegrationSnapshot(integration, inputs)
 	if err != nil {
 		return IntegrationPublishStatus{}, err
 	}
@@ -556,7 +476,7 @@ func (s *Service) PublishIntegration(ctx context.Context, integrationID string, 
 	if err != nil {
 		return model.IntegrationRevision{}, err
 	}
-	snapshot, validations, err := buildIntegrationSnapshot(integration, inputs, s.now())
+	snapshot, validations, err := buildIntegrationSnapshot(integration, inputs)
 	if err != nil {
 		return model.IntegrationRevision{}, err
 	}

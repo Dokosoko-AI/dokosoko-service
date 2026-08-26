@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
-	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
@@ -19,19 +17,19 @@ import (
 	"strings"
 )
 
-var errToolVersionExcluded = errors.New("tool is excluded from the effective product version")
+var errToolCatalogExcluded = errors.New("tool is excluded from the published API catalog")
 
-// executableTool resolves the exact row that was checked against the
-// effective-version allowlist. Callers must not fall through to Runtime's
+// executableTool resolves the exact row checked against the current published
+// API catalog. Callers must not fall through to Runtime's
 // second lookup when this read fails or finds no row: doing so would create a
-// publication race that bypasses the version check.
-func (s *Server) executableTool(ctx context.Context, productID, fullName string, selection model.ProductSelectionContext) (model.Tool, error) {
+// publication race that bypasses the catalog check.
+func (s *Server) executableTool(ctx context.Context, productID, fullName string, scope model.CatalogScope) (model.Tool, error) {
 	_ = s.syncNativePlugins(ctx, productID)
 	available, err := s.service.Store().Tools(ctx, productID, false)
 	if err != nil {
 		return model.Tool{}, err
 	}
-	manifest, manifestErr := s.service.ProductManifestFor(ctx, productID, selection)
+	manifest, manifestErr := s.service.ProductManifestFor(ctx, productID, scope)
 	matches := make([]model.Tool, 0, 1)
 	excluded := false
 	for _, candidate := range available {
@@ -40,7 +38,7 @@ func (s *Server) executableTool(ctx context.Context, productID, fullName string,
 		if legacyName != fullName && (manifestErr != nil || !canonical || canonicalName != fullName) {
 			continue
 		}
-		_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(ctx, productID, selection, candidate)
+		_, allowed, allowErr := s.service.CatalogAllowsTool(ctx, productID, scope, candidate)
 		if allowErr != nil || !allowed {
 			excluded = true
 			continue
@@ -54,7 +52,7 @@ func (s *Server) executableTool(ctx context.Context, productID, fullName string,
 		return model.Tool{}, store.ErrConflict
 	}
 	if excluded {
-		return model.Tool{}, errToolVersionExcluded
+		return model.Tool{}, errToolCatalogExcluded
 	}
 	return model.Tool{}, store.ErrNotFound
 }
@@ -148,9 +146,7 @@ func (s *Server) integrationToolAuthorization(ctx context.Context, manifest mode
 	if !managed {
 		return toolruntime.BoundAuthorization{}, false, nil
 	}
-	if (manifest.SelectionSource == "" || manifest.SelectionSource == "unversioned") && managedIntegrations > 1 {
-		return toolruntime.BoundAuthorization{}, true, errors.New("multiple managed Integrations require an exact customer, installation, or product-version selection")
-	}
+	_ = managedIntegrations
 	if len(candidates) != 1 {
 		return toolruntime.BoundAuthorization{}, true, errors.New("tool must resolve to exactly one applicable Integration")
 	}
@@ -309,12 +305,7 @@ func toolEffect(tool model.Tool) string {
 }
 
 func reportProductContext(manifest model.ProductManifest) reporting.ProductContext {
-	value := reporting.ProductContext{ProductID: manifest.ProductID, ProductName: manifest.ProductName, ManifestHash: manifest.ManifestHash, CatalogRevision: manifest.CatalogRevision, SelectionSource: manifest.SelectionSource, EnvironmentID: manifest.EnvironmentID, InstallationID: manifest.InstallationID}
-	if manifest.EffectiveVersion != nil {
-		value.ProductVersionID = manifest.EffectiveVersion.ID
-		value.ProductVersion = manifest.EffectiveVersion.Version
-	}
-	return value
+	return reporting.ProductContext{ProductID: manifest.ProductID, ProductName: manifest.ProductName, CatalogRevision: manifest.CatalogRevision}
 }
 
 func (s *Server) reportIntegrationContext(ctx context.Context, deploymentID, integrationID string) (*reporting.IntegrationContext, error) {
@@ -341,14 +332,7 @@ func (s *Server) reportIntegrationContext(ctx context.Context, deploymentID, int
 }
 
 func reportToolResult(value reporting.SubmissionView) map[string]any {
-	result := map[string]any{"submission_id": value.ID, "status": value.State}
-	if value.ExternalID != "" {
-		result["external_id"] = value.ExternalID
-	}
-	if value.ExternalURL != "" {
-		result["external_url"] = value.ExternalURL
-	}
-	return result
+	return map[string]any{"submission_id": value.ID, "status": value.State}
 }
 
 func reportingRPCError(w http.ResponseWriter, id any, err error) {
@@ -357,10 +341,8 @@ func reportingRPCError(w http.ResponseWriter, id any, err error) {
 		writeRPCError(w, id, -32602, "Potential credential or secret detected; redact it and ask the user to approve the revised report")
 	case errors.Is(err, reporting.ErrInvalidReport):
 		writeRPCError(w, id, -32602, err.Error())
-	case errors.Is(err, reporting.ErrDisabled), errors.Is(err, reporting.ErrNotConfigured):
-		writeRPCError(w, id, -32601, "Reporting tool is not enabled for this Integration")
 	default:
-		writeRPCError(w, id, -32603, "The report could not be held safely")
+		writeRPCError(w, id, -32603, "The report could not be queued safely")
 	}
 }
 
@@ -372,16 +354,6 @@ func decodeArguments(arguments map[string]any, destination any) error {
 	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(destination)
-}
-
-func providerPrincipal(principal identity.Principal, ctx context.Context) providerruntime.Principal {
-	requestID, _ := ctx.Value(requestIDKey).(string)
-	return providerruntime.Principal{Subject: vendorActorID(principal), ExternalCustomerID: principal.ExternalCustomerID, InstallationID: principal.InstallationID, Grants: principal.Grants, RequestID: requestID}
-}
-
-func accessPrincipal(principal identity.Principal, ctx context.Context) accessruntime.Principal {
-	requestID, _ := ctx.Value(requestIDKey).(string)
-	return accessruntime.Principal{Subject: vendorActorID(principal), ExternalCustomerID: principal.ExternalCustomerID, InstallationID: principal.InstallationID, Grants: principal.Grants, RequestID: requestID}
 }
 
 func toolPrincipal(principal identity.Principal, confirmed bool, requestID, idempotencyKey string) toolruntime.Principal {
@@ -400,33 +372,6 @@ func toolPrincipal(principal identity.Principal, confirmed bool, requestID, idem
 		RequestID:            requestID,
 		IdempotencyKey:       idempotencyKey,
 	}
-}
-
-func accessRPCError(w http.ResponseWriter, id any, err error) {
-	switch {
-	case errors.Is(err, accessruntime.ErrDenied):
-		writeRPCError(w, id, -32003, "Access operation was denied")
-	case errors.Is(err, accessruntime.ErrInvalidRequest):
-		writeRPCError(w, id, -32602, "Access operation request or provider response was invalid")
-	case errors.Is(err, accessruntime.ErrUnsupported):
-		writeRPCError(w, id, -32601, "Access operation is not supported by this connection")
-	case errors.Is(err, accessruntime.ErrUnsafeDestination):
-		writeRPCError(w, id, -32603, "Access provider destination failed safety validation")
-	default:
-		writeRPCError(w, id, -32603, "Access operation failed closed")
-	}
-}
-
-func providerRPCError(w http.ResponseWriter, id any, err error) {
-	if errors.Is(err, providerruntime.ErrDenied) {
-		writeRPCError(w, id, -32003, "Provider operation was denied by vendor authorization")
-		return
-	}
-	if errors.Is(err, providerruntime.ErrInvalidRequest) {
-		writeRPCError(w, id, -32602, "Provider operation request or response was invalid")
-		return
-	}
-	writeRPCError(w, id, -32603, "Provider operation failed closed")
 }
 
 func decodeJSON(reader io.Reader, value any) error {

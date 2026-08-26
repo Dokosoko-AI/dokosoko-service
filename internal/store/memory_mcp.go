@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/hex"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"sort"
 	"time"
@@ -69,55 +68,4 @@ func (m *Memory) UpdateMCPConnectionSync(_ context.Context, productID, id, catal
 	value.UpdatedAt = syncedAt
 	m.mcpConnections[productID][id] = cloneMCPConnection(value)
 	return cloneMCPConnection(value), nil
-}
-
-func (m *Memory) MCPUserGrant(_ context.Context, connectionID, subjectID string) (model.MCPUserGrant, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	value, ok := m.mcpGrants[connectionID][subjectID]
-	if !ok || value.RevokedAt != nil {
-		return model.MCPUserGrant{}, ErrNotFound
-	}
-	return cloneMCPGrant(value), nil
-}
-
-func (m *Memory) SaveMCPUserGrant(_ context.Context, value model.MCPUserGrant) (model.MCPUserGrant, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.mcpGrants[value.ConnectionID] == nil {
-		m.mcpGrants[value.ConnectionID] = make(map[string]model.MCPUserGrant)
-	}
-	if current, ok := m.mcpGrants[value.ConnectionID][value.SubjectID]; ok {
-		value.ID = current.ID
-		value.CreatedAt = current.CreatedAt
-	} else {
-		value.CreatedAt = time.Now().UTC()
-	}
-	value.UpdatedAt = time.Now().UTC()
-	m.mcpGrants[value.ConnectionID][value.SubjectID] = cloneMCPGrant(value)
-	return cloneMCPGrant(value), nil
-}
-
-func (m *Memory) CreateMCPAuthorizationState(_ context.Context, value model.MCPAuthorizationState) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := hex.EncodeToString(value.Digest)
-	if _, exists := m.mcpAuthStates[key]; exists {
-		return ErrConflict
-	}
-	m.mcpAuthStates[key] = cloneMCPAuthorizationState(value)
-	return nil
-}
-
-func (m *Memory) ConsumeMCPAuthorizationState(_ context.Context, digest []byte) (model.MCPAuthorizationState, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := hex.EncodeToString(digest)
-	value, ok := m.mcpAuthStates[key]
-	if !ok || time.Now().UTC().After(value.ExpiresAt) {
-		delete(m.mcpAuthStates, key)
-		return model.MCPAuthorizationState{}, ErrNotFound
-	}
-	delete(m.mcpAuthStates, key)
-	return cloneMCPAuthorizationState(value), nil
 }

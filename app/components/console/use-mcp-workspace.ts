@@ -23,14 +23,8 @@ export function useMCPWorkspaceState({ fixtures, product, apiConnected, setTools
   const [mcpName, setMCPName] = useState("");
   const [mcpNamespace, setMCPNamespace] = useState("");
   const [mcpEndpoint, setMCPEndpoint] = useState("");
-  const [mcpAuthMode, setMCPAuthMode] = useState<APIMCPConnection["auth_mode"]>("delegated_oauth");
-  const [mcpCredential, setMCPCredential] = useState("");
-  const [mcpOAuthClientID, setMCPOAuthClientID] = useState("");
-  const [mcpOAuthClientSecret, setMCPOAuthClientSecret] = useState("");
-  const [mcpOAuthIssuer, setMCPOAuthIssuer] = useState("");
-  const [mcpAuthorizationURL, setMCPAuthorizationURL] = useState("");
-  const [mcpTokenURL, setMCPTokenURL] = useState("");
-  const [mcpScopes, setMCPScopes] = useState("");
+  const [mcpAccessToken, setMCPAccessToken] = useState("");
+  const [mcpForwardUserIdentity, setMCPForwardUserIdentity] = useState(false);
   const [mcpGrants, setMCPGrants] = useState("");
   const [mcpConfirmationRequired, setMCPConfirmationRequired] = useState(true);
   const [publicMCPEnabled, setPublicMCPEnabled] = useState(false);
@@ -68,19 +62,13 @@ export function useMCPWorkspaceState({ fixtures, product, apiConnected, setTools
         name: mcpName,
         namespace: mcpNamespace,
         endpoint: mcpEndpoint,
-        auth_mode: mcpAuthMode,
-        credential: mcpCredential,
-        oauth_client_id: mcpOAuthClientID,
-        oauth_client_secret: mcpOAuthClientSecret,
-        oauth_issuer: mcpOAuthIssuer,
-        authorization_url: mcpAuthorizationURL,
-        token_url: mcpTokenURL,
-        scopes: mcpScopes.split(/[\s,]+/).map((value) => value.trim()).filter(Boolean),
+        access_token: mcpAccessToken,
+        forward_user_identity: mcpForwardUserIdentity,
       };
-      const connection = apiConnected ? await api.createMCPConnection(product.id, input) : { id: `mcp_${Date.now()}`, product_id: product.id, protocol_version: "2026-07-28" as const, state: "active" as const, revision: 1, ...input };
+      const connection = apiConnected ? await api.createMCPConnection(product.id, input) : { id: `mcp_${Date.now()}`, product_id: product.id, protocol_version: "2026-07-28" as const, auth_mode: "access_token" as const, state: "active" as const, revision: 1, config: {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...input };
       setMCPConnections((items) => [...items, connection]);
       setMCPConnectionOpen(false);
-      setMCPName(""); setMCPNamespace(""); setMCPEndpoint(""); setMCPCredential(""); setMCPOAuthClientSecret("");
+      setMCPName(""); setMCPNamespace(""); setMCPEndpoint(""); setMCPAccessToken(""); setMCPForwardUserIdentity(false);
       const catalog = apiConnected ? await api.inspectMCPConnection(product.id, connection.id) : fixtureCatalog(connection);
       setMCPCatalog(catalog);
       setMCPSelectedTools(catalog.tools.map((tool) => tool.name));
@@ -157,22 +145,10 @@ export function useMCPWorkspaceState({ fixtures, product, apiConnected, setTools
     setMCPNamespace,
     mcpEndpoint,
     setMCPEndpoint,
-    mcpAuthMode,
-    setMCPAuthMode,
-    mcpCredential,
-    setMCPCredential,
-    mcpOAuthClientID,
-    setMCPOAuthClientID,
-    mcpOAuthClientSecret,
-    setMCPOAuthClientSecret,
-    mcpOAuthIssuer,
-    setMCPOAuthIssuer,
-    mcpAuthorizationURL,
-    setMCPAuthorizationURL,
-    mcpTokenURL,
-    setMCPTokenURL,
-    mcpScopes,
-    setMCPScopes,
+    mcpAccessToken,
+    setMCPAccessToken,
+    mcpForwardUserIdentity,
+    setMCPForwardUserIdentity,
     mcpGrants,
     setMCPGrants,
     mcpConfirmationRequired,
@@ -186,4 +162,3 @@ export function useMCPWorkspaceState({ fixtures, product, apiConnected, setTools
     importMCPTools,
   };
 }
-

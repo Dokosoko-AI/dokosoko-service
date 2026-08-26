@@ -4,6 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
 type rpcResponse struct {
@@ -88,7 +93,7 @@ func decodeRPCSSE(reader io.Reader) (rpcResponse, error) {
 	return final, nil
 }
 
-func (m *Manager) invoke(ctx context.Context, connection model.MCPConnection, method, name string, params map[string]any, bearer string, timeout time.Duration) (json.RawMessage, error) {
+func (m *Manager) invoke(ctx context.Context, connection model.MCPConnection, method, name string, params map[string]any, bearer string, principal *toolruntime.Principal, timeout time.Duration) (json.RawMessage, error) {
 	parsed, address, err := m.safeDestination(ctx, connection.Endpoint)
 	if err != nil {
 		return nil, err
@@ -97,6 +102,23 @@ func (m *Manager) invoke(ctx context.Context, connection model.MCPConnection, me
 		"io.modelcontextprotocol/protocolVersion":    model.StatelessMCPv2Protocol,
 		"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "DokoSoko", "version": "2.0.0"},
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+	}
+	var forwardedIdentity []byte
+	if connection.ForwardUserIdentity && principal != nil && principal.Subject != "" {
+		forwardedIdentity, err = json.Marshal(map[string]any{
+			"issuer": principal.Issuer, "subject": principal.Subject,
+			"customer_account_id": principal.CustomerAccountID, "external_customer_id": principal.ExternalCustomerID,
+			"installation_id": principal.InstallationID, "environment_id": principal.EnvironmentID,
+			"grants": principal.Grants, "access_evaluation_id": principal.AccessEvaluationID,
+			"access_evaluated_at": principal.AccessEvaluatedAt, "request_id": principal.RequestID,
+			"issued_at": m.now(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		var identity map[string]any
+		_ = json.Unmarshal(forwardedIdentity, &identity)
+		meta["com.dokosoko/userIdentity"] = identity
 	}
 	if params == nil {
 		params = make(map[string]any)
@@ -123,6 +145,13 @@ func (m *Manager) invoke(ctx context.Context, connection model.MCPConnection, me
 	}
 	if bearer != "" {
 		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if len(forwardedIdentity) > 0 {
+		encoded := base64.RawURLEncoding.EncodeToString(forwardedIdentity)
+		mac := hmac.New(sha256.New, []byte(bearer))
+		_, _ = mac.Write([]byte(encoded))
+		request.Header.Set("X-DokoSoko-User", encoded)
+		request.Header.Set("X-DokoSoko-User-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
 	response, err := m.client(parsed, address, timeout).Do(request)
 	if err != nil {
@@ -167,5 +196,12 @@ func (m *Manager) invoke(ctx context.Context, connection model.MCPConnection, me
 }
 
 func (m *Manager) connectionBearer(ctx context.Context, connection model.MCPConnection) (string, error) {
-	return m.decryptSecret(ctx, connection.OrganisationID, connection.CredentialID, connection.OrganisationID+":mcp-connection:"+connection.ID+":service:")
+	currentAAD := connection.OrganisationID + ":mcp-connection:" + connection.ID + ":access-token:"
+	bearer, err := m.decryptSecret(ctx, connection.OrganisationID, connection.CredentialID, currentAAD)
+	if err == nil {
+		return bearer, nil
+	}
+	// Preserve access to service tokens encrypted before the token-only model.
+	legacyAAD := connection.OrganisationID + ":mcp-connection:" + connection.ID + ":service:"
+	return m.decryptSecret(ctx, connection.OrganisationID, connection.CredentialID, legacyAAD)
 }

@@ -45,7 +45,6 @@ type Repository interface {
 	ExpireIdentityProviderTests(context.Context, string, time.Time) error
 	CustomerAccount(context.Context, string, string) (CustomerAccount, error)
 	ResolveCustomerAccount(context.Context, CustomerAccount) (CustomerAccount, error)
-	ProductInstallationByExternalID(context.Context, string, string) (model.ProductInstallation, error)
 	CreateOAuthState(context.Context, OAuthState) error
 	ConsumeOAuthState(context.Context, []byte) (OAuthState, error)
 	CreateOAuthCode(context.Context, OAuthCode) error
@@ -461,12 +460,6 @@ func (b *Broker) Callback(ctx context.Context, rawState, code string) (result Ca
 	account, err := b.repository.ResolveCustomerAccount(ctx, CustomerAccount{ID: accountID, OrganisationID: config.OrganisationID, ProductID: productID, Issuer: upstream.Claims.Issuer, ExternalID: upstream.Claims.ExternalCustomerID, State: "active", LastAuthenticatedAt: b.now()})
 	if err != nil || account.State != "active" {
 		return CallbackResult{}, ErrInvalidOAuth
-	}
-	if upstream.Claims.InstallationID != "" {
-		installation, installationErr := b.repository.ProductInstallationByExternalID(ctx, productID, upstream.Claims.InstallationID)
-		if installationErr != nil || installation.State != "active" || installation.CustomerAccountID != account.ID {
-			return CallbackResult{}, ErrInvalidOAuth
-		}
 	}
 	config, err = b.activeProviderRevision(ctx, productID, state.ProviderRevision)
 	if err != nil {

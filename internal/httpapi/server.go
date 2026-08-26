@@ -6,13 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/nativeplugins"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
-	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/ratelimit"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
@@ -39,8 +37,6 @@ type Server struct {
 	auth            *auth.Manager
 	toolRuntime     *toolruntime.Runtime
 	identityBroker  *identity.Broker
-	accessRuntime   *accessruntime.Runtime
-	providerRuntime *providerruntime.Runtime
 	mcpBridge       *mcpbridge.Manager
 	nativePlugins   *nativeplugins.Manager
 	reporting       *reporting.Service
@@ -48,7 +44,6 @@ type Server struct {
 	uploadDirectory string
 	uploadMaxBytes  int64
 	allowDemoTokens bool
-	widgetsEnabled  bool
 	secureCookies   bool
 	rateOnce        sync.Once
 	rateLimiter     *ratelimit.FixedWindow
@@ -60,15 +55,12 @@ type Options struct {
 	Auth            *auth.Manager
 	ToolRuntime     *toolruntime.Runtime
 	IdentityBroker  *identity.Broker
-	AccessRuntime   *accessruntime.Runtime
-	ProviderRuntime *providerruntime.Runtime
 	MCPBridge       *mcpbridge.Manager
 	NativePlugins   *nativeplugins.Manager
 	Reporting       *reporting.Service
 	UploadDirectory string
 	UploadMaxBytes  int64
 	AllowDemoTokens bool
-	WidgetsEnabled  bool
 }
 
 type contextKey string
@@ -94,7 +86,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	if uploadMaxBytes <= 0 {
 		uploadMaxBytes = defaultSourceUploadMaxBytes
 	}
-	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, accessRuntime: options.AccessRuntime, providerRuntime: options.ProviderRuntime, mcpBridge: options.MCPBridge, nativePlugins: options.NativePlugins, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, widgetsEnabled: options.WidgetsEnabled, secureCookies: strings.HasPrefix(baseURL, "https://"), rateLimiter: ratelimit.NewFixedWindow(time.Minute, maxHTTPRateWindows)}
+	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, mcpBridge: options.MCPBridge, nativePlugins: options.NativePlugins, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rateLimiter: ratelimit.NewFixedWindow(time.Minute, maxHTTPRateWindows)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)
@@ -110,28 +102,10 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("GET /oauth/authorize", server.oauthAuthorize)
 	mux.HandleFunc("GET /oauth/callback", server.oauthCallback)
 	mux.HandleFunc("POST /oauth/token", server.oauthToken)
-	mux.HandleFunc("GET /oauth/upstream/callback", server.upstreamOAuthCallback)
 	mux.HandleFunc("/api/v1/", server.adminAPI)
 	mux.HandleFunc("POST /mcp/public", server.publicMCP)
 	mux.HandleFunc("POST /mcp", server.privateMCP)
 	mux.HandleFunc("GET /agent-setup/{kind}/prompt.md", server.agentSetupPrompt)
-	if options.WidgetsEnabled {
-		mux.HandleFunc("GET /v1/widgets/{widgetID}/configuration", server.widgetConfiguration)
-		mux.HandleFunc("POST /v1/widget-sessions", server.createWidgetSession)
-		mux.HandleFunc("POST /v1/widget-sessions/exchange", server.exchangeWidgetSession)
-		mux.HandleFunc("GET /v1/widget-session", server.currentWidgetSession)
-		mux.HandleFunc("POST /v1/widget-chat", server.widgetChat)
-	} else {
-		widgetUnavailable := func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Cache-Control", "no-store")
-			writeError(w, http.StatusNotFound, "not_found", "Route not found.", nil)
-		}
-		mux.HandleFunc("/v1/widgets/{widgetID}/configuration", widgetUnavailable)
-		mux.HandleFunc("/v1/widget-sessions", widgetUnavailable)
-		mux.HandleFunc("/v1/widget-sessions/exchange", widgetUnavailable)
-		mux.HandleFunc("/v1/widget-session", widgetUnavailable)
-		mux.HandleFunc("/v1/widget-chat", widgetUnavailable)
-	}
 	if options.UIDirectory != "" {
 		mux.Handle("/", staticConsole(options.UIDirectory))
 	}

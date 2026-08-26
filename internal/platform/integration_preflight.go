@@ -120,24 +120,13 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 		}
 	}
 	serviceAccessReady := true
-	providerManagementReady := true
 	for _, validation := range status.Validations {
 		switch {
 		case validation.Code == "access_missing", strings.HasPrefix(validation.Code, "runtime_service_"):
 			serviceAccessReady = false
-		case strings.HasPrefix(validation.Code, "provider_management_"):
-			providerManagementReady = false
 		}
 	}
-	providerManagementConfigured := len(integration.AccessConnections) > 0
-	providerManagementFailMessage := "Optional provider-managed issuance and rotation is not configured."
-	if providerManagementConfigured {
-		providerManagementFailMessage = "Resolve every selected advanced provider-management connection."
-	}
-	checks = append(checks,
-		preflightCheck("service_access", "Service access", "Every selected API-owned runtime tool has a publish-ready service connection.", "Configure an API endpoint and active compatible credential for every selected runtime tool.", "access", serviceAccessReady, runtimeAccessRequired),
-		preflightCheck("provider_management_access", "Provider management", "Every selected provider-management connection resolves exactly.", providerManagementFailMessage, "access", providerManagementConfigured && providerManagementReady, false),
-	)
+	checks = append(checks, preflightCheck("service_access", "Service access", "Every selected API-owned runtime tool has a publish-ready service connection.", "Configure an API endpoint and active compatible credential for every selected runtime tool.", "access", serviceAccessReady, runtimeAccessRequired))
 
 	grants, err := s.store.GrantDefinitions(ctx, deployment.ID)
 	if err != nil {
@@ -163,14 +152,6 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 	}
 	checks = append(checks, preflightCheck("tool_revision", "Published tool", "Every selected tool resolves to one non-drifted published revision.", "Bind at least one exact non-drifted published tool revision.", "tools", toolsReady, private))
 
-	supportReady := false
-	if route, routeErr := s.store.SupportRouteForIntegration(ctx, deployment.ID, integration.ID); routeErr == nil {
-		supportReady = route.State == "active" && (route.BugReportsEnabled || route.FeedbackEnabled)
-	} else if !errors.Is(routeErr, store.ErrNotFound) {
-		return IntegrationPreflightResult{}, routeErr
-	}
-	checks = append(checks, preflightCheck("support_policy", "Support policy", "An active bug-report or feedback route is effective.", "Support delivery is optional; configure a route when customer reporting is required.", "overview", supportReady, false))
-
 	recipeReady := false
 	recipes, err := s.store.Recipes(ctx, deployment.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -188,28 +169,17 @@ func (s *Service) IntegrationPreflight(ctx context.Context, integrationID string
 	}
 	checks = append(checks, preflightCheck("published_recipe", "Published recipe", "Published guidance is scoped to this Integration.", "A published recipe is optional and can be added after the API manifest is ready.", "overview", recipeReady, false))
 
-	packagesReady := true
-	packageFailures := make([]string, 0)
-	for _, binding := range integration.Packages {
-		if binding.Artifact == nil || binding.Release == nil || binding.Release.ID != binding.PackageReleaseID || binding.Release.PackageArtifactID != binding.PackageArtifactID || binding.Release.ContentHash == "" {
-			packagesReady = false
-			packageFailures = append(packageFailures, "A selected package does not resolve to its exact immutable release.")
-			continue
-		}
-		if unavailable := packageArtifactUnavailableMessage(*binding.Artifact, s.now()); unavailable != "" {
-			packagesReady = false
-			packageFailures = append(packageFailures, unavailable)
+	sdksReady := true
+	for _, reference := range integration.SDKs {
+		if reference.ID == "" || reference.Revision < 1 || reference.IntegrationID != integration.ID || reference.ExactVersion == "" || reference.InstallCommand == "" {
+			sdksReady = false
 		}
 	}
-	packagePassMessage := "No package is required; the candidate remains registry-neutral."
-	if len(integration.Packages) > 0 {
-		packagePassMessage = "Every optional package resolves to one exact immutable release."
+	sdkPassMessage := "No SDK is required for this API."
+	if len(integration.SDKs) > 0 {
+		sdkPassMessage = "Every SDK reference names one exact version and install command."
 	}
-	packageFailMessage := "Resolve every selected package to an exact immutable release, or remove the optional binding."
-	if len(packageFailures) > 0 {
-		packageFailMessage = strings.Join(packageFailures, " ")
-	}
-	checks = append(checks, preflightCheck("package_releases", "Packages", packagePassMessage, packageFailMessage, "documentation", packagesReady, len(integration.Packages) > 0))
+	checks = append(checks, preflightCheck("sdk_references", "SDK references", sdkPassMessage, "Resolve every SDK reference to one exact version, or remove it.", "documentation", sdksReady, len(integration.SDKs) > 0))
 
 	candidateReady := status.Ready
 	checks = append(checks, preflightCheck("candidate_integrity", "Candidate manifest", "The server reproduced the candidate manifest and all exact bindings are internally consistent.", "The candidate contains an unresolved or unsafe binding.", "overview", candidateReady, true))

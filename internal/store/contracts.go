@@ -58,16 +58,10 @@ type RuntimeServiceStore interface {
 
 // IntegrationPolicyStore owns persistence operations for one cohesive application domain.
 type IntegrationPolicyStore interface {
-	PackageArtifacts(context.Context, string) ([]model.PackageArtifact, error)
-	PackageArtifact(context.Context, string, string) (model.PackageArtifact, error)
-	CreatePackageArtifact(context.Context, model.PackageArtifact) (model.PackageArtifact, error)
-	UpdatePackageArtifact(context.Context, model.PackageArtifact, int64) (model.PackageArtifact, error)
-	PackageReleases(context.Context, string) ([]model.PackageRelease, error)
-	PackageRelease(context.Context, string, string) (model.PackageRelease, error)
-	CreatePackageRelease(context.Context, string, model.PackageRelease, int64) (model.PackageArtifact, model.PackageRelease, error)
-	IntegrationPackageBindings(context.Context, string) ([]model.IntegrationPackageBinding, error)
-	SaveIntegrationPackageBinding(context.Context, model.IntegrationPackageBinding) (model.IntegrationPackageBinding, error)
-	DeleteIntegrationPackageBinding(context.Context, string, string) error
+	SDKReferences(context.Context, string) ([]model.SDKReference, error)
+	SDKReference(context.Context, string, string) (model.SDKReference, error)
+	SaveSDKReference(context.Context, model.SDKReference, int64) (model.SDKReference, error)
+	DeleteSDKReference(context.Context, string, string) error
 	GrantDefinitions(context.Context, string) ([]model.GrantDefinition, error)
 	GrantDefinition(context.Context, string, string) (model.GrantDefinition, error)
 	SaveGrantDefinition(context.Context, model.GrantDefinition, int64) (model.GrantDefinition, error)
@@ -76,30 +70,6 @@ type IntegrationPolicyStore interface {
 	SaveAuthorizationPoint(context.Context, model.AuthorizationPoint, int64) (model.AuthorizationPoint, error)
 	IntegrationToolBindings(context.Context, string) ([]model.IntegrationToolBinding, error)
 	SaveIntegrationToolBindings(context.Context, string, []model.IntegrationToolBinding) ([]model.IntegrationToolBinding, error)
-	AccessDefinitions(context.Context, string) ([]model.AccessDefinition, error)
-	AccessDefinition(context.Context, string, string) (model.AccessDefinition, error)
-	CreateAccessDefinition(context.Context, model.AccessDefinition) (model.AccessDefinition, error)
-	UpdateAccessDefinition(context.Context, model.AccessDefinition, int64) (model.AccessDefinition, error)
-	AccessConnections(context.Context, string) ([]model.AccessConnection, error)
-	AccessConnection(context.Context, string, string) (model.AccessConnection, error)
-	CreateAccessConnection(context.Context, model.AccessConnection) (model.AccessConnection, error)
-	SetIntegrationAccessConnections(context.Context, string, string, []string, string) error
-	AccessInstances(context.Context, string, string) ([]model.AccessInstance, error)
-	AccessInstance(context.Context, string, string) (model.AccessInstance, error)
-	CreateAccessInstance(context.Context, model.AccessInstance) (model.AccessInstance, error)
-	AccessCredentials(context.Context, string, string, string) ([]model.AccessCredential, error)
-	AccessCredential(context.Context, string, string) (model.AccessCredential, error)
-	CreateAccessCredential(context.Context, model.AccessCredential) (model.AccessCredential, error)
-	RevokeAccessCredential(context.Context, string, string, time.Time) (model.AccessCredential, error)
-	BackendConnections(context.Context, string) ([]model.BackendConnection, error)
-	BackendConnection(context.Context, string, string) (model.BackendConnection, error)
-	CreateBackendConnection(context.Context, model.BackendConnection) (model.BackendConnection, error)
-	UpdateBackendConnection(context.Context, model.BackendConnection, int64) (model.BackendConnection, error)
-	SupportRoutes(context.Context, string) ([]model.SupportRoute, error)
-	SupportRoute(context.Context, string, string) (model.SupportRoute, error)
-	SupportRouteForIntegration(context.Context, string, string) (model.SupportRoute, error)
-	SaveSupportRoute(context.Context, model.SupportRoute, int64) (model.SupportRoute, error)
-	SetIntegrationSupportRoute(context.Context, string, string, string, string) error
 }
 
 // ProductCatalogStore owns persistence operations for one cohesive application domain.
@@ -111,27 +81,6 @@ type ProductCatalogStore interface {
 	Product(context.Context, string) (model.Product, error)
 	UpdateProduct(context.Context, model.Product, int64) (model.Product, error)
 	BumpProductCatalogRevision(context.Context, string) (int64, error)
-	ProductVersions(context.Context, string) ([]model.ProductVersion, error)
-	ProductVersion(context.Context, string, string) (model.ProductVersion, error)
-	CreateProductVersion(context.Context, model.ProductVersion) (model.ProductVersion, error)
-	UpdateProductVersion(context.Context, model.ProductVersion, int64) (model.ProductVersion, error)
-	ProductVersionPins(context.Context, string) ([]model.ProductVersionPin, error)
-	ProductVersionPin(context.Context, string, string, string) (model.ProductVersionPin, error)
-	SaveProductVersionPin(context.Context, model.ProductVersionPin, int64, model.ProductVersionPinHistory) (model.ProductVersionPin, error)
-	DeleteProductVersionPin(context.Context, string, string, model.ProductVersionPinHistory) error
-	ProductVersionPinHistory(context.Context, string) ([]model.ProductVersionPinHistory, error)
-	AppendProductVersionPinHistory(context.Context, model.ProductVersionPinHistory) error
-	ProductInstallations(context.Context, string) ([]model.ProductInstallation, error)
-	ProductInstallation(context.Context, string, string) (model.ProductInstallation, error)
-	ProductInstallationByExternalID(context.Context, string, string) (model.ProductInstallation, error)
-	SaveProductInstallation(context.Context, model.ProductInstallation, int64) (model.ProductInstallation, error)
-	ProductVersionActivity(context.Context, string, string, time.Time) (model.ProductVersionActivity, error)
-	ProductDefinition(context.Context, string) (model.ProductDefinition, error)
-	SaveProductDefinition(context.Context, model.ProductDefinition, int64) (model.ProductDefinition, error)
-	ProductBuilds(context.Context, string) ([]model.ProductBuild, error)
-	ProductBuild(context.Context, string, string) (model.ProductBuild, error)
-	CreateProductBuild(context.Context, model.ProductBuild) (model.ProductBuild, error)
-	MarkProductBuildPublished(context.Context, string, string) (model.ProductBuild, error)
 }
 
 // KnowledgeStore owns persistence operations for one cohesive application domain.
@@ -178,28 +127,6 @@ type MCPStore interface {
 	MCPConnection(context.Context, string, string) (model.MCPConnection, error)
 	CreateMCPConnection(context.Context, model.MCPConnection) (model.MCPConnection, error)
 	UpdateMCPConnectionSync(context.Context, string, string, string, time.Time) (model.MCPConnection, error)
-	MCPUserGrant(context.Context, string, string) (model.MCPUserGrant, error)
-	SaveMCPUserGrant(context.Context, model.MCPUserGrant) (model.MCPUserGrant, error)
-	CreateMCPAuthorizationState(context.Context, model.MCPAuthorizationState) error
-	ConsumeMCPAuthorizationState(context.Context, []byte) (model.MCPAuthorizationState, error)
-}
-
-// ExecutionStore owns persistence operations for one cohesive application domain.
-type ExecutionStore interface {
-	Providers(context.Context, string) ([]model.Provider, error)
-	Provider(context.Context, string, string) (model.Provider, error)
-	CreateProvider(context.Context, model.Provider) (model.Provider, error)
-	Projects(context.Context, string) ([]model.Project, error)
-	Project(context.Context, string, string) (model.Project, error)
-	CreateProject(context.Context, model.Project) (model.Project, error)
-	CredentialLeases(context.Context, string) ([]model.CredentialLease, error)
-	CredentialLease(context.Context, string, string) (model.CredentialLease, error)
-	CreateCredentialLease(context.Context, model.CredentialLease) (model.CredentialLease, error)
-	RevokeCredentialLease(context.Context, string, string, time.Time) (model.CredentialLease, error)
-	IntegrationRuns(context.Context, string) ([]model.IntegrationRun, error)
-	IntegrationRun(context.Context, string, string) (model.IntegrationRun, error)
-	CreateIntegrationRun(context.Context, model.IntegrationRun) (model.IntegrationRun, error)
-	CompleteIntegrationRun(context.Context, string, string, *bool, *bool, string, time.Time) (model.IntegrationRun, error)
 }
 
 // ReportingStore owns persistence operations for one cohesive application domain.
@@ -207,11 +134,6 @@ type ReportingStore interface {
 	ReportSubmissions(context.Context, string, string, int) ([]model.ReportSubmission, bool, error)
 	ReportSubmission(context.Context, string, string) (model.ReportSubmission, error)
 	CreateReportSubmission(context.Context, model.ReportSubmission) (model.ReportSubmission, error)
-	ActivateHeldReportSubmissions(context.Context, string, string, string, time.Time) error
-	ClaimReportSubmissions(context.Context, time.Time, int) ([]model.ReportSubmission, error)
-	UpdateReportSubmissionDelivery(context.Context, model.ReportSubmission) (model.ReportSubmission, error)
-	RetryReportSubmission(context.Context, string, string, time.Time) (model.ReportSubmission, error)
-	DeleteExpiredReportSubmissions(context.Context, time.Time) (int64, error)
 }
 
 // AIRecipeStore owns persistence operations for one cohesive application domain.
@@ -239,28 +161,6 @@ type AIRecipeStore interface {
 	AIJobs(context.Context, string) ([]model.AIJob, error)
 	AIJob(context.Context, string, string) (model.AIJob, error)
 	SaveAIJob(context.Context, model.AIJob) (model.AIJob, error)
-}
-
-// WidgetStore owns persistence operations for one cohesive application domain.
-type WidgetStore interface {
-	Widgets(context.Context, string) ([]model.Widget, error)
-	Widget(context.Context, string, string) (model.Widget, error)
-	CreateWidget(context.Context, model.Widget) (model.Widget, error)
-	UpdateWidget(context.Context, model.Widget, int64) (model.Widget, error)
-	CreateWidgetSecret(context.Context, model.WidgetSecret) (model.WidgetSecret, error)
-	WidgetSecrets(context.Context, string) ([]model.WidgetSecret, error)
-	WidgetSecretByDigest(context.Context, string, []byte) (model.WidgetSecret, error)
-	RevokeWidgetSecret(context.Context, string, string, time.Time) (model.WidgetSecret, error)
-	CreateWidgetBootstrap(context.Context, model.WidgetBootstrap) error
-	WidgetBootstrap(context.Context, []byte) (model.WidgetBootstrap, error)
-	ConsumeWidgetBootstrap(context.Context, []byte, time.Time) (model.WidgetBootstrap, error)
-	CreateWidgetSession(context.Context, model.WidgetSession) (model.WidgetSession, error)
-	WidgetSessions(context.Context, string) ([]model.WidgetSession, error)
-	WidgetSessionByDigest(context.Context, []byte, time.Time) (model.WidgetSession, error)
-	RevokeWidgetSession(context.Context, string, string, time.Time) (model.WidgetSession, error)
-	RevokeWidgetSessions(context.Context, string, time.Time) error
-	WidgetAgentMessages(context.Context, string, int) ([]model.WidgetAgentMessage, error)
-	AppendWidgetAgentMessages(context.Context, []model.WidgetAgentMessage) error
 }
 
 // IdentityStore owns persistence operations for one cohesive application domain.
@@ -294,8 +194,6 @@ type ObservabilityStore interface {
 	PublicKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
 	PrivateKnowledge(context.Context, string, []string, string) ([]model.KnowledgeRecord, error)
 	AppendAnalytics(context.Context, model.AnalyticsEvent) error
-	AnalyticsSummary(context.Context, string, time.Time) (model.AnalyticsSummary, error)
-	RecipePopularity(context.Context, string, time.Time) ([]model.RecipePopularity, error)
 	LLMTokensUsed(context.Context, string, string, time.Time) (int64, error)
 	AppendAudit(context.Context, model.AuditEvent) error
 	AuditEvents(context.Context, string) ([]model.AuditEvent, error)

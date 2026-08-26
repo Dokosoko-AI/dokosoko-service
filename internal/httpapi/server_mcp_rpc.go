@@ -103,32 +103,15 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	channel, actorKind, actorID := "public_mcp", "anonymous", ""
-	selection := model.ProductSelectionContext{Public: public}
+	scope := model.CatalogScope{Public: public}
 	if !public {
 		_ = s.syncNativePlugins(r.Context(), productID)
-		principal, _ := r.Context().Value(principalKey).(identity.Principal)
-		channel, actorKind, actorID = "private_mcp", "vendor_user", pseudonym(productID, principal)
-		selection.CustomerAccountID, selection.InstallationID = principal.CustomerAccountID, principal.InstallationID
 	}
-	productManifest, manifestErr := s.service.ProductManifestFor(r.Context(), productID, selection)
+	productManifest, manifestErr := s.service.ProductManifestFor(r.Context(), productID, scope)
 	if manifestErr != nil {
 		writeRPCError(w, request.ID, -32603, "Deployment context could not be resolved")
 		return
 	}
-	analyticsDimensions := map[string]any{"channel": channel, "method": request.Method}
-	if manifestErr == nil {
-		analyticsDimensions["catalog_revision"] = productManifest.CatalogRevision
-		analyticsDimensions["selection_source"] = productManifest.SelectionSource
-		analyticsDimensions["environment_id"] = productManifest.EnvironmentID
-		analyticsDimensions["installation_id"] = productManifest.InstallationID
-		if productManifest.EffectiveVersion != nil {
-			analyticsDimensions["product_version_id"] = productManifest.EffectiveVersion.ID
-			analyticsDimensions["product_version"] = productManifest.EffectiveVersion.Version
-			analyticsDimensions["manifest_hash"] = productManifest.ManifestHash
-		}
-	}
-	s.recordAnalytics(r.Context(), productID, "mcp.request", actorKind, actorID, analyticsDimensions)
 	switch request.Method {
 	case "server/discover":
 		if manifestErr != nil {
@@ -139,7 +122,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		if public {
 			cacheScope = "public"
 		}
-		instructions := "Use the effective DokoSoko connector release and Integration revisions returned in discovery. Authenticated installation, environment, and customer pins override default deployment channels in that order."
+		instructions := "Use the current deployment catalog and the exact immutable API publication revisions returned in discovery."
 		if !public && s.reporting != nil {
 			capabilities, _ := s.reporting.Capabilities(r.Context(), productID)
 			reportingEnabled := false
@@ -150,7 +133,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 				instructions += reportingAgentInstructions
 			}
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}, "resources": map[string]any{"listChanged": true}}, "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{model.StatelessMCPv2Protocol}, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}, "resources": map[string]any{"listChanged": true}}, "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "instructions": instructions, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "resources/list":
 		values, err := s.publishedRecipes(r.Context(), productID, public)
 		if err != nil {
@@ -175,7 +158,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			writeRPCError(w, request.ID, -32004, "Recipe resource not found")
 			return
 		}
-		s.recordAnalytics(r.Context(), productID, "recipe.view", actorKind, actorID, map[string]any{"recipe_id": recipe.ID, "recipe_slug": recipe.Slug, "channel": channel})
 		writeRPC(w, request.ID, map[string]any{"contents": []map[string]any{{"uri": recipe.StableURI, "mimeType": "text/markdown", "text": recipe.CurrentRevision.Markdown, "_meta": map[string]any{"revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt}}}})
 	case "tools/list":
 		if manifestErr != nil {
@@ -183,8 +165,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			return
 		}
 		tools := []map[string]any{
-			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment, its applicable Integration revisions, effective pinned or default connector release, and available releases.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "deployment.releases.list", "description": "List published connector releases and their latest, LTS, deprecated, replacement, and sunset metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
+			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment and its exact immutable API publication revisions.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "integration.recipes.list", "description": "List published implementation recipes and their stable MCP resource URIs.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 			{"name": "integration.plan", "description": "Choose the closest published recipe for a requested integration outcome. This returns a plan reference, not a claim that work was completed.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"outcome"}}},
 			{"name": "integration.check", "description": "Check whether a published recipe URI is current or needs attention before implementation.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"recipe_uri": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"recipe_uri"}}},
@@ -197,10 +178,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			tools = append(tools, generated...)
 		}
 		if !public {
-			tools = append(tools,
-				map[string]any{"name": "integration_runs.start", "description": "Start an environment-scoped integration outcome run.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"environment_id": map[string]any{"type": "string"}, "requested_outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"environment_id", "requested_outcome"}}},
-				map[string]any{"name": "integration_runs.complete", "description": "Complete a run with a deterministic validation result.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"run_id": map[string]any{"type": "string"}, "reported_success": map[string]any{"type": "boolean"}, "validated_success": map[string]any{"type": "boolean"}, "failure_code": map[string]any{"type": "string", "maxLength": 120}}, "required": []string{"run_id", "validated_success"}}},
-			)
 			if s.reporting != nil {
 				capabilities, _ := s.reporting.Capabilities(r.Context(), productID)
 				bugEnabled, feedbackEnabled := false, false
@@ -220,40 +197,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 					tools = append(tools, definition)
 				}
 			}
-			if s.mcpBridge != nil {
-				connections, _ := s.service.Store().MCPConnections(r.Context(), productID)
-				for _, connection := range connections {
-					if connection.AuthMode == "delegated_oauth" && connection.State == "active" {
-						tools = append(tools, map[string]any{"name": "mcp_connections.authorize", "description": "Create a short-lived authorization URL that connects your identity to a delegated Stateless MCPv2 upstream.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}}, "required": []string{"connection_id"}}})
-						break
-					}
-				}
-			}
-			if s.accessRuntime != nil && len(productManifest.Integrations) == 0 {
-				capabilities := s.accessRuntime.Capabilities(r.Context(), productID, principal.Grants)
-				if len(capabilities) > 0 {
-					metadata := map[string]any{"com.dokosoko/accessConnections": capabilities}
-					canCreateInstance, canCreateCredential, canRevokeCredential := false, false, false
-					for _, capability := range capabilities {
-						canCreateInstance = canCreateInstance || capability.CanCreateInstance
-						canCreateCredential = canCreateCredential || capability.CanCreateCredential
-						canRevokeCredential = canRevokeCredential || capability.CanRevokeCredential
-					}
-					tools = append(tools,
-						map[string]any{"name": "access.instances.list", "description": "List provider-owned resources available to the authenticated subject. The provider-specific resource label and allowed Integrations are supplied in tool metadata.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}}, "required": []string{"connection_id", "integration_id"}}, "_meta": metadata},
-						map[string]any{"name": "access.credentials.list", "description": "List credential metadata and fingerprints for an allowed provider connection or resource. Credential material is never returned by list operations.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}, "access_instance_id": map[string]any{"type": "string"}}, "required": []string{"connection_id", "integration_id"}}, "_meta": metadata},
-					)
-					if canCreateInstance {
-						tools = append(tools, map[string]any{"name": "access.instances.create", "description": "Create an idempotent provider resource using the provider-specific label shown in tool metadata. This tool is omitted for single-instance services.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}, "environment_id": map[string]any{"type": "string"}, "display_name": map[string]any{"type": "string", "maxLength": 160}, "idempotency_key": map[string]any{"type": "string", "minLength": 16}, "ttl_seconds": map[string]any{"type": "integer", "minimum": 300}}, "required": []string{"connection_id", "integration_id", "environment_id", "display_name", "idempotency_key"}}, "_meta": metadata})
-					}
-					if canCreateCredential {
-						tools = append(tools, map[string]any{"name": "access.credentials.create", "description": "Create scoped credential material once for an allowed provider connection or resource. DokoSoko retains only a fingerprint unless the provider definition explicitly requires encrypted managed storage.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"connection_id": map[string]any{"type": "string"}, "integration_id": map[string]any{"type": "string"}, "environment_id": map[string]any{"type": "string"}, "access_instance_id": map[string]any{"type": "string"}, "scopes": map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "string"}}, "idempotency_key": map[string]any{"type": "string", "minLength": 16}, "ttl_seconds": map[string]any{"type": "integer", "minimum": 300}}, "required": []string{"connection_id", "integration_id", "environment_id", "scopes", "idempotency_key"}}, "_meta": metadata})
-					}
-					if canRevokeCredential {
-						tools = append(tools, map[string]any{"name": "access.credentials.revoke", "description": "Revoke provider credential material owned by the authenticated subject.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"credential_id": map[string]any{"type": "string"}}, "required": []string{"credential_id"}}, "_meta": metadata})
-					}
-				}
-			}
 			if s.toolRuntime != nil {
 				custom, err := s.toolRuntime.Published(r.Context(), productID)
 				if err == nil {
@@ -264,7 +207,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 					candidates := make([]namedCustomDefinition, 0, len(custom))
 					nameCounts := make(map[string]int)
 					for _, item := range custom {
-						_, allowed, allowErr := s.service.ProductVersionAllowsToolFor(r.Context(), productID, selection, item)
+						_, allowed, allowErr := s.service.CatalogAllowsTool(r.Context(), productID, scope, item)
 						if allowErr != nil || !allowed {
 							continue
 						}
@@ -311,23 +254,16 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		if public {
 			cacheScope = "public"
 		}
-		versionMeta := map[string]any{"product_id": productManifest.ProductID, "catalog_revision": productManifest.CatalogRevision, "manifest_hash": productManifest.ManifestHash, "definition_revision": productManifest.DefinitionRevision, "selection_source": productManifest.SelectionSource, "environment_id": productManifest.EnvironmentID, "installation_id": productManifest.InstallationID}
-		if productManifest.EffectiveVersion != nil {
-			versionMeta["version"] = productManifest.EffectiveVersion.Version
-			versionMeta["is_latest"] = productManifest.EffectiveVersion.IsLatest
-			versionMeta["is_lts"] = productManifest.EffectiveVersion.IsLTS
-			versionMeta["deprecated"] = productManifest.EffectiveVersion.Deprecated
-		}
+		catalogMeta := map[string]any{"deployment_id": productManifest.DeploymentID, "catalog_revision": productManifest.CatalogRevision}
 		for _, definition := range tools {
 			metadata, _ := definition["_meta"].(map[string]any)
 			if metadata == nil {
 				metadata = make(map[string]any)
 			}
-			metadata["com.dokosoko/productVersion"] = versionMeta
-			metadata["com.dokosoko/deploymentRelease"] = versionMeta
+			metadata["com.dokosoko/catalog"] = catalogMeta
 			definition["_meta"] = metadata
 		}
-		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "manifestHash": productManifest.ManifestHash, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
+		writeRPC(w, request.ID, map[string]any{"resultType": "complete", "deployment": productManifest, "product": productManifest, "catalogRevision": productManifest.CatalogRevision, "tools": tools, "ttlMs": 30000, "cacheScope": cacheScope})
 	case "tools/call":
 		s.callTool(r.Context(), w, request, productID, public, productManifest, manifestErr)
 	default:

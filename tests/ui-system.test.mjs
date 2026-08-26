@@ -53,7 +53,7 @@ test("uses one interface contract for headers, tabs, sections, panels, filters, 
   assert.match(styles, /\.panel-heading\s*\{[^}]*min-height:\s*var\(--height-row\)[^}]*padding:\s*16px 18px/);
   assert.match(styles, /\.provider-row\s*\{[^}]*min-height:\s*var\(--height-row\)[^}]*padding:\s*12px 18px/);
   assert.doesNotMatch(routes, /analytics:|activity:\s*"\/insights/);
-  assert.match(routes, /"audit-event":\s*"runs"/);
+  assert.match(routes, /"audit-event":\s*"reporting"/);
 });
 
 test("maps the owned typography and Figma semantic theme into one UI contract", async () => {
@@ -116,8 +116,6 @@ test("keeps desktop workspaces focused without constraining builders", async () 
   assert.match(source, /<main id="main-content" className=\{workspaceClass\}/);
   assert.match(source, /<header className="topbar">\s*<div className="topbar-inner">/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.content\s*\{[^}]*padding:\s*24px 16px 48px/);
-  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.compact-audit-row\s*\{[^}]*grid-template-columns:\s*38px minmax\(0, 1fr\)/);
-  assert.match(styles, /\.compact-audit-row > code\s*\{[^}]*display:\s*none/);
 });
 
 test("keeps the Recipes authoring workflow inside the same global route stack", async () => {
@@ -125,14 +123,12 @@ test("keeps the Recipes authoring workflow inside the same global route stack", 
   const styles = await stylesSource();
 
   assert.doesNotMatch(source, /workflow-frame|recipe-workspace/);
-  assert.match(source, /className="recipe-library-row"/);
-  assert.match(source, /className="recipe-editor-layout"/);
-  assert.match(source, /className="recipe-markdown-input"/);
+  assert.match(source, /title="Recipes"/);
+  assert.match(source, /Generate from evidence/);
+  assert.match(source, /Create recipe/);
+  assert.match(source, /recipes\.map\(\(recipe\)/);
   assert.doesNotMatch(styles, /--workflow-width|\.workflow-frame/);
-  assert.match(styles, /\.recipe-library-row\s*\{[^}]*38px minmax\(0, 1fr\) auto 92px 18px/);
-  assert.match(styles, /\.recipe-editor-layout\s*\{[^}]*minmax\(0, 1fr\) 340px/);
-  assert.match(styles, /\.recipe-markdown-input\s*\{[^}]*min-height:\s*620px/);
-  assert.match(source, /<aside className="recipe-editor-sidebar">[\s\S]*?recipe-ai-rework/);
+  assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-input/);
 });
 
 test("keeps API documentation setup short without bypassing reviewed evidence", async () => {
@@ -240,13 +236,13 @@ test("keeps interactive controls semantic inside shared data tables", async () =
   assert.match(layout, /aria-colspan=\{columns\}/);
   assert.match(source, /<DataTableRow key=\{integration\.id\}/);
   assert.doesNotMatch(source, /<ConsoleLink[^>]*role="row"/);
-  assert.match(source, /<Table label="AI workloads" dense className="ai-settings-table ai-workload-table">/);
-  assert.match(source, /<Table label="AI providers" dense className="ai-settings-table ai-provider-table">/);
-  assert.match(source, /<colgroup><col className="ai-workload-column"/);
-  assert.match(source, /<colgroup><col className="ai-provider-identity-column"/);
+  assert.match(source, /<Table label="AI workloads" dense>/);
+  assert.match(source, /<TableHead><TableRow><TableHeader>Name<\/TableHeader><TableHeader>Provider<\/TableHeader><TableHeader>Model<\/TableHeader><TableHeader>Actions<\/TableHeader>/);
+  assert.match(source, /connections\.map\(\(connection\)/);
   assert.doesNotMatch(source, /className="ai-security-rail"/);
   assert.match(styles, /\.core-table\s*\{[^}]*width:\s*100%[^}]*min-width:\s*100%/);
-  assert.match(styles, /\.ai-settings-table table\s*\{[^}]*min-width:\s*860px[^}]*table-layout:\s*fixed/);
+  assert.match(source, /className="panel ai-table-panel"/);
+  assert.match(styles, /\.ai-table-panel\s*\{[^}]*--table-gutter:\s*18px[^}]*overflow:\s*hidden/);
   assert.match(styles, /\.ai-table-actions\s*\{[^}]*width:\s*100%[^}]*justify-content:\s*flex-end/);
   assert.match(table, /<caption className="sr-only">\{label\}<\/caption>/);
   assert.match(table, /className="core-table-frame"/);
@@ -284,76 +280,16 @@ test("keeps application colors inside the semantic light and dark token schemes"
   }
 });
 
-test("keeps the experimental widget implementation behind the deployment capability", async () => {
+test("keeps widgets outside the service behind a future plugin contract", async () => {
   const consoleApp = await consoleSource();
-  const launcher = await readFile(appFile("app/components/WidgetPreviewLauncher.tsx"), "utf8");
-  const markdown = await readFile(appFile("app/components/MarkdownMessage.tsx"), "utf8");
-  const packageJSON = JSON.parse(await readFile(appFile("package.json"), "utf8"));
   const client = await clientSource();
-  const styles = await stylesSource();
   const controlPlane = await readFile(appFile("api/openapi.yaml"), "utf8");
-  const runtime = await readFile(appFile("api/widget-runtime.openapi.yaml"), "utf8");
+  const pluginReadme = await readFile(appFile("extensions/widget-plugin/README.md"), "utf8");
+  const pluginSchema = await readFile(appFile("extensions/widget-plugin/plugin.schema.json"), "utf8");
 
-  assert.match(consoleApp, /import \{ WidgetPreviewLauncher \}/);
-  assert.match(consoleApp, /const widgetsEnabled = Boolean\(currentDeployment\.features\?\.widgets\)/);
-  assert.match(consoleApp, /widgetsEnabled \? api\.widgets\(\) : Promise\.resolve/);
-  assert.match(consoleApp, /\{widgetsEnabled && <WidgetPreviewLauncher widgets=\{widgets\}/);
-  assert.match(consoleApp, /\{widgetsEnabled && <section className="section-block widget-channel-card"/);
-  assert.match(consoleApp, /<WidgetDetailView[\s\S]*recipes=\{recipes\}/);
-  assert.match(consoleApp, /Publish guidance/);
-  assert.match(consoleApp, /Refresh guidance/);
-  assert.match(consoleApp, /Review guidance/);
-  assert.match(consoleApp, /guidanceNeedsReview/);
-  assert.match(styles, /widget-setup-steps li\.attention/);
-  assert.match(controlPlane, /knowledge_bindings: \{ type: array, items: \{ \$ref: "#\/components\/schemas\/WidgetKnowledgeBinding" \} \}/);
-  assert.match(launcher, /widgets\.filter\(\(widget\) => widget\.state === "active"\)/);
-  assert.match(launcher, /api\.widgetConfiguration\(widgetID\)[\s\S]*api\.widgetPreviewBootstrap\(widgetID\)[\s\S]*api\.exchangeWidgetSession\(bootstrap\.bootstrapToken, window\.location\.origin\)/);
-  assert.match(launcher, /streamWidgetMessage\(token, question/);
-  assert.match(launcher, /No active widget/);
-  assert.match(launcher, /Admin preview/);
-  assert.match(launcher, /Why this answer\?/);
-  assert.match(launcher, /Customer page context is added by the embedding backend/);
-  assert.match(launcher, /Ask a customer question/);
-  assert.doesNotMatch(launcher, /Ask what this API can do/);
-  assert.match(consoleApp, /context: \{[\s\S]*view: "profile"[\s\S]*label: "Plan"/);
-  assert.match(runtime, /WidgetSessionContext:[\s\S]*bounded snapshot/);
-  assert.match(launcher, /addAssistantSource/);
-  assert.match(launcher, /setAssistantTrace/);
-  assert.match(launcher, /aria-label="Open widget preview"|aria-label=\{open \? "Close widget preview" : "Open widget preview"\}/);
-  assert.match(launcher, /role="log" aria-live="polite"/);
-  assert.match(launcher, /message\.role === "assistant"[\s\S]*<MarkdownMessage>/);
-  assert.doesNotMatch(launcher, /localStorage|sessionStorage|widgetSecret|doko_wsk_/);
-
-  assert.equal(packageJSON.dependencies["react-markdown"], "10.1.0");
-  assert.equal(packageJSON.dependencies["remark-gfm"], "4.0.1");
-  assert.match(markdown, /remarkPlugins=\{\[remarkGfm\]\}/);
-  assert.match(markdown, /skipHtml/);
-  assert.match(markdown, /protocol === "https:"[\s\S]*protocol === "http:"[\s\S]*protocol === "mailto:"/);
-  assert.match(markdown, /rel="noopener noreferrer"/);
-  assert.match(markdown, /img: \(\{ alt \}\)/);
-  assert.doesNotMatch(markdown, /dangerouslySetInnerHTML|rehypeRaw|javascript:/i);
-
-  assert.match(client, /widgetConfiguration:[^\n]+credentials: "omit"/);
-  assert.match(client, /widgetPreviewBootstrap:[^\n]+\/preview-session/);
-  assert.match(client, /exchangeWidgetSession:[^\n]+credentials: "omit"/);
-  assert.match(client, /fetch\("\/v1\/widget-chat"[\s\S]*credentials: "omit"[\s\S]*Authorization: `Bearer \$\{sessionToken\}`/);
-  assert.match(client, /payload\.type === "source"[\s\S]*onSource/);
-  assert.match(client, /payload\.type === "trace"[\s\S]*onTrace/);
-
-  assert.match(styles, /\.widget-preview-root\s*\{[^}]*position:\s*fixed[^}]*right:\s*24px[^}]*bottom:\s*24px/);
-  assert.match(styles, /\.widget-preview-launcher\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/);
-  assert.match(styles, /\.widget-preview-panel\s*\{[^}]*width:\s*min\(400px,[^}]*height:\s*min\(620px/);
-  assert.match(styles, /\.widget-preview-panel\s*\{[^}]*top:\s*auto[^}]*right:\s*0[^}]*bottom:\s*58px[^}]*left:\s*auto/);
-  assert.match(styles, /\.markdown-message :where\(ul, ol\)/);
-  assert.match(styles, /\.markdown-message pre\s*\{[^}]*overflow-x:\s*auto/);
-  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.widget-preview-root\s*\{[^}]*right:\s*16px/);
-  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration:\s*\.01ms !important/);
-
-  assert.match(controlPlane, /\/api\/v1\/widgets\/\{widget_id\}\/preview-session:/);
-  assert.match(controlPlane, /enum: \[customer, admin_preview\]/);
-  assert.match(runtime, /kind:[\s\S]*enum: \[customer, admin_preview\]/);
-  assert.match(runtime, /WidgetAgentStreamEvent:/);
-  assert.match(runtime, /const: text_delta/);
-  assert.match(runtime, /const: source/);
-  assert.match(runtime, /const: trace/);
+  assert.doesNotMatch(consoleApp, /WidgetPreviewLauncher|WidgetDetailView|api\.widgets/);
+  assert.doesNotMatch(client, /widgetConfiguration|widgetPreviewBootstrap|exchangeWidgetSession|widget-chat/);
+  assert.doesNotMatch(controlPlane, /\/api\/v1\/widgets|WidgetSession|WidgetAgent/);
+  assert.match(pluginReadme, /external widget/i);
+  assert.match(pluginSchema, /"browser_entrypoint"[\s\S]*"backend_origin"[\s\S]*"private_mcp"/);
 });

@@ -1,12 +1,11 @@
 "use client";
 
-import { BookOpen, KeyRound, Plus, Share2, ShieldCheck, TerminalSquare, TriangleAlert } from "lucide-react";
+import { BookOpen, Plus, Share2, ShieldCheck, TerminalSquare, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
   APIError,
   api,
-  type APIAccessConnection,
   type APIAuthorizationPoint,
   type APIIntegration,
   type APIIntegrationToolBinding,
@@ -29,7 +28,7 @@ function integrationToolBindingSelectionSignature(selection: Record<string, Inte
   return JSON.stringify(Object.entries(selection).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-export function IntegrationToolsWorkspace({ integration, tools, providerManagementConnections, onMessage, onNavigate }: { integration: APIIntegration; tools: APITool[]; providerManagementConnections: APIAccessConnection[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+export function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }: { integration: APIIntegration; tools: APITool[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const [bindings, setBindings] = useState<APIIntegrationToolBinding[]>([]);
   const [authorizationPoints, setAuthorizationPoints] = useState<APIAuthorizationPoint[]>([]);
   const [bindingSelection, setBindingSelection] = useState<Record<string, IntegrationToolBindingSelection>>({});
@@ -149,16 +148,6 @@ export function IntegrationToolsWorkspace({ integration, tools, providerManageme
   const availableAPITools = availableTools.filter((tool) => toolIsOwnedByIntegration(tool, integration.id));
   const availableCommonTools = availableTools.filter(toolIsCommon);
   const reviewedDocumentation = integration.resources?.find((resource) => resource.kind === "documentation" && Boolean(resource.resolved_revision));
-  const apiAdminConnection = providerManagementConnections.find((connection) => {
-    if (connection.state !== "active") return false;
-    const operationKeys = Object.keys(connection.definition?.operations ?? {}).map((key) => key.toLowerCase());
-    return operationKeys.some((key) => /(credential|api[_-]?key)/.test(key) && /(create|issue|rotate|revoke)/.test(key));
-  });
-  const configuredAdminConnection = providerManagementConnections.find((connection) => connection.state === "active");
-  const configuredEnvironmentVariable = typeof apiAdminConnection?.config.environment_variable === "string" ? apiAdminConnection.config.environment_variable : "";
-  const familyEnvironmentVariable = `${integration.family_key.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").replace(/_API$/, "") || "SERVICE"}_API_KEY`;
-  const adminEnvironmentVariable = configuredEnvironmentVariable === "SERVICE_API_KEY" || apiAdminConnection?.config.credential_scope === "shared" || apiAdminConnection?.config.shared === true ? "SERVICE_API_KEY" : familyEnvironmentVariable;
-
   const renderBindingRows = (entries: Array<[string, IntegrationToolBindingSelection]>) => entries.map(([toolID, selection]) => {
     const resolution = resolveBinding(toolID, selection);
     const tool = resolution.tool;
@@ -178,7 +167,6 @@ export function IntegrationToolsWorkspace({ integration, tools, providerManageme
     <section className="panel integration-tool-bindings">
       <PanelHeader title="Built-in tools" description="DokoSoko exposes these API-scoped capabilities automatically when their reviewed source configuration is ready. They are not custom Tool records and do not need manual attachment." />
       <div className="provider-row"><span className="settings-icon"><BookOpen /></span><span><strong>Knowledge</strong><small><code>{integration.family_key}.knowledge.search</code> · {reviewedDocumentation ? `grounded in ${reviewedDocumentation.name}` : "requires attached reviewed documentation"}</small></span><Badge color={reviewedDocumentation ? "green" : "amber"}>{reviewedDocumentation ? "Automatic" : "Unavailable"}</Badge>{!reviewedDocumentation && <ConsoleLink path={integrationPath(integration.id, "documentation")} onNavigate={onNavigate} className="entity-back-link">Add documentation</ConsoleLink>}</div>
-      <div className="provider-row"><span className="settings-icon"><KeyRound /></span><span><strong>API Admin</strong><small>{apiAdminConnection ? `${apiAdminConnection.name} · returns ${adminEnvironmentVariable}` : configuredAdminConnection ? `${configuredAdminConnection.name} does not declare credential issue, rotate, or revoke operations` : "requires an active Advanced provider-management connection"}</small></span><Badge color={apiAdminConnection ? "green" : "amber"}>{apiAdminConnection ? "Automatic" : "Unavailable"}</Badge>{!apiAdminConnection && <ConsoleLink path={integrationPath(integration.id, "access")} onNavigate={onNavigate} className="entity-back-link">Open Access Advanced</ConsoleLink>}</div>
     </section>
     <section className="panel integration-tool-summary">
       <PanelHeader title="Tools for this API" description="API-owned tools stay with this API. Common tools are reusable deployment capabilities attached here at an exact revision." action={<span className="heading-actions">{dirty && <Badge color="amber">Unsaved changes</Badge>}<ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link">Open common catalog</ConsoleLink><Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}><Plus data-slot="icon" />Create API tool</Button><Button disabled={bindingsLoading || bindingBusy || bindingsUnavailable || activePoints.length === 0 || availableTools.length === 0} onClick={() => openAttachDialog()}><Plus data-slot="icon" />Attach tool</Button></span>} />

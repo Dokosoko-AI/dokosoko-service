@@ -12,16 +12,6 @@ import {
 } from "../../lib/console-routes";
 import { type NavigationGroup, navigation } from "./workspace-navigation";
 
-function availableConsoleRoute(path: string, widgetsEnabled: boolean): ConsoleRoute {
-  const route = parseConsolePath(path);
-  const isWidgetRoute =
-    (route.kind === "section" && route.section === "widgets") ||
-    (route.kind === "entity" && route.entity === "widget");
-  return !widgetsEnabled && isWidgetRoute
-    ? { kind: "not-found", section: "product", path: route.path }
-    : route;
-}
-
 function browserRouteURL(path: string) {
   const preview =
     process.env.NODE_ENV === "development" &&
@@ -32,10 +22,8 @@ function browserRouteURL(path: string) {
 }
 
 export function useConsoleNavigation({
-  widgetsEnabled,
   onLeaveToolBuilder,
 }: {
-  widgetsEnabled: boolean;
   onLeaveToolBuilder: () => void;
 }) {
   const [consoleRoute, setConsoleRoute] = useState<ConsoleRoute>(() => routeForSection("product"));
@@ -55,7 +43,7 @@ export function useConsoleNavigation({
   }, []);
 
   const navigateToPath = useCallback((path: string, replace = false) => {
-    const next = availableConsoleRoute(path, widgetsEnabled);
+    const next = parseConsolePath(path);
     const current = consoleRouteRef.current;
     if (!confirmToolBuilderNavigation(next.path)) return;
     if (current.path !== next.path) toolBuilderDirtyRef.current = false;
@@ -68,7 +56,7 @@ export function useConsoleNavigation({
     consoleRouteRef.current = next;
     setConsoleRoute(next);
     requestAnimationFrame(() => document.getElementById("main-content")?.focus());
-  }, [confirmToolBuilderNavigation, onLeaveToolBuilder, widgetsEnabled]);
+  }, [confirmToolBuilderNavigation, onLeaveToolBuilder]);
 
   const navigateToSection = useCallback((destination: Section) => {
     navigateToPath(sectionPath(destination));
@@ -90,7 +78,7 @@ export function useConsoleNavigation({
   useEffect(() => {
     const syncRoute = () => {
       const current = consoleRouteRef.current;
-      const next = availableConsoleRoute(window.location.pathname, widgetsEnabled);
+      const next = parseConsolePath(window.location.pathname);
       if (!confirmToolBuilderNavigation(next.path)) {
         window.history.pushState(null, "", browserRouteURL(current.path));
         return;
@@ -107,7 +95,7 @@ export function useConsoleNavigation({
     syncRoute();
     window.addEventListener("popstate", syncRoute);
     return () => window.removeEventListener("popstate", syncRoute);
-  }, [confirmToolBuilderNavigation, onLeaveToolBuilder, widgetsEnabled]);
+  }, [confirmToolBuilderNavigation, onLeaveToolBuilder]);
 
   const section = consoleRoute.section;
   const settingsTab: SettingsTab =

@@ -77,10 +77,6 @@ export function unavailableConsoleCapability(error: unknown) {
   return error instanceof APIError && [404, 405, 501].includes(error.status);
 }
 
-export function widgetOriginLabel(origin: string): string {
-  try { return new URL(origin).host; } catch { return "Invalid origin"; }
-}
-
 function escapeEmbedHTML(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }

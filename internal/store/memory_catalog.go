@@ -16,34 +16,6 @@ func memoryClone[T any](value T) T {
 	return cloned
 }
 
-// The public JSON representation intentionally omits provider endpoints and
-// secret references. Preserve those internal fields when cloning values for
-// the in-memory store; using memoryClone directly would silently erase them.
-func cloneAccessConnection(value model.AccessConnection) model.AccessConnection {
-	baseURL := value.BaseURL
-	managementSecretID := value.ManagementSecretID
-	legacyProviderID := value.LegacyProviderID
-	cloned := memoryClone(value)
-	cloned.BaseURL = baseURL
-	cloned.ManagementSecretID = managementSecretID
-	cloned.LegacyProviderID = legacyProviderID
-	return cloned
-}
-
-func cloneAccessCredential(value model.AccessCredential) model.AccessCredential {
-	encryptedSecretID := value.EncryptedSecretID
-	cloned := memoryClone(value)
-	cloned.EncryptedSecretID = encryptedSecretID
-	return cloned
-}
-
-func cloneBackendConnection(value model.BackendConnection) model.BackendConnection {
-	credentialSecretID := value.CredentialSecretID
-	cloned := memoryClone(value)
-	cloned.CredentialSecretID = credentialSecretID
-	return cloned
-}
-
 func (m *Memory) Deployment(context.Context) (model.Deployment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -64,27 +36,15 @@ func (m *Memory) CreateDeployment(_ context.Context, value model.Deployment) (mo
 	}
 	now := time.Now().UTC()
 	value.Revision, value.CatalogRevision = 1, 1
-	if value.DefaultReleasePolicy == "" {
-		value.DefaultReleasePolicy = "latest"
-	}
 	value.CreatedAt, value.UpdatedAt = now, now
 	m.deployment, m.hasDeployment = value, true
-	product := model.Product{ID: value.ID, OrganisationID: value.OrganisationID, Name: value.Name, Slug: value.Slug, Description: value.Description, DefaultVersionPolicy: value.DefaultReleasePolicy, CatalogRevision: value.CatalogRevision, RequirePromotionApproval: value.RequirePromotionApproval, PublicMCPEnabled: value.PublicMCPEnabled, Revision: value.Revision, CreatedAt: now, UpdatedAt: now}
+	product := model.Product{ID: value.ID, OrganisationID: value.OrganisationID, Name: value.Name, Slug: value.Slug, Description: value.Description, CatalogRevision: value.CatalogRevision, PublicMCPEnabled: value.PublicMCPEnabled, Revision: value.Revision, CreatedAt: now, UpdatedAt: now}
 	m.products[value.ID] = product
-	m.productVersions[value.ID] = make(map[string]model.ProductVersion)
-	m.productVersionPins[value.ID] = make(map[string]model.ProductVersionPin)
-	m.productVersionPinHistory[value.ID] = nil
-	m.productInstallations[value.ID] = make(map[string]model.ProductInstallation)
-	m.productBuilds[value.ID] = make(map[string]model.ProductBuild)
 	m.sources[value.ID] = make(map[string]model.Source)
 	m.knowledge[value.ID] = nil
 	m.envs[value.ID] = make(map[string]model.Environment)
 	m.tools[value.ID] = make(map[string]model.Tool)
 	m.mcpConnections[value.ID] = make(map[string]model.MCPConnection)
-	m.providers[value.ID] = make(map[string]model.Provider)
-	m.projects[value.ID] = make(map[string]model.Project)
-	m.leases[value.ID] = make(map[string]model.CredentialLease)
-	m.integrationRuns[value.ID] = make(map[string]model.IntegrationRun)
 	m.reportSubmissions[value.ID] = make(map[string]model.ReportSubmission)
 	m.llmProfiles[value.ID] = make(map[string]model.LLMProfile)
 	m.aiProviderConnections[value.ID] = make(map[string]model.AIProviderConnection)
@@ -107,8 +67,7 @@ func (m *Memory) UpdateDeployment(_ context.Context, value model.Deployment, exp
 	m.deployment = value
 	if product, ok := m.products[value.ID]; ok {
 		product.Name, product.Slug, product.Description = value.Name, value.Slug, value.Description
-		product.DefaultVersionPolicy, product.CatalogRevision = value.DefaultReleasePolicy, value.CatalogRevision
-		product.RequirePromotionApproval, product.PublicMCPEnabled = value.RequirePromotionApproval, value.PublicMCPEnabled
+		product.CatalogRevision, product.PublicMCPEnabled = value.CatalogRevision, value.PublicMCPEnabled
 		product.Revision, product.UpdatedAt = value.Revision, value.UpdatedAt
 		m.products[value.ID] = product
 	}
@@ -126,21 +85,16 @@ func (m *Memory) integrationLocked(value model.Integration) model.Integration {
 		}
 		return value.Resources[i].Kind < value.Resources[j].Kind
 	})
-	value.Packages = nil
-	for _, binding := range m.integrationPackageLinks[value.ID] {
-		value.Packages = append(value.Packages, m.integrationPackageBindingLocked(binding))
+	value.SDKs = nil
+	for _, reference := range m.sdkReferences[value.ID] {
+		value.SDKs = append(value.SDKs, memoryClone(reference))
 	}
-	sort.Slice(value.Packages, func(i, j int) bool {
-		return value.Packages[i].PackageArtifactID < value.Packages[j].PackageArtifactID
-	})
-	value.AccessConnections = nil
-	for connectionID, links := range m.integrationAccessLinks {
-		if links[value.ID] {
-			value.AccessConnections = append(value.AccessConnections, connectionID)
+	sort.Slice(value.SDKs, func(i, j int) bool {
+		if value.SDKs[i].Ecosystem == value.SDKs[j].Ecosystem {
+			return value.SDKs[i].Coordinate < value.SDKs[j].Coordinate
 		}
-	}
-	sort.Strings(value.AccessConnections)
-	value.SupportRouteID = m.integrationSupportRoutes[value.ID]
+		return value.SDKs[i].Ecosystem < value.SDKs[j].Ecosystem
+	})
 	return memoryClone(value)
 }
 
@@ -196,7 +150,7 @@ func (m *Memory) CreateIntegration(_ context.Context, value model.Integration) (
 	}
 	m.integrations[value.ID] = value
 	m.integrationResourceLinks[value.ID] = make(map[string]model.IntegrationResourceLink)
-	m.integrationPackageLinks[value.ID] = make(map[string]model.IntegrationPackageBinding)
+	m.sdkReferences[value.ID] = make(map[string]model.SDKReference)
 	m.integrationRevisions[value.ID] = make(map[string]model.IntegrationRevision)
 	m.deployment.CatalogRevision++
 	return m.integrationLocked(value), nil

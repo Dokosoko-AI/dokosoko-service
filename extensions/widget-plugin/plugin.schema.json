@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dokosoko.example/schemas/widget-plugin.json",
+  "title": "External DokoSoko widget plugin",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "display_name", "browser_entrypoint", "backend_origin", "capabilities"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "browser_entrypoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "backend_origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+$" },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["private_oauth", "private_mcp"] }
+    }
+  }
+}

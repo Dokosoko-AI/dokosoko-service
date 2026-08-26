@@ -31,7 +31,7 @@ func TestPostgresNativePluginStateAndToolContract(t *testing.T) {
 			t.Errorf("remove native plugin store fixture: %v", err)
 		}
 	})
-	if _, err := postgres.CreateProduct(ctx, model.Product{ID: productID, OrganisationID: organisationID, Name: "Native plugin store", Slug: "native-plugin-store", DefaultVersionPolicy: "latest"}); err != nil {
+	if _, err := postgres.CreateProduct(ctx, model.Product{ID: productID, OrganisationID: organisationID, Name: "Native plugin store", Slug: "native-plugin-store"}); err != nil {
 		t.Fatal(err)
 	}
 

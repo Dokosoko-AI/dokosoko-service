@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
@@ -114,18 +113,6 @@ func (s *Server) productCatalogError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
 		s.storeError(w, err)
-	case errors.Is(err, platform.ErrProductDescriptionRequired):
-		writeError(w, http.StatusUnprocessableEntity, "product_description_required", err.Error(), nil)
-	case errors.Is(err, platform.ErrProductVersionDeprecated):
-		writeError(w, http.StatusConflict, "product_version_deprecated", err.Error(), nil)
-	case errors.Is(err, platform.ErrProductVersionLifecycle):
-		writeError(w, http.StatusUnprocessableEntity, "invalid_product_version_lifecycle", err.Error(), nil)
-	case errors.Is(err, platform.ErrProductVersionDrifted):
-		writeError(w, http.StatusConflict, "product_version_drifted", err.Error(), nil)
-	case errors.Is(err, platform.ErrPromotionApprovalRequired), errors.Is(err, platform.ErrPromotionSeparationOfDuties):
-		writeError(w, http.StatusConflict, "promotion_approval_required", err.Error(), nil)
-	case errors.Is(err, platform.ErrProductVersionImpact):
-		writeError(w, http.StatusConflict, "product_version_impact_acknowledgement_required", err.Error(), nil)
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_product_catalog", err.Error(), nil)
 	}

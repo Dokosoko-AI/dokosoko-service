@@ -120,38 +120,6 @@ func (s *Server) integrationError(w http.ResponseWriter, err error, creating boo
 	s.productCatalogError(w, err)
 }
 
-func (s *Server) integrationAccessConnections(w http.ResponseWriter, r *http.Request, integrationID string) {
-	var input struct {
-		AccessConnectionIDs []string `json:"access_connection_ids"`
-	}
-	if err := decodeJSON(r.Body, &input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	value, err := s.service.SetIntegrationAccessConnections(r.Context(), integrationID, input.AccessConnectionIDs, actor(r))
-	if err != nil {
-		s.productCatalogError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
-func (s *Server) integrationSupportRoute(w http.ResponseWriter, r *http.Request, integrationID string) {
-	var input struct {
-		SupportRouteID string `json:"support_route_id"`
-	}
-	if err := decodeJSON(r.Body, &input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	value, err := s.service.SetIntegrationSupportRoute(r.Context(), integrationID, input.SupportRouteID, actor(r))
-	if err != nil {
-		s.productCatalogError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
 func (s *Server) publishIntegration(w http.ResponseWriter, r *http.Request, integrationID string) {
 	var input struct {
 		CandidateRevision     int64  `json:"candidate_revision"`

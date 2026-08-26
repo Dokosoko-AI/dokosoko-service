@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -189,12 +188,8 @@ func scopedResourceExcerpt(link model.IntegrationResourceLink, limit int) string
 	return truncateRunes(builder.String(), limit)
 }
 
-func scopedPackageExcerpt(binding model.IntegrationPackageBinding, limit int) string {
-	if binding.Release == nil {
-		return truncateRunes("Exact package release ID: "+binding.PackageReleaseID, limit)
-	}
-	release := binding.Release
-	return truncateRunes(fmt.Sprintf("Ecosystem: %s\nCoordinate: %s\nVersion: %s\nPURL: %s\nInstall: %s\nDigest: %s\nContent hash: %s", release.Ecosystem, release.Coordinate, release.Version, release.PURL, release.InstallCommand, release.Digest, release.ContentHash), limit)
+func scopedSDKExcerpt(reference model.SDKReference, limit int) string {
+	return truncateRunes(fmt.Sprintf("Ecosystem: %s\nCoordinate: %s\nExact version: %s\nInstall: %s\nDocumentation: %s\nSource: %s\nChecksum: %s", reference.Ecosystem, reference.Coordinate, reference.ExactVersion, reference.InstallCommand, reference.DocumentationURL, reference.SourceURL, reference.Checksum), limit)
 }
 
 func scopedAuthorizationExcerpt(point model.AuthorizationPoint, limit int) string {
@@ -281,16 +276,9 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 		}
 		values = append(values, model.IntegrationEvidence{Kind: "source_publication", ResourceID: publication.ID, Label: firstNonEmpty(label, publication.SourceID), Location: location, Excerpt: excerpt.Text, References: excerpt.References, Version: strconv.FormatInt(publication.Revision, 10), Visibility: visibility, Fingerprint: evidenceFingerprint("source_publication", publication.ID, publication.SourceID, publication.ContentHash, excerpt.Text)})
 	}
-	for _, binding := range integration.Packages {
-		label, packageVersion, visibility := binding.PackageArtifactID, binding.PackageReleaseID, model.VisibilityPrivate
-		if binding.Artifact != nil {
-			label = binding.Artifact.Name
-		}
-		if binding.Release != nil {
-			packageVersion, visibility = binding.Release.Version, binding.Release.Visibility
-		}
-		excerpt := scopedPackageExcerpt(binding, maxAnalysisToolItem)
-		values = append(values, model.IntegrationEvidence{Kind: "package", ResourceID: binding.PackageReleaseID, Label: label, Excerpt: excerpt, Version: packageVersion, Visibility: visibility, Fingerprint: evidenceFingerprint("package", integration.ID, binding.PackageArtifactID, binding.PackageReleaseID, excerpt)})
+	for _, reference := range integration.SDKs {
+		excerpt := scopedSDKExcerpt(reference, maxAnalysisToolItem)
+		values = append(values, model.IntegrationEvidence{Kind: "sdk", ResourceID: reference.ID, Label: reference.Coordinate, Excerpt: excerpt, Version: reference.ExactVersion, Visibility: reference.Visibility, Fingerprint: evidenceFingerprint("sdk", integration.ID, reference.ID, strconv.FormatInt(reference.Revision, 10), excerpt)})
 	}
 	points, err := s.store.AuthorizationPoints(ctx, integration.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -333,43 +321,6 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 	}
 	if hasDocumentation {
 		values = append(values, automaticToolEvidence(integration, integration.FamilyKey+".knowledge.search", "Search only the reviewed documentation pinned by this published API revision.", `{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string","minLength":1,"maxLength":2000}},"required":["query"]}`, "Read-only. No confirmation or idempotency key is required.", version))
-	}
-	connections, connectionErr := s.store.AccessConnections(ctx, product.ID)
-	if connectionErr != nil && !errors.Is(connectionErr, store.ErrNotFound) {
-		return nil, model.Integration{}, connectionErr
-	}
-	boundConnections := make([]model.AccessConnection, 0)
-	for _, connection := range connections {
-		if connection.State == "active" && slices.Contains(connection.IntegrationIDs, integration.ID) && connection.Definition != nil && connection.Definition.State == "active" {
-			boundConnections = append(boundConnections, connection)
-		}
-	}
-	serviceCounts := make(map[string]int)
-	for _, connection := range boundConnections {
-		serviceCounts[connection.Definition.ServiceKey]++
-	}
-	for _, connection := range boundConnections {
-		definition := connection.Definition
-		prefix := integration.FamilyKey + ".admin"
-		if len(boundConnections) > 1 {
-			if serviceCounts[definition.ServiceKey] != 1 {
-				continue
-			}
-			prefix += "." + definition.ServiceKey
-		}
-		operations := accessOperationNames(definition.Operations)
-		details := fmt.Sprintf("Service: %s\nConnection revision: %d\nAccess definition revision: %d", definition.Name, connection.Revision, definition.Revision)
-		values = append(values,
-			automaticToolEvidence(integration, prefix+".instances.list", "List provider resources owned by the authenticated subject for this API.", `{"type":"object","additionalProperties":false,"properties":{}}`, details+"\nRead-only.", strconv.FormatInt(connection.Revision, 10)),
-			automaticToolEvidence(integration, prefix+".credentials.list", "List credential identifiers, states, expiry, scopes, and fingerprints. Credential material is never returned.", `{"type":"object","additionalProperties":false,"properties":{"access_instance_id":{"type":"string"}}}`, details+"\nRead-only.", strconv.FormatInt(connection.Revision, 10)),
-		)
-		if operations["credentials.create"] {
-			environmentVariable := RuntimeEnvironmentVariableForFamily(integration.FamilyKey, len(connection.IntegrationIDs) > 1)
-			values = append(values, automaticToolEvidence(integration, prefix+".credentials.rotate", "Issue the first credential or a safe-overlap replacement. One-time credential material is returned only by the successful confirmed mutation.", `{"type":"object","additionalProperties":false,"properties":{"environment_id":{"type":"string"},"access_instance_id":{"type":"string"},"rotated_from_credential_id":{"type":"string","minLength":1},"scopes":{"type":"array","maxItems":20,"items":{"type":"string"}},"ttl_seconds":{"type":"integer","minimum":300}},"required":["environment_id","scopes"]}`, details+"\nSuccessful result field environment_variable: "+environmentVariable+"\nSuccessful result field credential_material: one-time secret material\nConfirmation protocol: call without attestation to receive error data containing confirmation_challenge, then retry the exact tool, arguments, and stable params._meta.idempotency_key with params._meta.confirmation_challenge and params._meta.confirmed=true. The challenge is exact-request bound and single-use.\nOperator intent: choose and approve the target environment, scopes, TTL, and optional rotated_from_credential_id before retrying.", strconv.FormatInt(connection.Revision, 10)))
-		}
-		if operations["credentials.revoke"] {
-			values = append(values, automaticToolEvidence(integration, prefix+".credentials.revoke", "Revoke one credential owned by the authenticated subject for this exact API connection.", `{"type":"object","additionalProperties":false,"properties":{"credential_id":{"type":"string","minLength":1}},"required":["credential_id"]}`, details+"\nDestructive confirmation protocol: after choosing and approving the exact credential_id, call without attestation to receive error data containing confirmation_challenge, then retry the exact arguments with params._meta.confirmation_challenge and params._meta.confirmed=true. The challenge is exact-request bound and single-use.\nRotation and revocation use separate challenges.", strconv.FormatInt(connection.Revision, 10)))
-		}
 	}
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].Kind == values[j].Kind {

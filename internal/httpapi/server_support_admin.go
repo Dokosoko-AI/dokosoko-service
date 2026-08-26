@@ -2,13 +2,9 @@ package httpapi
 
 import (
 	"errors"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 	"net/http"
 	"strconv"
-	"time"
-
-	"github.com/dokosoko/dokosoko-service/internal/model"
-	"github.com/dokosoko/dokosoko-service/internal/reporting"
-	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
 func (s *Server) supportSubmissions(w http.ResponseWriter, r *http.Request) {
@@ -63,36 +59,4 @@ func (s *Server) supportSubmission(w http.ResponseWriter, r *http.Request, submi
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
-}
-
-func (s *Server) createSupportDeliveryAttempt(w http.ResponseWriter, r *http.Request, submissionID string) {
-	if s.reporting == nil {
-		writeError(w, http.StatusServiceUnavailable, "reporting_unavailable", "Reporting is unavailable.", nil)
-		return
-	}
-	deployment, err := s.service.Store().Deployment(r.Context())
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	value, err := s.reporting.Retry(r.Context(), deployment.ID, submissionID)
-	if errors.Is(err, reporting.ErrDeliveryUnavailable) {
-		writeError(w, http.StatusConflict, "reporting_delivery_unavailable", "Configure support delivery before retrying.", nil)
-		return
-	}
-	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, "submission_not_retryable", "Only unexpired held or failed submissions can be retried.", nil)
-		return
-	}
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	currentActor := actor(r)
-	requestID, _ := r.Context().Value(requestIDKey).(string)
-	if err := s.service.Store().AppendAudit(r.Context(), model.AuditEvent{ID: "audit_" + strconv.FormatInt(time.Now().UnixNano(), 10), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: currentActor.ID, Action: "support_submission.delivery_attempt_created", TargetType: "support_submission", TargetID: submissionID, Current: map[string]any{"kind": value.Kind, "state": value.State}, RequestID: requestID, CreatedAt: time.Now().UTC()}); err != nil {
-		s.storeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, value)
 }

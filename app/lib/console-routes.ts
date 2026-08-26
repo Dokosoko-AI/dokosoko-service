@@ -1,22 +1,15 @@
-export type Section = "product" | "identity" | "recipes" | "sources" | "projects" | "connections" | "tools" | "releases" | "distribution" | "widgets" | "runs" | "reporting" | "settings";
+export type Section = "product" | "identity" | "recipes" | "sources" | "connections" | "tools" | "distribution" | "reporting" | "settings";
 
 export type IntegrationTab = "overview" | "documentation" | "access" | "tools" | "test" | "history";
-export type IntegrationResourceTab = "documentation" | "contracts" | "packages";
-export type SettingsTab = "overview" | "connections" | "reporting" | "storage" | "ai" | "root";
+export type IntegrationResourceTab = "documentation" | "contracts" | "sdks";
+export type SettingsTab = "overview" | "storage" | "ai" | "root";
 
 export type EntityKind =
   | "integration"
-  | "widget"
   | "resource-set"
   | "source"
   | "tool"
   | "connection"
-  | "access-definition"
-  | "access-connection"
-  | "installation"
-  | "release"
-  | "run"
-  | "support-route"
   | "report"
   | "audit-event"
   | "root-user";
@@ -31,7 +24,7 @@ export type ConsoleRoute =
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
   { id: "overview", label: "Quick Start" },
   { id: "documentation", label: "Documentation" },
-  { id: "access", label: "Access" },
+  { id: "access", label: "Keys & Access" },
   { id: "tools", label: "Tools" },
   { id: "test", label: "Test" },
   { id: "history", label: "History" },
@@ -44,13 +37,11 @@ export const INTEGRATION_PRIMARY_TABS = INTEGRATION_TABS.filter(
 export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; label: string }> = [
   { id: "documentation", label: "Documentation" },
   { id: "contracts", label: "API contracts" },
-  { id: "packages", label: "SDKs & Packages" },
+  { id: "sdks", label: "SDKs" },
 ];
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "overview", label: "Overview" },
-  { id: "connections", label: "Service connections" },
-  { id: "reporting", label: "Bug reports & feedback" },
   { id: "storage", label: "Database & storage" },
   { id: "ai", label: "AI providers" },
   { id: "root", label: "Root access" },
@@ -63,30 +54,19 @@ export const SECTION_PATHS: Record<Section, string> = {
   sources: "/integrations/documentation",
   tools: "/tools",
   connections: "/tools/connections",
-  projects: "/access",
   distribution: "/agent-access",
-  widgets: "/widgets",
-  releases: "/distribution/releases",
-  runs: "/activity",
-  reporting: "/operations/reporting",
+  reporting: "/operations/outbox",
   settings: "/settings",
 };
 
 const ENTITY_SECTIONS: Record<EntityKind, Section> = {
   integration: "product",
-  widget: "widgets",
   "resource-set": "product",
   source: "sources",
   tool: "tools",
   connection: "connections",
-  "access-definition": "projects",
-  "access-connection": "projects",
-  installation: "projects",
-  release: "releases",
-  run: "runs",
-  "support-route": "reporting",
   report: "reporting",
-  "audit-event": "runs",
+  "audit-event": "reporting",
   "root-user": "settings",
 };
 
@@ -153,7 +133,7 @@ export function routeForIntegration(uid: string, integrationTab: IntegrationTab 
 
 export function parseConsolePath(pathname: string): ConsoleRoute {
   const path = normalizePath(pathname);
-	if (path === "/") return routeForSection("product");
+  if (path === "/") return routeForSection("product");
 
   const toolBuilderMatch = path.match(/^\/tools\/new(?:\/([^/]+))?$/);
   if (toolBuilderMatch) {
@@ -185,15 +165,12 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (section) return routeForSection(section);
 
-	const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
+  const integrationMatch = path.match(/^\/integration\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
   if (integrationMatch) {
-    const requestedTab = integrationMatch[2] ?? "overview";
-    const tab = requestedTab as IntegrationTab;
+    const tab = (integrationMatch[2] ?? "overview") as IntegrationTab;
     if (!INTEGRATION_TABS.some((candidate) => candidate.id === tab)) return { kind: "not-found", section: "product", path };
-    const requestedResourceTab = integrationMatch[3];
-    if (requestedResourceTab && tab !== "documentation") return { kind: "not-found", section: "product", path };
-    const resourceTab = requestedResourceTab as IntegrationResourceTab | undefined;
-    if (resourceTab && !INTEGRATION_RESOURCE_TABS.some((candidate) => candidate.id === resourceTab)) return { kind: "not-found", section: "product", path };
+    const resourceTab = integrationMatch[3] as IntegrationResourceTab | undefined;
+    if (resourceTab && (tab !== "documentation" || !INTEGRATION_RESOURCE_TABS.some((candidate) => candidate.id === resourceTab))) return { kind: "not-found", section: "product", path };
     try {
       return routeForIntegration(decodeURIComponent(integrationMatch[1]), tab, resourceTab);
     } catch {

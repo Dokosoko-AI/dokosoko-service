@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 
 import { Badge, Button, Dialog } from "../../core/control";
 import type { useAdminActivityWorkspace } from "../use-admin-activity-workspace";
@@ -19,35 +19,19 @@ export function AdminActivityDialogs({ workspace }: {
     rootCode, setRootCode,
     rootEnrollment,
     rootRecoveryCodes, setRootRecoveryCodes,
-    environments,
-    runOpen, setRunOpen,
-    runBusy,
-    runEnvironmentID, setRunEnvironmentID,
-    runOutcome, setRunOutcome,
     beginRootUser,
     completeRootUser,
-    startIntegrationRun,
   } = workspace;
 
   return <>
     <Dialog
-      open={runOpen}
-      onClose={setRunOpen}
-      title="Start API run"
-      description="Track an intended developer outcome through a deterministic validation result."
-      actions={<><Button outline onClick={() => setRunOpen(false)}>Cancel</Button><Button color="indigo" disabled={runBusy || !runEnvironmentID || !runOutcome.trim()} onClick={startIntegrationRun}>{runBusy ? "Starting…" : "Start run"}</Button></>}
-    >
-      <div className="auth-form compact-form"><label className="auth-field"><span>Environment</span><select value={runEnvironmentID} onChange={(event) => setRunEnvironmentID(event.target.value)}>{environments.map((environment) => <option value={environment.id} key={environment.id}>{environment.name}</option>)}</select></label><label className="auth-field"><span>Requested outcome</span><textarea maxLength={500} value={runOutcome} onChange={(event) => setRunOutcome(event.target.value)} placeholder="Install the SDK, authenticate, and verify a first API request" /></label><div className="private-default-note"><ShieldCheck />The run records outcome and validation state. Secret inputs, raw prompts, and tool payloads are excluded.</div></div>
-    </Dialog>
-
-    <Dialog
       open={Boolean(reportDetail)}
       onClose={(open) => { if (!open) setReportDetail(null); }}
       title={reportDetail?.kind === "bug" ? "Bug report" : "Feedback submission"}
-      description="Decrypted on demand for this authenticated administrative review."
+      description="Plaintext, schema-bounded content approved by the reporting user."
       actions={<Button color="indigo" onClick={() => setReportDetail(null)}>Close</Button>}
     >
-      {reportDetailBusy ? <div className="empty-row">Decrypting submission…</div> : reportDetail && <div className="report-detail"><div className="report-detail-meta"><span><small>Status</small><Badge color={reportDetail.state === "delivered" ? "green" : reportDetail.state === "failed" ? "red" : reportDetail.state === "held" ? "amber" : "blue"}>{reportDetail.state}</Badge></span><span><small>Compatibility snapshot</small><code>{reportDetail.trusted_context.product_version || "Unversioned"}</code></span><span><small>Created</small><strong>{new Date(reportDetail.created_at).toLocaleString()}</strong></span></div><pre>{JSON.stringify(reportDetail.content ?? { summary: reportDetail.summary }, null, 2)}</pre>{reportDetail.external_url && <a className="report-external-detail" href={reportDetail.external_url} target="_blank" rel="noreferrer"><ExternalLink />Open {reportDetail.external_id || "external ticket"}</a>}</div>}
+      {reportDetailBusy ? <div className="empty-row">Loading submission…</div> : reportDetail && <div className="report-detail"><div className="report-detail-meta"><span><small>Status</small><Badge color="blue">{reportDetail.state}</Badge></span><span><small>API</small><code>{reportDetail.trusted_integration?.display_name || "Deployment"}</code></span><span><small>Created</small><strong>{new Date(reportDetail.created_at).toLocaleString()}</strong></span></div><pre>{JSON.stringify(reportDetail.content ?? { summary: reportDetail.summary }, null, 2)}</pre></div>}
     </Dialog>
 
     <Dialog

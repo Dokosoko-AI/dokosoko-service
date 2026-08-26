@@ -157,12 +157,7 @@ type MCPConnection struct {
 	ProtocolVersion     string          `json:"protocol_version"`
 	AuthMode            string          `json:"auth_mode"`
 	CredentialID        string          `json:"-"`
-	OAuthClientID       string          `json:"oauth_client_id,omitempty"`
-	OAuthClientSecretID string          `json:"-"`
-	OAuthIssuer         string          `json:"oauth_issuer,omitempty"`
-	AuthorizationURL    string          `json:"authorization_url,omitempty"`
-	TokenURL            string          `json:"token_url,omitempty"`
-	Scopes              []string        `json:"scopes"`
+	ForwardUserIdentity bool            `json:"forward_user_identity"`
 	State               string          `json:"state"`
 	LastSyncedAt        *time.Time      `json:"last_synced_at,omitempty"`
 	LastCatalogHash     string          `json:"last_catalog_hash,omitempty"`
@@ -170,29 +165,4 @@ type MCPConnection struct {
 	Revision            int64           `json:"revision"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
-}
-
-type MCPUserGrant struct {
-	ID              string     `json:"id"`
-	OrganisationID  string     `json:"organisation_id"`
-	ProductID       string     `json:"product_id"`
-	ConnectionID    string     `json:"connection_id"`
-	SubjectID       string     `json:"-"`
-	UpstreamSubject string     `json:"upstream_subject,omitempty"`
-	AccessSecretID  string     `json:"-"`
-	RefreshSecretID string     `json:"-"`
-	Scopes          []string   `json:"scopes"`
-	ExpiresAt       time.Time  `json:"expires_at"`
-	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-}
-
-type MCPAuthorizationState struct {
-	Digest       []byte
-	ConnectionID string
-	ProductID    string
-	SubjectID    string
-	CodeVerifier string
-	ExpiresAt    time.Time
 }

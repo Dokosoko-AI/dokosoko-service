@@ -7,11 +7,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const deploymentSelect = `SELECT id::text,organisation_id::text,name,slug,description,public_mcp_enabled,default_release_policy,require_promotion_approval,catalog_revision,revision,created_at,updated_at FROM deployments`
+const deploymentSelect = `SELECT id::text,organisation_id::text,name,slug,description,public_mcp_enabled,catalog_revision,revision,created_at,updated_at FROM deployments`
 
 func scanDeployment(row pgx.Row) (model.Deployment, error) {
 	var value model.Deployment
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.PublicMCPEnabled, &value.DefaultReleasePolicy, &value.RequirePromotionApproval, &value.CatalogRevision, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.PublicMCPEnabled, &value.CatalogRevision, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
@@ -25,11 +25,11 @@ func (p *Postgres) CreateDeployment(ctx context.Context, value model.Deployment)
 		return model.Deployment{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	created, err := scanDeployment(tx.QueryRow(ctx, `INSERT INTO deployments(id,organisation_id,name,slug,description,public_mcp_enabled,default_release_policy,require_promotion_approval) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,organisation_id::text,name,slug,description,public_mcp_enabled,default_release_policy,require_promotion_approval,catalog_revision,revision,created_at,updated_at`, value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.PublicMCPEnabled, value.DefaultReleasePolicy, value.RequirePromotionApproval))
+	created, err := scanDeployment(tx.QueryRow(ctx, `INSERT INTO deployments(id,organisation_id,name,slug,description,public_mcp_enabled) VALUES($1,$2,$3,$4,$5,$6) RETURNING `+deploymentSelect[len("SELECT "):len(deploymentSelect)-len(" FROM deployments")], value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.PublicMCPEnabled))
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO products(id,organisation_id,slug,name,description,public_mcp_enabled,default_version_policy,require_promotion_approval,catalog_revision,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, created.ID, created.OrganisationID, created.Slug, created.Name, created.Description, created.PublicMCPEnabled, created.DefaultReleasePolicy, created.RequirePromotionApproval, created.CatalogRevision, created.Revision, created.CreatedAt, created.UpdatedAt); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO products(id,organisation_id,slug,name,description,public_mcp_enabled,catalog_revision,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, created.ID, created.OrganisationID, created.Slug, created.Name, created.Description, created.PublicMCPEnabled, created.CatalogRevision, created.Revision, created.CreatedAt, created.UpdatedAt); err != nil {
 		return model.Deployment{}, databaseError(err)
 	}
 	return created, tx.Commit(ctx)
@@ -41,11 +41,11 @@ func (p *Postgres) UpdateDeployment(ctx context.Context, value model.Deployment,
 		return model.Deployment{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	updated, err := scanDeployment(tx.QueryRow(ctx, `UPDATE deployments SET name=$2,slug=$3,description=$4,public_mcp_enabled=$5,default_release_policy=$6,require_promotion_approval=$7,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$8 RETURNING id::text,organisation_id::text,name,slug,description,public_mcp_enabled,default_release_policy,require_promotion_approval,catalog_revision,revision,created_at,updated_at`, value.ID, value.Name, value.Slug, value.Description, value.PublicMCPEnabled, value.DefaultReleasePolicy, value.RequirePromotionApproval, expected))
+	updated, err := scanDeployment(tx.QueryRow(ctx, `UPDATE deployments SET name=$2,slug=$3,description=$4,public_mcp_enabled=$5,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$6 RETURNING `+deploymentSelect[len("SELECT "):len(deploymentSelect)-len(" FROM deployments")], value.ID, value.Name, value.Slug, value.Description, value.PublicMCPEnabled, expected))
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE products SET name=$2,slug=$3,description=$4,public_mcp_enabled=$5,default_version_policy=$6,require_promotion_approval=$7,revision=$8,updated_at=$9 WHERE id=$1`, updated.ID, updated.Name, updated.Slug, updated.Description, updated.PublicMCPEnabled, updated.DefaultReleasePolicy, updated.RequirePromotionApproval, updated.Revision, updated.UpdatedAt); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE products SET name=$2,slug=$3,description=$4,public_mcp_enabled=$5,revision=$6,updated_at=$7 WHERE id=$1`, updated.ID, updated.Name, updated.Slug, updated.Description, updated.PublicMCPEnabled, updated.Revision, updated.UpdatedAt); err != nil {
 		return model.Deployment{}, databaseError(err)
 	}
 	return updated, tx.Commit(ctx)
@@ -73,28 +73,11 @@ func (p *Postgres) enrichIntegration(ctx context.Context, value model.Integratio
 		return model.Integration{}, err
 	}
 	value.Resources = links
-	packages, err := p.IntegrationPackageBindings(ctx, value.ID)
+	sdks, err := p.SDKReferences(ctx, value.ID)
 	if err != nil && err != ErrNotFound {
 		return model.Integration{}, err
 	}
-	value.Packages = packages
-	rows, err := p.pool.Query(ctx, `SELECT access_connection_id::text FROM integration_access_bindings WHERE integration_id=$1 ORDER BY access_connection_id`, value.ID)
-	if err != nil {
-		return model.Integration{}, databaseError(err)
-	}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return model.Integration{}, databaseError(err)
-		}
-		value.AccessConnections = append(value.AccessConnections, id)
-	}
-	rows.Close()
-	err = p.pool.QueryRow(ctx, `SELECT support_route_id::text FROM integration_support_bindings WHERE integration_id=$1 ORDER BY created_at DESC LIMIT 1`, value.ID).Scan(&value.SupportRouteID)
-	if err != nil && err != pgx.ErrNoRows {
-		return model.Integration{}, databaseError(err)
-	}
+	value.SDKs = sdks
 	return value, nil
 }
 

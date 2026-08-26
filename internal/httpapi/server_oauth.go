@@ -239,28 +239,7 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	s.recordAnalytics(r.Context(), result.Principal.ProductID, "connector_authorized", "vendor_user", pseudonym(result.Principal.ProductID, result.Principal), map[string]any{"client_id": result.Principal.ClientID})
 	writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) upstreamOAuthCallback(w http.ResponseWriter, r *http.Request) {
-	if s.mcpBridge == nil {
-		writeError(w, http.StatusServiceUnavailable, "mcp_bridge_unavailable", "Stateless MCPv2 authorization is unavailable.", nil)
-		return
-	}
-	if r.URL.Query().Get("error") != "" {
-		writeError(w, http.StatusUnauthorized, "upstream_authorization_denied", "The upstream MCP authorization server denied access.", nil)
-		return
-	}
-	if _, err := s.mcpBridge.CompleteAuthorization(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"), r.URL.Query().Get("iss")); err != nil {
-		writeError(w, http.StatusUnauthorized, "upstream_authorization_failed", "The upstream MCP authorization response was invalid or expired.", nil)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, `<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Connected</title><style>body{font:16px system-ui;margin:4rem;max-width:42rem}h1{color:#18181b}</style></head><body><h1>Stateless MCPv2 connection authorized</h1><p>Your upstream user grant is encrypted and bound to this DokoSoko identity. You can close this window.</p></body></html>`)
 }
 
 func (s *Server) identityProvider(w http.ResponseWriter, r *http.Request) {

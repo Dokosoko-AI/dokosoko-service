@@ -64,62 +64,6 @@ func (s *Service) normalizeToolOwnership(ctx context.Context, product model.Prod
 	}
 }
 
-type ProviderInput struct {
-	OrganisationID string
-	ProductID      string
-	Name           string
-	BaseURL        string
-	Credential     string
-	RequiredGrants []string
-	MaxTTLSeconds  int
-}
-
-func (s *Service) CreateProvider(ctx context.Context, input ProviderInput, actor Actor) (model.Provider, error) {
-	input.Name, input.BaseURL, input.Credential = strings.TrimSpace(input.Name), strings.TrimRight(strings.TrimSpace(input.BaseURL), "/"), strings.TrimSpace(input.Credential)
-	if input.Name == "" || len(input.Name) > 120 || !validHTTPSOrigin(input.BaseURL) || input.Credential == "" || s.vault == nil {
-		return model.Provider{}, errors.New("provider name, fixed HTTPS base URL, and encrypted API credential are required")
-	}
-	if input.MaxTTLSeconds == 0 {
-		input.MaxTTLSeconds = 3600
-	}
-	if input.MaxTTLSeconds < 300 || input.MaxTTLSeconds > 86400 {
-		return model.Provider{}, errors.New("provider maximum TTL must be between 300 and 86400 seconds")
-	}
-	providerID, err := randomUUID()
-	if err != nil {
-		return model.Provider{}, err
-	}
-	secretID, err := randomUUID()
-	if err != nil {
-		return model.Provider{}, err
-	}
-	encrypted, err := s.vault.Encrypt([]byte(input.Credential), input.OrganisationID+":provider:"+secretID)
-	if err != nil {
-		return model.Provider{}, err
-	}
-	if _, err := s.store.CreateSecret(ctx, model.Secret{ID: secretID, OrganisationID: input.OrganisationID, Name: "provider-" + providerID, Purpose: "provider_api", Ciphertext: encrypted.Ciphertext, Nonce: encrypted.Nonce, KeyVersion: encrypted.KeyVersion, Fingerprint: encrypted.Fingerprint}); err != nil {
-		return model.Provider{}, err
-	}
-	grants := make([]string, 0, len(input.RequiredGrants))
-	seen := map[string]bool{}
-	for _, grant := range input.RequiredGrants {
-		grant = strings.TrimSpace(grant)
-		if grant != "" && !seen[grant] {
-			seen[grant] = true
-			grants = append(grants, grant)
-		}
-	}
-	config, _ := json.Marshal(map[string]any{"contract_version": "2026-08-01", "authorize_path": "/v1/authorize", "project_path": "/v1/projects", "credential_path": "/v1/credentials", "revoke_path": "/v1/credentials/{credential_id}/revoke", "required_grants": grants, "max_ttl_seconds": input.MaxTTLSeconds})
-	value, err := s.store.CreateProvider(ctx, model.Provider{ID: providerID, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Kind: "remote", BaseURL: input.BaseURL, CredentialID: secretID, Config: config})
-	if err != nil {
-		return model.Provider{}, err
-	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: input.OrganisationID, ProductID: input.ProductID, ActorID: actor.ID, Action: "provider.created", TargetType: "provider", TargetID: value.ID, Current: map[string]any{"name": value.Name, "kind": value.Kind, "contract_version": "2026-08-01", "credential_stored": true}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
-		return model.Provider{}, err
-	}
-	return value, nil
-}
-
 type LLMProfileInput struct {
 	OrganisationID      string
 	ProductID           string

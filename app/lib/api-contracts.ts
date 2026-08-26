@@ -4,13 +4,21 @@ export type APIVisibility = Contract.Visibility;
 
 export type APIProduct = Omit<Contract.Product, "created_at" | "updated_at">;
 
-export type APIDeployment = Omit<Contract.Deployment, "description" | "require_promotion_approval" | "created_at" | "updated_at"> & { description: string; require_promotion_approval: boolean; features?: { widgets: boolean } };
+export type APIDeployment = Omit<Contract.Deployment, "description" | "created_at" | "updated_at"> & { description: string };
 
 export type APIResourceSetRevision = Omit<Contract.ResourceSetRevision, "manifest"> & { manifest: Array<Record<string, unknown>> };
 
 export type APIIntegrationResourceLink = Omit<Contract.IntegrationResourceLink, "resolved_revision"> & { resolved_revision?: APIResourceSetRevision };
 
-export type APIIntegration = Omit<Contract.Integration, "resources" | "packages" | "sunset_at" | "created_at" | "updated_at"> & { sunset_at?: string; resources?: APIIntegrationResourceLink[] };
+export type APISDKReferenceInput = Contract.SdkReferenceInput;
+
+export type APISDKReference = Contract.SdkReference;
+
+export type APIIntegration = Omit<Contract.Integration, "resources" | "sdks" | "sunset_at" | "created_at" | "updated_at"> & {
+  sunset_at?: string;
+  resources?: APIIntegrationResourceLink[];
+  sdks?: APISDKReference[];
+};
 
 export type APIIntegrationRevision = Omit<Contract.IntegrationRevision, "state" | "published_at"> & { state: string; published_at?: string };
 
@@ -30,26 +38,6 @@ export type APIIntegrationDetail = {
   publish_status: APIIntegrationPublishStatus;
 };
 
-export type APIWidgetAppearance = Contract.WidgetAppearance;
-
-export type APIWidget = Omit<Contract.Widget, "activated_at"> & { activated_at?: string };
-
-export type APIWidgetSecret = Omit<Contract.WidgetSecret, "last_used_at" | "revoked_at"> & { last_used_at?: string; revoked_at?: string };
-
-export type APIWidgetSession = Omit<Contract.WidgetSession, "customer_organisation_id" | "revoked_at"> & { customer_organisation_id?: string; revoked_at?: string };
-
-export type APIWidgetProvisioning = Omit<Contract.WidgetProvisioning, "widget"> & { widget: APIWidget };
-export type APIWidgetSecretProvisioning = Omit<Contract.WidgetSecretProvisioning, "credential"> & { credential: APIWidgetSecret };
-export type APIWidgetConfiguration = { widgetId: string; name: string; appearance: APIWidgetAppearance; protocolVersion: "1" };
-export type APIWidgetBootstrap = { bootstrapToken: string; expiresAt: string };
-export type APIWidgetRuntimeSession = { sessionToken: string; sessionId: string; expiresAt: string };
-export type APIWidgetInput = {
-  name: string;
-  allowed_origins: string[];
-  integration_ids: string[];
-  appearance: { theme: APIWidgetAppearance["theme"]; accent_colour?: string; launcher_position: APIWidgetAppearance["launcherPosition"]; greeting?: string };
-};
-
 export type APIResourceSet = {
   id: string;
   deployment_id: string;
@@ -62,129 +50,6 @@ export type APIResourceSet = {
   latest_revision?: APIResourceSetRevision;
   integration_ids?: string[];
 };
-
-export type APIAccessDefinition = {
-  id: string;
-  deployment_id: string;
-  organisation_id: string;
-  service_key: string;
-  name: string;
-  instance_cardinality: "one" | "many";
-  instance_label_singular: string;
-  instance_label_plural: string;
-  credential_scope: "connection" | "instance";
-  management_auth_type: "none" | "bearer" | "api_key" | "oauth2_client_credentials";
-  api_resource_set_id?: string;
-  operations: Record<string, unknown>;
-  state: "draft" | "active" | "archived";
-  revision: number;
-};
-
-export type APIAccessConnection = {
-  id: string;
-  deployment_id: string;
-  organisation_id: string;
-  access_definition_id: string;
-  environment_id?: string;
-  name: string;
-  region?: string;
-  config: Record<string, unknown>;
-  state: "active" | "disabled" | "error";
-  revision: number;
-  definition?: APIAccessDefinition;
-  integration_ids?: string[];
-};
-
-export type APIAccessInstance = {
-  id: string;
-  access_connection_id: string;
-  environment_id: string;
-  owner_type: "organisation" | "user" | "installation";
-  external_id: string;
-  display_name: string;
-  state: string;
-  integration_ids?: string[];
-  expires_at?: string;
-};
-
-export type APIAccessCredential = {
-  id: string;
-  access_connection_id: string;
-  access_instance_id?: string;
-  environment_id: string;
-  scopes: string[];
-  secret_fingerprint: string;
-  storage_mode: "one_time" | "managed" | "reference";
-  state: "active" | "retiring" | "revoked" | "expired";
-  expires_at?: string;
-};
-
-export type APISupportRoute = {
-  id: string;
-  deployment_id: string;
-  organisation_id: string;
-  name: string;
-  is_default: boolean;
-  bug_reports_enabled: boolean;
-  feedback_enabled: boolean;
-  backend_connection_id?: string;
-  retention_days: number;
-  state: "active" | "archived";
-  revision: number;
-  integration_ids?: string[];
-};
-
-export type APIBackendConnection = {
-  id: string;
-  deployment_id: string;
-  organisation_id: string;
-  name: string;
-  base_url: string;
-  authentication_type: "bearer";
-  credential_fingerprint?: string;
-  state: "active" | "disabled";
-  revision: number;
-  created_at: string;
-  updated_at: string;
-};
-
-export type APIBackendConnectionCredential = {
-  id: string;
-  backend_connection_id: string;
-  fingerprint: string;
-  connection_revision: number;
-  created_at: string;
-};
-
-export type APIProductVersion = Omit<Contract.ProductVersion, "diff" | "drift_details" | "created_at" | "updated_at"> & { diff: APIProductVersionDiff; drift_details: APIProductArtifactDrift[] };
-
-export type APIProductVersionChange = Contract.ProductVersionChange;
-export type APIProductVersionDiff = Omit<Contract.ProductVersionDiff, "added" | "removed" | "changed"> & { added: APIProductVersionChange[]; removed: APIProductVersionChange[]; changed: APIProductVersionChange[] };
-export type APIProductArtifactDrift = Contract.ProductArtifactDrift;
-
-export type APIProductVersionPin = Contract.ProductVersionPin;
-
-export type APIProductInstallation = Contract.ProductInstallation;
-
-export type APIProductVersionPinHistory = Contract.ProductVersionPinHistory;
-
-export type APIProductVersionImpact = Contract.ProductVersionImpact;
-
-export type APIProductBinding = Contract.ProductBinding;
-
-export type APIProductRelease = Omit<Contract.ProductRelease, "bindings"> & { bindings: APIProductBinding[] };
-
-export type APIProductComponent = Omit<Contract.ProductComponent, "releases"> & { releases: APIProductRelease[] };
-
-export type APIProductValidationFinding = Contract.ProductValidationFinding;
-
-export type APIProductProfile = Contract.ProductProfile;
-
-export type APIProductDefinition = Omit<Contract.ProductDefinition, "profiles"> & { profiles: APIProductProfile[] };
-
-export type APIProductBuildInput = Contract.ProductBuildInput;
-
-export type APIProductBuild = Omit<Contract.ProductBuild, "proposal" | "unresolved"> & { proposal: APIProductDefinition; unresolved: APIProductValidationFinding[] };
 
 export type APIOrganisation = Contract.Organisation;
 
@@ -851,93 +716,7 @@ export type APIGrantDefinition = Contract.GrantDefinition;
 
 export type APIAuthorizationPoint = Contract.AuthorizationPoint;
 
-export type APIPackageRelease = {
-  id: string;
-  package_artifact_id: string;
-  artifact_name: string;
-  ecosystem: string;
-  coordinate: string;
-  version: string;
-  purl: string;
-  registry_url: string;
-  source_url?: string;
-  language?: string;
-  platform?: string;
-  install_command: string;
-  digest: string;
-  sbom_url?: string;
-  provenance_url?: string;
-  visibility: APIVisibility;
-  content_hash: string;
-  published_by?: string;
-  published_at: string;
-  created_at: string;
-};
-
-export type APIPackageArtifact = {
-  id: string;
-  organisation_id?: string;
-  deployment_id?: string;
-  ecosystem: string;
-  name: string;
-  description: string;
-  coordinate: string;
-  registry_url: string;
-  source_url?: string;
-  purl: string;
-  language?: string;
-  platform?: string;
-  visibility: APIVisibility;
-  lifecycle: "draft" | "active" | "deprecated" | "retired";
-  replacement_package_artifact_id?: string;
-  deprecation_message?: string;
-  sunset_at?: string;
-  revision: number;
-  latest_release?: APIPackageRelease;
-  integration_ids?: string[];
-  releases?: APIPackageRelease[]; // Client-side enrichment from the releases endpoint.
-  created_at: string;
-  updated_at: string;
-};
-
-export type APIPackageArtifactInput = Pick<APIPackageArtifact, "name" | "description" | "ecosystem" | "coordinate" | "purl" | "registry_url" | "visibility"> & {
-  source_url?: string;
-  language?: string;
-  platform?: string;
-  acknowledge_public: boolean;
-};
-
-export type APIIntegrationPackageBinding = {
-  id?: string;
-  integration_id: string;
-  package_artifact_id: string;
-  package_release_id: string;
-  artifact?: APIPackageArtifact;
-  release?: APIPackageRelease;
-  created_by?: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type APIMCPConnection = {
-  id: string;
-  organisation_id: string;
-  product_id: string;
-  name: string;
-  namespace: string;
-  endpoint: string;
-  protocol_version: "2026-07-28";
-  auth_mode: "none" | "service" | "delegated_oauth";
-  oauth_client_id?: string;
-  oauth_issuer?: string;
-  authorization_url?: string;
-  token_url?: string;
-  scopes: string[];
-  state: "active" | "disabled";
-  last_synced_at?: string;
-  last_catalog_hash?: string;
-  revision: number;
-};
+export type APIMCPConnection = Contract.McpConnection;
 
 export type APIMCPCatalogTool = Contract.McpCatalogTool;
 
@@ -1031,61 +810,7 @@ export type APICustomerAccountPage = {
   has_more: boolean;
 };
 
-export type APISupportSubmission = {
-  id: string;
-  support_route_id: string;
-  kind: "bug" | "feedback";
-  state: "held" | "pending" | "delivering" | "delivered" | "failed";
-  summary: string;
-  category?: string;
-  rating?: number;
-  related_tool?: string;
-  attempts: number;
-  last_error?: string;
-  external_id?: string;
-  external_url?: string;
-  created_at: string;
-  delivered_at?: string;
-  expires_at: string;
-  content?: Record<string, unknown>;
-  trusted_context: {
-    product_id: string;
-    product_name: string;
-    product_version_id?: string;
-    product_version?: string;
-    manifest_hash?: string;
-    catalog_revision?: number;
-    selection_source?: string;
-    environment_id?: string;
-    installation_id?: string;
-  };
-  trusted_integration?: {
-    integration_id: string;
-    family_key: string;
-    version_key: string;
-    display_name: string;
-    lifecycle: string;
-    revision: number;
-    manifest_hash?: string;
-  };
-};
-
-export type APIAnalytics = {
-  active_developers: number;
-  authorized_users: number;
-  mcp_requests: number;
-  tool_calls: number;
-  integration_runs: number;
-  validated_runs: number;
-  validated_success: number;
-  first_pass_rate: number;
-  channels: Record<string, number>;
-  versions: Record<string, number>;
-  funnel: Record<string, number>;
-  daily_requests: Array<{ date: string; count: number }>;
-  since: string;
-  generated_at: string;
-};
+export type APISupportSubmission = Contract.SupportSubmission;
 
 export type APILLMProfile = {
   id: string;
@@ -1185,14 +910,6 @@ export type APIRecipe = {
   updated_at: string;
 };
 
-export type APIRecipePopularity = {
-  recipe_id: string;
-  recipe_slug: string;
-  title: string;
-  views: number;
-  plan_selections: number;
-};
-
 export type APIAIWorkloadUsage = {
   workload: APIAIWorkloadProfile["workload"];
   calls: number;
@@ -1211,20 +928,6 @@ export type APIAIProviderUsage = {
   duration_ms: number;
   backup_calls: number;
   last_used_at: string;
-};
-
-export type APIIntegrationRun = {
-  id: string;
-  organisation_id: string;
-  product_id: string;
-  environment_id: string;
-  requested_outcome: string;
-  state: "running" | "succeeded" | "failed";
-  reported_success?: boolean;
-  validated_success?: boolean;
-  failure_code?: string;
-  started_at: string;
-  finished_at?: string;
 };
 
 export type APIAuditEvent = Contract.AuditEvent;

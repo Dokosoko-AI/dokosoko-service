@@ -538,33 +538,6 @@ func TestSuspendingCustomerAccountInvalidatesExistingToken(t *testing.T) {
 	}
 }
 
-func TestAuthorizationRequiresInstallationToBelongToCustomer(t *testing.T) {
-	memory, vault := configuredMemory(t)
-	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{installationID: "installation-9"}, fakeAccessEvaluator{}, staticClientMetadata{})
-	verifier := strings.Repeat("v", 48)
-	upstreamURL, err := broker.Begin(context.Background(), identity.AuthorizationRequest{ProductID: productID, ClientID: clientID, RedirectURI: redirect, Resource: resource, Scope: "mcp:private", State: "state", CodeChallenge: challenge(verifier)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, _ := url.Parse(upstreamURL)
-	if _, err := broker.Callback(context.Background(), parsed.Query().Get("state"), "vendor-code"); !errors.Is(err, identity.ErrInvalidOAuth) {
-		t.Fatalf("unknown installation claim was accepted: %v", err)
-	}
-
-	account, err := memory.ResolveCustomerAccount(context.Background(), identity.CustomerAccount{ID: "account_7", OrganisationID: "org_acme", ProductID: productID, Issuer: "https://idp.example", ExternalID: "vendor-account-7", State: "active", LastAuthenticatedAt: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := memory.SaveProductInstallation(context.Background(), model.ProductInstallation{ID: "installation_internal_9", OrganisationID: "org_acme", ProductID: productID, CustomerAccountID: account.ID, EnvironmentID: "env_prod", ExternalID: "installation-9", Name: "Customer production", State: "active"}, 0); err != nil {
-		t.Fatal(err)
-	}
-	code := authorize(t, broker, verifier)
-	token, err := broker.Exchange(context.Background(), code, verifier, clientID, redirect, resource)
-	if err != nil || token.Principal.InstallationID != "installation-9" {
-		t.Fatalf("registered installation authorization failed: token=%#v err=%v", token, err)
-	}
-}
-
 func TestBrokerRequiresRegisteredClientAndFailsClosed(t *testing.T) {
 	memory, vault := configuredMemory(t)
 	broker := identity.NewBroker(memory, vault, publicURL, fakeUpstream{}, fakeAccessEvaluator{failure: errors.New("vendor unavailable")}, staticClientMetadata{})

@@ -32,29 +32,25 @@ The normalised contract is now:
 
 | Route | Section | View component | Primary composition |
 | --- | --- | --- | --- |
-| `/integrations` | APIs | `IntegrationDirectoryView` through `IntegrationsView` | Header, toolbar, grouped `DataTable`s. |
+| `/integrations` | APIs | `IntegrationDirectoryView` through `IntegrationsView` | Header, toolbar, API `DataTable`. |
 | `/recipes` | Recipes | `RecipesView` | Header, metrics, evidence workbench, review queue. Uses the same route stack and width as every other route. |
 | `/integrations/documentation` | Sources | `SourcesView` | Header, summary, toolbar, `DataTable`. |
-| `/access` | Service connections | `AccessView` | Header, panel lists, advanced disclosure. |
-| `/integrations/mcp` | MCP connections | `MCPConnectionsView` | Header, policy notice, managed-upstream panel. |
-| `/integrations/tools` | Tools | `ToolsView` | Header, policy notice, tool collection. |
-| `/distribution/releases` | Compatibility snapshots | `ConnectorReleasesView` | Header, notice, metrics, published list. |
+| `/tools/connections` | MCP connections | `MCPConnectionsView` | Header, policy notice, token-authenticated upstream panel. |
+| `/tools` | Tools | `ToolsView` | Header, policy notice, reviewed tool collection. |
 | `/agent-access` | Agent access | `DistributionView` | Header, public MCP block, setup blocks, resource `DataTable`. |
-| `/widgets` | Widgets | `WidgetsView` | Header, security principle, `DataTable`. |
-| `/activity` | Activity | `ActivityHubView` | Header, shared segmented filter, summary, run/report/audit panels. |
-| `/operations/reporting` | Reporting | `ReportingView` | Header, policy block, connections and policy lists. |
+| `/operations/outbox` | Support outbox | `OutboxView` | Header, plaintext queued reports and recent audit. |
 | `/settings` | Settings overview | `SettingsView` | Header, shared settings tabs, settings collection, identity and administrator panels. |
 | `/settings/ai` | AI providers | `AISettingsView` | Header, shared settings tabs, workload and provider tables. |
 
 ### Context and entity routes
 
-`/integration/:uid` has the shared Overview, Resources, Access, and History tabs; `IntegrationWorkspaceView` owns their contextual content. `/widget/:uid` uses `WidgetDetailView` for configuration, install, security, empty, and loading states.
+`/integration/:uid` has shared Quick Start, Documentation, Keys & Access, Tools, Test, and History tabs; `IntegrationWorkspaceView` owns their contextual content.
 
-The generic `EntityDetailView` covers resource sets, sources, tools, MCP connections, access definitions, access connections, installations, releases, runs, support routes, reports, audit events, and root users. Invalid paths and unavailable records use `ConsoleNotFoundView` or the entity missing state without exposing internal routing errors.
+The generic `EntityDetailView` covers resource sets, sources, tools, MCP connections, reports, audit events, and root users. Invalid paths and unavailable records use `ConsoleNotFoundView` or the entity missing state without exposing internal routing errors.
 
 ### Dialog and transient views
 
-`ConsoleApp` also owns the product importer, integration/resource editors, access configuration, MCP import, widget creation and credential reveal, visibility confirmation, support reporting, run creation, AI provider/model configuration, root administrator enrolment, and release lifecycle dialogs. They all use the owned `Dialog`, form, button, badge, and switch compositions. Toast messages use a polite status region; blocking authentication failures use an alert region.
+`ConsoleApp` also owns Integration/resource/SDK editors, runtime access configuration, MCP import, visibility confirmation, support-report detail, AI provider/model configuration, and root administrator enrolment dialogs. They all use the owned `Dialog`, form, button, badge, and switch compositions. Toast messages use a polite status region; blocking authentication failures use an alert region.
 
 ## Component catalogue
 

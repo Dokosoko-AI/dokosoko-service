@@ -35,7 +35,7 @@ func TestExecutableToolLookupFailsClosedBeforeRuntimeSecondLookup(t *testing.T) 
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := &Server{service: platform.New(fixture)}
-			selected, err := server.executableTool(context.Background(), "prod_acme", "records.read", model.ProductSelectionContext{})
+			selected, err := server.executableTool(context.Background(), "prod_acme", "records.read", model.CatalogScope{})
 			if err == nil || selected.ID != "" || fixture.calls != 1 {
 				t.Fatalf("selected=%#v err=%v lookup calls=%d", selected, err, fixture.calls)
 			}
@@ -74,7 +74,7 @@ func TestIntegrationToolAuthorizationIsExactAndIntegrationIsolated(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := model.ProductManifest{DeploymentID: "prod_acme", SelectionSource: "customer_pin", Integrations: []model.IntegrationManifest{{ID: integrationA.ID, AuthorizationPoints: []model.IntegrationManifestAuthorizationPoint{{ID: pointA.ID, Revision: pointA.Revision}}, Tools: []model.IntegrationManifestTool{{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: pointA.ID, AuthorizationPointRevision: pointA.Revision}}}, {ID: integrationB.ID, AuthorizationPoints: []model.IntegrationManifestAuthorizationPoint{{ID: pointB.ID, Revision: pointB.Revision}}, Tools: []model.IntegrationManifestTool{}}}}
+	manifest := model.ProductManifest{DeploymentID: "prod_acme", Integrations: []model.IntegrationManifest{{ID: integrationA.ID, AuthorizationPoints: []model.IntegrationManifestAuthorizationPoint{{ID: pointA.ID, Revision: pointA.Revision}}, Tools: []model.IntegrationManifestTool{{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: pointA.ID, AuthorizationPointRevision: pointA.Revision}}}, {ID: integrationB.ID, AuthorizationPoints: []model.IntegrationManifestAuthorizationPoint{{ID: pointB.ID, Revision: pointB.Revision}}, Tools: []model.IntegrationManifestTool{}}}}
 	binding, managed, err := server.integrationToolAuthorization(ctx, manifest, tool)
 	if err != nil || !managed || binding.IntegrationID != integrationA.ID || binding.AuthorizationPoint.ID != pointA.ID {
 		t.Fatalf("unique Integration A binding=%#v managed=%t err=%v", binding, managed, err)
@@ -87,7 +87,7 @@ func TestIntegrationToolAuthorizationIsExactAndIntegrationIsolated(t *testing.T)
 	if _, managed, err := server.integrationToolAuthorization(ctx, denyAll, tool); !managed || err == nil {
 		t.Fatalf("managed empty binding set did not fail closed: managed=%t err=%v", managed, err)
 	}
-	filteredOut := model.ProductManifest{DeploymentID: "prod_acme", SelectionSource: "customer_pin", ManagedIntegrationTools: true, Integrations: []model.IntegrationManifest{}}
+	filteredOut := model.ProductManifest{DeploymentID: "prod_acme", ManagedIntegrationTools: true, Integrations: []model.IntegrationManifest{}}
 	if _, managed, err := server.integrationToolAuthorization(ctx, filteredOut, tool); !managed || err == nil {
 		t.Fatalf("a selected profile with no applicable managed Integration fell back to legacy execution: managed=%t err=%v", managed, err)
 	}
@@ -108,10 +108,5 @@ func TestIntegrationToolAuthorizationIsExactAndIntegrationIsolated(t *testing.T)
 	manifest.Integrations[1].Tools = []model.IntegrationManifestTool{{ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: pointB.ID, AuthorizationPointRevision: pointB.Revision}}
 	if _, managed, err := server.integrationToolAuthorization(ctx, manifest, tool); !managed || err == nil {
 		t.Fatalf("product-wide A/B union was accepted: managed=%t err=%v", managed, err)
-	}
-	manifest.Integrations[1].Tools = []model.IntegrationManifestTool{}
-	manifest.SelectionSource = "unversioned"
-	if _, managed, err := server.integrationToolAuthorization(ctx, manifest, tool); !managed || err == nil {
-		t.Fatalf("unversioned multi-Integration discovery was accepted: managed=%t err=%v", managed, err)
 	}
 }

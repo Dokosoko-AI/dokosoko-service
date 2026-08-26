@@ -225,15 +225,6 @@ func (s *Server) publishRecipe(w http.ResponseWriter, r *http.Request, productID
 	writeJSON(w, http.StatusOK, value)
 }
 
-func (s *Server) aiJobs(w http.ResponseWriter, r *http.Request, productID string) {
-	values, err := s.service.Store().AIJobs(r.Context(), productID)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": values})
-}
-
 func (s *Server) attention(w http.ResponseWriter, r *http.Request, productID string) {
 	recipes, err := s.service.ReconcileRecipeDrift(r.Context(), productID)
 	if err != nil {
@@ -273,35 +264,6 @@ func operationalSince(w http.ResponseWriter, r *http.Request) (time.Time, bool) 
 		days = value
 	}
 	return time.Now().UTC().AddDate(0, 0, -days), true
-}
-
-func (s *Server) recipeAnalytics(w http.ResponseWriter, r *http.Request, productID string) {
-	since, ok := operationalSince(w, r)
-	if !ok {
-		return
-	}
-	popularity, err := s.service.Store().RecipePopularity(r.Context(), productID, since)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	recipes, err := s.service.Store().Recipes(r.Context(), productID)
-	if err != nil {
-		s.storeError(w, err)
-		return
-	}
-	titles := make(map[string]string, len(recipes))
-	for _, recipe := range recipes {
-		titles[recipe.ID] = recipe.Title
-	}
-	items := make([]map[string]any, 0, len(popularity))
-	for _, value := range popularity {
-		items = append(items, map[string]any{
-			"recipe_id": value.RecipeID, "recipe_slug": value.RecipeSlug, "title": titles[value.RecipeID],
-			"views": value.Views, "plan_selections": value.PlanSelections,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "since": since, "generated_at": time.Now().UTC()})
 }
 
 func (s *Server) aiUsage(w http.ResponseWriter, r *http.Request, productID string) {

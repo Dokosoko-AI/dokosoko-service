@@ -43,10 +43,8 @@ type Store interface {
 	ToolStore
 	NativePluginStateStore
 	MCPStore
-	ExecutionStore
 	ReportingStore
 	AIRecipeStore
-	WidgetStore
 	IdentityStore
 	ObservabilityStore
 }

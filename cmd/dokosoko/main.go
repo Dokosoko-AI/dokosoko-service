@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
@@ -28,7 +27,6 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/nativeplugins"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
-	providerruntime "github.com/dokosoko/dokosoko-service/internal/providers"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
@@ -104,9 +102,9 @@ func run(ctx context.Context) error {
 	toolProxy := toolruntime.NewRuntime(persistence, nil, nil)
 	toolProxy.SetCredentialResolver(platformService)
 	toolProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
-	mcpBridge := mcpbridge.New(persistence, vault, baseURL, nil, nil)
+	mcpBridge := mcpbridge.New(persistence, vault, nil, nil)
 	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil, nil)
-	reportingService := reporting.New(persistence, vault)
+	reportingService := reporting.New(persistence)
 	toolProxy.SetMCPExecutor(mcpBridge)
 	nativePluginManager, err := nativeplugins.New(nativeplugins.Registered(), nativeplugins.Options{
 		Environment:           os.LookupEnv,
@@ -138,9 +136,6 @@ func run(ctx context.Context) error {
 	} else if !errors.Is(deploymentErr, store.ErrNotFound) {
 		return fmt.Errorf("load deployment for native tool catalog: %w", deploymentErr)
 	}
-	providerProxy := providerruntime.New(persistence, vault, nil, nil)
-	accessProxy := accessruntime.New(persistence, vault, nil, nil)
-	accessProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
 	if err := platformService.ConfigureEnvironmentAI(startupCtx, platform.AIEnvironmentConfig{
 		Provider: os.Getenv("DOKOSOKO_AI_PROVIDER"),
 		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
@@ -155,7 +150,7 @@ func run(ctx context.Context) error {
 	handler := httpapi.NewWithOptions(platformService, httpapi.Options{
 		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
 		UploadDirectory: uploadDirectory, UploadMaxBytes: uploadMaxBytes,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), WidgetsEnabled: boolEnv("DOKOSOKO_WIDGETS_ENABLED"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, AccessRuntime: accessProxy, ProviderRuntime: providerProxy, MCPBridge: mcpBridge, NativePlugins: nativePluginManager, Reporting: reportingService,
+		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, MCPBridge: mcpBridge, NativePlugins: nativePluginManager, Reporting: reportingService,
 	})
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -163,7 +158,6 @@ func run(ctx context.Context) error {
 	}
 	workerCtx, stopWorkers := context.WithCancel(ctx)
 	supervisor := lifecycle.NewSupervisor(workerCtx, log.Printf)
-	supervisor.Start("support-report-delivery", func(ctx context.Context) error { return reportingService.Run(ctx, 30*time.Second) })
 	supervisor.Start("tool-test-retention", func(ctx context.Context) error {
 		return platformService.RunToolTestRetentionJanitor(ctx, platform.DefaultToolTestRetentionInterval)
 	})

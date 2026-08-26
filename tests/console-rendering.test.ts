@@ -28,7 +28,7 @@ test("renders the six primary console destinations as accessible links", () => {
     ["Tools", "/tools"],
     ["Recipes", "/recipes"],
     ["Agent access", "/agent-access"],
-    ["Activity", "/activity"],
+    ["Support outbox", "/operations/outbox"],
   ]) {
     assert.match(html, new RegExp(`href="${path}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
@@ -47,7 +47,7 @@ test("renders the same destination model in the mobile console selector", () => 
 
   assert.match(html, /<select class="mobile-navigation" aria-label="Console section">/);
   assert.match(html, /<option value="recipes" selected="">Recipes<\/option>/);
-  for (const label of ["APIs", "Identity", "Tools", "Recipes", "Agent access", "Activity", "Settings"]) {
+  for (const label of ["APIs", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
     assert.match(html, new RegExp(`>${label}</option>`));
   }
   assert.match(html, /<strong>Developer Platform<\/strong>/);

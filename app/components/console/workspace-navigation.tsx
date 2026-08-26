@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Activity,
   BookOpen,
   LayoutDashboard,
   LogOut,
@@ -17,7 +16,7 @@ import { type Section, sectionPath } from "../../lib/console-routes";
 import { ThemeToggle } from "../ThemeToggle";
 import { ConsoleLink } from "./console-link";
 
-export type NavigationGroup = "apis" | "identity" | "tools" | "recipes" | "agent-access" | "activity";
+export type NavigationGroup = "apis" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
 
 export const navigation: Array<{
   id: NavigationGroup;
@@ -30,8 +29,8 @@ export const navigation: Array<{
   { id: "identity", label: "Identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", label: "Customer sign-in" }] },
   { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }] },
   { id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes", sections: [{ id: "recipes", label: "Recipes" }] },
-  { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }, { id: "widgets", label: "Widgets" }] },
-  { id: "activity", label: "Activity", icon: Activity, defaultSection: "runs", sections: [{ id: "runs", label: "Activity" }] },
+  { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }] },
+  { id: "outbox", label: "Support outbox", icon: LayoutDashboard, defaultSection: "reporting", sections: [{ id: "reporting", label: "Support outbox" }] },
 ];
 
 export function ConsoleSidebar({

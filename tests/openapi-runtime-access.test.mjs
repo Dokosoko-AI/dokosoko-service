@@ -20,7 +20,7 @@ test("publishes every runtime Access administration route", () => {
   const paths = boundedSection(
     openapi,
     "  /api/v1/integrations/{integration_id}/runtime-setup:",
-    "\n  /api/v1/integrations/{integration_id}/access-connections:",
+    "\n  /api/v1/integrations/{integration_id}/authorization-points:",
   );
 
   for (const path of [
@@ -81,8 +81,7 @@ test("keeps runtime Access response contracts credential-redacted", () => {
     ["RuntimeServiceConnectionCheck", "RuntimeServiceConnectionReadiness"],
     ["RuntimeServiceConnectionReadiness", "RuntimeCredentialVersion"],
     ["RuntimeCredentialVersion", "RuntimeCredentialSet"],
-    ["RuntimeCredentialSet", "RuntimeCredentialSetList"],
-    ["RuntimeCredentialSetList", "RuntimeCredentialUsage"],
+    ["RuntimeCredentialSet", "RuntimeCredentialUsage"],
     ["RuntimeCredentialUsage", "RuntimeSetup"],
     ["RuntimeSetup", "RuntimeSetupRequest"],
   ];
@@ -101,7 +100,7 @@ test("keeps runtime Access response contracts credential-redacted", () => {
     ["RotateRuntimeCredentialRequest", "Integration"],
   ]) {
     const schema = runtimeSchema(name, nextName);
-    assert.match(schema, /^\s{8}credential: \{[^\n]*format: password[^\n]*writeOnly: true/m);
+    assert.match(schema, /^\s{8}credential:\n\s{10}type: string\n\s{10}format: password[\s\S]*?^\s{10}writeOnly: true/m);
   }
 
   assert.doesNotMatch(runtimeSchema("RuntimeServiceConnectionRequest", "RuntimeCredentialSetRequest"), /^\s{8}credential:/m);

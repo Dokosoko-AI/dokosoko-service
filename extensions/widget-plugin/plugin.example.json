@@ -1,0 +1,13 @@
+{
+  "$schema": "./plugin.schema.json",
+  "id": "com.example.dokosoko-widget",
+  "version": "0.1.0",
+  "display_name": "Example DokoSoko widget",
+  "browser_entrypoint": "https://widget.example.com/widget.js",
+  "backend_origin": "https://widget.example.com",
+  "capabilities": [
+    "private_oauth",
+    "private_mcp"
+  ]
+}
+

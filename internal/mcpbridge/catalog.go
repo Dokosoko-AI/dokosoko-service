@@ -88,7 +88,7 @@ func (m *Manager) Inspect(ctx context.Context, productID, connectionID string) (
 	if err != nil {
 		return Catalog{}, err
 	}
-	raw, err := m.invoke(ctx, connection, "tools/list", "", nil, bearer, 20*time.Second)
+	raw, err := m.invoke(ctx, connection, "tools/list", "", nil, bearer, nil, 20*time.Second)
 	if err != nil {
 		return Catalog{}, err
 	}

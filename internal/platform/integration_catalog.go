@@ -13,14 +13,12 @@ import (
 var integrationVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 type DeploymentInput struct {
-	OrganisationID           string
-	Name                     string
-	Slug                     string
-	Description              string
-	DefaultReleasePolicy     string
-	RequirePromotionApproval bool
-	PublicMCPEnabled         bool
-	Revision                 int64
+	OrganisationID   string
+	Name             string
+	Slug             string
+	Description      string
+	PublicMCPEnabled bool
+	Revision         int64
 }
 
 func (s *Service) CreateDeployment(ctx context.Context, input DeploymentInput, actor Actor) (model.Deployment, error) {
@@ -32,17 +30,11 @@ func (s *Service) CreateDeployment(ctx context.Context, input DeploymentInput, a
 	if len(input.Description) > 2000 {
 		return model.Deployment{}, errors.New("deployment description must be no more than 2000 characters")
 	}
-	if input.DefaultReleasePolicy == "" {
-		input.DefaultReleasePolicy = "latest"
-	}
-	if input.DefaultReleasePolicy != "latest" && input.DefaultReleasePolicy != "lts" {
-		return model.Deployment{}, errors.New("default release policy must be latest or lts")
-	}
 	id, err := randomUUID()
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	value, err := s.store.CreateDeployment(ctx, model.Deployment{ID: id, OrganisationID: input.OrganisationID, Name: input.Name, Slug: input.Slug, Description: input.Description, DefaultReleasePolicy: input.DefaultReleasePolicy, RequirePromotionApproval: input.RequirePromotionApproval, PublicMCPEnabled: input.PublicMCPEnabled})
+	value, err := s.store.CreateDeployment(ctx, model.Deployment{ID: id, OrganisationID: input.OrganisationID, Name: input.Name, Slug: input.Slug, Description: input.Description, PublicMCPEnabled: input.PublicMCPEnabled})
 	if err != nil {
 		return model.Deployment{}, err
 	}
@@ -61,16 +53,13 @@ func (s *Service) UpdateDeployment(ctx context.Context, input DeploymentInput, a
 	if validateNameSlug(input.Name, input.Slug) != nil || len(input.Description) > 2000 {
 		return model.Deployment{}, errors.New("deployment name, slug, or description is invalid")
 	}
-	if input.DefaultReleasePolicy != "latest" && input.DefaultReleasePolicy != "lts" {
-		return model.Deployment{}, errors.New("default release policy must be latest or lts")
-	}
 	current.Name, current.Slug, current.Description = input.Name, input.Slug, input.Description
-	current.DefaultReleasePolicy, current.RequirePromotionApproval, current.PublicMCPEnabled = input.DefaultReleasePolicy, input.RequirePromotionApproval, input.PublicMCPEnabled
+	current.PublicMCPEnabled = input.PublicMCPEnabled
 	updated, err := s.store.UpdateDeployment(ctx, current, input.Revision)
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ID, ActorID: actor.ID, Action: "deployment.updated", TargetType: "deployment", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "slug": updated.Slug, "default_release_policy": updated.DefaultReleasePolicy}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ID, ActorID: actor.ID, Action: "deployment.updated", TargetType: "deployment", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "slug": updated.Slug}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
 		return model.Deployment{}, err
 	}
 	return updated, nil
@@ -187,71 +176,6 @@ func (s *Service) UpdateIntegration(ctx context.Context, integrationID string, i
 		return model.Integration{}, err
 	}
 	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.updated", TargetType: "integration", TargetID: updated.ID, Current: map[string]any{"family_key": updated.FamilyKey, "version_key": updated.VersionKey, "visibility": updated.Visibility, "lifecycle": updated.Lifecycle, "revision": updated.Revision}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
-		return model.Integration{}, err
-	}
-	return updated, nil
-}
-
-func (s *Service) SetIntegrationAccessConnections(ctx context.Context, integrationID string, connectionIDs []string, actor Actor) (model.Integration, error) {
-	deployment, err := s.store.Deployment(ctx)
-	if err != nil {
-		return model.Integration{}, err
-	}
-	if _, err := s.store.Integration(ctx, deployment.ID, integrationID); err != nil {
-		return model.Integration{}, err
-	}
-	selected := make([]string, 0, len(connectionIDs))
-	seen := make(map[string]bool, len(connectionIDs))
-	for _, connectionID := range connectionIDs {
-		connectionID = strings.TrimSpace(connectionID)
-		if connectionID == "" || seen[connectionID] {
-			continue
-		}
-		if _, err := s.store.AccessConnection(ctx, deployment.ID, connectionID); err != nil {
-			return model.Integration{}, errors.New("every access binding must reference a connection in this deployment")
-		}
-		seen[connectionID] = true
-		selected = append(selected, connectionID)
-	}
-	if err := s.store.SetIntegrationAccessConnections(ctx, deployment.ID, integrationID, selected, actor.ID); err != nil {
-		return model.Integration{}, err
-	}
-	updated, err := s.store.Integration(ctx, deployment.ID, integrationID)
-	if err != nil {
-		return model.Integration{}, err
-	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.access_connections.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"access_connection_ids": updated.AccessConnections}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
-		return model.Integration{}, err
-	}
-	return updated, nil
-}
-
-func (s *Service) SetIntegrationSupportRoute(ctx context.Context, integrationID, routeID string, actor Actor) (model.Integration, error) {
-	deployment, err := s.store.Deployment(ctx)
-	if err != nil {
-		return model.Integration{}, err
-	}
-	if _, err := s.store.Integration(ctx, deployment.ID, integrationID); err != nil {
-		return model.Integration{}, err
-	}
-	routeID = strings.TrimSpace(routeID)
-	if routeID != "" {
-		route, err := s.store.SupportRoute(ctx, deployment.ID, routeID)
-		if err != nil || route.State != "active" {
-			return model.Integration{}, errors.New("support binding must reference an active route in this deployment")
-		}
-		if route.IsDefault {
-			routeID = ""
-		}
-	}
-	if err := s.store.SetIntegrationSupportRoute(ctx, deployment.ID, integrationID, routeID, actor.ID); err != nil {
-		return model.Integration{}, err
-	}
-	updated, err := s.store.Integration(ctx, deployment.ID, integrationID)
-	if err != nil {
-		return model.Integration{}, err
-	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.support_route.updated", TargetType: "integration", TargetID: integrationID, Current: map[string]any{"support_route_id": updated.SupportRouteID}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
 		return model.Integration{}, err
 	}
 	return updated, nil

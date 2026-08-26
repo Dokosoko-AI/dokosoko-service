@@ -3,7 +3,6 @@ package platform
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
@@ -21,7 +20,7 @@ func TestIntegrationSnapshotPinsCompleteNativeToolSourceContract(t *testing.T) {
 	binding := model.IntegrationToolBinding{IntegrationID: integration.ID, ToolID: tool.ID, ToolRevision: tool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision, Tool: &tool, AuthorizationPoint: &point}
 	build := func(value model.Tool) integrationToolSnapshot {
 		binding.Tool = &value
-		raw, validations, err := buildIntegrationSnapshot(integration, integrationPublicationInputSet{AuthorizationPoints: []model.AuthorizationPoint{point}, ToolBindings: []model.IntegrationToolBinding{binding}}, time.Now().UTC())
+		raw, validations, err := buildIntegrationSnapshot(integration, integrationPublicationInputSet{AuthorizationPoints: []model.AuthorizationPoint{point}, ToolBindings: []model.IntegrationToolBinding{binding}})
 		if err != nil {
 			t.Fatal(err)
 		}

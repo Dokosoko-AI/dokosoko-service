@@ -1,30 +1,22 @@
 package reporting
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
-	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
-	"github.com/dokosoko/dokosoko-service/internal/secrets"
-	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
-func validateCommon(idempotencyKey, relatedTool, integrationRunID string) error {
+func validateCommon(idempotencyKey, relatedTool string) error {
 	if len(idempotencyKey) < 16 || len(idempotencyKey) > 200 {
 		return errors.New("idempotency_key must be between 16 and 200 characters")
 	}
 	if relatedTool != "" && !toolNamePattern.MatchString(relatedTool) {
 		return errors.New("related_tool is invalid")
-	}
-	if len(integrationRunID) > 160 {
-		return errors.New("integration_run_id is too long")
 	}
 	return nil
 }
@@ -34,8 +26,7 @@ func trimExact(value string) string { return strings.TrimSpace(value) }
 func validateBug(input *BugInput) error {
 	input.IntegrationID = trimExact(input.IntegrationID)
 	input.Summary, input.Description = trimExact(input.Summary), trimExact(input.Description)
-	input.RelatedTool, input.IntegrationRunID = trimExact(input.RelatedTool), trimExact(input.IntegrationRunID)
-	input.Severity = strings.ToLower(trimExact(input.Severity))
+	input.RelatedTool, input.Severity = trimExact(input.RelatedTool), strings.ToLower(trimExact(input.Severity))
 	if input.Summary == "" || len(input.Summary) > 160 || input.Description == "" || len(input.Description) > 10000 {
 		return errors.New("summary and description are required and must fit their limits")
 	}
@@ -48,13 +39,8 @@ func validateBug(input *BugInput) error {
 			return errors.New("each reproduction step must be between 1 and 1000 characters")
 		}
 	}
-	for label, value := range map[string]string{"expected_behavior": input.ExpectedBehavior, "actual_behavior": input.ActualBehavior} {
-		if len(value) > 4000 {
-			return fmt.Errorf("%s is too long", label)
-		}
-	}
-	if len(input.ErrorCode) > 120 || len(input.ErrorMessage) > 8000 || len(input.StackTrace) > 16000 || len(input.DiagnosticContext) > 20000 {
-		return errors.New("error or diagnostic context is too long")
+	if len(input.ExpectedBehavior) > 4000 || len(input.ActualBehavior) > 4000 || len(input.ErrorCode) > 120 || len(input.ErrorMessage) > 8000 || len(input.StackTrace) > 16000 || len(input.DiagnosticContext) > 20000 {
+		return errors.New("report details exceed their limits")
 	}
 	if input.Severity == "" {
 		input.Severity = "unknown"
@@ -62,33 +48,33 @@ func validateBug(input *BugInput) error {
 	if input.Severity != "unknown" && input.Severity != "low" && input.Severity != "medium" && input.Severity != "high" && input.Severity != "critical" {
 		return errors.New("severity is invalid")
 	}
-	return validateCommon(input.IdempotencyKey, input.RelatedTool, input.IntegrationRunID)
+	return validateCommon(input.IdempotencyKey, input.RelatedTool)
 }
 
 func validateFeedback(input *FeedbackInput) error {
 	input.IntegrationID = trimExact(input.IntegrationID)
 	input.Message, input.Category = trimExact(input.Message), strings.ToLower(trimExact(input.Category))
-	input.RelatedTool, input.IntegrationRunID = trimExact(input.RelatedTool), trimExact(input.IntegrationRunID)
+	input.RelatedTool = trimExact(input.RelatedTool)
 	if input.Message == "" || len(input.Message) > 10000 {
 		return errors.New("message is required and must contain no more than 10000 characters")
 	}
 	if input.Category == "" {
 		input.Category = "general"
 	}
-	if input.Category != "general" && input.Category != "usability" && input.Category != "documentation" && input.Category != "performance" && input.Category != "feature_request" && input.Category != "other" {
+	validCategory := input.Category == "general" || input.Category == "usability" || input.Category == "documentation" || input.Category == "performance" || input.Category == "feature_request" || input.Category == "other"
+	if !validCategory {
 		return errors.New("category is invalid")
 	}
 	if input.Rating != nil && (*input.Rating < 1 || *input.Rating > 5) {
 		return errors.New("rating must be between 1 and 5")
 	}
-	return validateCommon(input.IdempotencyKey, input.RelatedTool, input.IntegrationRunID)
+	return validateCommon(input.IdempotencyKey, input.RelatedTool)
 }
 
 func containsSensitiveContent(value any) bool {
 	encoded, _ := json.Marshal(value)
-	text := string(encoded)
 	for _, pattern := range secretPatterns {
-		if pattern.MatchString(text) {
+		if pattern.Match(encoded) {
 			return true
 		}
 	}
@@ -104,12 +90,6 @@ func (s *Service) SubmitBug(ctx context.Context, input BugInput, submit SubmitCo
 	}
 	if input.IntegrationID != "" && (submit.Integration == nil || submit.Integration.IntegrationID != input.IntegrationID) {
 		return SubmissionView{}, fmt.Errorf("%w: integration_id does not belong to the trusted connector context", ErrInvalidReport)
-	}
-	if input.IntegrationRunID != "" {
-		run, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID)
-		if err != nil || run.ActorPseudonym != submit.ActorPseudonym {
-			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to the authenticated reporter", ErrInvalidReport)
-		}
 	}
 	idempotencyKey := input.IdempotencyKey
 	input.IdempotencyKey, input.IntegrationID = "", ""
@@ -128,12 +108,6 @@ func (s *Service) SubmitFeedback(ctx context.Context, input FeedbackInput, submi
 	if input.IntegrationID != "" && (submit.Integration == nil || submit.Integration.IntegrationID != input.IntegrationID) {
 		return SubmissionView{}, fmt.Errorf("%w: integration_id does not belong to the trusted connector context", ErrInvalidReport)
 	}
-	if input.IntegrationRunID != "" {
-		run, err := s.store.IntegrationRun(ctx, submit.Product.ProductID, input.IntegrationRunID)
-		if err != nil || run.ActorPseudonym != submit.ActorPseudonym {
-			return SubmissionView{}, fmt.Errorf("%w: integration_run_id does not belong to the authenticated reporter", ErrInvalidReport)
-		}
-	}
 	idempotencyKey := input.IdempotencyKey
 	input.IdempotencyKey, input.IntegrationID = "", ""
 	envelope := s.envelope(KindFeedback, submit, input.AllowContact)
@@ -146,142 +120,47 @@ func (s *Service) envelope(kind string, submit SubmitContext, allowContact bool)
 	if allowContact {
 		reporter.DisplayName, reporter.Email = submit.Principal.DisplayName, submit.Principal.Email
 	}
-	resource := ResourceContext{Type: "deployment", ID: submit.Product.ProductID, Name: submit.Product.ProductName, VersionID: submit.Product.ProductVersionID, Version: submit.Product.ProductVersion, EnvironmentID: submit.Product.EnvironmentID, InstallationID: submit.Product.InstallationID}
-	related := make([]ResourceContext, 0, 1)
-	if submit.Integration != nil {
-		related = append(related, ResourceContext{Type: "api", ID: submit.Integration.IntegrationID, Name: submit.Integration.DisplayName, Version: submit.Integration.VersionKey, State: submit.Integration.Lifecycle, Revision: submit.Integration.Revision})
-	}
-	extensions := &EnvelopeExtensions{DokoSoko: DokoSokoExtension{ManifestHash: submit.Product.ManifestHash, CatalogRevision: submit.Product.CatalogRevision, SelectionSource: submit.Product.SelectionSource, Integration: submit.Integration}}
-	return Envelope{SchemaVersion: "2026-08-25", Kind: kind, Reporter: reporter, Provider: ProviderContext{Key: "dokosoko", Name: "DokoSoko"}, Resource: resource, RelatedResources: related, Channel: "private_mcp", Extensions: extensions, ConfirmedAt: s.now(), RequestID: submit.RequestID}
-}
-
-func envelopeProduct(envelope Envelope) ProductContext {
-	if envelope.Resource.ID != "" {
-		product := ProductContext{ProductID: envelope.Resource.ID, ProductName: envelope.Resource.Name, ProductVersionID: envelope.Resource.VersionID, ProductVersion: envelope.Resource.Version, EnvironmentID: envelope.Resource.EnvironmentID, InstallationID: envelope.Resource.InstallationID}
-		if envelope.Extensions != nil {
-			product.ManifestHash = envelope.Extensions.DokoSoko.ManifestHash
-			product.CatalogRevision = envelope.Extensions.DokoSoko.CatalogRevision
-			product.SelectionSource = envelope.Extensions.DokoSoko.SelectionSource
-		}
-		return product
-	}
-	if envelope.LegacyProduct != nil {
-		return *envelope.LegacyProduct
-	}
-	return ProductContext{}
-}
-
-func envelopeIntegration(envelope Envelope) *IntegrationContext {
-	if envelope.Extensions != nil && envelope.Extensions.DokoSoko.Integration != nil {
-		return envelope.Extensions.DokoSoko.Integration
-	}
-	return envelope.LegacyIntegration
+	return Envelope{SchemaVersion: "1", Kind: kind, Reporter: reporter, Product: submit.Product, Integration: submit.Integration, Channel: "private_mcp", ConfirmedAt: s.now(), RequestID: submit.RequestID}
 }
 
 func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope Envelope, actorPseudonym string) (SubmissionView, error) {
-	organisationID, supportRouteID, retentionDays, enabled, deliveryCredentialID, err := s.submissionRoute(ctx, envelope)
+	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	if !enabled {
-		return SubmissionView{}, ErrDisabled
-	}
-	if s.vault == nil {
-		return SubmissionView{}, errors.New("report payload vault is unavailable")
+	if deployment.ID != envelope.Product.ProductID {
+		return SubmissionView{}, fmt.Errorf("%w: product context is invalid", ErrInvalidReport)
 	}
 	id, err := randomUUID()
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	encoded, err := json.Marshal(envelope)
+	payload, err := json.Marshal(envelope)
 	if err != nil {
 		return SubmissionView{}, err
 	}
-	encrypted, err := s.vault.Encrypt(encoded, organisationID+":report:"+id)
-	if err != nil {
-		return SubmissionView{}, err
-	}
-	product := envelopeProduct(envelope)
-	integration := envelopeIntegration(envelope)
 	integrationID := ""
-	integrationSnapshot := json.RawMessage(`{}`)
-	if integration != nil {
-		integrationID = integration.IntegrationID
-		integrationSnapshot, err = json.Marshal(integration)
-		if err != nil {
-			return SubmissionView{}, err
-		}
+	if envelope.Integration != nil {
+		integrationID = envelope.Integration.IntegrationID
 	}
-	digest := sha256.Sum256([]byte(product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
+	digest := sha256.Sum256([]byte(envelope.Product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
 	now := s.now()
-	state := "held"
-	var next *time.Time
-	if deliveryCredentialID != "" {
-		state, next = "pending", &now
-	}
-	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: organisationID, ProductID: product.ProductID, IntegrationID: integrationID, IntegrationSnapshot: integrationSnapshot, SupportRouteID: supportRouteID, Kind: envelope.Kind, State: state, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], PayloadCiphertext: encrypted.Ciphertext, PayloadNonce: encrypted.Nonce, PayloadKeyVersion: encrypted.KeyVersion, PayloadFingerprint: encrypted.Fingerprint, NextAttemptAt: next, ExpiresAt: now.AddDate(0, 0, retentionDays)})
+	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, IntegrationID: integrationID, Kind: envelope.Kind, State: "queued", ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], Payload: payload, ExpiresAt: now.AddDate(0, 0, 90)})
 	if err != nil {
+		return SubmissionView{}, err
+	}
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: auditID(), OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, ActorID: actorPseudonym, Action: "support_submission.queued", TargetType: "support_submission", TargetID: value.ID, Current: map[string]any{"kind": value.Kind, "state": value.State}, RequestID: envelope.RequestID, CreatedAt: now}); err != nil {
 		return SubmissionView{}, err
 	}
 	return s.view(value)
 }
 
-func (s *Service) submissionRoute(ctx context.Context, envelope Envelope) (organisationID, routeID string, retentionDays int, enabled bool, deliveryCredentialID string, err error) {
-	product := envelopeProduct(envelope)
-	integration := envelopeIntegration(envelope)
-	integrationID := ""
-	if integration != nil {
-		integrationID = integration.IntegrationID
-	}
-	route, routeErr := s.store.SupportRouteForIntegration(ctx, product.ProductID, integrationID)
-	if routeErr != nil {
-		if errors.Is(routeErr, store.ErrNotFound) {
-			err = ErrNotConfigured
-		} else {
-			err = routeErr
-		}
-		return
-	}
-	organisationID, routeID, retentionDays = route.OrganisationID, route.ID, route.RetentionDays
-	enabled = route.BugReportsEnabled
-	if envelope.Kind == KindFeedback {
-		enabled = route.FeedbackEnabled
-	}
-	if enabled && route.State == "active" && route.BackendConnectionID != "" {
-		connection, connectionErr := s.store.BackendConnection(ctx, product.ProductID, route.BackendConnectionID)
-		if connectionErr == nil && connection.State == "active" {
-			deliveryCredentialID = connection.CredentialSecretID
-		}
-	}
-	return
-}
-
-func (s *Service) decrypt(value model.ReportSubmission) (Envelope, error) {
-	if s.vault == nil {
-		return Envelope{}, errors.New("report payload vault is unavailable")
-	}
-	plain, err := s.vault.Decrypt(secrets.Encrypted{Ciphertext: value.PayloadCiphertext, Nonce: value.PayloadNonce, KeyVersion: value.PayloadKeyVersion, Fingerprint: value.PayloadFingerprint}, value.OrganisationID+":report:"+value.ID)
-	if err != nil {
-		return Envelope{}, err
-	}
-	var envelope Envelope
-	decoder := json.NewDecoder(bytes.NewReader(plain))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&envelope); err != nil {
-		return Envelope{}, err
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return Envelope{}, errors.New("report payload contains multiple JSON values")
-	}
-	return envelope, nil
-}
-
 func (s *Service) view(value model.ReportSubmission) (SubmissionView, error) {
-	envelope, err := s.decrypt(value)
-	if err != nil {
+	var envelope Envelope
+	if err := json.Unmarshal(value.Payload, &envelope); err != nil {
 		return SubmissionView{}, err
 	}
-	view := SubmissionView{ID: value.ID, SupportRouteID: value.SupportRouteID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, ExternalID: value.ExternalID, ExternalURL: value.ExternalURL, CreatedAt: value.CreatedAt, DeliveredAt: value.DeliveredAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelopeProduct(envelope), TrustedIntegration: envelopeIntegration(envelope)}
+	view := SubmissionView{ID: value.ID, Kind: value.Kind, State: value.State, CreatedAt: value.CreatedAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
 	if envelope.Bug != nil {
 		view.Summary, view.RelatedTool = envelope.Bug.Summary, envelope.Bug.RelatedTool
 		encoded, _ := json.Marshal(envelope.Bug)
@@ -318,37 +197,6 @@ func (s *Service) Submissions(ctx context.Context, productID, startingAfter stri
 func (s *Service) Submission(ctx context.Context, productID, id string) (SubmissionView, error) {
 	value, err := s.store.ReportSubmission(ctx, productID, id)
 	if err != nil {
-		return SubmissionView{}, err
-	}
-	return s.view(value)
-}
-
-func (s *Service) Retry(ctx context.Context, productID, id string) (SubmissionView, error) {
-	value, err := s.store.ReportSubmission(ctx, productID, id)
-	if err != nil {
-		return SubmissionView{}, err
-	}
-	if value.State == "pending" || value.State == "delivering" {
-		return s.view(value)
-	}
-	endpoint, credentialID, err := s.deliveryRoute(ctx, value)
-	if err != nil {
-		if errors.Is(err, ErrNotConfigured) || errors.Is(err, store.ErrNotFound) {
-			return SubmissionView{}, ErrDeliveryUnavailable
-		}
-		return SubmissionView{}, err
-	}
-	if endpoint == "" || credentialID == "" {
-		return SubmissionView{}, ErrDeliveryUnavailable
-	}
-	value, err = s.store.RetryReportSubmission(ctx, productID, id, s.now())
-	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			current, lookupErr := s.store.ReportSubmission(ctx, productID, id)
-			if lookupErr == nil && (current.State == "pending" || current.State == "delivering") {
-				return s.view(current)
-			}
-		}
 		return SubmissionView{}, err
 	}
 	return s.view(value)

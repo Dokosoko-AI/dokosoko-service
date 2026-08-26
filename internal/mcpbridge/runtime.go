@@ -25,8 +25,6 @@ import (
 
 var (
 	ErrInvalidConnection = errors.New("invalid Stateless MCPv2 connection")
-	ErrUnsupportedAuth   = errors.New("unsupported Stateless MCPv2 authorization mode")
-	ErrGrantRequired     = errors.New("upstream user authorization is required")
 	ErrUpstreamProtocol  = errors.New("upstream did not satisfy Stateless MCPv2")
 	ErrUnsafeDestination = errors.New("upstream MCP destination is unsafe")
 )
@@ -49,24 +47,17 @@ type Manager struct {
 	vault    *secrets.Vault
 	resolver Resolver
 	doer     Doer
-	baseURL  string
 	now      func() time.Time
 }
 
 type ConnectionInput struct {
-	OrganisationID    string
-	ProductID         string
-	Name              string
-	Namespace         string
-	Endpoint          string
-	AuthMode          string
-	Credential        string
-	OAuthClientID     string
-	OAuthClientSecret string
-	OAuthIssuer       string
-	AuthorizationURL  string
-	TokenURL          string
-	Scopes            []string
+	OrganisationID      string
+	ProductID           string
+	Name                string
+	Namespace           string
+	Endpoint            string
+	AccessToken         string
+	ForwardUserIdentity bool
 }
 
 type Actor struct {
@@ -107,11 +98,11 @@ type ImportResult struct {
 	Rejected   map[string]string   `json:"rejected"`
 }
 
-func New(storage store.Store, vault *secrets.Vault, baseURL string, resolver Resolver, doer Doer) *Manager {
+func New(storage store.Store, vault *secrets.Vault, resolver Resolver, doer Doer) *Manager {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
-	return &Manager{store: storage, vault: vault, resolver: resolver, doer: doer, baseURL: strings.TrimRight(baseURL, "/"), now: func() time.Time { return time.Now().UTC() }}
+	return &Manager{store: storage, vault: vault, resolver: resolver, doer: doer, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func randomToken(bytesCount int) (string, error) {
@@ -195,43 +186,19 @@ func (m *Manager) CreateConnection(ctx context.Context, input ConnectionInput, a
 	input.Name = strings.TrimSpace(input.Name)
 	input.Namespace = strings.TrimSpace(input.Namespace)
 	input.Endpoint = strings.TrimSpace(input.Endpoint)
-	input.AuthMode = strings.TrimSpace(input.AuthMode)
-	input.AuthorizationURL = strings.TrimSpace(input.AuthorizationURL)
-	input.TokenURL = strings.TrimSpace(input.TokenURL)
-	input.OAuthIssuer = strings.TrimSpace(input.OAuthIssuer)
-	input.OAuthClientID = strings.TrimSpace(input.OAuthClientID)
-	if input.OrganisationID == "" || input.ProductID == "" || input.Name == "" || len(input.Name) > 120 || !namespacePattern.MatchString(input.Namespace) || !fixedHTTPS(input.Endpoint) {
+	input.AccessToken = strings.TrimSpace(input.AccessToken)
+	if input.OrganisationID == "" || input.ProductID == "" || input.Name == "" || len(input.Name) > 120 || !namespacePattern.MatchString(input.Namespace) || !fixedHTTPS(input.Endpoint) || input.AccessToken == "" {
 		return model.MCPConnection{}, ErrInvalidConnection
-	}
-	switch input.AuthMode {
-	case "none":
-		if input.Credential != "" || input.OAuthClientID != "" || input.OAuthClientSecret != "" {
-			return model.MCPConnection{}, ErrInvalidConnection
-		}
-	case "service":
-		if strings.TrimSpace(input.Credential) == "" {
-			return model.MCPConnection{}, ErrInvalidConnection
-		}
-	case "delegated_oauth":
-		if input.OAuthClientID == "" || input.OAuthClientSecret == "" || !fixedHTTPS(input.OAuthIssuer) || !fixedHTTPS(input.AuthorizationURL) || !fixedHTTPS(input.TokenURL) {
-			return model.MCPConnection{}, ErrInvalidConnection
-		}
-	default:
-		return model.MCPConnection{}, ErrUnsupportedAuth
 	}
 	id, err := randomUUID()
 	if err != nil {
 		return model.MCPConnection{}, err
 	}
-	credentialID, err := m.saveSecret(ctx, input.OrganisationID, "mcp-service-"+input.Namespace, "mcp_upstream_service", input.Credential, input.OrganisationID+":mcp-connection:"+id+":service:")
+	credentialID, err := m.saveSecret(ctx, input.OrganisationID, "mcp-access-token-"+input.Namespace, "mcp_upstream_access_token", input.AccessToken, input.OrganisationID+":mcp-connection:"+id+":access-token:")
 	if err != nil {
 		return model.MCPConnection{}, err
 	}
-	clientSecretID, err := m.saveSecret(ctx, input.OrganisationID, "mcp-oauth-client-"+input.Namespace, "mcp_upstream_oauth_client", input.OAuthClientSecret, input.OrganisationID+":mcp-connection:"+id+":oauth-client:")
-	if err != nil {
-		return model.MCPConnection{}, err
-	}
-	value, err := m.store.CreateMCPConnection(ctx, model.MCPConnection{ID: id, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Namespace: input.Namespace, Endpoint: input.Endpoint, ProtocolVersion: model.StatelessMCPv2Protocol, AuthMode: input.AuthMode, CredentialID: credentialID, OAuthClientID: input.OAuthClientID, OAuthClientSecretID: clientSecretID, OAuthIssuer: input.OAuthIssuer, AuthorizationURL: input.AuthorizationURL, TokenURL: input.TokenURL, Scopes: normalizeScopes(input.Scopes), Config: json.RawMessage(`{"transport":"streamable_http","live_subscription":false}`)})
+	value, err := m.store.CreateMCPConnection(ctx, model.MCPConnection{ID: id, OrganisationID: input.OrganisationID, ProductID: input.ProductID, Name: input.Name, Namespace: input.Namespace, Endpoint: input.Endpoint, ProtocolVersion: model.StatelessMCPv2Protocol, AuthMode: "access_token", CredentialID: credentialID, ForwardUserIdentity: input.ForwardUserIdentity, Config: json.RawMessage(`{"transport":"streamable_http","live_subscription":false}`)})
 	if err != nil {
 		return model.MCPConnection{}, err
 	}

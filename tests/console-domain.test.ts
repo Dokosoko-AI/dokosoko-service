@@ -10,7 +10,6 @@ import {
   sourcePublicationManifestEntry,
   toolPolicy,
   unavailableConsoleCapability,
-  widgetOriginLabel,
   type Source,
 } from "../app/lib/console-domain";
 import { APIError, type APIIntegration, type APIIntegrationAnalysis, type APIRecipe, type APISourcePublication, type APITool } from "../app/lib/api";
@@ -65,11 +64,9 @@ test("console domain helpers derive safe tool policy defaults and capability fai
   assert.equal(unavailableConsoleCapability(new APIError(500, "failed", "failed")), false);
 });
 
-test("console embed output escapes tenant-controlled values and labels origins", () => {
+test("console embed output escapes tenant-controlled values", () => {
   const embed = buildAgentSetupEmbedHTML(`<img src=x onerror="alert(1)">`, "https://console.example/agent-setup/public/prompt.md?a=1&b=2", "public");
   assert.doesNotMatch(embed, /<img src=x onerror=/);
   assert.match(embed, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.match(embed, /a=1&amp;b=2/);
-  assert.equal(widgetOriginLabel("https://app.customer.example/path"), "app.customer.example");
-  assert.equal(widgetOriginLabel("not a URL"), "Invalid origin");
 });

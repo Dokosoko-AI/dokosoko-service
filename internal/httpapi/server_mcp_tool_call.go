@@ -7,11 +7,8 @@ import (
 	"strings"
 	"time"
 
-	accessruntime "github.com/dokosoko/dokosoko-service/internal/access"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
-	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/model"
-	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
@@ -23,27 +20,15 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		return
 	}
 	principal, _ := ctx.Value(principalKey).(identity.Principal)
-	actorKind, actorID, channel := "anonymous", "", "public_mcp"
+	actorID := ""
 	if !public {
-		actorKind, actorID, channel = "vendor_user", pseudonym(productID, principal), "private_mcp"
+		actorID = pseudonym(productID, principal)
 	}
-	selection := model.ProductSelectionContext{Public: public}
-	if !public {
-		selection.CustomerAccountID, selection.InstallationID = principal.CustomerAccountID, principal.InstallationID
-	}
-	dimensions := map[string]any{"channel": channel, "tool": params.Name}
-	if manifestErr == nil {
-		dimensions["catalog_revision"], dimensions["selection_source"] = productManifest.CatalogRevision, productManifest.SelectionSource
-		dimensions["environment_id"], dimensions["installation_id"] = productManifest.EnvironmentID, productManifest.InstallationID
-		if productManifest.EffectiveVersion != nil {
-			dimensions["product_version_id"], dimensions["product_version"], dimensions["manifest_hash"] = productManifest.EffectiveVersion.ID, productManifest.EffectiveVersion.Version, productManifest.ManifestHash
-		}
-	}
-	s.recordAnalytics(ctx, productID, "tool.called", actorKind, actorID, dimensions)
+	scope := model.CatalogScope{Public: public}
 	if manifestErr == nil && len(productManifest.Integrations) > 0 {
 		_, generatedBindings := s.apiDefaultToolDefinitions(ctx, productID, productManifest, principal, public)
 		if binding, ok := generatedBindings[params.Name]; ok {
-			s.executeAPIDefaultTool(ctx, w, request, params, productID, binding, public, productManifest, selection, principal)
+			s.executeAPIDefaultTool(ctx, w, request, params, productID, binding, public, productManifest, scope, principal)
 			return
 		}
 	}
@@ -78,7 +63,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32004, "No published recipe matches this outcome")
 			return
 		}
-		s.recordAnalytics(ctx, productID, "recipe.plan_selected", actorKind, actorID, map[string]any{"recipe_id": selected.ID, "recipe_slug": selected.Slug, "channel": channel})
 		writeToolResult(w, request.ID, map[string]any{"recipe_uri": selected.StableURI, "title": selected.Title, "outcome": selected.Outcome, "revision_id": selected.CurrentRevisionID, "next_step": "Read the recipe resource, verify its prerequisites, then implement and validate each step."})
 	case "integration.check":
 		recipeURI, _ := params.Arguments["recipe_uri"].(string)
@@ -94,12 +78,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			return
 		}
 		writeToolResult(w, request.ID, productManifest)
-	case "deployment.releases.list", "product.versions.list":
-		if manifestErr != nil {
-			writeRPCError(w, request.ID, -32603, "Connector release discovery failed")
-			return
-		}
-		writeToolResult(w, request.ID, map[string]any{"product_id": productManifest.ProductID, "catalog_revision": productManifest.CatalogRevision, "manifest_hash": productManifest.ManifestHash, "effective_version": productManifest.EffectiveVersion, "selection_source": productManifest.SelectionSource, "available_versions": productManifest.AvailableVersions, "operational_warnings": productManifest.OperationalWarnings})
 	case "support.report_bug":
 		if public || s.reporting == nil {
 			writeRPCError(w, request.ID, -32601, "Tool is not available")
@@ -134,7 +112,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			reportingRPCError(w, request.ID, err)
 			return
 		}
-		s.recordAnalytics(ctx, productID, "support.bug_reported", "vendor_user", actorID, map[string]any{"channel": "private_mcp", "state": value.State})
 		writeToolResult(w, request.ID, reportToolResult(value))
 	case "support.submit_feedback":
 		if public || s.reporting == nil {
@@ -170,142 +147,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			reportingRPCError(w, request.ID, err)
 			return
 		}
-		s.recordAnalytics(ctx, productID, "support.feedback_submitted", "vendor_user", actorID, map[string]any{"channel": "private_mcp", "state": value.State})
 		writeToolResult(w, request.ID, reportToolResult(value))
-	case "mcp_connections.authorize":
-		if public || s.mcpBridge == nil {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		connectionID, _ := params.Arguments["connection_id"].(string)
-		requestID, _ := ctx.Value(requestIDKey).(string)
-		authorizationURL, err := s.mcpBridge.BeginAuthorization(ctx, productID, connectionID, toolPrincipal(principal, false, requestID, ""))
-		if err != nil {
-			writeRPCError(w, request.ID, -32003, "Upstream user authorization could not be started")
-			return
-		}
-		writeToolResult(w, request.ID, map[string]any{"authorization_url": authorizationURL, "expires_in_seconds": 600, "connection_id": connectionID})
-	case "integration_runs.start":
-		if public {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		var input struct {
-			EnvironmentID    string `json:"environment_id"`
-			RequestedOutcome string `json:"requested_outcome"`
-		}
-		if decodeArguments(params.Arguments, &input) != nil {
-			writeRPCError(w, request.ID, -32602, "Invalid params")
-			return
-		}
-		requestID, _ := ctx.Value(requestIDKey).(string)
-		value, err := s.service.StartIntegrationRun(ctx, productID, input.EnvironmentID, input.RequestedOutcome, platform.Actor{ID: vendorActorID(principal), RequestID: requestID})
-		if err != nil {
-			writeRPCError(w, request.ID, -32602, "Integration run could not be started")
-			return
-		}
-		writeToolResult(w, request.ID, value)
-	case "integration_runs.complete":
-		if public {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		var input struct {
-			RunID            string `json:"run_id"`
-			ReportedSuccess  *bool  `json:"reported_success"`
-			ValidatedSuccess *bool  `json:"validated_success"`
-			FailureCode      string `json:"failure_code"`
-		}
-		if decodeArguments(params.Arguments, &input) != nil {
-			writeRPCError(w, request.ID, -32602, "Invalid params")
-			return
-		}
-		requestID, _ := ctx.Value(requestIDKey).(string)
-		value, err := s.service.CompleteIntegrationRun(ctx, productID, input.RunID, input.ReportedSuccess, input.ValidatedSuccess, input.FailureCode, platform.Actor{ID: vendorActorID(principal), RequestID: requestID})
-		if err != nil {
-			writeRPCError(w, request.ID, -32602, "Integration run could not be completed")
-			return
-		}
-		writeToolResult(w, request.ID, value)
-	case "access.instances.list":
-		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		connectionID, _ := params.Arguments["connection_id"].(string)
-		integrationID, _ := params.Arguments["integration_id"].(string)
-		values, err := s.accessRuntime.ListInstances(ctx, productID, connectionID, integrationID, accessPrincipal(principal, ctx))
-		if err != nil {
-			accessRPCError(w, request.ID, err)
-			return
-		}
-		writeToolResult(w, request.ID, map[string]any{"instances": values})
-	case "access.instances.create":
-		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		var input struct {
-			ConnectionID string `json:"connection_id"`
-			accessruntime.InstanceRequest
-		}
-		if decodeArguments(params.Arguments, &input) != nil {
-			writeRPCError(w, request.ID, -32602, "Invalid params")
-			return
-		}
-		value, err := s.accessRuntime.CreateInstance(ctx, productID, input.ConnectionID, input.InstanceRequest, accessPrincipal(principal, ctx))
-		if err != nil {
-			accessRPCError(w, request.ID, err)
-			return
-		}
-		s.recordAnalytics(ctx, productID, "access_instance.created", "vendor_user", pseudonym(productID, principal), map[string]any{"connection_id": input.ConnectionID, "integration_id": input.IntegrationID})
-		writeToolResult(w, request.ID, value)
-	case "access.credentials.list":
-		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		connectionID, _ := params.Arguments["connection_id"].(string)
-		integrationID, _ := params.Arguments["integration_id"].(string)
-		instanceID, _ := params.Arguments["access_instance_id"].(string)
-		values, err := s.accessRuntime.ListCredentials(ctx, productID, connectionID, integrationID, instanceID, accessPrincipal(principal, ctx))
-		if err != nil {
-			accessRPCError(w, request.ID, err)
-			return
-		}
-		writeToolResult(w, request.ID, map[string]any{"credentials": values})
-	case "access.credentials.create":
-		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		var input struct {
-			ConnectionID string `json:"connection_id"`
-			accessruntime.CredentialRequest
-		}
-		if decodeArguments(params.Arguments, &input) != nil {
-			writeRPCError(w, request.ID, -32602, "Invalid params")
-			return
-		}
-		value, err := s.accessRuntime.IssueCredential(ctx, productID, input.ConnectionID, input.CredentialRequest, accessPrincipal(principal, ctx))
-		if err != nil {
-			accessRPCError(w, request.ID, err)
-			return
-		}
-		s.recordAnalytics(ctx, productID, "access_credential.created", "vendor_user", pseudonym(productID, principal), map[string]any{"connection_id": input.ConnectionID, "integration_id": input.IntegrationID, "existing": value.Existing})
-		writeToolResult(w, request.ID, value)
-	case "access.credentials.revoke":
-		if public || s.accessRuntime == nil || len(productManifest.Integrations) > 0 {
-			writeRPCError(w, request.ID, -32601, "Tool is not available")
-			return
-		}
-		credentialID, _ := params.Arguments["credential_id"].(string)
-		value, err := s.accessRuntime.RevokeCredential(ctx, productID, credentialID, accessPrincipal(principal, ctx))
-		if err != nil {
-			accessRPCError(w, request.ID, err)
-			return
-		}
-		writeToolResult(w, request.ID, value)
 	case "search_knowledge":
 		if len(productManifest.Integrations) > 0 {
 			writeRPCError(w, request.ID, -32601, "Tool is not available for Integration-catalog deployments")
@@ -328,7 +170,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			for _, item := range items {
 				allowed := false
 				for _, kind := range []string{"docs", "openapi", "git"} {
-					managed, candidateAllowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, kind, item.SourceID, "", "")
+					managed, candidateAllowed, allowErr := s.service.CatalogAllowsArtifact(ctx, productID, scope, kind, item.SourceID)
 					if allowErr == nil && (!managed || candidateAllowed) {
 						allowed = true
 						break
@@ -354,7 +196,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		for _, item := range items {
 			allowed := false
 			for _, kind := range []string{"docs", "openapi", "git"} {
-				managed, candidateAllowed, allowErr := s.service.ProductVersionAllowsArtifactFor(ctx, productID, selection, kind, item.SourceID, "", "")
+				managed, candidateAllowed, allowErr := s.service.CatalogAllowsArtifact(ctx, productID, scope, kind, item.SourceID)
 				if allowErr == nil && (!managed || candidateAllowed) {
 					allowed = true
 					break
@@ -371,15 +213,15 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			return
 		}
 		if manifestErr != nil {
-			writeRPCError(w, request.ID, -32003, "Tool execution requires a resolved deployment and customer selection context")
+			writeRPCError(w, request.ID, -32003, "Tool execution requires a resolved deployment catalog")
 			return
 		}
 		if s.toolRuntime != nil {
 			requestID, _ := ctx.Value(requestIDKey).(string)
 			principal, _ := ctx.Value(principalKey).(identity.Principal)
-			selectedTool, lookupErr := s.executableTool(ctx, productID, params.Name, selection)
-			if errors.Is(lookupErr, errToolVersionExcluded) {
-				writeRPCError(w, request.ID, -32003, "Tool is not included in the effective product version")
+			selectedTool, lookupErr := s.executableTool(ctx, productID, params.Name, scope)
+			if errors.Is(lookupErr, errToolCatalogExcluded) {
+				writeRPCError(w, request.ID, -32003, "Tool is not included in a published API revision")
 				return
 			}
 			if lookupErr != nil || selectedTool.ID == "" {
@@ -404,7 +246,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 					return
 				}
 				managedPrincipal := toolPrincipal(principal, false, requestID, params.Meta.IdempotencyKey)
-				managedPrincipal.EnvironmentID = productManifest.EnvironmentID
 				if confirmationRequired {
 					if params.Arguments == nil {
 						params.Arguments = map[string]any{}
@@ -450,7 +291,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 				value, err = s.toolRuntime.ExecuteBound(ctx, productID, runtimeName, params.Arguments, managedPrincipal, bound)
 			} else {
 				runtimePrincipal := toolPrincipal(principal, params.Meta.Confirmed, requestID, params.Meta.IdempotencyKey)
-				runtimePrincipal.EnvironmentID = productManifest.EnvironmentID
 				runtimeName := selectedTool.Namespace + "." + selectedTool.Name
 				value, err = s.toolRuntime.Execute(ctx, productID, runtimeName, params.Arguments, runtimePrincipal)
 			}
@@ -472,10 +312,6 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			}
 			if errors.Is(err, toolruntime.ErrRateLimited) {
 				writeRPCError(w, request.ID, -32029, "The upstream tool connection request limit was exceeded")
-				return
-			}
-			if errors.Is(err, mcpbridge.ErrGrantRequired) {
-				writeRPCError(w, request.ID, -32001, "Authorize this Stateless MCPv2 connection with mcp_connections.authorize before calling its tools")
 				return
 			}
 			writeRPCError(w, request.ID, -32603, "Tool execution failed safely; review the tool activity for the sanitized failure category")

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -43,7 +42,7 @@ func managerForTest(t *testing.T, doer recordingDoer) (*mcpbridge.Manager, *stor
 	if err != nil {
 		t.Fatal(err)
 	}
-	return mcpbridge.New(memory, vault, "https://dokosoko.example", fixedResolver{net.ParseIP("8.8.8.8")}, doer), memory, vault
+	return mcpbridge.New(memory, vault, fixedResolver{net.ParseIP("8.8.8.8")}, doer), memory, vault
 }
 
 func decodeRequest(t *testing.T, request *http.Request) map[string]any {
@@ -115,7 +114,7 @@ func TestManagedImportPinsSchemasAndRuntimeAuthorizesBeforeServiceCall(t *testin
 		}
 	}))
 
-	connection, err := manager.CreateConnection(context.Background(), mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Support", Namespace: "support", Endpoint: "https://mcp.vendor.example/v2", AuthMode: "service", Credential: "upstream-service-token"}, mcpbridge.Actor{ID: "root", RequestID: "create"})
+	connection, err := manager.CreateConnection(context.Background(), mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Support", Namespace: "support", Endpoint: "https://mcp.vendor.example/v2", AccessToken: "upstream-service-token"}, mcpbridge.Actor{ID: "root", RequestID: "create"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +201,7 @@ func TestImportFailsClosedForDuplicateUpstreamToolIdentities(t *testing.T) {
 		return response("application/json", rpcResult(t, body, `{"resultType":"complete","tools":[{"name":"incidents.create","description":"Create an incident","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"properties":{}}}]}`)), nil
 	}))
 	ctx := context.Background()
-	connection, err := manager.CreateConnection(ctx, mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Duplicate guard", Namespace: "support_duplicate", Endpoint: "https://mcp.vendor.example/v2", AuthMode: "none"}, mcpbridge.Actor{ID: "root"})
+	connection, err := manager.CreateConnection(ctx, mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Duplicate guard", Namespace: "support_duplicate", Endpoint: "https://mcp.vendor.example/v2", AccessToken: "upstream-token"}, mcpbridge.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,57 +242,31 @@ func TestImportFailsClosedForDuplicateUpstreamToolIdentities(t *testing.T) {
 	}
 }
 
-func TestDelegatedOAuthBindsSeparateUpstreamGrantToDokoSubject(t *testing.T) {
+func TestAccessTokenProxyCanForwardSignedUserIdentity(t *testing.T) {
 	t.Parallel()
-	var tokenForm url.Values
-	var callAuthorization string
+	var callAuthorization, identityHeader, signatureHeader string
+	var identityMeta map[string]any
 	manager, memory, vault := managerForTest(t, recordingDoer(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Host == "identity.vendor.example" {
-			body, _ := io.ReadAll(request.Body)
-			tokenForm, _ = url.ParseQuery(string(body))
-			if request.Header.Get("Authorization") != "Basic ZG9rbzpjbGllbnQtc2VjcmV0" {
-				t.Fatalf("OAuth client authorization = %q", request.Header.Get("Authorization"))
-			}
-			return response("application/json", `{"access_token":"upstream-user-token","refresh_token":"upstream-refresh-token","token_type":"Bearer","expires_in":3600,"scope":"incidents.write"}`), nil
-		}
 		body := decodeRequest(t, request)
 		method, _ := body["method"].(string)
 		if method == "tools/list" {
+			if request.Header.Get("X-DokoSoko-User") != "" {
+				t.Fatal("user identity was forwarded during catalog inspection")
+			}
 			return response("application/json", rpcResult(t, body, `{"resultType":"complete","tools":[{"name":"incidents.comment","description":"Comment","inputSchema":{"type":"object","additionalProperties":false,"properties":{"body":{"type":"string"}},"required":["body"]}}]}`)), nil
 		}
 		callAuthorization = request.Header.Get("Authorization")
+		identityHeader, signatureHeader = request.Header.Get("X-DokoSoko-User"), request.Header.Get("X-DokoSoko-User-Signature")
+		params := body["params"].(map[string]any)
+		meta := params["_meta"].(map[string]any)
+		identityMeta, _ = meta["com.dokosoko/userIdentity"].(map[string]any)
 		return response("application/json", rpcResult(t, body, `{"resultType":"complete","content":[{"type":"text","text":"ok"}],"isError":false}`)), nil
 	}))
-	connection, err := manager.CreateConnection(context.Background(), mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Support users", Namespace: "support_user", Endpoint: "https://mcp.vendor.example/v2", AuthMode: "delegated_oauth", OAuthClientID: "doko", OAuthClientSecret: "client-secret", OAuthIssuer: "https://identity.vendor.example", AuthorizationURL: "https://identity.vendor.example/oauth/authorize", TokenURL: "https://identity.vendor.example/oauth/token", Scopes: []string{"incidents.write"}}, mcpbridge.Actor{ID: "root"})
+	connection, err := manager.CreateConnection(context.Background(), mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Support users", Namespace: "support_user", Endpoint: "https://mcp.vendor.example/v2", AccessToken: "upstream-service-token", ForwardUserIdentity: true}, mcpbridge.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal := tools.Principal{Subject: "doko-user-7", ExternalCustomerID: "org_customer", Grants: map[string]bool{"support.write": true}}
-	authorizationURL, err := manager.BeginAuthorization(context.Background(), "prod_acme", connection.ID, principal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, _ := url.Parse(authorizationURL)
-	if parsed.Query().Get("resource") != connection.Endpoint || parsed.Query().Get("code_challenge_method") != "S256" || parsed.Query().Get("state") == "" {
-		t.Fatalf("authorization URL = %s", authorizationURL)
-	}
-	if _, err := manager.CompleteAuthorization(context.Background(), parsed.Query().Get("state"), "authorization-code", "https://attacker.example"); err == nil {
-		t.Fatal("mismatched RFC 9207 issuer was accepted")
-	}
-	if tokenForm != nil {
-		t.Fatal("authorization code was redeemed before issuer validation")
-	}
-	authorizationURL, err = manager.BeginAuthorization(context.Background(), "prod_acme", connection.ID, principal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, _ = url.Parse(authorizationURL)
-	if _, err := manager.CompleteAuthorization(context.Background(), parsed.Query().Get("state"), "authorization-code", "https://identity.vendor.example"); err != nil {
-		t.Fatal(err)
-	}
-	if tokenForm.Get("code") != "authorization-code" || tokenForm.Get("resource") != connection.Endpoint || tokenForm.Get("code_verifier") == "" {
-		t.Fatalf("token form = %#v", tokenForm)
-	}
+	principal := tools.Principal{Issuer: "https://identity.vendor.example", Subject: "doko-user-7", ExternalCustomerID: "org_customer", Grants: map[string]bool{"support.write": true}}
 	imported, err := manager.Import(context.Background(), "prod_acme", connection.ID, mcpbridge.ImportInput{ToolNames: []string{"incidents.comment"}, RequiredGrants: []string{"support.write"}, TimeoutMS: 5000}, mcpbridge.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
@@ -309,11 +282,11 @@ func TestDelegatedOAuthBindsSeparateUpstreamGrantToDokoSubject(t *testing.T) {
 	if _, err := manager.ExecuteMCP(context.Background(), published, map[string]any{"body": "Update"}, principal); err != nil {
 		t.Fatal(err)
 	}
-	if callAuthorization != "Bearer upstream-user-token" {
+	if callAuthorization != "Bearer upstream-service-token" {
 		t.Fatalf("tool authorization = %q", callAuthorization)
 	}
-	if _, err := manager.ExecuteMCP(context.Background(), published, map[string]any{"body": "Update"}, tools.Principal{Subject: "different-user"}); !errors.Is(err, mcpbridge.ErrGrantRequired) {
-		t.Fatalf("different subject error = %v", err)
+	if identityHeader == "" || !strings.HasPrefix(signatureHeader, "sha256=") || identityMeta["subject"] != "doko-user-7" || identityMeta["external_customer_id"] != "org_customer" {
+		t.Fatalf("identity header=%q signature=%q meta=%#v", identityHeader, signatureHeader, identityMeta)
 	}
 }
 
@@ -322,11 +295,11 @@ func TestBridgeRejectsPrivateNetworkResolution(t *testing.T) {
 	called := false
 	memory := store.NewMemory()
 	vault, _ := secrets.New(bytes.Repeat([]byte{0x2c}, 32))
-	manager := mcpbridge.New(memory, vault, "https://dokosoko.example", fixedResolver{net.ParseIP("127.0.0.1")}, recordingDoer(func(*http.Request) (*http.Response, error) {
+	manager := mcpbridge.New(memory, vault, fixedResolver{net.ParseIP("127.0.0.1")}, recordingDoer(func(*http.Request) (*http.Response, error) {
 		called = true
 		return nil, errors.New("must not be called")
 	}))
-	connection, err := manager.CreateConnection(context.Background(), mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Unsafe", Namespace: "unsafe", Endpoint: "https://internal.example/v2", AuthMode: "none"}, mcpbridge.Actor{ID: "root"})
+	connection, err := manager.CreateConnection(context.Background(), mcpbridge.ConnectionInput{OrganisationID: "org_acme", ProductID: "prod_acme", Name: "Unsafe", Namespace: "unsafe", Endpoint: "https://internal.example/v2", AccessToken: "upstream-token"}, mcpbridge.Actor{ID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}

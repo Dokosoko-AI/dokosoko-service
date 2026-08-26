@@ -1,213 +1,92 @@
-# DokoSoko integration contract
+# DokoSoko core product contract
 
-This document records the intended long-lived contract. It is normative design guidance; the OpenAPI documents are the machine-readable source of truth.
+DokoSoko is one MCP connector for documentation, SDK references, runtime keys,
+recipes, and reviewed tools. The service is deliberately not a developer
+portal, provisioning platform, widget product, support-delivery system, or
+product-release orchestrator.
 
-## 1. Resource model
+## Core resources
 
-One DokoSoko installation is one vendor deployment. Its integration surface consists of:
+- `deployment` — the single vendor catalog and Public MCP master switch;
+- `integration` — one versioned API and its immutable publications;
+- `source`, `source_publication`, and documentation/API `resource_set`;
+- `sdk_reference` — one exact API-owned install reference;
+- runtime service connections and versioned encrypted credential sets;
+- authorization points and reviewed HTTP, MCP, or native tool revisions;
+- immutable evidence-grounded recipes;
+- customer identity and OAuth artifacts for optional Private MCP;
+- upstream MCP connections using a service access token and optional signed
+  user-identity forwarding;
+- consent-based plaintext queued support submissions;
+- append-only audit plus bounded analytics needed for AI budgets and recipe
+  popularity.
 
-- `integration` — one API family and version exposed by the deployment;
-- `resource_set` — independently revisioned documentation or API content shared by integrations;
-- optional singleton `identity_provider` — delegated customer OIDC and API configuration for private access;
-- `backend_connection` — service-to-service origin, authentication state, and active credential version;
-- `customer_account` — DokoSoko's durable account resource resolved from a trusted external identity;
-- `installation` — a registered customer/environment integration instance;
-- `tool` — a published HTTP, managed MCP, or source-compiled native operation with fixed execution contract, schemas, and authorization policy;
-- optional `package_artifact` and immutable `package_release` records —
-  bounded metadata for externally delivered developer artifacts;
-- `integration_package_binding` — compatibility between one Integration draft
-  and one exact immutable package release;
-- `support_submission` — one consented, encrypted bug report or feedback item;
-- `support_route` — reporting policy that references, but never owns, a backend connection;
-- optional `ai_provider_connection` and four `ai_workload_profile` records for extraction, authoring, review, and support;
-- `integration_analysis` — a versioned evidence manifest, endpoint and identity plan, and explicit unknowns;
-- `recipe` and immutable `recipe_revision` — reviewed Markdown implementation guidance published as an MCP resource;
-- optional `access_definition`, `access_connection`, `access_instance`, and `access_credential` resources for provider-owned lifecycle management.
+## Publication model
 
-Package metadata is an optional DokoSoko catalogue resource; package delivery is not. An HTTP capability still belongs in an API or tool contract. A generated SDK or other package may be identified by an exact metadata release in an Integration manifest, but it is never required to expose an endpoint and does not shape runtime authorization.
+An Integration publication is the delivery boundary. It resolves and stores the
+exact source publications, SDK references, authorization points, tool revisions,
+and runtime connection revisions selected for that API. The snapshot and hash
+are immutable.
 
-## 2. Optional identity and customer accounts
+There are no connector releases, Latest/LTS channels, customer pins,
+installations, staged promotion, rollout percentages, product drift records,
+package releases, provenance lifecycle, provider-owned resource instances, or
+integration-run analytics.
 
-Private customer access optionally configures:
+## Trust boundaries
 
-- an exact HTTPS OIDC issuer;
-- a client ID and encrypted client secret;
-- OIDC scopes and audience;
-- an optional OAuth resource indicator independent of the API origin;
-- the claim containing the vendor's external customer ID;
-- an optional installation claim;
-- one credential-free delegated API origin;
-- an explicit active or disabled state.
+### Documentation
 
-The pair `(issuer, external_customer_id)` resolves to one durable `customer_account` within a deployment. This resolution is just-in-time after a verified ID token. Administrative APIs may list, suspend, and reactivate accounts but cannot manufacture identity-backed accounts.
+The crawler is credential-free and isolated. URL, DNS, redirect, same-origin,
+byte/page, upload-containment, and renderer-network controls fail closed.
+Fetched material is untrusted until an administrator reviews and publishes it.
 
-Internal `customer_account.id` values are used for DokoSoko relationships. External IDs are preserved for vendor context and never accepted as internal foreign keys. Installations must belong to the resolved customer account. An unknown or mismatched authenticated installation fails closed.
+### Credentials and tools
 
-Suspension is checked whenever a DokoSoko access token is authenticated. It therefore affects already-issued tokens without waiting for expiry.
+Secrets are encrypted with purpose-bound authenticated data and never returned.
+Runtime destinations are fixed. Tools validate their schema and policy before a
+network call. Consequential operations require the exact confirmation marker;
+idempotency and grants cannot be weakened by a client.
 
-Identity is not required for public discovery or backend delivery. Disabling the provider immediately fails private authorization without disabling those independent surfaces.
+Native tools are trusted compiled-in source. They receive only scoped host
+capabilities, but they are not a security sandbox and therefore require source
+and dependency review.
 
-## 3. OAuth contract
+### Customer OAuth
 
-DokoSoko is the authorization server for MCP clients and federates authentication to vendor OIDC.
+DokoSoko owns its downstream authorization server and resource-bound tokens. An
+optional upstream OIDC provider establishes customer identity; a fixed vendor
+access-evaluation origin returns grants. Identity, customer status, grant,
+freshness, and provider failures deny Private MCP access. DokoSoko tokens are
+never sent to vendor services.
 
-Required properties:
+### Upstream MCP
 
-1. RFC 8414 authorization-server metadata at `/.well-known/oauth-authorization-server`.
-2. RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource/mcp`.
-3. One canonical resource: the exact `/mcp` URL.
-4. Authorization code flow with PKCE S256 only.
-5. Mandatory RFC 8707 `resource` on authorization and token requests.
-6. HTTPS client metadata documents as client IDs; redirect URIs must match exactly.
-7. One-time, short-lived authorization state and code records stored by digest.
-8. DokoSoko access tokens bound to client, resource, deployment, subject, customer account, scopes, and grant evaluation.
-9. The DokoSoko token is never forwarded to a vendor or upstream MCP server.
+Each connection has one fixed public HTTPS endpoint and encrypted service access
+token. DokoSoko may add a bounded identity envelope encoded in
+`X-DokoSoko-User` and signed with the service token. It never forwards the
+inbound bearer. Imported schemas remain reviewed local tool definitions; an
+upstream schema change blocks execution until reviewed.
 
-The upstream vendor access token is stored encrypted and expires no later than the earliest upstream token or access-evaluation boundary.
+### AI
 
-## 4. Vendor-owned operations
+Analysis and Assistant providers, failover, models, limits, and daily budgets
+remain explicit. Retrieved content is untrusted data, models receive no tools,
+and invalid credentials/configuration, unsafe input, exhausted budgets, or
+invalid output never trigger silent failover. Generated recipes require human
+review and immutable publication.
 
-The vendor may configure two independent HTTPS origins: the delegated API origin under the identity provider and a service origin on each backend connection. Neither is a collection of hook URLs. DokoSoko owns the paths and request schemas.
+### Reporting
 
-Identity and backend delivery have separate OpenAPI documents. Either may generate an independent server stub without creating a shared base URL, credential, deployment, or lifecycle.
+The reporting tools show a bounded preview and require explicit user consent.
+Secret-like content is rejected. The accepted payload is stored as plaintext in
+one local `queued` outbox with trusted API and reporter context. No encryption,
+routing, delivery credentials, retry worker, or external receipt lifecycle is
+part of the service.
 
-### Access evaluation
+## External extension boundary
 
-`POST /v1/access/evaluations` is called once during authorization with the live delegated vendor access token. Its body is an empty object. The vendor derives the client, authenticated subject, and external customer from the token; DokoSoko does not send a second ambiguous integration identifier.
-
-The response contains:
-
-- a stable evaluation ID;
-- a bounded, unique list of `grants`;
-- an absolute expiry;
-- an optional policy version.
-
-DokoSoko defines tools and `required_grants`. Access evaluation narrows access; it does not remotely define DokoSoko resources. Network errors, non-success HTTP statuses, malformed data, missing identity, expired evaluations, and unavailable dependencies deny authorization.
-
-The `Idempotency-Key` is stable for retries of one evaluation and unique for a later evaluation. Each transport attempt has a new provider-neutral `X-External-Request-ID`.
-
-### Support submission
-
-`POST /v1/support-submissions` receives both bug reports and feedback through a referenced backend connection. Backend credentials rotate independently of support routes and are never reused for delegated customer operations.
-
-DokoSoko accepts a report only after explicit user confirmation, schema and size validation, and secret screening. It stores the payload encrypted and returns a local receipt before vendor delivery. A durable worker provides at-least-once delivery.
-
-Retries preserve `Idempotency-Key` and change `X-External-Request-ID`. Network failures, 408, 429, and 5xx are retryable. Other 4xx statuses are permanent. A vendor returns `409` if a key is reused with a different payload and retains the original result for at least 24 hours.
-
-Usage is an ordinary API operation or tool if required. It has no separate integration mechanism.
-
-## 5. Tools and delegated execution
-
-A tool has:
-
-- a stable namespace and name;
-- bounded JSON input and output schemas;
-- one fixed HTTPS destination, managed MCP operation, or exact native source contract;
-- an HTTP method, managed MCP operation, or native tool ID;
-- `required_grants`;
-- explicit effect, identity, and idempotency declarations;
-- an explicit confirmation policy;
-- a timeout and immutable published revision.
-
-For vendor HTTP tools, the destination must share the delegated API origin and execution uses the authenticated user's delegated vendor token. For managed MCP tools, DokoSoko uses either a separately encrypted service credential or a delegated upstream OAuth grant bound to the DokoSoko subject.
-
-For native tools, an operator reviews a Go source package and its dependency
-tree, registers it explicitly, and compiles it into the service. DokoSoko does
-not load uploaded source, binaries, dynamic Go plugins, or WASM at runtime.
-Native code is trusted same-process application code, not sandboxed code. A
-strict source checker rejects direct environment, filesystem, process, SQL,
-socket, cgo, unsafe, assembler, and compiled-artifact use as a governance aid;
-it cannot turn same-process code or unchecked transitive dependencies into an
-untrusted boundary.
-
-A native manifest declares registered configuration in the exclusive
-`DOKOSOKO_PLUGIN_<ID>_<KEY>` namespace, an identity requirement, one state
-scope, effect, confirmation, idempotency, limits, and optional managed HTTPS
-claims. The host passes only plugin-specific opaque identity references. It
-provides one scoped JSON state abstraction backed by one shared table, with
-revision checks, transactions, TTL, quotas, and transactional version upgrades;
-plugins receive no database handle or custom table space. Managed HTTP permits
-only declared public HTTPS destinations. Native tools are Private MCP only.
-
-Source changes stage a new draft Tool revision. Publication pins the plugin ID,
-plugin and SDK versions, manifest hash, and tool-contract hash. Runtime mismatch,
-missing identity, inactive plugin, failed state upgrade, or malformed output
-fails closed.
-
-Before execution DokoSoko checks publication state, schema, confirmation, grants, customer and installation state, destination policy, and upstream schema drift. Any ambiguity fails closed. Request-time destination overrides are forbidden.
-
-## 6. Access Provider API
-
-The optional Access Provider API is reserved for a genuine provider-owned resource lifecycle:
-
-- authorize one mutation;
-- create an instance when cardinality is `many`;
-- issue a connection- or instance-scoped credential;
-- revoke a credential idempotently.
-
-It must not become a generic action bag. Operations that do not fit this lifecycle are ordinary tools.
-
-Every mutation is authorized independently. Create and issue operations require idempotency keys. One-time credentials are returned once; replay returns metadata, never plaintext. DokoSoko persists only encrypted material or fingerprints according to the declared storage mode.
-
-## 7. Package metadata and external verification
-
-A `package_artifact` is the stable metadata identity for one ecosystem and canonical coordinate. It contains a canonical unversioned Package URL whose type matches the ecosystem, a registry URL, an optional source URL, visibility, and lifecycle. Package-specific URLs must use HTTPS, except for loopback HTTP during local development, and cannot contain userinfo, a query, or a fragment. This rejects those common credential and signature channels, but URL paths and other free-text fields are not comprehensive secret scans, so operators must not enter credentials, signatures, package bytes, or executable payloads into them.
-
-A `package_release` is immutable metadata for one exact externally hosted version. It includes a query-free and fragment-free versioned Package URL with the exact artifact identity and a decoded version matching the release version, an operator-supplied display-only install command, a declared SHA-256, SHA-384, or SHA-512 digest, and optional provenance and SBOM URLs using the same strict URL policy. DokoSoko validates field shape, PURL identity, URL policy, obvious credential-bearing install-command forms, exact-version consistency, and digest syntax, then computes a deterministic hash of the metadata. That hash proves metadata identity only; it does not prove anything about external bytes or certify free-text as safe.
-
-An Integration package binding names one exact release. Publishing the Integration embeds the resolved release metadata, lifecycle guidance, and metadata content hash in its immutable manifest. Package bindings never follow latest. A public Integration may embed only public package metadata. Creating a public artifact, changing a private draft to public, and publishing each public release require explicit public acknowledgement.
-
-The external registry delivers bytes and enforces registry authentication and authorization. DokoSoko does not fetch, host, execute, sign, cryptographically verify, or proxy a package, provenance statement, SBOM, or installation. Before operational use, an operator should run a separately operated external verifier to check the registry bytes against the declared digest, validate any declared provenance or SBOM, and exercise the documented installation procedure. DokoSoko neither records this evidence nor enforces that verification occurred. Verifier credentials and results are separate operational evidence and must not be copied into package metadata.
-
-All artifact catalogue fields are editable only in `draft`; the first immutable release activates the artifact, and later releases remain independently immutable. Deprecation can be applied to any non-retired artifact and requires guidance plus the exact current revision. Its optional replacement must be active with a published release. Its optional future sunset is guidance only: the deprecated artifact becomes immediately unavailable for releases, new bindings, and candidate publication. Retirement can likewise be applied to any non-retired artifact, is immediate, requires guidance and the exact revision, and applies the same replacement rule while preserving any existing sunset. Existing bindings remain readable. Neither transition rewrites historical published Integration manifests; a future candidate must remove the unavailable package or bind an available replacement explicitly.
-
-## 8. HTTP and evolution rules
-
-- Resource creation uses `POST` and returns `201`; accepted asynchronous work returns `202`.
-- Retrieval uses `GET`; partial state change uses `PATCH`; replacement configuration uses `PUT`; deletion uses `DELETE` and returns `204` when no representation is needed.
-- Mutable administrative resources use revisions for optimistic concurrency and return `409` on stale writes.
-- Errors use one structured envelope with stable machine codes, safe messages, and request IDs.
-- List responses use `{ "items": [...] }`; cursor pagination must be added before an unbounded collection can grow materially.
-- Servers ignore unknown additive response fields from vendor APIs. Vendors must tolerate additive request headers but may reject unknown body fields according to the published schema.
-- Breaking changes require a new versioned path or explicit API version. Implementation details and database identifiers are not promoted into the public contract accidentally.
-
-## 9. AI analysis and recipes
-
-DokoSoko uses a small provider-neutral interface implemented directly with the official OpenAI, Google, and Anthropic SDKs plus one OpenAI-compatible adapter. There is no agent framework, model-owned tool loop, hidden cross-provider fallback, or second workflow engine. The boundary is intentionally replaceable if a framework later solves a measured problem.
-
-One encrypted credential belongs to one provider connection. Workload profiles reference that connection and select a visible model ID, input and output limits, daily token budget, and enabled state. Extraction may use an efficient model, authoring and support a balanced model, and review a strongest model. These are editable presets, not automatic routing. Every attempt records normalized outcome, provider, requested and resolved model, tokens, latency, error code, and prompt version.
-
-Analysis starts from resources DokoSoko already knows. The result contains the evidence manifest and fingerprints, identity boundary, proposed endpoints, recipe proposals, and questions for anything not justified by evidence. Blocking questions prevent generation. Only bounded API manifests, tool schemas and authorization policy, and excerpts from already-published knowledge may be sent to the configured extraction provider: at most three documents and 6,000 characters per source, with a 32,000-character total cap across all evidence. Retrieved content is untrusted data, never instructions, and there is no arbitrary URL fetch path.
-
-A recipe is Markdown with structured references and dependencies. Model output is visibly generated and always enters review. Direct human edits and AI rework both create immutable revisions and run the same deterministic checks. Model review is advisory; only a human can approve the current revision, and only an approved current revision can be published.
-
-References may select only analysed HTTPS sources or exact canonical documentation and sample-code pages included in their bounded evidence. Markdown URLs outside that allowlist are blocking findings. Public recipes may reference only public, published, non-quarantined sources and pages. Published recipes use stable `dokosoko://products/{product}/recipes/{recipe}` URIs and appear through MCP `resources/list` and `resources/read`. Exact evidence-fingerprint drift marks dependent recipes outdated and removes them from MCP until reviewed again.
-
-The in-product attention inbox contains unanswered questions and drifted recipes. Recipe views and explicit plan selections are distinct analytics events; popularity does not imply correctness or approval.
-
-## 10. Acceptance invariants
-
-The integration is acceptable only while all of these remain true:
-
-1. The OpenAPI and implemented paths agree exactly.
-2. There is one canonical Private MCP resource and no legacy ID-bearing alias.
-3. A trusted external customer resolves to a durable internal account.
-4. Suspended or mismatched accounts and installations fail closed.
-5. Access evaluation is resource-bound, short-lived, idempotent, and fail-closed.
-6. `grants` is the only authorization vocabulary across identity, tools, provider access, storage, and APIs.
-7. DokoSoko tokens are never forwarded.
-8. Vendor calls use fixed origins and fixed versioned paths.
-9. Support delivery is consented, encrypted, durable, idempotent, and retry-safe.
-10. Optional package metadata binds an exact immutable release into an Integration manifest; no package gateway, byte store, download proxy, entitlement hook, usage hook, or arbitrary hook URL exists.
-11. Package URL fields reject userinfo, queries, and fragments, obvious credential-bearing install commands are rejected, and operators keep credentials out of URL paths and all other package metadata. Registries deliver bytes; external verification of bytes, digest, optional provenance or SBOM, and installation is operator-controlled and is neither performed nor evidenced by DokoSoko.
-12. Package deprecation and retirement immediately block releases, new bindings, and candidate publication without mutating readable existing bindings or historical Integration manifests; replacements are explicit in later candidates.
-13. Identity, backend connectivity, package metadata, and public visibility are independent axes.
-14. Integrations default private; public transition requires acknowledgement and the global Public MCP switch remains a master kill switch.
-15. Support routes contain backend-connection references, never plaintext credentials or copied secret identifiers.
-16. AI provider credentials exist once per provider connection and are never returned or copied into workload profiles.
-17. Model output cannot authorize, publish, add an arbitrary reference, or silently select another provider.
-18. Every published recipe has an explicitly approved immutable revision and is removed from discovery when its evidence drifts.
-19. Native tools come only from reviewed source compiled through the explicit registry; there is no runtime binary, source, Go-plugin, or WASM loader.
-20. Native configuration is manifest-registered and plugin-namespaced, identity references are opaque and plugin-specific, and configuration values and raw identity credentials never appear in control-plane responses.
-21. Native persistence uses one host-owned scoped state table and abstraction; plugins receive neither SQL connections nor custom schemas.
-22. Native source and contract pins must match exactly at execution, and native tools remain unavailable to Public MCP.
+Widgets and similar experiences are separate applications. They authenticate
+through standard private OAuth and consume standard Private MCP. DokoSoko may
+publish discovery metadata for such a plugin, but it does not load its browser
+code, store its sessions/secrets, or expose widget-specific runtime endpoints.
