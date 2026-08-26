@@ -7,7 +7,6 @@ import type { APIIntegration } from "../../../lib/api";
 import type { Section } from "../../../lib/console-routes";
 import {
   developerAssetsApi,
-  type APIDocumentationBinding,
   type DeploymentDocumentationPublication,
   type DocumentationCollection,
   type DocumentationCollectionMemberInput,
@@ -18,6 +17,7 @@ import { Badge, Button, Dialog } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
 import { CatalogNavigation, DocumentationNavigation } from "./developer-asset-navigation";
 import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
+import { documentationUsages, type DocumentationUsage } from "./developer-asset-usage";
 
 type RevisionTab = "members" | "map" | "manifest";
 
@@ -37,7 +37,7 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
   const [publicationVisibility, setPublicationVisibility] = useState<"private" | "public">("private");
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [publicationAcknowledged, setPublicationAcknowledged] = useState(false);
-  const [usedBy, setUsedBy] = useState<Array<{ integration: APIIntegration; binding: APIDocumentationBinding }>>([]);
+  const [usedBy, setUsedBy] = useState<DocumentationUsage[]>([]);
   const [revisionTab, setRevisionTab] = useState<RevisionTab>("members");
   const [loading, setLoading] = useState(live);
   const [problem, setProblem] = useState("");
@@ -111,12 +111,9 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
       queueMicrotask(() => { if (!cancelled) setUsedBy([]); });
       return () => { cancelled = true; };
     }
-    Promise.all(integrations.map(async (integration) => {
-      try {
-        const resources = await developerAssetsApi.apiResources(integration.id);
-        return resources.documentation.filter((binding) => binding.documentation_collection_id === selectedID && binding.lifecycle === "attached").map((binding) => ({ integration, binding }));
-      } catch { return []; }
-    })).then((values) => { if (!cancelled) setUsedBy(values.flat()); });
+    developerAssetsApi.usage()
+      .then((value) => { if (!cancelled) setUsedBy(documentationUsages(value, integrations, selectedID)); })
+      .catch(() => { if (!cancelled) setUsedBy([]); });
     return () => { cancelled = true; };
   }, [integrations, live, selectedID]);
 

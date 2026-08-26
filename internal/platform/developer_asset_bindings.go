@@ -17,6 +17,33 @@ type APIResourceBindings struct {
 	SDKs          []model.APISDKBinding           `json:"sdks"`
 }
 
+// DeveloperAssetUsage is the deployment-wide inverse view of API Resources.
+// Catalog pages filter this one response locally instead of loading every API
+// separately for each selected asset.
+type DeveloperAssetUsage struct {
+	Documentation []model.APIDocumentationBinding      `json:"documentation"`
+	Contracts     []model.APIContractBinding           `json:"contracts"`
+	SDKs          []model.APISDKBinding                `json:"sdks"`
+	Publications  []model.APIDeveloperAssetPublication `json:"publications"`
+}
+
+func (s *Service) DeveloperAssetUsage(ctx context.Context) (DeveloperAssetUsage, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return DeveloperAssetUsage{}, err
+	}
+	value, err := s.store.DeveloperAssetUsage(ctx, deployment.ID)
+	if err != nil {
+		return DeveloperAssetUsage{}, err
+	}
+	return DeveloperAssetUsage{
+		Documentation: value.Documentation,
+		Contracts:     value.Contracts,
+		SDKs:          value.SDKs,
+		Publications:  value.Publications,
+	}, nil
+}
+
 func (s *Service) APIResourceBindings(ctx context.Context, apiID string) (APIResourceBindings, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {

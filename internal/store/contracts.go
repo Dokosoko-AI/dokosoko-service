@@ -60,8 +60,6 @@ type RuntimeServiceStore interface {
 type IntegrationPolicyStore interface {
 	SDKReferences(context.Context, string) ([]model.SDKReference, error)
 	SDKReference(context.Context, string, string) (model.SDKReference, error)
-	SaveSDKReference(context.Context, model.SDKReference, int64) (model.SDKReference, error)
-	DeleteSDKReference(context.Context, string, string) error
 	GrantDefinitions(context.Context, string) ([]model.GrantDefinition, error)
 	GrantDefinition(context.Context, string, string) (model.GrantDefinition, error)
 	SaveGrantDefinition(context.Context, model.GrantDefinition, int64) (model.GrantDefinition, error)

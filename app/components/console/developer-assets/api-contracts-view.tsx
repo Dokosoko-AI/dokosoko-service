@@ -8,7 +8,6 @@ import type { Section } from "../../../lib/console-routes";
 import {
   developerAssetsApi,
   type APIContract,
-  type APIContractBinding,
   type APIContractCandidate,
   type APIContractCandidateRecord,
   type APIContractRevision,
@@ -20,6 +19,7 @@ import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, P
 import type { Source } from "../shared";
 import { CatalogNavigation, DocumentationNavigation } from "./developer-asset-navigation";
 import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
+import { contractUsages, type ContractUsage } from "./developer-asset-usage";
 
 type CandidateTab = "summary" | "operations" | "schemas" | "examples" | "map" | "contract" | "diagnostics";
 
@@ -40,7 +40,7 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
   const [sourceBindings, setSourceBindings] = useState<APIContractSource[]>([]);
   const [selectedCandidateID, setSelectedCandidateID] = useState("");
   const [candidateRecord, setCandidateRecord] = useState<APIContractCandidateRecord | null>(null);
-  const [usedBy, setUsedBy] = useState<Array<{ integration: APIIntegration; binding: APIContractBinding }>>([]);
+  const [usedBy, setUsedBy] = useState<ContractUsage[]>([]);
   const [tab, setTab] = useState<CandidateTab>("summary");
   const [loading, setLoading] = useState(live);
   const [problem, setProblem] = useState("");
@@ -119,12 +119,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       queueMicrotask(() => { if (!cancelled) setUsedBy([]); });
       return () => { cancelled = true; };
     }
-    Promise.all(integrations.map(async (integration) => {
-      try {
-        const resources = await developerAssetsApi.apiResources(integration.id);
-        return resources.contracts.filter((binding) => binding.api_contract_id === selectedID && binding.lifecycle === "attached").map((binding) => ({ integration, binding }));
-      } catch { return []; }
-    })).then((values) => { if (!cancelled) setUsedBy(values.flat()); });
+    developerAssetsApi.usage()
+      .then((value) => { if (!cancelled) setUsedBy(contractUsages(value, integrations, selectedID)); })
+      .catch(() => { if (!cancelled) setUsedBy([]); });
     return () => { cancelled = true; };
   }, [integrations, live, selectedID]);
 

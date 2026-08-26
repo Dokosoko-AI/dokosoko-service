@@ -7,13 +7,11 @@ import type { APIIntegration } from "../../../lib/api";
 import type { Section } from "../../../lib/console-routes";
 import {
   developerAssetsApi,
-  type APIDeveloperAssetPublication,
-  type APISDKBinding,
   type DeveloperAssetRecord,
-  type ReviewDecision,
   type SDKContentCandidate,
   type SDKContentCandidateRecord,
   type SDKContentPublication,
+  type SDKIngestionFile,
   type SDKPackage,
   type SDKRelease,
   type SDKReleaseLifecycleState,
@@ -24,87 +22,11 @@ import { ConsoleLink } from "../console-link";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
 import { CatalogNavigation } from "./developer-asset-navigation";
 import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordID, recordString, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
+import { sdkUsages, type SDKUsage } from "./developer-asset-usage";
+import { decisionPayload, decisionsComplete, maxSDKIngestionFileBytes, maxSDKIngestionFiles, maxSDKIngestionTotalBytes, sampleValidated, sdkBufferLooksText, sdkExplorerRecordMatches, sdkLanguageForPath, sdkNormalizedLocalPath, sdkTextBytes, type SDKDecisionState } from "./sdk-catalog-helpers";
 
 type SDKTab = "files" | "symbols" | "samples" | "map" | "diagnostics" | "used-by";
-type DecisionState = Record<string, { decision: "" | ReviewDecision["decision"]; reason: string; reviewEvidence: string }>;
-type SDKIngestionFile = { source_path: string; content: string; media_type: string; language: string; role: string };
 type SDKRejectedFile = { path: string; reason: string };
-type SDKUsage = { integration: APIIntegration; binding: APISDKBinding; publication?: APIDeveloperAssetPublication };
-
-const maxSDKIngestionFiles = 500;
-const maxSDKIngestionFileBytes = 2_097_152;
-const maxSDKIngestionTotalBytes = 20_971_520;
-
-function sdkTextBytes(value: string) {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function sdkBufferLooksText(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  if (bytes.length === 0) return false;
-  let controls = 0;
-  for (const byte of bytes.subarray(0, Math.min(bytes.length, 8192))) {
-    if (byte === 0) return false;
-    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) controls += 1;
-  }
-  return controls / Math.min(bytes.length, 8192) < 0.02;
-}
-
-function sdkLanguageForPath(path: string) {
-  const extension = path.toLowerCase().split(".").pop() ?? "";
-  return ({ md: "markdown", mdx: "markdown", json: "json", yaml: "yaml", yml: "yaml", toml: "toml", ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", py: "python", go: "go", rb: "ruby", rs: "rust", java: "java", kt: "kotlin", swift: "swift", php: "php", cs: "csharp", xml: "xml", html: "html", css: "css", txt: "text" } as Record<string, string>)[extension] ?? "text";
-}
-
-function sdkNormalizedLocalPath(value: string) {
-  const path = value.replaceAll("\\", "/");
-  if (!path || path.startsWith("/") || /^[a-z]:\//i.test(path) || path.includes("\0")) return "";
-  const segments = path.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) return "";
-  return segments.join("/");
-}
-
-function sampleValidated(sample: DeveloperAssetRecord) {
-  const positiveStatuses = new Set(["syntax_checked", "compiled", "contract_tested", "executed"]);
-  if (typeof sample.validation_status !== "string" || !positiveStatuses.has(sample.validation_status)) return false;
-  const evidence = sample.validation_evidence;
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
-  const value = evidence as DeveloperAssetRecord;
-  const positive = value.validated === true || value.passed === true;
-  const identifiedValidator = (typeof value.validator === "string" && Boolean(value.validator.trim()))
-    || (typeof value.evidence_id === "string" && Boolean(value.evidence_id.trim()));
-  return positive && identifiedValidator;
-}
-
-function decisionsComplete(records: DeveloperAssetRecord[], decisions: DecisionState, kind: "file" | "sample") {
-  return records.every((record, index) => {
-    const current = decisions[recordID(record, `${kind}-${index}`)];
-    if (!current?.decision) return false;
-    if ((current.decision === "excluded" || current.decision === "quarantined") && !current.reason.trim()) return false;
-    if (kind === "sample" && current.decision === "approved" && !sampleValidated(record) && !current.reviewEvidence.trim()) return false;
-    return kind === "file" ? current.decision !== "approved" : current.decision !== "included";
-  });
-}
-
-function decisionPayload(records: DeveloperAssetRecord[], decisions: DecisionState, kind: "file" | "sample"): ReviewDecision[] {
-  return records.map((record, index) => {
-    const id = recordID(record, `${kind}-${index}`);
-    const current = decisions[id];
-    return {
-      id,
-      decision: current.decision as ReviewDecision["decision"],
-      ...((current.decision === "excluded" || current.decision === "quarantined") ? { reason: current.reason.trim() } : {}),
-      ...(kind === "sample" && current.decision === "approved" && !sampleValidated(record) ? { review_evidence: { summary: current.reviewEvidence.trim() } } : {}),
-    };
-  });
-}
-
-const sdkExplorerSearchKeys = ["source_path", "path", "title", "name", "qualified_name", "symbol", "language", "code_language", "role", "content_hash"];
-
-function sdkExplorerRecordMatches(record: DeveloperAssetRecord, query: string, fallback: string) {
-  if (!query) return true;
-  const searchable = [fallback, ...sdkExplorerSearchKeys.map((key) => record[key]).filter((value): value is string => typeof value === "string")].join("\n").toLowerCase();
-  return searchable.includes(query);
-}
 
 export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { live: boolean; integrations: APIIntegration[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
   const [packages, setPackages] = useState<SDKPackage[]>([]);
@@ -150,8 +72,8 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
   const [queuedFiles, setQueuedFiles] = useState<SDKIngestionFile[]>([]);
   const [rejectedFiles, setRejectedFiles] = useState<SDKRejectedFile[]>([]);
   const [filePickerBusy, setFilePickerBusy] = useState(false);
-  const [fileDecisions, setFileDecisions] = useState<DecisionState>({});
-  const [sampleDecisions, setSampleDecisions] = useState<DecisionState>({});
+  const [fileDecisions, setFileDecisions] = useState<SDKDecisionState>({});
+  const [sampleDecisions, setSampleDecisions] = useState<SDKDecisionState>({});
   const [acknowledged, setAcknowledged] = useState(false);
 
   const load = useCallback(async () => {
@@ -257,16 +179,9 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
       queueMicrotask(() => { if (!cancelled) setUsedBy([]); });
       return () => { cancelled = true; };
     }
-    Promise.all(integrations.map(async (integration) => {
-      try {
-        const [resources, publications] = await Promise.all([developerAssetsApi.apiResources(integration.id), developerAssetsApi.apiResourcePublications(integration.id)]);
-        return resources.sdks.filter((binding) => binding.sdk_package_id === selectedPackageID && binding.state !== "detached").map((binding) => ({
-          integration,
-          binding,
-          publication: [...publications].sort((left, right) => Date.parse(right.published_at) - Date.parse(left.published_at)).find((value) => value.sdks.some((asset) => asset.binding_id === binding.id && asset.sdk_content_publication_id === binding.sdk_content_publication_id)),
-        }));
-      } catch { return []; }
-    })).then((values) => { if (!cancelled) setUsedBy(values.flat()); });
+    developerAssetsApi.usage()
+      .then((value) => { if (!cancelled) setUsedBy(sdkUsages(value, integrations, selectedPackageID)); })
+      .catch(() => { if (!cancelled) setUsedBy([]); });
     return () => { cancelled = true; };
   }, [integrations, live, selectedPackageID]);
 
@@ -454,7 +369,7 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
     } finally { setBusy(false); }
   }
 
-  function setDecision(kind: "file" | "sample", id: string, decision: DecisionState[string]["decision"], reason?: string, reviewEvidence?: string) {
+  function setDecision(kind: "file" | "sample", id: string, decision: SDKDecisionState[string]["decision"], reason?: string, reviewEvidence?: string) {
     const setter = kind === "file" ? setFileDecisions : setSampleDecisions;
     setter((current) => ({
       ...current,
@@ -474,7 +389,7 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
       const machineValidated = kind === "sample" && sampleValidated(record);
       return <div key={id}>
         <span><strong>{recordTitle(record, id)}</strong><small><code>{id}</code>{kind === "sample" && ` · ${machineValidated ? "machine evidence passed" : "explicit review evidence required for approval"}`}</small></span>
-        <label><span>Decision</span><select aria-label={`${kind} decision for ${recordTitle(record, id)}`} value={current.decision} onChange={(event) => setDecision(kind, id, event.target.value as DecisionState[string]["decision"])}><option value="">Choose…</option>{kind === "file" ? <option value="included">Include</option> : <option value="approved">Approve</option>}<option value="excluded">Exclude</option><option value="quarantined">Quarantine</option></select></label>
+        <label><span>Decision</span><select aria-label={`${kind} decision for ${recordTitle(record, id)}`} value={current.decision} onChange={(event) => setDecision(kind, id, event.target.value as SDKDecisionState[string]["decision"])}><option value="">Choose…</option>{kind === "file" ? <option value="included">Include</option> : <option value="approved">Approve</option>}<option value="excluded">Exclude</option><option value="quarantined">Quarantine</option></select></label>
         {(current.decision === "excluded" || current.decision === "quarantined") && <label><span>Reason</span><input value={current.reason} onChange={(event) => setDecision(kind, id, current.decision, event.target.value)} /></label>}
         {kind === "sample" && current.decision === "approved" && !machineValidated && <label><span>Explicit review evidence</span><textarea value={current.reviewEvidence} onChange={(event) => setDecision(kind, id, current.decision, undefined, event.target.value)} placeholder="Summarize the manual checks that justify approval of this exact sample." /><small>A status label alone is not validation. This structured summary is stored with the immutable publication review.</small></label>}
         {kind === "sample" && <div className="developer-ai-sample-actions">{advisoryUsages.map(({ integration, binding, publication }) => publication && selectedContentPublication ? <DeveloperAssetAIAdvisoryButton key={`${binding.id}-${id}`} input={{ prompt_key: "sdk.sample_review", api_id: integration.id, api_developer_asset_publication_id: publication.id, api_sdk_binding_id: binding.id, sdk_content_publication_id: selectedContentPublication.id, sdk_code_sample_id: id }} subject={`${recordTitle(record, id)} · ${integration.display_name}`} label={`AI advisory · ${integration.display_name}`} /> : null)}{advisoryUsages.length === 0 && <DeveloperAssetAIAdvisoryButton input={null} subject={recordTitle(record, id)} unavailableReason="First publish this human-reviewed SDK candidate, attach that exact publication to an API, and publish the API resource snapshot." />}</div>}

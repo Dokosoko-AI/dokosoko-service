@@ -219,14 +219,14 @@ type RetrievalQueryTraceRecord struct {
 	Results []model.RetrievalQueryTraceResult
 }
 
-type RetrievalEvaluationSetRevisionRecord struct {
-	Revision model.RetrievalEvaluationSetRevision
-	Cases    []model.RetrievalEvaluationCase
-}
-
-type RetrievalEvaluationRunRecord struct {
-	Run     model.RetrievalEvaluationRun
-	Results []model.RetrievalEvaluationCaseResult
+// DeveloperAssetUsageRecord is one deployment-wide snapshot of API bindings
+// and immutable publications. Catalog views use it to resolve "Used by APIs"
+// without issuing one request per API and asset kind.
+type DeveloperAssetUsageRecord struct {
+	Documentation []model.APIDocumentationBinding
+	Contracts     []model.APIContractBinding
+	SDKs          []model.APISDKBinding
+	Publications  []model.APIDeveloperAssetPublication
 }
 
 type DeveloperAssetAIAdvisoryQuery struct {
@@ -236,21 +236,20 @@ type DeveloperAssetAIAdvisoryQuery struct {
 	Limit        int
 }
 
-// DeveloperAssetStore is the control-plane persistence contract for reusable
-// developer assets. Aggregate creation methods are transactional: callers
-// never observe a candidate, revision, publication, index generation, trace,
-// or evaluation revision with only some of its immutable children present.
-type DeveloperAssetStore interface {
-	DeveloperAssetRawBlob(context.Context, string, string) (model.DeveloperAssetRawBlob, error)
-	SaveDeveloperAssetRawBlob(context.Context, model.DeveloperAssetRawBlob) (model.DeveloperAssetRawBlob, error)
-
+// DeveloperAssetIngestionStore persists the state shared by all developer-asset
+// ingestion pipelines.
+type DeveloperAssetIngestionStore interface {
 	DeveloperAssetIngestionRuns(context.Context, string, model.DeveloperAssetKind, string) ([]model.DeveloperAssetIngestionRun, error)
 	DeveloperAssetIngestionRun(context.Context, string, string) (model.DeveloperAssetIngestionRun, error)
 	CreateDeveloperAssetIngestionRun(context.Context, model.DeveloperAssetIngestionRun) (model.DeveloperAssetIngestionRun, error)
 	TransitionDeveloperAssetIngestionRun(context.Context, model.DeveloperAssetIngestionRun, model.DeveloperAssetIngestionState) (model.DeveloperAssetIngestionRun, error)
 	DeveloperAssetIngestionStages(context.Context, string) ([]model.DeveloperAssetIngestionStage, error)
 	SaveDeveloperAssetIngestionStage(context.Context, model.DeveloperAssetIngestionStage, string) (model.DeveloperAssetIngestionStage, error)
+}
 
+// DeveloperAssetDocumentationStore owns normalized documentation candidates,
+// revisions, and deployment publications.
+type DeveloperAssetDocumentationStore interface {
 	DocumentationIngestionOutput(context.Context, string, string) (DocumentationIngestionOutput, error)
 	SaveDocumentationIngestionOutput(context.Context, string, DocumentationIngestionOutput) error
 	DocumentationCandidateDocuments(context.Context, DocumentationCandidateQuery) (DocumentationCandidatePage, error)
@@ -270,7 +269,11 @@ type DeveloperAssetStore interface {
 	DeploymentDocumentationPublication(context.Context, string, string) (model.DeploymentDocumentationPublication, error)
 	ActiveDeploymentDocumentationPublication(context.Context, string) (model.DeploymentDocumentationPublication, int64, error)
 	PublishDeploymentDocumentation(context.Context, model.DeploymentDocumentationPublication, int64) (model.DeploymentDocumentationPublication, error)
+}
 
+// DeveloperAssetContractStore owns API contracts, their source associations,
+// ingestion candidates, and immutable revisions.
+type DeveloperAssetContractStore interface {
 	APIContracts(context.Context, string) ([]model.APIContract, error)
 	APIContract(context.Context, string, string) (model.APIContract, error)
 	SaveAPIContract(context.Context, model.APIContract, int64) (model.APIContract, error)
@@ -285,7 +288,11 @@ type DeveloperAssetStore interface {
 	APIContractRevisions(context.Context, string, string) ([]model.APIContractRevision, error)
 	APIContractRevision(context.Context, string, string) (model.APIContractRevision, error)
 	PublishAPIContractCandidate(context.Context, model.APIContract, int64, model.APIContractRevision, *model.APIContractRevisionSourcePublication) (model.APIContract, model.APIContractRevision, error)
+}
 
+// DeveloperAssetSDKStore owns the shared SDK catalog and its ingestion,
+// publication, lifecycle, and compatibility records.
+type DeveloperAssetSDKStore interface {
 	SDKPackages(context.Context, string) ([]model.SDKPackage, error)
 	SDKPackage(context.Context, string, string) (model.SDKPackage, error)
 	SaveSDKPackage(context.Context, model.SDKPackage, int64) (model.SDKPackage, error)
@@ -304,7 +311,12 @@ type DeveloperAssetStore interface {
 	SDKCompatibilityAssertions(context.Context, string, string, string) ([]model.SDKCompatibilityAssertion, error)
 	SDKCompatibilityAssertion(context.Context, string, string) (model.SDKCompatibilityAssertion, error)
 	CreateSDKCompatibilityAssertion(context.Context, model.SDKCompatibilityAssertion) (model.SDKCompatibilityAssertion, error)
+}
 
+// DeveloperAssetBindingStore owns API-to-asset relationships and the immutable
+// snapshots published from those relationships.
+type DeveloperAssetBindingStore interface {
+	DeveloperAssetUsage(context.Context, string) (DeveloperAssetUsageRecord, error)
 	APIDocumentationBindings(context.Context, string, string) ([]model.APIDocumentationBinding, error)
 	APIDocumentationBinding(context.Context, string, string, string) (model.APIDocumentationBinding, error)
 	SaveAPIDocumentationBinding(context.Context, model.APIDocumentationBinding, int64) (model.APIDocumentationBinding, error)
@@ -321,7 +333,12 @@ type DeveloperAssetStore interface {
 	APIDeveloperAssetPublications(context.Context, string, string) ([]model.APIDeveloperAssetPublication, error)
 	APIDeveloperAssetPublication(context.Context, string, string) (model.APIDeveloperAssetPublication, error)
 	CreateAPIDeveloperAssetPublication(context.Context, model.APIDeveloperAssetPublication) (model.APIDeveloperAssetPublication, error)
+}
 
+// DeveloperAssetRetrievalStore owns search generations, retrieval, and retained
+// query traces. Evaluation-run persistence is intentionally not part of this
+// contract until an executable evaluation workflow exists.
+type DeveloperAssetRetrievalStore interface {
 	SearchIndexGenerations(context.Context, string, string, string) ([]model.SearchIndexGeneration, error)
 	SearchIndexGeneration(context.Context, string, string) (SearchIndexGenerationRecord, error)
 	CreateSearchIndexGeneration(context.Context, model.SearchIndexGeneration) (model.SearchIndexGeneration, error)
@@ -333,20 +350,27 @@ type DeveloperAssetStore interface {
 	RetrievalQueryTrace(context.Context, string, string) (RetrievalQueryTraceRecord, error)
 	AppendRetrievalQueryTrace(context.Context, RetrievalQueryTraceRecord) error
 	DeleteExpiredRetrievalQueryTraces(context.Context, time.Time, int) (int64, error)
+}
 
-	RetrievalEvaluationSets(context.Context, string) ([]model.RetrievalEvaluationSet, error)
-	RetrievalEvaluationSet(context.Context, string, string) (model.RetrievalEvaluationSet, error)
-	CreateRetrievalEvaluationSet(context.Context, model.RetrievalEvaluationSet, RetrievalEvaluationSetRevisionRecord) (model.RetrievalEvaluationSet, error)
-	ReviseRetrievalEvaluationSet(context.Context, model.RetrievalEvaluationSet, int64, RetrievalEvaluationSetRevisionRecord) (model.RetrievalEvaluationSet, error)
-	RetrievalEvaluationSetRevisions(context.Context, string, string) ([]model.RetrievalEvaluationSetRevision, error)
-	RetrievalEvaluationSetRevision(context.Context, string, string) (RetrievalEvaluationSetRevisionRecord, error)
-	RetrievalEvaluationRuns(context.Context, string, string) ([]model.RetrievalEvaluationRun, error)
-	RetrievalEvaluationRun(context.Context, string, string) (RetrievalEvaluationRunRecord, error)
-	CreateRetrievalEvaluationRun(context.Context, model.RetrievalEvaluationRun) (model.RetrievalEvaluationRun, error)
-	CompleteRetrievalEvaluationRun(context.Context, RetrievalEvaluationRunRecord, string) (model.RetrievalEvaluationRun, error)
-
+// DeveloperAssetAIStore persists advisory runs independently from deterministic
+// ingestion and publication state.
+type DeveloperAssetAIStore interface {
 	DeveloperAssetAIAdvisoryRuns(context.Context, DeveloperAssetAIAdvisoryQuery) ([]model.DeveloperAssetAIAdvisoryRun, error)
 	DeveloperAssetAIAdvisoryRun(context.Context, string, string) (model.DeveloperAssetAIAdvisoryRun, error)
 	DeveloperAssetAIAdvisoryRunByInputHash(context.Context, string, string, string) (model.DeveloperAssetAIAdvisoryRun, error)
 	CreateDeveloperAssetAIAdvisoryRun(context.Context, model.DeveloperAssetAIAdvisoryRun) (model.DeveloperAssetAIAdvisoryRun, error)
+}
+
+// DeveloperAssetStore is the complete control-plane persistence contract for
+// reusable developer assets. Aggregate creation methods are transactional:
+// callers never observe a candidate, revision, publication, index generation,
+// or trace with only some of its immutable children present.
+type DeveloperAssetStore interface {
+	DeveloperAssetIngestionStore
+	DeveloperAssetDocumentationStore
+	DeveloperAssetContractStore
+	DeveloperAssetSDKStore
+	DeveloperAssetBindingStore
+	DeveloperAssetRetrievalStore
+	DeveloperAssetAIStore
 }

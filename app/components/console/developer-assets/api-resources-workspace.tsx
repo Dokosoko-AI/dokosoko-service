@@ -235,6 +235,7 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
         const release = await developerAssetsApi.createSDKRelease(sdkPackage.id, {
           exact_version: exactVersion.trim(),
           ...(installCommand.trim() ? { install_command: installCommand.trim() } : {}),
+          identity_assurance: "metadata_only",
           visibility: "private",
           lifecycle: "active",
         });

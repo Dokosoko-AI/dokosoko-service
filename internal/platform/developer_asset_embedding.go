@@ -7,11 +7,11 @@ import (
 	"unicode"
 )
 
-// The local embedding is deliberately deterministic and dependency-free. It
-// supplies a stable dense-retrieval fallback when no external embedding model
-// is configured; FTS and exact identifiers remain independent signals. The
-// version is part of every index generation so a future model change rebuilds
-// rather than silently mixing vector spaces.
+// The local feature-hash vector is deliberately deterministic and
+// dependency-free. It is a lexical dense-retrieval signal, not a learned
+// semantic embedding model; FTS and exact identifiers remain independent
+// signals. The version is part of every index generation so a future model
+// change rebuilds rather than silently mixing vector spaces.
 const (
 	developerAssetEmbeddingModel      = "local-feature-hash-v1"
 	developerAssetEmbeddingDimensions = 384

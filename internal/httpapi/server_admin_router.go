@@ -210,6 +210,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.integrationSDK(w, r, parts[3], parts[5])
 	case len(parts) == 3 && parts[2] == "developer-assets":
 		s.developerAssetCatalog(w, r)
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "usage":
+		s.developerAssetUsage(w, r)
 	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "ingestion-runs":
 		s.developerAssetIngestionRuns(w, r)
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "ingestion-runs":

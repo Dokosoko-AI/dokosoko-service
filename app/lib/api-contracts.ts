@@ -10,8 +10,6 @@ export type APIResourceSetRevision = Omit<Contract.ResourceSetRevision, "manifes
 
 export type APIIntegrationResourceLink = Omit<Contract.IntegrationResourceLink, "resolved_revision"> & { resolved_revision?: APIResourceSetRevision };
 
-export type APISDKReferenceInput = Contract.SdkReferenceInput;
-
 export type APISDKReference = Contract.SdkReference;
 
 export type APIIntegration = Omit<Contract.Integration, "resources" | "sdks" | "sunset_at" | "created_at" | "updated_at"> & {

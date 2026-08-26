@@ -32,7 +32,7 @@ function DocumentationDecisionCell({ record }: { record: DocumentationCandidateR
   </span>;
 }
 
-function DocumentationReviewHistory({ selections }: { selections: SourcePublicationDocumentSelection[] }) {
+export function DocumentationReviewHistory({ selections }: { selections: SourcePublicationDocumentSelection[] }) {
   if (selections.length === 0) {
     return <section className="developer-document-review-empty" aria-label="Source publication review state">
       <DocumentationDecisionBadge decision="unreviewed" />

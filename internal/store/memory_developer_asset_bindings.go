@@ -2,109 +2,65 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
-func writePostgresJSONText(builder *strings.Builder, value any) error {
-	switch typed := value.(type) {
-	case nil:
-		builder.WriteString("null")
-	case bool:
-		if typed {
-			builder.WriteString("true")
-		} else {
-			builder.WriteString("false")
-		}
-	case json.Number:
-		builder.WriteString(typed.String())
-	case string:
-		encoded, _ := json.Marshal(typed)
-		builder.Write(encoded)
-	case []any:
-		builder.WriteByte('[')
-		for index, item := range typed {
-			if index > 0 {
-				builder.WriteString(", ")
-			}
-			if err := writePostgresJSONText(builder, item); err != nil {
-				return err
-			}
-		}
-		builder.WriteByte(']')
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		// PostgreSQL jsonb stores object keys by length and then byte value.
-		sort.Slice(keys, func(i, j int) bool {
-			if len(keys[i]) == len(keys[j]) {
-				return keys[i] < keys[j]
-			}
-			return len(keys[i]) < len(keys[j])
-		})
-		builder.WriteByte('{')
-		for index, key := range keys {
-			if index > 0 {
-				builder.WriteString(", ")
-			}
-			encoded, _ := json.Marshal(key)
-			builder.Write(encoded)
-			builder.WriteString(": ")
-			if err := writePostgresJSONText(builder, typed[key]); err != nil {
-				return err
-			}
-		}
-		builder.WriteByte('}')
-	default:
-		return ErrConflict
-	}
-	return nil
-}
+func (m *Memory) DeveloperAssetUsage(_ context.Context, deploymentID string) (DeveloperAssetUsageRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-func documentationSelectorCanonicalJSON(selector json.RawMessage) (string, error) {
-	if len(selector) == 0 {
-		selector = json.RawMessage(`{}`)
+	result := DeveloperAssetUsageRecord{
+		Documentation: make([]model.APIDocumentationBinding, 0),
+		Contracts:     make([]model.APIContractBinding, 0),
+		SDKs:          make([]model.APISDKBinding, 0),
+		Publications:  make([]model.APIDeveloperAssetPublication, 0),
 	}
-	if !json.Valid(selector) {
-		return "", ErrConflict
+	for _, value := range m.developerAssets.documentationBindings {
+		if value.DeploymentID == deploymentID {
+			result.Documentation = append(result.Documentation, memoryClone(value))
+		}
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(selector)))
-	decoder.UseNumber()
-	var decoded any
-	if err := decoder.Decode(&decoded); err != nil {
-		return "", ErrConflict
+	for _, value := range m.developerAssets.contractBindings {
+		if value.DeploymentID == deploymentID {
+			result.Contracts = append(result.Contracts, memoryClone(value))
+		}
 	}
-	if _, ok := decoded.(map[string]any); !ok {
-		return "", ErrConflict
+	for _, value := range m.developerAssets.sdkBindings {
+		if value.DeploymentID == deploymentID {
+			result.SDKs = append(result.SDKs, memoryClone(value))
+		}
 	}
-	var builder strings.Builder
-	if err := writePostgresJSONText(&builder, decoded); err != nil {
-		return "", err
+	for _, value := range m.developerAssets.apiPublications {
+		if value.DeploymentID == deploymentID {
+			result.Publications = append(result.Publications, memoryClone(value))
+		}
 	}
-	return builder.String(), nil
-}
-
-func documentationSelectorHash(selector json.RawMessage) (string, error) {
-	canonical, err := documentationSelectorCanonicalJSON(selector)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256([]byte(canonical))
-	return "sha256:" + hex.EncodeToString(digest[:]), nil
-}
-
-func documentationSelectorsEqual(left, right json.RawMessage) bool {
-	leftCanonical, leftErr := documentationSelectorCanonicalJSON(left)
-	rightCanonical, rightErr := documentationSelectorCanonicalJSON(right)
-	return leftErr == nil && rightErr == nil && leftCanonical == rightCanonical
+	sort.Slice(result.Documentation, func(i, j int) bool {
+		if result.Documentation[i].APIID == result.Documentation[j].APIID {
+			return result.Documentation[i].ID < result.Documentation[j].ID
+		}
+		return result.Documentation[i].APIID < result.Documentation[j].APIID
+	})
+	sort.Slice(result.Contracts, func(i, j int) bool {
+		if result.Contracts[i].APIID == result.Contracts[j].APIID {
+			return result.Contracts[i].ID < result.Contracts[j].ID
+		}
+		return result.Contracts[i].APIID < result.Contracts[j].APIID
+	})
+	sort.Slice(result.SDKs, func(i, j int) bool {
+		if result.SDKs[i].APIID == result.SDKs[j].APIID {
+			return result.SDKs[i].ID < result.SDKs[j].ID
+		}
+		return result.SDKs[i].APIID < result.SDKs[j].APIID
+	})
+	sort.Slice(result.Publications, func(i, j int) bool {
+		return result.Publications[i].PublishedAt.After(result.Publications[j].PublishedAt)
+	})
+	return result, nil
 }
 
 func (m *Memory) APIDocumentationBindings(_ context.Context, deploymentID, apiID string) ([]model.APIDocumentationBinding, error) {

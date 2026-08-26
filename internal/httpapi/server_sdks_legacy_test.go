@@ -1,49 +1,56 @@
 package httpapi_test
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
-func TestLegacySDKHTTPCompatibilityIsExplicitlyDeprecatedAndDetachesBinding(t *testing.T) {
+func TestLegacySDKHTTPProjectionIsReadOnlyAndExplicitlyDeprecated(t *testing.T) {
 	t.Parallel()
 	memory, service, handler := newDeveloperAssetServer()
 	api := createDeveloperAssetAPI(t, service, "legacy-sdk-http", "v1")
-	created := request(t, handler, http.MethodPost, "/api/v1/integrations/"+api.ID+"/sdks", "doko_admin_demo", `{
-		"ecosystem":"npm","coordinate":"@acme/http-legacy","exact_version":"1.0.0",
-		"install_command":"npm install @acme/http-legacy@1.0.0",
-		"documentation_url":"https://docs.example.test/http-legacy/1.0.0",
-		"source_url":"https://github.com/acme/http-legacy/tree/v1.0.0","visibility":"private"
-	}`)
-	if created.Code != http.StatusCreated {
-		t.Fatalf("create legacy SDK = %d: %s", created.Code, created.Body.String())
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			name: "create", method: http.MethodPost, path: "/api/v1/integrations/" + api.ID + "/sdks",
+			body: `{"ecosystem":"npm","coordinate":"@acme/legacy","exact_version":"1.0.0","install_command":"npm install @acme/legacy@1.0.0","visibility":"private"}`,
+		},
+		{
+			name: "replace", method: http.MethodPut, path: "/api/v1/integrations/" + api.ID + "/sdks/legacy-reference",
+			body: `{"ecosystem":"npm","coordinate":"@acme/legacy","exact_version":"2.0.0","install_command":"npm install @acme/legacy@2.0.0","visibility":"private","revision":1}`,
+		},
+		{name: "delete", method: http.MethodDelete, path: "/api/v1/integrations/" + api.ID + "/sdks/legacy-reference"},
 	}
-	if created.Header().Get("Deprecation") != "true" || !strings.Contains(created.Header().Get("Link"), `rel="successor-version"`) {
-		t.Fatalf("legacy create deprecation headers = %#v", created.Header())
-	}
-	var reference model.SDKReference
-	if err := json.Unmarshal(created.Body.Bytes(), &reference); err != nil {
-		t.Fatal(err)
-	}
-	binding, err := memory.APISDKBinding(t.Context(), "prod_acme", api.ID, reference.ID)
-	if err != nil || binding.ID != reference.ID {
-		t.Fatalf("legacy ID was not preserved as binding ID: %#v, err=%v", binding, err)
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			response := request(t, handler, test.method, test.path, "doko_admin_demo", test.body)
+			if response.Code != http.StatusGone || !strings.Contains(response.Body.String(), `"code":"legacy_sdk_mutation_removed"`) {
+				t.Fatalf("legacy %s = %d: %s", test.name, response.Code, response.Body.String())
+			}
+			if response.Header().Get("Deprecation") != "true" || !strings.Contains(response.Header().Get("Link"), `rel="successor-version"`) {
+				t.Fatalf("legacy %s deprecation headers = %#v", test.name, response.Header())
+			}
+		})
 	}
 
-	deleted := request(t, handler, http.MethodDelete, "/api/v1/integrations/"+api.ID+"/sdks/"+reference.ID, "doko_admin_demo", "")
-	if deleted.Code != http.StatusNoContent || deleted.Header().Get("Deprecation") != "true" {
-		t.Fatalf("delete legacy SDK = %d, headers=%#v body=%s", deleted.Code, deleted.Header(), deleted.Body.String())
+	packages, err := memory.SDKPackages(t.Context(), "prod_acme")
+	if err != nil || len(packages) != 0 {
+		t.Fatalf("removed mutations changed SDK catalog: %#v, err=%v", packages, err)
 	}
-	binding, err = memory.APISDKBinding(t.Context(), "prod_acme", api.ID, reference.ID)
-	if err != nil || binding.State != "detached" {
-		t.Fatalf("legacy delete did not detach typed binding: %#v, err=%v", binding, err)
+	bindings, err := memory.APISDKBindings(t.Context(), "prod_acme", api.ID)
+	if err != nil || len(bindings) != 0 {
+		t.Fatalf("removed mutations changed API resources: %#v, err=%v", bindings, err)
 	}
-	packages, _ := memory.SDKPackages(t.Context(), "prod_acme")
-	if len(packages) != 1 {
-		t.Fatalf("legacy delete removed SDK package: %#v", packages)
+
+	projection := request(t, handler, http.MethodGet, "/api/v1/integrations/"+api.ID+"/sdks", "doko_admin_demo", "")
+	if projection.Code != http.StatusOK || !strings.Contains(projection.Body.String(), `"items":[]`) {
+		t.Fatalf("legacy read projection = %d: %s", projection.Code, projection.Body.String())
 	}
 }

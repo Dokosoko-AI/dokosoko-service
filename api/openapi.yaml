@@ -6,6 +6,47 @@ info:
     Control-plane contract for DokoSoko's deployment-owned developer assets, API Resources bindings, credentials, recipes, reviewed tools, native tools, and MCP connector.
     Documentation publications, contract revisions, SDK releases/content, maps, and citations are exact and immutable; bindings never auto-upgrade an SDK release. Publication requires
     explicit human review. Cookie-authenticated mutations also require CSRF validation. Public MCP is optional and read-only.
+tags:
+  - name: Health
+    description: Service health and operational readiness.
+  - name: Catalog Administration
+    description: Deployment, organisation, product, environment, API, and customer-account administration.
+  - name: Setup and Access
+    description: First-run setup, administrator sessions, root users, and system diagnostics.
+  - name: Runtime
+    description: Runtime service connections, credentials, rotation, checks, and usage.
+  - name: Authorization
+    description: Grant definitions, authorization points, resource sets, and integration policy bindings.
+  - name: Sources
+    description: Documentation source acquisition, crawl runs, review, publication, and visibility.
+  - name: Tools
+    description: Tool Builder, reviewed tools, dry runs, test evidence, publication, and retirement.
+  - name: MCP
+    description: MCP connections, previews, public resources, OAuth, and agent setup.
+  - name: Identity
+    description: Identity-provider configuration, validation, activation, and customer identity resolution.
+  - name: Support
+    description: Bounded support submissions and their administrative review.
+  - name: AI Configuration
+    description: Provider connections, workload profiles, prompt settings, budgets, and usage.
+  - name: Recipes and Analysis
+    description: Product analyses, evidence-grounded recipes, review, rework, approval, and publication.
+  - name: Native Plugins
+    description: Native plugin discovery and host-owned plugin state.
+  - name: Developer Assets
+    description: Deployment-owned ingestion runs, catalog roots, and shared lifecycle evidence.
+  - name: Documentation
+    description: Normalized documentation, reusable collections, exact revisions, and deployment publications.
+  - name: API Contracts
+    description: Reusable OpenAPI roots, candidates, validation, and immutable reviewed revisions.
+  - name: SDK Catalog
+    description: Deployment-owned SDK packages, exact releases, reviewed content, and compatibility projections.
+  - name: API Resources
+    description: Attachment-only API bindings and immutable developer-asset publication snapshots.
+  - name: Query and Traces
+    description: Bounded retrieval over exact published scopes and its inspectable traces.
+  - name: Advisory AI
+    description: Explicit schema-constrained advisory runs over exact reviewed evidence.
 servers:
   - url: https://dokosoko.example.com
 security:
@@ -14,6 +55,7 @@ security:
 paths:
   /healthz:
     get:
+      tags: ["Health"]
       security: []
       operationId: health
       responses:
@@ -30,6 +72,7 @@ paths:
                   - status
   /readyz:
     get:
+      tags: ["Health"]
       security: []
       operationId: readiness
       responses:
@@ -43,6 +86,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/deployment:
     get:
+      tags: ["Catalog Administration"]
       operationId: getDeployment
       responses:
         '200':
@@ -52,6 +96,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Deployment'
     post:
+      tags: ["Catalog Administration"]
       operationId: createDeployment
       requestBody:
         required: true
@@ -69,6 +114,7 @@ paths:
         '409':
           $ref: '#/components/responses/Error'
     patch:
+      tags: ["Catalog Administration"]
       operationId: updateDeployment
       requestBody:
         required: true
@@ -87,6 +133,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/native-plugins:
     get:
+      tags: ["Native Plugins"]
       operationId: listNativePlugins
       description: Lists source-registered native plugin lifecycle, declared capabilities, tool contracts, and configuration key status. Configuration values are never returned.
       responses:
@@ -105,6 +152,7 @@ paths:
           type: string
           pattern: ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$
     patch:
+      tags: ["Native Plugins"]
       operationId: updateNativePluginState
       description: Enables or disables a source-registered plugin. Environment-disabled plugins cannot be enabled through the API. The change is audit logged.
       requestBody:
@@ -130,6 +178,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/environments:
     get:
+      tags: ["Catalog Administration"]
       operationId: listDeploymentEnvironments
       responses:
         '200':
@@ -139,6 +188,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/EnvironmentList'
     post:
+      tags: ["Catalog Administration"]
       operationId: createDeploymentEnvironment
       requestBody:
         required: true
@@ -169,6 +219,7 @@ paths:
                 $ref: '#/components/schemas/Environment'
   /api/v1/integrations:
     get:
+      tags: ["Catalog Administration"]
       operationId: listIntegrations
       responses:
         '200':
@@ -178,6 +229,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntegrationList'
     post:
+      tags: ["Catalog Administration"]
       operationId: createIntegration
       requestBody:
         required: true
@@ -204,6 +256,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Catalog Administration"]
       operationId: getIntegration
       responses:
         '200':
@@ -226,6 +279,7 @@ paths:
                   - revisions
                   - publish_status
     put:
+      tags: ["Catalog Administration"]
       operationId: replaceIntegration
       description: >-
         Replaces the complete mutable Integration representation. Changing visibility from private to public requires acknowledge_public=true, and the change does not appear
@@ -259,6 +313,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Catalog Administration"]
       operationId: publishIntegration
       description: >-
         Publishes only the exact server-preflight candidate identified by its optimistic Integration revision and manifest hash. A changed candidate is rejected and must be
@@ -286,6 +341,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Catalog Administration"]
       operationId: preflightIntegration
       description: Rebuilds and validates the exact API candidate. Required documentation, contracts, SDK references, identity, authorization, tool, and runtime-service gates fail closed.
       responses:
@@ -305,6 +361,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Runtime"]
       operationId: getIntegrationRuntimeSetup
       description: >-
         Returns the shortest-path runtime Access setup for one API, including environments, service connections, and credential metadata. Credential values and internal vault
@@ -319,6 +376,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     put:
+      tags: ["Runtime"]
       operationId: configureIntegrationRuntimeSetup
       description: >-
         Configures one environment-specific service connection and either selects an existing eligible credential set or creates a dedicated/shared credential set in the same
@@ -350,6 +408,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Runtime"]
       operationId: listIntegrationRuntimeServiceConnections
       description: Lists the API-owned upstream service connections and their current immutable environment revisions.
       responses:
@@ -362,6 +421,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     post:
+      tags: ["Runtime"]
       operationId: createIntegrationRuntimeServiceConnection
       description: >-
         Creates or revises a named API-owned service connection. The destination is a credential-free HTTPS origin or localhost HTTP origin; secret material is referenced only
@@ -393,6 +453,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Runtime"]
       operationId: checkRuntimeServiceConnection
       description: Performs a deterministic, value-free configuration check for one API-owned service connection. This does not send an unspecified network probe to the upstream service.
       responses:
@@ -412,6 +473,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Runtime"]
       operationId: createIntegrationRuntimeCredentialSet
       description: >-
         Creates an encrypted dedicated or deliberately shared runtime credential set. The credential is accepted only through the write-only request field; responses expose
@@ -443,6 +505,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Runtime"]
       operationId: getRuntimeCredentialSet
       description: Returns lifecycle, scope, usage-safe fingerprint, and version metadata for one credential set. Credential values and internal vault identifiers are never returned.
       responses:
@@ -462,6 +525,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Runtime"]
       operationId: getRuntimeCredentialUsage
       description: Lists every service connection in the deployment whose current environment revision references this credential set.
       responses:
@@ -481,6 +545,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Runtime"]
       operationId: rotateRuntimeCredential
       description: Stores and activates a new encrypted credential version while moving the prior active version into retiring state. The credential is write-only and is never returned.
       requestBody:
@@ -515,6 +580,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Runtime"]
       operationId: revokeRuntimeCredentialVersion
       description: Revokes one exact credential version and returns only the credential set's updated redacted metadata. Repeating a completed revoke is idempotent.
       responses:
@@ -538,6 +604,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Authorization"]
       operationId: listIntegrationAuthorizationPoints
       description: Lists declarative authorization points for one Integration. Authorization points contain no arbitrary callback URL or credential.
       responses:
@@ -550,6 +617,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     post:
+      tags: ["Authorization"]
       operationId: createIntegrationAuthorizationPoint
       description: Creates a declarative action-to-grants policy. Every required grant must already be active in the deployment grant registry, and destructive actions require confirmation.
       requestBody:
@@ -584,6 +652,7 @@ paths:
         schema:
           type: string
     patch:
+      tags: ["Authorization"]
       operationId: updateIntegrationAuthorizationPoint
       description: Replaces mutable policy fields using optimistic revision control. The stable authorization-point key cannot be changed.
       requestBody:
@@ -613,6 +682,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Authorization"]
       operationId: listIntegrationToolBindings
       description: Lists reusable tools bound to this Integration at exact published tool and authorization-point revisions.
       responses:
@@ -625,6 +695,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     put:
+      tags: ["Authorization"]
       operationId: setIntegrationToolBindings
       description: >-
         Atomically replaces the complete tool-binding set. Every selection must name the tool's current exact published revision and one exact active authorization-point revision
@@ -656,6 +727,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Authorization"]
       operationId: attachIntegrationResourceSet
       requestBody:
         required: true
@@ -691,12 +763,14 @@ paths:
         schema:
           type: string
     delete:
+      tags: ["Authorization"]
       operationId: detachIntegrationResourceSet
       responses:
         '204':
           description: Resource set detached.
   /api/v1/resource-sets:
     get:
+      tags: ["Authorization"]
       operationId: listResourceSets
       parameters:
         - name: kind
@@ -714,6 +788,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResourceSetList'
     post:
+      tags: ["Authorization"]
       operationId: createResourceSet
       requestBody:
         required: true
@@ -730,6 +805,7 @@ paths:
                 $ref: '#/components/schemas/ResourceSet'
   /api/v1/grant-definitions:
     get:
+      tags: ["Authorization"]
       operationId: listGrantDefinitions
       description: Lists the deployment-owned authorization vocabulary. A grant definition describes a key and never grants access by itself.
       responses:
@@ -740,6 +816,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/GrantDefinitionList'
     post:
+      tags: ["Authorization"]
       operationId: createGrantDefinition
       requestBody:
         required: true
@@ -766,6 +843,7 @@ paths:
         schema:
           type: string
     patch:
+      tags: ["Authorization"]
       operationId: updateGrantDefinition
       description: Replaces mutable grant metadata using optimistic revision control. The stable grant key cannot be changed.
       requestBody:
@@ -795,6 +873,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Authorization"]
       operationId: getResourceSet
       responses:
         '200':
@@ -804,6 +883,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResourceSet'
     patch:
+      tags: ["Authorization"]
       operationId: updateResourceSet
       requestBody:
         required: true
@@ -826,6 +906,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Authorization"]
       operationId: duplicateResourceSet
       requestBody:
         required: true
@@ -848,6 +929,7 @@ paths:
                 $ref: '#/components/schemas/ResourceSet'
   /api/v1/setup/status:
     get:
+      tags: ["Catalog Administration"]
       security: []
       operationId: setupStatus
       responses:
@@ -867,6 +949,7 @@ paths:
                   - requires_mfa
   /api/v1/setup/begin:
     post:
+      tags: ["Catalog Administration"]
       security:
         - setupToken: []
       operationId: beginSetup
@@ -881,6 +964,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/setup/complete:
     post:
+      tags: ["Catalog Administration"]
       security: []
       operationId: completeSetup
       requestBody:
@@ -890,6 +974,7 @@ paths:
           $ref: '#/components/responses/AuthenticatedRoot'
   /api/v1/auth/login:
     post:
+      tags: ["Catalog Administration"]
       security: []
       operationId: login
       requestBody:
@@ -920,12 +1005,14 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/auth/logout:
     post:
+      tags: ["Catalog Administration"]
       operationId: logout
       responses:
         '204':
           description: Session ended and cookies expired.
   /api/v1/auth/session:
     get:
+      tags: ["Catalog Administration"]
       operationId: currentSession
       responses:
         '200':
@@ -947,11 +1034,13 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/root/users:
     get:
+      tags: ["Catalog Administration"]
       operationId: listRootUsers
       responses:
         '200':
           $ref: '#/components/responses/RootList'
     post:
+      tags: ["Catalog Administration"]
       operationId: beginRootUser
       requestBody:
         $ref: '#/components/requestBodies/RootInput'
@@ -959,6 +1048,7 @@ paths:
         '201':
           $ref: '#/components/responses/MFAEnrollment'
     put:
+      tags: ["Catalog Administration"]
       operationId: completeRootUser
       requestBody:
         $ref: '#/components/requestBodies/MFACompletion'
@@ -973,6 +1063,7 @@ paths:
         schema:
           type: string
     delete:
+      tags: ["Catalog Administration"]
       operationId: revokeRootUser
       description: Self-revocation and revocation of the last active root are rejected.
       responses:
@@ -982,6 +1073,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/system/doctor:
     get:
+      tags: ["Catalog Administration"]
       operationId: runSystemDoctor
       responses:
         '200':
@@ -992,6 +1084,7 @@ paths:
                 $ref: '#/components/schemas/SystemDoctor'
   /api/v1/organisations:
     get:
+      tags: ["Catalog Administration"]
       operationId: listOrganisations
       responses:
         '200':
@@ -1001,6 +1094,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/OrganisationList'
     post:
+      tags: ["Catalog Administration"]
       operationId: createOrganisation
       requestBody:
         $ref: '#/components/requestBodies/NamedResource'
@@ -1019,6 +1113,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/OrganisationID'
     get:
+      tags: ["Catalog Administration"]
       operationId: listProducts
       responses:
         '200':
@@ -1028,6 +1123,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProductList'
     post:
+      tags: ["Catalog Administration"]
       operationId: createProduct
       requestBody:
         $ref: '#/components/requestBodies/NamedResource'
@@ -1042,6 +1138,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/OrganisationID'
     get:
+      tags: ["Catalog Administration"]
       operationId: listAuditEvents
       responses:
         '200':
@@ -1054,6 +1151,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     patch:
+      tags: ["Catalog Administration"]
       operationId: updateProductDiscoverySettings
       description: Updates the agent-facing deployment description. API publications are the immutable delivery boundary; product channels and pins do not exist.
       requestBody:
@@ -1088,6 +1186,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
+      tags: ["Catalog Administration"]
       operationId: rewriteProductDescription
       deprecated: true
       description: Deprecated compatibility helper. Uses the enabled Analysis workload to return an editable MCP-facing draft. The draft is never saved automatically; new clients should edit product metadata directly.
@@ -1126,6 +1225,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Catalog Administration"]
       operationId: listCustomerAccounts
       description: Lists customer accounts created from trusted vendor OIDC organization claims, newest first. Accounts are never created by this administrative endpoint.
       parameters:
@@ -1160,6 +1260,7 @@ paths:
         schema:
           type: string
     patch:
+      tags: ["Catalog Administration"]
       operationId: updateCustomerAccount
       description: Suspends or reactivates a customer account using optimistic concurrency. Suspension invalidates existing DokoSoko access tokens on their next use.
       requestBody:
@@ -1195,6 +1296,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Catalog Administration"]
       operationId: listEnvironments
       responses:
         '200':
@@ -1204,6 +1306,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/EnvironmentList'
     post:
+      tags: ["Catalog Administration"]
       operationId: createEnvironment
       requestBody:
         required: true
@@ -1226,6 +1329,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Catalog Administration"]
       operationId: getProductDistribution
       responses:
         '200':
@@ -1235,6 +1339,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Distribution'
     patch:
+      tags: ["Catalog Administration"]
       operationId: updateProductDistribution
       description: Enabling Public MCP requires acknowledge_public=true. Disabling it does not require acknowledgement and takes effect immediately.
       requestBody:
@@ -1270,6 +1375,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Sources"]
       operationId: listSources
       responses:
         '200':
@@ -1286,6 +1392,7 @@ paths:
                 required:
                   - items
     post:
+      tags: ["Sources"]
       operationId: createSource
       description: >-
         Creates a private, unpublished website, OpenAPI, or Git source. File uploads must use the reviewed multipart upload endpoint instead of supplying a client-selected storage
@@ -1309,6 +1416,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
+      tags: ["Sources"]
       operationId: uploadSource
       description: >-
         Creates a private, unpublished upload source from one non-empty, valid UTF-8 documentation file. Accepted filename extensions are .md, .mdx, .txt, .html, .htm, .json,
@@ -1360,6 +1468,7 @@ paths:
       - $ref: '#/components/parameters/ProductID'
       - $ref: '#/components/parameters/SourceID'
     post:
+      tags: ["Sources"]
       operationId: queueSourceCrawl
       responses:
         '202':
@@ -1375,6 +1484,7 @@ paths:
       - $ref: '#/components/parameters/ProductID'
       - $ref: '#/components/parameters/SourceID'
     get:
+      tags: ["Sources"]
       operationId: listSourceCrawls
       responses:
         '200':
@@ -1394,6 +1504,7 @@ paths:
           type: string
         description: Exact generation to inspect; defaults to the latest generation.
     get:
+      tags: ["Sources"]
       operationId: reviewSourceGeneration
       description: Returns one exact crawl generation, including changed and reused immutable documents, injection findings, and any publication already created from it.
       responses:
@@ -1410,6 +1521,7 @@ paths:
       - $ref: '#/components/parameters/ProductID'
       - $ref: '#/components/parameters/SourceID'
     get:
+      tags: ["Sources"]
       operationId: listSourcePublications
       description: Lists immutable reviewed source publications, newest revision first.
       responses:
@@ -1426,6 +1538,7 @@ paths:
       - $ref: '#/components/parameters/ProductID'
       - $ref: '#/components/parameters/SourceID'
     post:
+      tags: ["Sources"]
       operationId: publishSource
       description: Atomically publishes an explicitly acknowledged selection from the exact latest completed crawl generation. Failed, partial, stale, or quarantined generations are rejected.
       requestBody:
@@ -1452,6 +1565,7 @@ paths:
         schema:
           type: string
     patch:
+      tags: ["Sources"]
       operationId: updateSourceVisibility
       description: A private-to-public transition requires acknowledge_public=true and is audit logged. A public-to-private transition is immediate.
       requestBody:
@@ -1475,6 +1589,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Tools"]
       operationId: listTools
       responses:
         '200':
@@ -1484,6 +1599,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ToolList'
     post:
+      tags: ["Tools"]
       operationId: createTool
       description: >-
         Creates a draft one-call HTTP tool with bounded JSON Schemas, a fixed credential-free destination, explicit request and response mappings, vendor-neutral upstream
@@ -1512,6 +1628,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
+      tags: ["Tools"]
       operationId: validateToolDraft
       description: >-
         Deterministically normalizes and validates one non-secret HTTP tool draft. It does not resolve DNS, call the candidate endpoint, or call an AI provider. The nested
@@ -1539,6 +1656,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
+      tags: ["Tools"]
       operationId: proposeToolDraft
       description: >-
         Continues a bounded builder conversation with the configured Analysis AI workload. The assistant may ask a clarifying question with no changes or return a complete
@@ -1570,6 +1688,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
+      tags: ["Tools"]
       operationId: importToolDraft
       description: >-
         Parses pasted cURL, Postman Collection, or OpenAPI text into reviewable non-secret HTTP tool candidates. Import is local-only; openapi_url is recognized but rejected
@@ -1597,6 +1716,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
+      tags: ["Tools"]
       operationId: analyseToolDraft
       description: >-
         Runs authoritative deterministic validation and adds advisory warning or information findings from the configured Analysis AI workload when available. AI cannot remove or
@@ -1624,6 +1744,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["MCP"]
       operationId: getMCPPreview
       description: >-
         Renders the exact JSON-RPC response produced by the live Stateless MCPv2 discovery path without executing a tool. Public previews are anonymous. Private previews use only
@@ -1679,6 +1800,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Tools"]
       operationId: getToolEditorResource
       description: >-
         Returns the complete administrative tool contract. HTTP tools include their fixed credential-free endpoint, non-secret upstream authentication, mappings, examples, and
@@ -1693,6 +1815,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     put:
+      tags: ["Tools"]
       operationId: replaceToolDraft
       description: >-
         Replaces a draft tool contract using optimistic revision control. The optional write-only credential rotates the encrypted upstream credential; omitting it preserves a
@@ -1725,6 +1848,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Tools"]
       operationId: cloneToolDraft
       description: >-
         Copies one exact HTTP draft or published source revision into a new editable draft with a new immutable namespace/name identity. The required revision provides optimistic
@@ -1758,6 +1882,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Tools"]
       operationId: dryRunTool
       description: Validates arguments, resolves the fixed destination and authorization policy, and reports readiness warnings without performing any network call.
       requestBody:
@@ -1786,6 +1911,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Tools"]
       operationId: createToolTestConfirmation
       description: >-
         Creates a five-minute, single-use confirmation for one exact HTTP tool revision and canonical argument hash when the method is non-GET or the stored authorization policy
@@ -1823,6 +1949,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Tools"]
       operationId: listToolTestRuns
       description: >-
         Lists unexpired, tenant- and tool-scoped sanitized evidence newest first. Raw requests, responses, headers, scalar values, credentials, destinations, actors, nonces,
@@ -1837,6 +1964,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
     post:
+      tags: ["Tools"]
       operationId: runToolLiveTest
       description: >-
         Performs one exact-revision HTTP action test against the persisted fixed destination after deterministic validation. OAuth client-credentials authentication may first make
@@ -1885,6 +2013,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Tools"]
       operationId: getToolTestRun
       description: Returns one exact unexpired sanitized run only when its tenant, product and tool scope match the route.
       responses:
@@ -1910,6 +2039,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Tools"]
       operationId: analyseToolTestRun
       description: >-
         Contacts the exact configured Analysis provider only after an explicit true consent boolean, an exact server-recomputed evidence-hash match, and durable persistence of the
@@ -1951,6 +2081,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Tools"]
       operationId: retireTool
       description: Retires a tool at its exact current revision so it cannot be selected for new Integration bindings.
       requestBody:
@@ -1977,6 +2108,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Tools"]
       operationId: publishTool
       description: >-
         Publishes the exact reviewed draft revision after verifying that every required grant is active in the deployment registry. Imported upstream tools with unresolved schema
@@ -2000,6 +2132,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["MCP"]
       operationId: listMCPConnections
       description: Lists redacted managed upstreams. Access tokens are never returned.
       responses:
@@ -2010,6 +2143,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/MCPConnectionList'
     post:
+      tags: ["MCP"]
       operationId: createMCPConnection
       description: Registers one fixed HTTPS upstream using a service access token and optional signed user-identity forwarding.
       requestBody:
@@ -2032,6 +2166,7 @@ paths:
       - $ref: '#/components/parameters/ProductID'
       - $ref: '#/components/parameters/MCPConnectionID'
     post:
+      tags: ["MCP"]
       operationId: inspectMCPConnection
       description: Fetches one complete Stateless MCPv2 tool catalog without importing or publishing anything.
       responses:
@@ -2048,6 +2183,7 @@ paths:
       - $ref: '#/components/parameters/ProductID'
       - $ref: '#/components/parameters/MCPConnectionID'
     post:
+      tags: ["MCP"]
       operationId: importMCPTools
       description: Explicitly selects, namespaces, normalizes, and schema-pins upstream tools as local drafts. Published schema drift fails closed.
       requestBody:
@@ -2067,6 +2203,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/identity-provider:
     get:
+      tags: ["Identity"]
       operationId: getIdentityProvider
       responses:
         '200':
@@ -2076,6 +2213,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IdentityProvider'
     put:
+      tags: ["Identity"]
       operationId: replaceIdentityProvider
       description: Saves a disabled OIDC draft. State is server-controlled; every save creates a new revision and immediately invalidates OAuth artifacts bound to older revisions.
       requestBody:
@@ -2098,6 +2236,7 @@ paths:
         '422':
           $ref: '#/components/responses/Error'
     delete:
+      tags: ["Identity"]
       operationId: disconnectIdentityProvider
       description: >-
         Permanently disconnects a disabled OIDC configuration at one exact revision. Deletes the provider config, client credential, provider tests, and product OAuth artifacts
@@ -2124,6 +2263,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/identity-provider/tests:
     post:
+      tags: ["Identity"]
       operationId: beginIdentityProviderTest
       description: >-
         Runs discovery and starts a real OIDC authorization-code test for one exact saved configuration revision. Active configurations may be re-tested without interrupting
@@ -2158,6 +2298,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Identity"]
       operationId: getIdentityProviderTest
       responses:
         '200':
@@ -2170,6 +2311,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/identity-provider/activate:
     post:
+      tags: ["Identity"]
       operationId: activateIdentityProvider
       description: >-
         Activates a disabled revision only after the exact revision has a passing, unexpired OIDC test. Activation is itself a state change and advances the provider revision,
@@ -2193,6 +2335,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/identity-provider/disable:
     post:
+      tags: ["Identity"]
       operationId: disableIdentityProvider
       description: Disables the current provider revision. Existing OAuth states, codes, and access tokens fail closed immediately.
       requestBody:
@@ -2214,6 +2357,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/support-submissions:
     get:
+      tags: ["Support"]
       operationId: listSupportSubmissions
       summary: List queued support submissions
       description: Lists the consent-based plaintext outbox without including full report content.
@@ -2248,6 +2392,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Support"]
       operationId: getSupportSubmission
       summary: Get one queued support submission
       responses:
@@ -2263,6 +2408,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["AI Configuration"]
       operationId: listLLMProfiles
       deprecated: true
       description: Removed legacy endpoint. Use /api/v1/ai/connections and /api/v1/products/{product_id}/ai-profiles instead.
@@ -2270,6 +2416,7 @@ paths:
         '410':
           $ref: '#/components/responses/Error'
     put:
+      tags: ["AI Configuration"]
       operationId: saveLLMProfile
       deprecated: true
       description: Removed legacy endpoint. Use /api/v1/ai/connections and /api/v1/products/{product_id}/ai-profiles/analysis instead.
@@ -2278,6 +2425,7 @@ paths:
           $ref: '#/components/responses/Error'
   /api/v1/ai/connections:
     get:
+      tags: ["AI Configuration"]
       operationId: listAIProviderConnections
       description: Lists credential-redacted provider connections used by the Analysis workload.
       responses:
@@ -2288,6 +2436,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AIProviderConnectionList'
     post:
+      tags: ["AI Configuration"]
       operationId: saveAIProviderConnection
       description: Creates, updates, or rotates one provider connection. Native provider origins are fixed; credentials are encrypted and never returned.
       requestBody:
@@ -2321,6 +2470,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["AI Configuration"]
       operationId: testAIProviderConnection
       description: Makes a minimal provider request and stores only normalized health metadata.
       responses:
@@ -2336,6 +2486,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["AI Configuration"]
       operationId: listAIWorkloadProfiles
       description: Lists the provider, model, and limits for the Analysis workload. Safety policy is enforced by the service rather than stored as mutable profile data.
       responses:
@@ -2354,6 +2505,7 @@ paths:
         schema:
           $ref: '#/components/schemas/AIWorkload'
     put:
+      tags: ["AI Configuration"]
       operationId: saveAIWorkloadProfile
       description: Selects a provider connection and model for one workload. No model tools or authorization decisions are enabled.
       requestBody:
@@ -2377,6 +2529,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["AI Configuration"]
       operationId: listAIWorkflowPrompts
       description: Lists the effective editable instructions for the four supported Analysis workflows. The server-owned safety policy is applied separately and is never exposed or editable through this API.
       responses:
@@ -2397,6 +2550,7 @@ paths:
         schema:
           $ref: '#/components/schemas/AIWorkflowPromptKey'
     put:
+      tags: ["AI Configuration"]
       operationId: saveAIWorkflowPromptOverride
       description: Creates a new version of one workflow's editable instructions. The immutable server-owned safety policy is always prepended at invocation time.
       requestBody:
@@ -2429,6 +2583,7 @@ paths:
         schema:
           $ref: '#/components/schemas/AIWorkflowPromptKey'
     post:
+      tags: ["AI Configuration"]
       operationId: resetAIWorkflowPrompt
       description: Creates a new version that restores the server-owned default instructions for one supported workflow.
       requestBody:
@@ -2456,6 +2611,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Recipes and Analysis"]
       operationId: listIntegrationAnalyses
       responses:
         '200':
@@ -2465,6 +2621,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntegrationAnalysisList'
     post:
+      tags: ["Recipes and Analysis"]
       operationId: analyseIntegration
       description: >-
         Builds a versioned plan from known DokoSoko evidence. Supply integration_id to scope evidence to one API's exact documentation, contracts, SDK references, authorization,
@@ -2502,6 +2659,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Recipes and Analysis"]
       operationId: getIntegrationAnalysis
       responses:
         '200':
@@ -2511,6 +2669,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntegrationAnalysis'
     patch:
+      tags: ["Recipes and Analysis"]
       operationId: answerIntegrationUnknowns
       deprecated: true
       description: Removed. Unknowns are read-only evidence gaps; attach or configure the missing evidence and run a new analysis.
@@ -2526,6 +2685,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Recipes and Analysis"]
       operationId: generateRecipes
       description: >-
         Creates review-state Markdown recipes synchronously. Supply the same integration_id used to create a scoped analysis; cross-integration generation is rejected.
@@ -2558,6 +2718,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Recipes and Analysis"]
       operationId: listRecipes
       description: Reconciles source drift before returning the human review queue.
       responses:
@@ -2568,6 +2729,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RecipeList'
     post:
+      tags: ["Recipes and Analysis"]
       operationId: createRecipe
       description: Analyses current evidence and creates one AI-assisted recipe from a developer outcome prompt. Supply integration_id to ground the recipe in one API's exact reviewed evidence.
       requestBody:
@@ -2608,6 +2770,7 @@ paths:
         schema:
           type: string
     get:
+      tags: ["Recipes and Analysis"]
       operationId: getRecipe
       responses:
         '200':
@@ -2628,6 +2791,7 @@ paths:
                   - recipe
                   - revisions
     patch:
+      tags: ["Recipes and Analysis"]
       operationId: updateRecipeSpec
       description: >-
         Creates a human-reviewed immutable revision. The server owns the exact operation-derived instructions and derives Markdown;
@@ -2663,6 +2827,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Recipes and Analysis"]
       operationId: reworkRecipe
       description: Reworks only the exact recipe revision the operator reviewed and creates a new immutable revision.
       requestBody:
@@ -2691,6 +2856,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Recipes and Analysis"]
       operationId: approveRecipe
       description: Records explicit human approval only when the recipe record and immutable revision still match what the reviewer saw. Validation errors fail closed.
       requestBody:
@@ -2719,6 +2885,7 @@ paths:
         schema:
           type: string
     post:
+      tags: ["Recipes and Analysis"]
       operationId: publishRecipe
       description: >-
         Publishes only the exact approved revision the operator reviewed. Public recipes may reference only public, published,
@@ -2744,6 +2911,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Recipes and Analysis"]
       operationId: getRecipeAttention
       deprecated: true
       description: Removed. Read recipe needs_attention state directly and resolve read-only analysis unknowns by changing evidence or configuration.
@@ -2754,6 +2922,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     get:
+      tags: ["Recipes and Analysis"]
       operationId: getAIUsage
       parameters:
         - name: days
@@ -2772,6 +2941,7 @@ paths:
                 $ref: '#/components/schemas/AIUsage'
   /.well-known/oauth-authorization-server:
     get:
+      tags: ["MCP"]
       security: []
       operationId: getOAuthAuthorizationServerMetadata
       description: RFC 8414-compatible authorization-server metadata for resource-bound Private MCP OAuth.
@@ -2784,6 +2954,7 @@ paths:
                 $ref: '#/components/schemas/OAuthAuthorizationServerMetadata'
   /.well-known/oauth-protected-resource/mcp:
     get:
+      tags: ["MCP"]
       security: []
       operationId: getMCPProtectedResourceMetadata
       description: RFC 9728 protected-resource metadata for the singleton Deployment's Private MCP endpoint.
@@ -2798,6 +2969,7 @@ paths:
           $ref: '#/components/responses/Error'
   /oauth/register:
     post:
+      tags: ["MCP"]
       security: []
       operationId: registerOAuthClient
       description: >-
@@ -2826,6 +2998,7 @@ paths:
           $ref: '#/components/responses/OAuthError'
   /oauth/authorize:
     get:
+      tags: ["MCP"]
       security: []
       operationId: oauthAuthorize
       description: >-
@@ -2884,6 +3057,7 @@ paths:
           $ref: '#/components/responses/OAuthError'
   /oauth/callback:
     get:
+      tags: ["MCP"]
       security: []
       operationId: oauthCallback
       description: >-
@@ -2901,6 +3075,7 @@ paths:
           $ref: '#/components/responses/OAuthError'
   /oauth/token:
     post:
+      tags: ["MCP"]
       security: []
       operationId: oauthToken
       requestBody:
@@ -2956,6 +3131,7 @@ paths:
             - public
             - private
     get:
+      tags: ["MCP"]
       security: []
       operationId: getAgentSetupPrompt
       description: >-
@@ -2976,6 +3152,7 @@ paths:
       - $ref: '#/components/parameters/MCPMethod'
       - $ref: '#/components/parameters/MCPName'
     post:
+      tags: ["MCP"]
       security: []
       operationId: publicDeploymentMCP
       description: >-
@@ -3005,6 +3182,7 @@ paths:
       - $ref: '#/components/parameters/MCPMethod'
       - $ref: '#/components/parameters/MCPName'
     post:
+      tags: ["MCP"]
       security:
         - dokoBearer: []
       operationId: privateDeploymentMCP
@@ -3034,6 +3212,7 @@ paths:
   /api/v1/developer-assets:
     get:
       operationId: getDeveloperAssetCatalog
+      tags: ["Developer Assets"]
       description: >-
         Returns the deployment-owned root catalog. Documentation collections, API contracts, and SDK packages are reusable assets; APIs attach typed bindings and never own mutable copies.
       responses:
@@ -3045,9 +3224,25 @@ paths:
                 $ref: '#/components/schemas/DeveloperAssetCatalog'
         '404':
           $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/usage:
+    get:
+      operationId: getDeveloperAssetUsage
+      tags: ["Developer Assets"]
+      description: >-
+        Returns all API resource bindings and immutable API resource publications for the deployment in one inverse-usage view. Catalog clients filter it locally to answer which APIs use a documentation collection, contract, SDK package, release, or content publication without one request per API.
+      responses:
+        '200':
+          description: Deployment-wide developer-asset usage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeveloperAssetUsage'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/v1/developer-assets/ingestion-runs:
     get:
       operationId: listDeveloperAssetIngestionRuns
+      tags: ["Developer Assets"]
       description: Lists inspectable ingestion runs and their human-review state without mutating immutable normalized output.
       parameters:
         - name: asset_kind
@@ -3077,6 +3272,7 @@ paths:
           type: string
     get:
       operationId: getDeveloperAssetIngestionRun
+      tags: ["Developer Assets"]
       description: Returns one ingestion run together with all durable stage checkpoints and diagnostics.
       responses:
         '200':
@@ -3090,6 +3286,7 @@ paths:
   /api/v1/developer-assets/documentation/documents:
     get:
       operationId: exploreNormalizedDocumentation
+      tags: ["Documentation"]
       description: >-
         Searches normalized, inspectable documentation candidates. Filters are deployment-scoped and may be narrowed to one exact ingestion run, source, or reviewed source publication. Every record includes the complete newest-first history of persisted source-publication decisions for that exact document.
       parameters:
@@ -3144,6 +3341,7 @@ paths:
           type: string
     get:
       operationId: getNormalizedDocumentation
+      tags: ["Documentation"]
       description: Reads one normalized document with its ordered sections, exact ingestion-run provenance, and complete newest-first source-publication decision history.
       responses:
         '200':
@@ -3157,6 +3355,7 @@ paths:
   /api/v1/developer-assets/documentation-collections:
     get:
       operationId: listDocumentationCollections
+      tags: ["Documentation"]
       description: Lists reusable deployment-owned documentation collections.
       responses:
         '200':
@@ -3167,6 +3366,7 @@ paths:
                 $ref: '#/components/schemas/DocumentationCollectionList'
     post:
       operationId: createDocumentationCollection
+      tags: ["Documentation"]
       description: >-
         Creates a collection and its first immutable, reviewed revision. Every member cites exact reviewed evidence; acknowledge_reviewed must be true.
       requestBody:
@@ -3211,6 +3411,7 @@ paths:
           type: string
     get:
       operationId: getDocumentationCollection
+      tags: ["Documentation"]
       responses:
         '200':
           description: Mutable collection identity; content remains in immutable revisions.
@@ -3222,6 +3423,7 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: reviseDocumentationCollection
+      tags: ["Documentation"]
       description: Creates the next immutable reviewed revision using optimistic collection revision control.
       requestBody:
         required: true
@@ -3253,6 +3455,7 @@ paths:
           type: string
     get:
       operationId: listDocumentationCollectionRevisions
+      tags: ["Documentation"]
       description: Lists immutable human-reviewed revisions for one reusable collection.
       responses:
         '200':
@@ -3277,6 +3480,7 @@ paths:
           type: string
     get:
       operationId: getDocumentationCollectionRevision
+      tags: ["Documentation"]
       description: Reads the exact selection manifest, members, generated Documentation Map, hashes, and reviewer citation for one revision.
       responses:
         '200':
@@ -3290,6 +3494,7 @@ paths:
   /api/v1/developer-assets/documentation-publications:
     get:
       operationId: listDeploymentDocumentationPublications
+      tags: ["Documentation"]
       description: Lists immutable global documentation snapshots owned by this deployment.
       responses:
         '200':
@@ -3300,6 +3505,7 @@ paths:
                 $ref: '#/components/schemas/DeploymentDocumentationPublicationList'
     post:
       operationId: publishDeploymentDocumentation
+      tags: ["Documentation"]
       description: >-
         Publishes one global snapshot from exact collection revision IDs. Publications never float or auto-upgrade when a collection later changes, and human review is mandatory.
       requestBody:
@@ -3338,6 +3544,7 @@ paths:
           type: string
     get:
       operationId: getDeploymentDocumentationPublication
+      tags: ["Documentation"]
       responses:
         '200':
           description: Exact global documentation publication and member hashes.
@@ -3350,6 +3557,7 @@ paths:
   /api/v1/developer-assets/api-contracts:
     get:
       operationId: listAPIContracts
+      tags: ["API Contracts"]
       description: Lists deployment-owned API contract roots that may be attached to several APIs.
       responses:
         '200':
@@ -3360,6 +3568,7 @@ paths:
                 $ref: '#/components/schemas/APIContractList'
     post:
       operationId: createAPIContract
+      tags: ["API Contracts"]
       requestBody:
         required: true
         content:
@@ -3386,6 +3595,7 @@ paths:
           type: string
     get:
       operationId: getAPIContract
+      tags: ["API Contracts"]
       responses:
         '200':
           description: API contract root metadata.
@@ -3397,6 +3607,7 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateAPIContract
+      tags: ["API Contracts"]
       description: Updates root metadata with optimistic revision control; published contract revisions remain immutable.
       requestBody:
         required: true
@@ -3419,6 +3630,7 @@ paths:
           $ref: '#/components/responses/Error'
     delete:
       operationId: archiveAPIContract
+      tags: ["API Contracts"]
       description: Archives the root without deleting immutable candidates, revisions, maps, citations, or audit history.
       requestBody:
         $ref: '#/components/requestBodies/Revision'
@@ -3442,6 +3654,7 @@ paths:
           type: string
     get:
       operationId: listAPIContractSources
+      tags: ["API Contracts"]
       description: Lists attached acquisition sources for this deployment-owned contract.
       responses:
         '200':
@@ -3454,6 +3667,7 @@ paths:
           $ref: '#/components/responses/Error'
     post:
       operationId: attachAPIContractSource
+      tags: ["API Contracts"]
       description: Attaches a fixed deployment source and audit-logs the actor; it does not publish a contract candidate.
       requestBody:
         required: true
@@ -3486,6 +3700,7 @@ paths:
           type: string
     get:
       operationId: getAPIContractSource
+      tags: ["API Contracts"]
       responses:
         '200':
           description: Contract source binding.
@@ -3497,6 +3712,7 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateAPIContractSource
+      tags: ["API Contracts"]
       requestBody:
         required: true
         content:
@@ -3514,6 +3730,7 @@ paths:
           $ref: '#/components/responses/Error'
     delete:
       operationId: detachAPIContractSource
+      tags: ["API Contracts"]
       description: Detaches the acquisition source while preserving prior ingestion and review evidence.
       requestBody:
         $ref: '#/components/requestBodies/Revision'
@@ -3537,6 +3754,7 @@ paths:
           type: string
     get:
       operationId: listAPIContractCandidates
+      tags: ["API Contracts"]
       description: Lists normalized but unpublished contract candidates produced by deterministic ingestion.
       responses:
         '200':
@@ -3561,6 +3779,7 @@ paths:
           type: string
     get:
       operationId: reviewAPIContractCandidate
+      tags: ["API Contracts"]
       description: Reads normalized OpenAPI, validation diagnostics, operations, schemas, examples, and the evidence-backed Contract Map for human review.
       responses:
         '200':
@@ -3585,6 +3804,7 @@ paths:
           type: string
     post:
       operationId: publishAPIContractCandidate
+      tags: ["API Contracts"]
       description: >-
         Publishes one deterministically valid candidate only after explicit human review. The candidate, Contract Map, exact source publication citation, content hash, and resulting revision are immutable.
       requestBody:
@@ -3615,6 +3835,7 @@ paths:
           type: string
     get:
       operationId: listAPIContractRevisions
+      tags: ["API Contracts"]
       responses:
         '200':
           description: Immutable reviewed contract revision history.
@@ -3636,6 +3857,7 @@ paths:
           type: string
     get:
       operationId: getAPIContractRevision
+      tags: ["API Contracts"]
       responses:
         '200':
           description: Exact immutable reviewed contract revision.
@@ -3648,6 +3870,7 @@ paths:
   /api/v1/developer-assets/sdk-packages:
     get:
       operationId: listSDKPackages
+      tags: ["SDK Catalog"]
       description: Lists deployment-owned package identities independently of APIs and exact releases.
       responses:
         '200':
@@ -3658,6 +3881,7 @@ paths:
                 $ref: '#/components/schemas/SDKPackageList'
     post:
       operationId: createSDKPackage
+      tags: ["SDK Catalog"]
       description: Creates one reusable SDK package identity; package coordinates do not imply a floating version.
       requestBody:
         required: true
@@ -3697,6 +3921,7 @@ paths:
           type: string
     get:
       operationId: getSDKPackage
+      tags: ["SDK Catalog"]
       responses:
         '200':
           description: SDK package metadata; releases remain separate immutable records.
@@ -3708,6 +3933,7 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateSDKPackage
+      tags: ["SDK Catalog"]
       description: Updates package metadata with optimistic revision control and never rewrites exact releases.
       requestBody:
         required: true
@@ -3733,6 +3959,7 @@ paths:
           type: string
     get:
       operationId: listSDKReleases
+      tags: ["SDK Catalog"]
       description: Lists exact immutable releases for one deployment-owned SDK package.
       responses:
         '200':
@@ -3743,6 +3970,7 @@ paths:
                 $ref: '#/components/schemas/SDKReleaseList'
     post:
       operationId: createSDKRelease
+      tags: ["SDK Catalog"]
       description: >-
         Creates one exact release. Version ranges, tags such as latest, caller-invented install commands, and automatic upgrades are rejected; APIs must bind this release ID explicitly.
       requestBody:
@@ -3787,6 +4015,7 @@ paths:
           type: string
     get:
       operationId: getSDKRelease
+      tags: ["SDK Catalog"]
       responses:
         '200':
           description: One exact immutable SDK release and its canonical install command.
@@ -3810,6 +4039,7 @@ paths:
           type: string
     get:
       operationId: getSDKReleaseLifecycle
+      tags: ["SDK Catalog"]
       description: >-
         Resolves the effective lifecycle of an immutable exact release from its append-only event history. Historical API publications remain readable regardless of the current effective lifecycle.
       responses:
@@ -3823,6 +4053,7 @@ paths:
           $ref: '#/components/responses/Error'
     post:
       operationId: appendSDKReleaseLifecycleEvent
+      tags: ["SDK Catalog"]
       description: >-
         Records a reviewed registry or administrative lifecycle observation without rewriting release identity. An effective yanked or archived state prevents new bindings and publications; it never upgrades, detaches, or rewrites existing exact selections automatically.
       requestBody:
@@ -3853,6 +4084,7 @@ paths:
           type: string
     post:
       operationId: ingestSDKReleaseContent
+      tags: ["SDK Catalog"]
       description: >-
         Deterministically normalizes a bounded set of text files for one exact SDK release. It never executes package code, fetches a caller-selected URL, changes release identity, approves samples, or publishes content; an identical generation is idempotent.
       requestBody:
@@ -3906,6 +4138,7 @@ paths:
           type: string
     get:
       operationId: listSDKContentCandidates
+      tags: ["SDK Catalog"]
       description: Lists normalized content candidates for this exact release; content from another release is never substituted.
       responses:
         '200':
@@ -3928,6 +4161,7 @@ paths:
           type: string
     get:
       operationId: reviewSDKContentCandidate
+      tags: ["SDK Catalog"]
       description: Reads files, symbols, sections, code samples, validation evidence, citations, and the SDK Map for human review.
       responses:
         '200':
@@ -3952,6 +4186,7 @@ paths:
           type: string
     post:
       operationId: publishSDKContentCandidate
+      tags: ["SDK Catalog"]
       description: >-
         Publishes only this exact release's candidate after a human explicitly decides every file and sample. Unvalidated samples cannot be approved and the reviewed SDK Map is pinned.
       requestBody:
@@ -3980,6 +4215,7 @@ paths:
           type: string
     get:
       operationId: listSDKContentPublications
+      tags: ["SDK Catalog"]
       responses:
         '200':
           description: Immutable reviewed content publication history for one exact SDK release.
@@ -4001,6 +4237,7 @@ paths:
           type: string
     get:
       operationId: getSDKContentPublication
+      tags: ["SDK Catalog"]
       description: Reads the publication with exact file/sample decisions and the pinned SDK Map citation.
       responses:
         '200':
@@ -4016,6 +4253,7 @@ paths:
       - $ref: '#/components/parameters/IntegrationID'
     get:
       operationId: getAPIResourceBindings
+      tags: ["API Resources"]
       description: >-
         Returns the typed Resources view for one API. It contains attachment records only; deployment-owned documentation, contracts, packages, and exact releases remain independent and reusable.
       responses:
@@ -4032,6 +4270,7 @@ paths:
       - $ref: '#/components/parameters/IntegrationID'
     get:
       operationId: listAPIDeveloperAssetPublications
+      tags: ["API Resources"]
       description: Lists every immutable developer-asset publication for one API, newest first, so exact historical retrieval and recipe evidence remain addressable.
       responses:
         '200':
@@ -4052,6 +4291,7 @@ paths:
           type: string
     get:
       operationId: getAPIDeveloperAssetPublication
+      tags: ["API Resources"]
       description: Reads one exact immutable API snapshot, including selected documentation revisions, contract revisions, SDK releases, selectors, visibility, and hashes.
       responses:
         '200':
@@ -4067,6 +4307,7 @@ paths:
       - $ref: '#/components/parameters/IntegrationID'
     post:
       operationId: attachAPIDocumentation
+      tags: ["API Resources"]
       description: Attaches either one exact reviewed collection revision or an explicit follow-latest policy; the API does not copy the collection.
       requestBody:
         required: true
@@ -4095,6 +4336,7 @@ paths:
           type: string
     get:
       operationId: getAPIDocumentationBinding
+      tags: ["API Resources"]
       responses:
         '200':
           description: Documentation binding.
@@ -4104,6 +4346,7 @@ paths:
                 $ref: '#/components/schemas/APIDocumentationBinding'
     patch:
       operationId: changeAPIDocumentationBinding
+      tags: ["API Resources"]
       requestBody:
         required: true
         content:
@@ -4121,6 +4364,7 @@ paths:
           $ref: '#/components/responses/Error'
     delete:
       operationId: detachAPIDocumentation
+      tags: ["API Resources"]
       requestBody:
         $ref: '#/components/requestBodies/Revision'
       responses:
@@ -4135,6 +4379,7 @@ paths:
       - $ref: '#/components/parameters/IntegrationID'
     post:
       operationId: attachAPIContract
+      tags: ["API Resources"]
       description: Attaches a reviewed contract revision or an explicit follow-latest policy; primary identifies the API's principal contract.
       requestBody:
         required: true
@@ -4163,6 +4408,7 @@ paths:
           type: string
     get:
       operationId: getAPIContractBinding
+      tags: ["API Resources"]
       responses:
         '200':
           description: Contract binding.
@@ -4172,6 +4418,7 @@ paths:
                 $ref: '#/components/schemas/APIContractBinding'
     patch:
       operationId: changeAPIContractBinding
+      tags: ["API Resources"]
       requestBody:
         required: true
         content:
@@ -4189,6 +4436,7 @@ paths:
           $ref: '#/components/responses/Error'
     delete:
       operationId: detachAPIContract
+      tags: ["API Resources"]
       requestBody:
         $ref: '#/components/requestBodies/Revision'
       responses:
@@ -4203,6 +4451,7 @@ paths:
       - $ref: '#/components/parameters/IntegrationID'
     post:
       operationId: attachAPISDKRelease
+      tags: ["API Resources"]
       description: >-
         Attaches one deployment-owned package and one exact release ID. The binding never follows latest and never auto-upgrades; compatibility assurance and selectors are explicit.
       requestBody:
@@ -4246,6 +4495,7 @@ paths:
           type: string
     get:
       operationId: getAPISDKBinding
+      tags: ["API Resources"]
       responses:
         '200':
           description: Exact SDK release binding.
@@ -4255,6 +4505,7 @@ paths:
                 $ref: '#/components/schemas/APISDKBinding'
     patch:
       operationId: changeAPISDKBinding
+      tags: ["API Resources"]
       description: Changes the binding explicitly. Selecting another exact release is a revisioned human action, never an automatic upgrade.
       requestBody:
         required: true
@@ -4273,6 +4524,7 @@ paths:
           $ref: '#/components/responses/Error'
     delete:
       operationId: detachAPISDKRelease
+      tags: ["API Resources"]
       requestBody:
         $ref: '#/components/requestBodies/Revision'
       responses:
@@ -4285,6 +4537,7 @@ paths:
   /api/v1/developer-assets/ai-advisories:
     get:
       operationId: listDeveloperAssetAIAdvisories
+      tags: ["Advisory AI"]
       description: >-
         Lists immutable advisory artifacts for the current deployment. This persistence-only route remains available when the Analysis AI workload is disabled or unconfigured.
       parameters:
@@ -4316,6 +4569,7 @@ paths:
           $ref: '#/components/responses/Error'
     post:
       operationId: runDeveloperAssetAIAdvisory
+      tags: ["Advisory AI"]
       description: >-
         Runs one closed, advisory-only AI workflow over exact immutable reviewed publication evidence. The result never mutates maps, bindings, samples, visibility, indexes, approvals, or publication state.
       requestBody:
@@ -4352,6 +4606,7 @@ paths:
           type: string
     get:
       operationId: getDeveloperAssetAIAdvisory
+      tags: ["Advisory AI"]
       description: Reads one immutable, deployment-scoped advisory artifact without requiring an AI provider connection.
       responses:
         '200':
@@ -4365,6 +4620,7 @@ paths:
   /api/v1/developer-assets/query-lab:
     post:
       operationId: runDeveloperAssetQueryLab
+      tags: ["Query and Traces"]
       description: >-
         Runs bounded hybrid retrieval only over an exact published global, API, or combined scope. Cross-API publication IDs are rejected; every result carries immutable source identity, hashes, and citation metadata.
       requestBody:
@@ -4404,6 +4660,7 @@ paths:
   /api/v1/developer-assets/query-lab/traces:
     get:
       operationId: listDeveloperAssetQueryTraces
+      tags: ["Query and Traces"]
       description: Lists bounded, deployment-scoped retrieval traces for review and citation debugging.
       parameters:
         - name: since
@@ -4436,6 +4693,7 @@ paths:
           type: string
     get:
       operationId: getDeveloperAssetQueryTrace
+      tags: ["Query and Traces"]
       description: Reads the requested filters, resolved immutable publication scope, routing diagnostics, ranked citations, and exclusions for one query.
       responses:
         '200':
@@ -4451,6 +4709,7 @@ paths:
       - $ref: '#/components/parameters/IntegrationID'
     get:
       operationId: listIntegrationSDKReferences
+      tags: ["SDK Catalog"]
       deprecated: true
       description: >-
         Compatibility projection of the API's typed SDK bindings. New clients use /integrations/{integration_id}/resources and the deployment-owned SDK package/release catalog; this projection never creates an independently owned or auto-upgrading release.
@@ -4463,22 +4722,11 @@ paths:
                 $ref: '#/components/schemas/SDKReferenceList'
     post:
       operationId: createIntegrationSDKReference
+      tags: ["SDK Catalog"]
       deprecated: true
-      description: Compatibility mutation projected onto an exact typed SDK binding. New clients create deployment-owned packages/releases and attach them through Resources.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SDKReferenceInput'
+      description: Removed compatibility mutation. Manage deployment-owned packages and exact releases in SDK Catalog, then attach them through API Resources.
       responses:
-        '201':
-          description: SDK reference created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SDKReference'
-        '400':
+        '410':
           $ref: '#/components/responses/Error'
   /api/v1/integrations/{integration_id}/sdks/{sdk_id}:
     parameters:
@@ -4490,31 +4738,19 @@ paths:
           type: string
     put:
       operationId: replaceIntegrationSDKReference
+      tags: ["SDK Catalog"]
       deprecated: true
-      description: Compatibility mutation for an exact API SDK projection. New clients change a typed Resources SDK binding explicitly; releases never auto-upgrade.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SDKReferenceInput'
+      description: Removed compatibility mutation. Change the deployment-owned release or the typed API Resources binding explicitly.
       responses:
-        '200':
-          description: SDK reference updated.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SDKReference'
-        '409':
+        '410':
           $ref: '#/components/responses/Error'
     delete:
       operationId: deleteIntegrationSDKReference
+      tags: ["SDK Catalog"]
       deprecated: true
-      description: Compatibility detach operation. New clients detach the typed Resources SDK binding and retain its audit history.
+      description: Removed compatibility mutation. Detach the typed API Resources SDK binding to retain its audit history.
       responses:
-        '204':
-          description: SDK reference deleted.
-        '404':
+        '410':
           $ref: '#/components/responses/Error'
 components:
   securitySchemes:
@@ -10899,10 +11135,19 @@ components:
             - message
       required:
         - error
-    SDKReferenceInput:
+    SDKReference:
       type: object
       additionalProperties: false
+      description: Read-only compatibility projection of one exact deployment-owned SDK release attached to an API.
       properties:
+        id:
+          type: string
+        deployment_id:
+          type: string
+        organisation_id:
+          type: string
+        integration_id:
+          type: string
         ecosystem:
           type: string
           minLength: 1
@@ -10939,45 +11184,26 @@ components:
         revision:
           type: integer
           format: int64
-          minimum: 0
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
       required:
+        - id
+        - deployment_id
+        - organisation_id
+        - integration_id
         - ecosystem
         - coordinate
         - exact_version
         - install_command
         - visibility
-    SDKReference:
-      allOf:
-        - $ref: '#/components/schemas/SDKReferenceInput'
-        - type: object
-          additionalProperties: false
-          properties:
-            id:
-              type: string
-            deployment_id:
-              type: string
-            organisation_id:
-              type: string
-            integration_id:
-              type: string
-            revision:
-              type: integer
-              format: int64
-              minimum: 1
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-          required:
-            - id
-            - deployment_id
-            - organisation_id
-            - integration_id
-            - revision
-            - created_at
-            - updated_at
+        - revision
+        - created_at
+        - updated_at
     SDKReferenceList:
       type: object
       additionalProperties: false
@@ -13300,6 +13526,32 @@ components:
         - documentation
         - contracts
         - sdks
+    DeveloperAssetUsage:
+      type: object
+      additionalProperties: false
+      description: Deployment-wide inverse view of API resource bindings and immutable publications.
+      properties:
+        documentation:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIDocumentationBinding'
+        contracts:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIContractBinding'
+        sdks:
+          type: array
+          items:
+            $ref: '#/components/schemas/APISDKBinding'
+        publications:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIDeveloperAssetPublication'
+      required:
+        - documentation
+        - contracts
+        - sdks
+        - publications
     APIDeveloperAssetPublicationList:
       type: object
       additionalProperties: false
@@ -14008,6 +14260,7 @@ components:
           type: number
         semantic_score:
           type: number
+          description: Compatibility field containing the local-feature-hash-v1 cosine score. It is a deterministic lexical feature-hash signal, not a learned semantic embedding.
         rerank_score:
           type: number
         selected:
@@ -14159,6 +14412,7 @@ components:
           type: number
         semantic_score:
           type: number
+          description: Compatibility field containing the local-feature-hash-v1 cosine score. It is a deterministic lexical feature-hash signal, not a learned semantic embedding.
         rerank_score:
           type: number
         selected:

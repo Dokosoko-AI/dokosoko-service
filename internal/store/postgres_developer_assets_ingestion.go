@@ -9,28 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const developerAssetRawBlobSelect = `SELECT id::text,deployment_id::text,sha256,object_key,media_type,byte_size,source_uri,metadata,created_at FROM developer_asset_raw_blobs`
-
-func scanDeveloperAssetRawBlob(row pgx.Row) (model.DeveloperAssetRawBlob, error) {
-	var value model.DeveloperAssetRawBlob
-	err := row.Scan(&value.ID, &value.DeploymentID, &value.SHA256, &value.ObjectKey, &value.MediaType, &value.ByteSize, &value.SourceURI, &value.Metadata, &value.CreatedAt)
-	return value, databaseError(err)
-}
-
-func (p *Postgres) DeveloperAssetRawBlob(ctx context.Context, deploymentID, id string) (model.DeveloperAssetRawBlob, error) {
-	return scanDeveloperAssetRawBlob(p.pool.QueryRow(ctx, developerAssetRawBlobSelect+` WHERE deployment_id=$1 AND id=$2`, deploymentID, id))
-}
-
-func (p *Postgres) SaveDeveloperAssetRawBlob(ctx context.Context, value model.DeveloperAssetRawBlob) (model.DeveloperAssetRawBlob, error) {
-	created, err := scanDeveloperAssetRawBlob(p.pool.QueryRow(ctx, `INSERT INTO developer_asset_raw_blobs(id,deployment_id,sha256,object_key,media_type,byte_size,source_uri,metadata)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(deployment_id,sha256) DO NOTHING
-		RETURNING id::text,deployment_id::text,sha256,object_key,media_type,byte_size,source_uri,metadata,created_at`, value.ID, value.DeploymentID, value.SHA256, value.ObjectKey, value.MediaType, value.ByteSize, value.SourceURI, value.Metadata))
-	if errors.Is(err, ErrNotFound) {
-		return scanDeveloperAssetRawBlob(p.pool.QueryRow(ctx, developerAssetRawBlobSelect+` WHERE deployment_id=$1 AND sha256=$2`, value.DeploymentID, value.SHA256))
-	}
-	return created, err
-}
-
 const developerAssetIngestionRunSelect = `SELECT id::text,deployment_id::text,organisation_id::text,asset_kind,coalesce(target_id::text,''),target_key,coalesce(source_id::text,''),resolved_source_uri,resolved_source_revision,resolved_source_hash,state,attempt,pipeline_version,parser_version,normalizer_version,mapper_version,raw_manifest,raw_manifest_hash,diagnostics,discovered_count,acquired_count,failed_count,skipped_count,quarantined_count,lease_owner,lease_expires_at,heartbeat_at,error_code,error_message,queued_at,started_at,finished_at FROM developer_asset_ingestion_runs`
 
 func scanDeveloperAssetIngestionRun(row pgx.Row) (model.DeveloperAssetIngestionRun, error) {

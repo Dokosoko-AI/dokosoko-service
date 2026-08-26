@@ -100,6 +100,11 @@ func TestDeveloperAssetCatalogSharesOneExactSDKReleaseAcrossAPIs(t *testing.T) {
 	if legacy.Code != http.StatusOK || !strings.Contains(legacy.Body.String(), `"exact_version":"1.4.0"`) {
 		t.Fatalf("legacy SDK projection = %d: %s", legacy.Code, legacy.Body.String())
 	}
+	usage := request(t, handler, http.MethodGet, "/api/v1/developer-assets/usage", "doko_admin_demo", "")
+	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), apiV1.ID) ||
+		!strings.Contains(usage.Body.String(), apiV2.ID) || !strings.Contains(usage.Body.String(), release.ID) {
+		t.Fatalf("deployment developer-asset usage = %d: %s", usage.Code, usage.Body.String())
+	}
 }
 
 func TestDeveloperAssetDocumentationExplorerSearchesNormalizedContent(t *testing.T) {

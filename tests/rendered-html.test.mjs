@@ -289,7 +289,6 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.match(client, /integration: \(integrationID: string\)/);
   assert.match(client, /APIIntegrationRevision/);
   assert.match(client, /APIIntegrationPublishStatus/);
-  assert.match(client, /integrationSDKs/);
   assert.doesNotMatch(client, /setIntegrationAccessConnections|setIntegrationSupportRoute/);
 });
 
@@ -298,9 +297,7 @@ test("keeps SDK package and release ownership in Catalog with exact API attachme
   const client = await clientSource();
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
-  assert.match(source, /Deployment-owned SDK packages and exact releases/);
-  assert.match(source, /This API keeps only an immutable exact attachment/);
-  assert.match(source, /Read-only compatibility view/);
+  assert.doesNotMatch(source, /Legacy SDK attachment projection/);
   assert.doesNotMatch(source, /Exact API-owned SDK references/);
   assert.doesNotMatch(source, /There is no global package catalogue or release workflow/);
   assert.match(source, /Ranges and latest tags are rejected/);
@@ -314,9 +311,9 @@ test("keeps SDK package and release ownership in Catalog with exact API attachme
   assert.match(client, /detachAPISDK/);
   assert.match(openapi, /\/api\/v1\/developer-assets\/sdk-packages:/);
   assert.match(openapi, /\/api\/v1\/integrations\/\{integration_id\}\/resources\/sdks:/);
-  // Legacy API SDK endpoints remain a compatibility projection during migration,
-  // but the active UI never treats them as the lifecycle owner.
-  assert.match(client, /integrationSDKs/);
+  // Legacy server endpoints remain a compatibility projection during the
+  // migration window, but no active frontend can write through that path.
+  assert.doesNotMatch(client, /integrationSDKs|createIntegrationSDK|replaceIntegrationSDK|deleteIntegrationSDK/);
   assert.match(openapi, /\/api\/v1\/integrations\/\{integration_id\}\/sdks:/);
   assert.match(openapi, /One immutable version; ranges and latest are rejected/);
 });

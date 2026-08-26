@@ -12,8 +12,6 @@ type memoryDocumentationHead struct {
 }
 
 type memoryDeveloperAssets struct {
-	rawBlobs map[string]model.DeveloperAssetRawBlob
-
 	ingestionRuns   map[string]model.DeveloperAssetIngestionRun
 	ingestionStages map[string]map[string]model.DeveloperAssetIngestionStage
 
@@ -49,15 +47,10 @@ type memoryDeveloperAssets struct {
 	apiPublications       map[string]model.APIDeveloperAssetPublication
 	apiPublicationIDs     map[string][]string
 
-	indexGenerations      map[string]SearchIndexGenerationRecord
-	queryTraces           map[string]RetrievalQueryTraceRecord
-	evaluationSets        map[string]model.RetrievalEvaluationSet
-	evaluationRevisions   map[string]RetrievalEvaluationSetRevisionRecord
-	evaluationRevisionIDs map[string][]string
-	evaluationRuns        map[string]RetrievalEvaluationRunRecord
-	evaluationRunIDs      map[string][]string
-	aiAdvisoryRuns        map[string]model.DeveloperAssetAIAdvisoryRun
-	aiAdvisoryInputIDs    map[string]string
+	indexGenerations   map[string]SearchIndexGenerationRecord
+	queryTraces        map[string]RetrievalQueryTraceRecord
+	aiAdvisoryRuns     map[string]model.DeveloperAssetAIAdvisoryRun
+	aiAdvisoryInputIDs map[string]string
 }
 
 // Developer assets are deployment-owned but the legacy Product projection is
@@ -77,7 +70,6 @@ func (m *Memory) bumpDeveloperAssetCatalogRevisionLocked() {
 
 func newMemoryDeveloperAssets() *memoryDeveloperAssets {
 	return &memoryDeveloperAssets{
-		rawBlobs:                  make(map[string]model.DeveloperAssetRawBlob),
 		ingestionRuns:             make(map[string]model.DeveloperAssetIngestionRun),
 		ingestionStages:           make(map[string]map[string]model.DeveloperAssetIngestionStage),
 		documentationOutputs:      make(map[string]DocumentationIngestionOutput),
@@ -110,11 +102,6 @@ func newMemoryDeveloperAssets() *memoryDeveloperAssets {
 		apiPublicationIDs:         make(map[string][]string),
 		indexGenerations:          make(map[string]SearchIndexGenerationRecord),
 		queryTraces:               make(map[string]RetrievalQueryTraceRecord),
-		evaluationSets:            make(map[string]model.RetrievalEvaluationSet),
-		evaluationRevisions:       make(map[string]RetrievalEvaluationSetRevisionRecord),
-		evaluationRevisionIDs:     make(map[string][]string),
-		evaluationRuns:            make(map[string]RetrievalEvaluationRunRecord),
-		evaluationRunIDs:          make(map[string][]string),
 		aiAdvisoryRuns:            make(map[string]model.DeveloperAssetAIAdvisoryRun),
 		aiAdvisoryInputIDs:        make(map[string]string),
 	}

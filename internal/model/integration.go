@@ -24,8 +24,8 @@ type Integration struct {
 	UpdatedAt                time.Time                 `json:"updated_at"`
 }
 
-// SDKReference is an exact, API-owned install reference. DokoSoko does not
-// mirror package bytes or model a package release/provenance lifecycle.
+// SDKReference is the read-only compatibility projection of one exact
+// deployment-owned SDK release attached through an API Resources binding.
 type SDKReference struct {
 	ID               string     `json:"id"`
 	DeploymentID     string     `json:"deployment_id"`

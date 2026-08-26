@@ -18,6 +18,96 @@ func scanAPIDocumentationBinding(row pgx.Row) (model.APIDocumentationBinding, er
 	return value, databaseError(err)
 }
 
+func (p *Postgres) DeveloperAssetUsage(ctx context.Context, deploymentID string) (DeveloperAssetUsageRecord, error) {
+	result := DeveloperAssetUsageRecord{
+		Documentation: make([]model.APIDocumentationBinding, 0),
+		Contracts:     make([]model.APIContractBinding, 0),
+		SDKs:          make([]model.APISDKBinding, 0),
+		Publications:  make([]model.APIDeveloperAssetPublication, 0),
+	}
+
+	rows, err := p.pool.Query(ctx, apiDocumentationBindingSelect+` WHERE deployment_id=$1 ORDER BY integration_id,created_at,id`, deploymentID)
+	if err != nil {
+		return result, databaseError(err)
+	}
+	for rows.Next() {
+		value, scanErr := scanAPIDocumentationBinding(rows)
+		if scanErr != nil {
+			rows.Close()
+			return result, scanErr
+		}
+		result.Documentation = append(result.Documentation, value)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return result, databaseError(err)
+	}
+	rows.Close()
+
+	rows, err = p.pool.Query(ctx, apiContractBindingSelect+` WHERE deployment_id=$1 ORDER BY integration_id,created_at,id`, deploymentID)
+	if err != nil {
+		return result, databaseError(err)
+	}
+	for rows.Next() {
+		value, scanErr := scanAPIContractBinding(rows)
+		if scanErr != nil {
+			rows.Close()
+			return result, scanErr
+		}
+		result.Contracts = append(result.Contracts, value)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return result, databaseError(err)
+	}
+	rows.Close()
+
+	rows, err = p.pool.Query(ctx, apiSDKBindingSelect+` WHERE deployment_id=$1 ORDER BY integration_id,created_at,id`, deploymentID)
+	if err != nil {
+		return result, databaseError(err)
+	}
+	for rows.Next() {
+		value, scanErr := scanAPISDKBinding(rows)
+		if scanErr != nil {
+			rows.Close()
+			return result, scanErr
+		}
+		result.SDKs = append(result.SDKs, value)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return result, databaseError(err)
+	}
+	rows.Close()
+
+	rows, err = p.pool.Query(ctx, apiDeveloperAssetPublicationSelect+` WHERE deployment_id=$1 ORDER BY published_at DESC`, deploymentID)
+	if err != nil {
+		return result, databaseError(err)
+	}
+	basePublications := make([]model.APIDeveloperAssetPublication, 0)
+	for rows.Next() {
+		value, scanErr := scanAPIDeveloperAssetPublication(rows)
+		if scanErr != nil {
+			rows.Close()
+			return result, scanErr
+		}
+		basePublications = append(basePublications, value)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return result, databaseError(err)
+	}
+	rows.Close()
+	for _, value := range basePublications {
+		enriched, enrichErr := p.enrichAPIDeveloperAssetPublication(ctx, value)
+		if enrichErr != nil {
+			return result, enrichErr
+		}
+		result.Publications = append(result.Publications, enriched)
+	}
+	return result, nil
+}
+
 func (p *Postgres) APIDocumentationBindings(ctx context.Context, deploymentID, apiID string) ([]model.APIDocumentationBinding, error) {
 	rows, err := p.pool.Query(ctx, apiDocumentationBindingSelect+` WHERE deployment_id=$1 AND integration_id=$2 ORDER BY created_at,id`, deploymentID, apiID)
 	if err != nil {

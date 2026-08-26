@@ -14,7 +14,6 @@ export async function consoleSource() {
     "app/components/console/integrations/authorization-policy-workspace.tsx",
     "app/components/console/integrations/tools-workspace.tsx",
     "app/components/console/integrations/test-workspace.tsx",
-    "app/components/console/integrations/sdks-workspace.tsx",
     "app/components/console/agent-access-views.tsx",
     "app/components/console/tool-views.tsx",
     "app/components/console/catalog-settings-views.tsx",

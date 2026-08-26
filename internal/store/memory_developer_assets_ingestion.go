@@ -10,35 +10,6 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
-func (m *Memory) DeveloperAssetRawBlob(_ context.Context, deploymentID, id string) (model.DeveloperAssetRawBlob, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	value, ok := m.developerAssets.rawBlobs[id]
-	if !ok || value.DeploymentID != deploymentID {
-		return model.DeveloperAssetRawBlob{}, ErrNotFound
-	}
-	return memoryClone(value), nil
-}
-
-func (m *Memory) SaveDeveloperAssetRawBlob(_ context.Context, value model.DeveloperAssetRawBlob) (model.DeveloperAssetRawBlob, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.hasDeployment || m.deployment.ID != value.DeploymentID {
-		return model.DeveloperAssetRawBlob{}, ErrNotFound
-	}
-	for _, current := range m.developerAssets.rawBlobs {
-		if current.DeploymentID == value.DeploymentID && current.SHA256 == value.SHA256 {
-			return memoryClone(current), nil
-		}
-	}
-	if _, exists := m.developerAssets.rawBlobs[value.ID]; exists {
-		return model.DeveloperAssetRawBlob{}, ErrConflict
-	}
-	value.CreatedAt = time.Now().UTC()
-	m.developerAssets.rawBlobs[value.ID] = memoryClone(value)
-	return value, nil
-}
-
 func (m *Memory) DeveloperAssetIngestionRuns(_ context.Context, deploymentID string, kind model.DeveloperAssetKind, targetKey string) ([]model.DeveloperAssetIngestionRun, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

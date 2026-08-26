@@ -33,7 +33,9 @@ type DeveloperAssetQueryLabResult struct {
 	Unit          model.KnowledgeUnit `json:"unit"`
 	Excerpt       string              `json:"excerpt"`
 	LexicalScore  float64             `json:"lexical_score"`
-	SemanticScore float64             `json:"semantic_score"`
+	// SemanticScore retains the public v1 field name, but currently contains
+	// cosine similarity from local-feature-hash-v1, not a learned embedding.
+	SemanticScore float64 `json:"semantic_score"`
 	RerankScore   float64             `json:"rerank_score"`
 	Selected      bool                `json:"selected"`
 }
@@ -273,8 +275,8 @@ func (s *Service) RunDeveloperAssetQueryLab(ctx context.Context, input Developer
 		"limit": input.Limit, "context_token_limit": input.ContextTokenLimit,
 	})
 	routing, _ := json.Marshal(map[string]any{
-		"lexical": "postgres_fts", "semantic": developerAssetEmbeddingModel,
-		"fusion": "weighted_lexical_cosine", "map_boost": 0.08, "exact_identifier_boost": 0.2,
+		"lexical": "postgres_fts", "feature_hash": developerAssetEmbeddingModel,
+		"fusion": "weighted_lexical_feature_hash_cosine", "map_boost": 0.08, "exact_identifier_boost": 0.2,
 	})
 	diagnostics, _ := json.Marshal(map[string]any{"candidate_pool_limit": candidateLimit, "truncated_by_context": len(results) < min(input.Limit, len(candidates))})
 	now := s.now()

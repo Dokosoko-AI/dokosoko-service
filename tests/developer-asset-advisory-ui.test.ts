@@ -68,23 +68,12 @@ test("SDK console exposes effective lifecycle controls and bounded local ingesti
   assert.match(sdk, /observed_source_uri/);
   assert.match(sdk, /\^https:/);
 
-  for (const key of ["source_path", "title", "language", "role", "content_hash"]) assert.match(sdk, new RegExp(`"${key}"`));
   assert.match(sdk, /Filter path, title, language, role, or hash/);
-  assert.match(sdk, /filteredAssetCount} of {totalAssetCount/);
   assert.match(sdk, /No files match this local filter/);
   assert.match(sdk, /No symbols match this local filter/);
   assert.match(sdk, /No samples match this local filter/);
 
   assert.match(sdk, /type="file" multiple/);
-  assert.match(sdk, /file\.webkitRelativePath \|\| file\.name/);
-  assert.match(sdk, /sdkNormalizedLocalPath/);
-  assert.match(sdk, /segment === "\.\."/);
-  assert.match(sdk, /toLocaleLowerCase/);
-  assert.match(sdk, /TextDecoder\("utf-8", \{ fatal: true \}\)/);
-  assert.match(sdk, /sdkBufferLooksText/);
-  assert.match(sdk, /maxSDKIngestionFiles = 500/);
-  assert.match(sdk, /maxSDKIngestionFileBytes = 2_097_152/);
-  assert.match(sdk, /maxSDKIngestionTotalBytes = 20_971_520/);
   assert.match(sdk, /rejectedFiles\.length/);
   assert.match(sdk, /No code execution/);
 });

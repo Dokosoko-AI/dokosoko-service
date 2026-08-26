@@ -92,8 +92,8 @@ review decision. Only explicitly approved samples enter a publication.
 
 Every published collection, contract, and SDK content publication has a compact
 agent-facing Map/Table of Contents. Retrieval indexes only exact immutable
-publications, searches maps and targeted sections with lexical and semantic
-signals, applies exact scope and version filters, enforces a context budget,
+publications, searches maps and targeted sections with lexical and deterministic
+local feature-hash signals, applies exact scope and version filters, enforces a context budget,
 and returns citations containing immutable publication, entity, and content
 hashes. API search is:
 
@@ -276,8 +276,9 @@ weaken an earlier deterministic gate.
 
 ### Phase 3: scoped retrieval and Query Lab
 
-- Build immutable lexical and semantic search generations from exact
-  publications. Index compact maps as routing evidence and sections, contract
+- Build immutable lexical and local feature-hash search generations from exact
+  publications. The feature-hash vector is a deterministic lexical fallback,
+  not a learned semantic embedding. Index compact maps as routing evidence and sections, contract
   operations, SDK symbols, and approved samples as targeted evidence.
 - Resolve global, API, or combined scope before ranking. Apply API publication,
   asset-kind, language, ecosystem, exact version, selector, visibility, result,
