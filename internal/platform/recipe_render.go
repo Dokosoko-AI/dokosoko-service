@@ -3,7 +3,6 @@ package platform
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -12,24 +11,41 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
+// Recipe grounding is deliberately narrower than integration analysis. Only
+// the exact product facts selected for one recipe participate in authoring and
+// drift; DokoSoko's MCP delivery and administration contracts never do.
 func recipeReferences(evidence []model.IntegrationEvidence) []model.RecipeReference {
 	values := make([]model.RecipeReference, 0)
-	seen := make(map[string]bool)
-	for _, item := range evidence {
-		parsed, err := url.Parse(item.Location)
-		if err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" && parsed.User == nil && !seen[item.Location] {
-			values = append(values, model.RecipeReference{Label: item.Label, URL: item.Location, Kind: recipeReferenceKind(item.Label, item.Location), ResourceID: item.ResourceID})
-			seen[item.Location] = true
+	seenURL := make(map[string]bool)
+	seenID := make(map[string]bool)
+	add := func(reference model.RecipeReference) {
+		reference.Label = recipeLinkLabel(reference.Label)
+		reference.URL = strings.TrimSpace(reference.URL)
+		parsed, err := url.Parse(reference.URL)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || seenURL[reference.URL] {
+			return
+		}
+		if reference.ResourceID != "" && seenID[reference.ResourceID] {
+			return
+		}
+		seenURL[reference.URL] = true
+		seenID[reference.ResourceID] = reference.ResourceID != ""
+		values = append(values, reference)
+	}
+	for _, item := range recipeProductEvidence(evidence) {
+		if item.Location != "" {
+			add(model.RecipeReference{Label: item.Label, URL: item.Location, Kind: recipeReferenceKind(item.Label, item.Location), ResourceID: item.ResourceID})
 		}
 		for _, reference := range item.References {
-			parsed, err := url.Parse(reference.URL)
-			if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || seen[reference.URL] {
-				continue
-			}
-			values = append(values, reference)
-			seen[reference.URL] = true
+			add(reference)
 		}
 	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].ResourceID == values[j].ResourceID {
+			return values[i].URL < values[j].URL
+		}
+		return values[i].ResourceID < values[j].ResourceID
+	})
 	return values
 }
 
@@ -38,47 +54,47 @@ func recipeDependencies(evidence []model.IntegrationEvidence) []model.RecipeDepe
 	for _, item := range evidence {
 		values = append(values, model.RecipeDependency{Kind: item.Kind, ResourceID: item.ResourceID, Version: item.Fingerprint})
 	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].Kind != values[j].Kind {
+			return values[i].Kind < values[j].Kind
+		}
+		if values[i].ResourceID != values[j].ResourceID {
+			return values[i].ResourceID < values[j].ResourceID
+		}
+		return values[i].Version < values[j].Version
+	})
 	return values
 }
 
-// recipeSelectedEvidence resolves an exact, server-issued evidence-ID
-// selection. Empty selections are accepted only for records written before the
-// selection contract existed and conservatively resolve to the full snapshot.
 func recipeSelectedEvidence(evidence []model.IntegrationEvidence, evidenceIDs []string) ([]model.IntegrationEvidence, bool) {
 	if len(evidenceIDs) == 0 {
-		return append([]model.IntegrationEvidence(nil), evidence...), true
+		return nil, false
 	}
-	byID := make(map[string][]model.IntegrationEvidence, len(evidence))
-	for _, item := range evidence {
-		id := strings.TrimSpace(item.ResourceID)
-		if id == "" {
-			continue
-		}
-		byID[id] = append(byID[id], item)
-	}
+	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(evidence))
 	selected := make([]model.IntegrationEvidence, 0, len(evidenceIDs))
 	seen := make(map[string]bool, len(evidenceIDs))
 	for _, rawID := range evidenceIDs {
 		id := strings.TrimSpace(rawID)
-		items, exists := byID[id]
-		if id == "" || !exists || seen[id] {
+		item, exists := byID[id]
+		if id == "" || !exists || ambiguous[id] || seen[id] {
 			return nil, false
 		}
-		selected = append(selected, items...)
+		selected = append(selected, item)
 		seen[id] = true
 	}
 	return selected, true
 }
 
-// recipeEvidenceForDependencies recovers the persisted selection from a
-// recipe. Exact kind, resource ID, and fingerprint matching prevents an old or
-// missing resource from silently widening the recipe to other evidence.
+// recipeEvidenceForDependencies recovers the exact persisted product snapshot.
+// The synthetic authoring dependency is checked separately and can never widen
+// the evidence selection.
 func recipeEvidenceForDependencies(evidence []model.IntegrationEvidence, dependencies []model.RecipeDependency) ([]model.IntegrationEvidence, bool) {
 	byDependency := make(map[model.RecipeDependency]model.IntegrationEvidence, len(evidence))
-	for _, item := range evidence {
+	ambiguous := make(map[model.RecipeDependency]bool)
+	for _, item := range recipeProductEvidence(evidence) {
 		dependency := model.RecipeDependency{Kind: item.Kind, ResourceID: item.ResourceID, Version: item.Fingerprint}
 		if _, exists := byDependency[dependency]; exists {
-			return nil, false
+			ambiguous[dependency] = true
 		}
 		byDependency[dependency] = item
 	}
@@ -94,7 +110,7 @@ func recipeEvidenceForDependencies(evidence []model.IntegrationEvidence, depende
 			continue
 		}
 		item, exists := byDependency[dependency]
-		if !exists || seen[dependency] {
+		if !exists || ambiguous[dependency] || seen[dependency] {
 			return nil, false
 		}
 		selected = append(selected, item)
@@ -109,13 +125,10 @@ func recipeEvidenceIDsForDependencies(evidence []model.IntegrationEvidence, depe
 		return nil, false
 	}
 	ids := make([]string, 0, len(selected))
-	seen := make(map[string]bool, len(selected))
 	for _, item := range selected {
-		if !seen[item.ResourceID] {
-			ids = append(ids, item.ResourceID)
-			seen[item.ResourceID] = true
-		}
+		ids = append(ids, item.ResourceID)
 	}
+	sort.Strings(ids)
 	return ids, true
 }
 
@@ -127,16 +140,22 @@ func recipeAnalysisWithEvidence(analysis model.IntegrationAnalysis, evidence []m
 func recipeGroundingDependenciesForContract(analysis model.IntegrationAnalysis, seed model.RecipeSeed, authoringContract string) []model.RecipeDependency {
 	selected, ok := recipeSelectedEvidence(analysis.Evidence, seed.EvidenceIDs)
 	if !ok {
-		selected = nil
+		return nil
 	}
 	values := recipeDependencies(selected)
+	normalizedSeed := seed
+	normalizedSeed.EndpointIDs = nil
+	normalizedSeed.CapabilityIDs = append([]string(nil), seed.CapabilityIDs...)
+	normalizedSeed.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
+	sort.Strings(normalizedSeed.CapabilityIDs)
+	sort.Strings(normalizedSeed.EvidenceIDs)
+	integrationID, _ := integrationScopeID(analysis.Evidence)
 	input, _ := json.Marshal(struct {
-		AuthoringContract string                      `json:"authoring_contract"`
-		Plan              model.IntegrationPlan       `json:"plan"`
-		Evidence          []model.IntegrationEvidence `json:"evidence"`
-		Seed              model.RecipeSeed            `json:"seed"`
-	}{AuthoringContract: authoringContract, Plan: analysis.Plan, Evidence: selected, Seed: seed})
-	return append(values, model.RecipeDependency{Kind: recipeAuthoringInputDependencyKind, ResourceID: seed.Slug, Version: evidenceFingerprint(recipeAuthoringInputDependencyKind, string(input))})
+		AuthoringContract string           `json:"authoring_contract"`
+		IntegrationID     string           `json:"integration_id"`
+		Seed              model.RecipeSeed `json:"seed"`
+	}{AuthoringContract: authoringContract, IntegrationID: integrationID, Seed: normalizedSeed})
+	return append(values, model.RecipeDependency{Kind: recipeAuthoringInputDependencyKind, ResourceID: normalizedSeed.Slug, Version: evidenceFingerprint(recipeAuthoringInputDependencyKind, string(input))})
 }
 
 func recipeGroundingDependencies(analysis model.IntegrationAnalysis, seed model.RecipeSeed) []model.RecipeDependency {
@@ -161,11 +180,39 @@ func recipeDependencySetsMatch(actual, expected []model.RecipeDependency) bool {
 }
 
 func recipeGroundingMatches(recipe model.Recipe, analysis model.IntegrationAnalysis, seed model.RecipeSeed) bool {
-	if recipe.AnalysisID != analysis.ID || recipe.CurrentRevisionID == "" || recipe.CurrentRevision == nil || recipe.Title != seed.Title || recipe.Outcome != seed.Outcome || recipe.Audience != seed.Audience {
+	integrationID, scoped := integrationScopeID(analysis.Evidence)
+	if !scoped || integrationID == "" || recipe.ContractVersion != model.RecipeContractProductIntegrationV2 || recipe.IntegrationID != integrationID || recipe.AnalysisID != analysis.ID || recipe.CurrentRevisionID == "" || recipe.CurrentRevision == nil || recipe.CurrentRevision.SpecVersion != model.RecipeSpecVersion2 || recipe.Title != seed.Title || recipe.Outcome != seed.Outcome || recipe.Audience != "coding_agent" {
 		return false
 	}
-	if _, ok := recipeSelectedEvidence(analysis.Evidence, seed.EvidenceIDs); !ok {
+	if _, ok := recipeResolveProductSelection(analysis, seed); !ok {
 		return false
+	}
+	return recipeDependencySetsMatch(recipe.Dependencies, recipeGroundingDependencies(analysis, seed))
+}
+
+// recipeDependenciesMatchCurrentContract prevents the synthetic authoring
+// dependency from becoming an inert marker. It is recomputed from the stored
+// immutable recipe fields and exact selected evidence so a contract change or
+// dependency tamper deterministically makes the revision stale.
+func recipeDependenciesMatchCurrentContract(recipe model.Recipe, spec model.RecipeSpec, selectedEvidence []model.IntegrationEvidence) bool {
+	evidenceIDs := make([]string, 0, len(selectedEvidence))
+	for _, item := range selectedEvidence {
+		if strings.TrimSpace(item.ResourceID) == "" {
+			return false
+		}
+		evidenceIDs = append(evidenceIDs, item.ResourceID)
+	}
+	analysis := model.IntegrationAnalysis{Evidence: append([]model.IntegrationEvidence{
+		{Kind: integrationScopeEvidenceKind, ResourceID: recipe.IntegrationID},
+	}, selectedEvidence...)}
+	seed := model.RecipeSeed{
+		Slug:          recipe.Slug,
+		Title:         recipe.Title,
+		Outcome:       recipe.Outcome,
+		Audience:      "coding_agent",
+		CapabilityIDs: append([]string(nil), spec.CapabilityIDs...),
+		SDKID:         spec.SDKID,
+		EvidenceIDs:   evidenceIDs,
 	}
 	return recipeDependencySetsMatch(recipe.Dependencies, recipeGroundingDependencies(analysis, seed))
 }
@@ -193,430 +240,25 @@ func recipeLinkLabel(value string) string {
 	return firstNonEmpty(value, "Reference")
 }
 
-func recipeSelectedEndpoints(plan model.IntegrationPlan, seed model.RecipeSeed) []model.IntegrationEndpointPlan {
-	if len(seed.EndpointIDs) == 0 {
-		return nil
-	}
-	byName := make(map[string]model.IntegrationEndpointPlan, len(plan.Endpoints))
-	for _, endpoint := range plan.Endpoints {
-		byName[endpoint.Name] = endpoint
-	}
-	values := make([]model.IntegrationEndpointPlan, 0, len(seed.EndpointIDs))
-	seen := make(map[string]bool, len(seed.EndpointIDs))
-	for _, endpointID := range seed.EndpointIDs {
-		if endpoint, ok := byName[endpointID]; ok && !seen[endpointID] {
-			values = append(values, endpoint)
-			seen[endpointID] = true
-		}
-	}
-	return values
-}
-
-func recipeJSONSchema(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || !json.Valid([]byte(raw)) {
-		return ""
-	}
-	var value any
-	if json.Unmarshal([]byte(raw), &value) != nil {
-		return ""
-	}
-	formatted, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return ""
-	}
-	return string(formatted)
-}
-
-func recipeSchemaAcceptsEmptyObject(raw string) bool {
-	var schema struct {
-		Type          string                     `json:"type"`
-		Required      []string                   `json:"required"`
-		Properties    map[string]json.RawMessage `json:"properties"`
-		MinProperties int                        `json:"minProperties"`
-	}
-	return json.Unmarshal([]byte(raw), &schema) == nil && schema.Type == "object" && len(schema.Required) == 0 && len(schema.Properties) == 0 && schema.MinProperties == 0
-}
-
-func writeRecipeIndentedJSON(builder *strings.Builder, value string) {
-	for _, line := range strings.Split(value, "\n") {
-		builder.WriteString("\n       " + line)
-	}
-}
-
-func recipeCommaSeparatedValues(value string) []string {
-	values := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, raw := range strings.Split(value, ",") {
-		item := strings.TrimSpace(raw)
-		if item != "" && !seen[item] {
-			values = append(values, item)
-			seen[item] = true
-		}
-	}
-	return values
-}
-
 func recipeGroundedURLs(analysis model.IntegrationAnalysis) []string {
 	values := make([]string, 0)
 	seen := make(map[string]bool)
 	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
 		parsed, err := url.Parse(candidate)
 		if err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" && parsed.User == nil && !seen[candidate] {
 			values = append(values, candidate)
 			seen[candidate] = true
 		}
 	}
-	add(analysis.Plan.Identity.Issuer)
-	add(analysis.Plan.Identity.Audience)
-	for _, item := range analysis.Evidence {
-		if item.Kind != "tool" {
-			continue
-		}
+	for _, item := range recipeProductEvidence(analysis.Evidence) {
+		add(item.Location)
 		add(recipeEvidenceField(item.Excerpt, "Fixed endpoint"))
-	}
-	return values
-}
-
-type recipeIdentityEvidence struct {
-	Issuer            string
-	Audience          string
-	Scopes            []string
-	OrganisationClaim string
-}
-
-func recipeIdentityFromEvidence(analysis model.IntegrationAnalysis) recipeIdentityEvidence {
-	value := recipeIdentityEvidence{Issuer: analysis.Plan.Identity.Issuer, Audience: analysis.Plan.Identity.Audience}
-	for _, item := range analysis.Evidence {
-		if item.Kind != "identity_provider" {
-			continue
-		}
-		value.Issuer = firstNonEmpty(recipeEvidenceField(item.Excerpt, "Issuer"), value.Issuer)
-		value.Audience = firstNonEmpty(recipeEvidenceField(item.Excerpt, "Audience"), value.Audience)
-		value.Scopes = recipeCommaSeparatedValues(recipeEvidenceField(item.Excerpt, "Scopes"))
-		value.OrganisationClaim = recipeEvidenceField(item.Excerpt, "Customer account claim")
-		break
-	}
-	return value
-}
-
-func recipeToolRequiredGrants(item model.IntegrationEvidence) []string {
-	if item.Kind != "tool" {
-		return nil
-	}
-	var policy ToolPolicy
-	if json.Unmarshal([]byte(recipeEvidenceField(item.Excerpt, "Authorization policy")), &policy) != nil {
-		return nil
-	}
-	values := make([]string, 0, len(policy.RequiredGrants))
-	seen := make(map[string]bool, len(policy.RequiredGrants))
-	for _, grant := range policy.RequiredGrants {
-		grant = strings.ToLower(strings.TrimSpace(grant))
-		if grant != "" && !seen[grant] && authorizationKeyPattern.MatchString(grant) {
-			values = append(values, grant)
-			seen[grant] = true
+		for _, reference := range item.References {
+			add(reference.URL)
 		}
 	}
 	return values
-}
-
-func recipeToolEvidence(values []model.IntegrationEvidence) []model.IntegrationEvidence {
-	result := make([]model.IntegrationEvidence, 0)
-	for _, item := range values {
-		if item.Kind == "tool" || item.Kind == "automatic_tool" {
-			result = append(result, item)
-		}
-	}
-	priority := func(item model.IntegrationEvidence) int {
-		switch {
-		case strings.HasSuffix(item.Label, ".knowledge.search"):
-			return 10
-		case item.Kind == "tool":
-			return 20
-		case strings.HasSuffix(item.Label, ".instances.list"):
-			return 30
-		case strings.HasSuffix(item.Label, ".credentials.list"):
-			return 40
-		case strings.HasSuffix(item.Label, ".credentials.rotate"):
-			return 50
-		case strings.HasSuffix(item.Label, ".credentials.revoke"):
-			return 60
-		default:
-			return 70
-		}
-	}
-	sort.SliceStable(result, func(i, j int) bool {
-		left, right := priority(result[i]), priority(result[j])
-		if left == right {
-			return result[i].Label < result[j].Label
-		}
-		return left < right
-	})
-	return result
-}
-
-func deterministicRecipeMarkdown(product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, references []model.RecipeReference) string {
-	selectedEvidence, ok := recipeSelectedEvidence(analysis.Evidence, seed.EvidenceIDs)
-	if !ok {
-		selectedEvidence = nil
-	}
-	analysis = recipeAnalysisWithEvidence(analysis, selectedEvidence)
-	references = recipeReferences(selectedEvidence)
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "# %s\n\n## Outcome\n\n%s\n\n## Before you start\n", seed.Title, seed.Outcome)
-
-	endpoints := recipeSelectedEndpoints(analysis.Plan, seed)
-	missingEndpoints := len(endpoints) == 0
-	identityEvidence := recipeIdentityFromEvidence(analysis)
-	if missingEndpoints {
-		fmt.Fprintf(&builder, "\n%s\n\n- No exact IntegrationPlan endpoint is selected for this recipe seed. Select an endpoint ID before implementation.", recipeMissingEndpointMarker)
-	}
-	usesOAuth := false
-	for _, endpoint := range endpoints {
-		identity := strings.ToLower(strings.TrimSpace(endpoint.Identity))
-		boundary := "private"
-		if identity == "none" {
-			boundary = "public"
-		}
-		if identity == "oauth2" {
-			usesOAuth = true
-		}
-		fmt.Fprintf(&builder, "\n- Configure the MCP client for the %s endpoint %s: %s %s with identity mode %s.", boundary, recipeCode(endpoint.Name), recipeCode(strings.ToUpper(endpoint.Method)), recipeCode(endpoint.Path), recipeCode(identity))
-		fmt.Fprintf(&builder, "\n- Resolve endpoint path %s against the DokoSoko deployment origin supplied by the operator; do not infer or hardcode a hostname.", recipeCode(endpoint.Path))
-	}
-	if usesOAuth {
-		if identityEvidence.Issuer != "" || identityEvidence.Audience != "" {
-			builder.WriteString("\n- Treat the OAuth 2.0/OIDC values as the configured upstream identity-provider boundary")
-			if identityEvidence.Issuer != "" {
-				fmt.Fprintf(&builder, ": issuer %s", recipeCode(identityEvidence.Issuer))
-			}
-			if identityEvidence.Audience != "" {
-				fmt.Fprintf(&builder, ", audience %s", recipeCode(identityEvidence.Audience))
-			}
-			builder.WriteString(".")
-		}
-		builder.WriteString("\n- The MCP client authenticates to the private endpoint through DokoSoko; it does not integrate directly with the configured issuer or handle vendor access tokens.")
-		if len(identityEvidence.Scopes) > 0 {
-			builder.WriteString("\n- The configured identity provider declares scope")
-			if len(identityEvidence.Scopes) > 1 {
-				builder.WriteString("s")
-			}
-			for _, scope := range identityEvidence.Scopes {
-				builder.WriteString(" " + recipeCode(scope))
-			}
-			builder.WriteString(".")
-		}
-	}
-	for _, item := range analysis.Evidence {
-		switch item.Kind {
-		case "resource_set":
-			resourceKind := firstNonEmpty(recipeEvidenceField(item.Excerpt, "Kind"), "catalog")
-			fmt.Fprintf(&builder, "\n- Ground this implementation in the %s resource set %s (ID %s), exact revision %s.", recipeCode(resourceKind), recipeCode(item.Label), recipeCode(item.ResourceID), recipeCode(firstNonEmpty(item.Version, recipeEvidenceField(item.Excerpt, "Revision"))))
-		case "source_publication":
-			fmt.Fprintf(&builder, "\n- Use source publication %s (ID %s), publication revision %s.", recipeCode(item.Label), recipeCode(item.ResourceID), recipeCode(item.Version))
-		case "tool":
-			grants := recipeToolRequiredGrants(item)
-			if len(grants) > 0 {
-				fmt.Fprintf(&builder, "\n- Bound MCP tool %s declares required grant", recipeCode(item.Label))
-				if len(grants) > 1 {
-					builder.WriteString("s")
-				}
-				for _, grant := range grants {
-					builder.WriteString(" " + recipeCode(grant))
-				}
-				builder.WriteString(" in its authorization policy.")
-			}
-		}
-	}
-
-	builder.WriteString("\n\n## Identity\n")
-	if missingEndpoints {
-		builder.WriteString("\n- No endpoint identity boundary is selected. Keep this recipe in review until an exact endpoint ID is chosen.")
-	}
-	for _, endpoint := range endpoints {
-		identity := strings.ToLower(strings.TrimSpace(endpoint.Identity))
-		if identity == "none" {
-			fmt.Fprintf(&builder, "\n- %s %s is explicitly anonymous (%s).", recipeCode(strings.ToUpper(endpoint.Method)), recipeCode(endpoint.Path), recipeCode(endpoint.Name))
-		} else {
-			fmt.Fprintf(&builder, "\n- %s %s (%s) is private and requires %s.", recipeCode(strings.ToUpper(endpoint.Method)), recipeCode(endpoint.Path), recipeCode(endpoint.Name), recipeCode(identity))
-		}
-	}
-	if usesOAuth {
-		builder.WriteString("\n- DokoSoko is the MCP-facing authorization boundary and brokers customer sign-in through the configured upstream identity provider; the MCP client never handles the upstream access token")
-		if identityEvidence.Issuer != "" {
-			fmt.Fprintf(&builder, "; the configured upstream issuer is %s", recipeCode(identityEvidence.Issuer))
-		}
-		if identityEvidence.Audience != "" {
-			fmt.Fprintf(&builder, " and its audience is %s", recipeCode(identityEvidence.Audience))
-		}
-		builder.WriteString(".")
-		if identityEvidence.OrganisationClaim != "" {
-			fmt.Fprintf(&builder, "\n- The configured identity provider identifies %s as its customer account claim.", recipeCode(identityEvidence.OrganisationClaim))
-		}
-	}
-	for _, item := range analysis.Evidence {
-		if missingEndpoints || item.Kind != "authorization_point" {
-			continue
-		}
-		grants := recipeCommaSeparatedValues(recipeEvidenceField(item.Excerpt, "Required grants"))
-		fmt.Fprintf(&builder, "\n- Authorization point %s (ID %s)", recipeCode(item.Label), recipeCode(item.ResourceID))
-		if action := recipeEvidenceField(item.Excerpt, "Action"); action != "" {
-			fmt.Fprintf(&builder, " governs action %s", recipeCode(action))
-		}
-		if len(grants) > 0 {
-			builder.WriteString(" and requires grant")
-			if len(grants) > 1 {
-				builder.WriteString("s")
-			}
-			for index, grant := range grants {
-				if index > 0 {
-					builder.WriteString(",")
-				}
-				builder.WriteString(" " + recipeCode(grant))
-			}
-		}
-		builder.WriteString(".")
-	}
-
-	builder.WriteString("\n\n## Implementation\n")
-	step := 1
-	if missingEndpoints {
-		builder.WriteString("\n1. Select one exact endpoint ID from the reviewed IntegrationPlan before configuring transport, identity, authorization, or tools.")
-		step++
-	}
-	for _, endpoint := range endpoints {
-		fmt.Fprintf(&builder, "\n%d. Configure the MCP transport for %s by resolving %s against the DokoSoko deployment origin supplied by the operator, then use %s at that resolved endpoint.", step, recipeCode(endpoint.Name), recipeCode(endpoint.Path), recipeCode(strings.ToUpper(endpoint.Method)))
-		step++
-	}
-	if usesOAuth {
-		hasMCPContract := false
-		for _, item := range analysis.Evidence {
-			hasMCPContract = hasMCPContract || item.Kind == "mcp_oauth"
-		}
-		if hasMCPContract {
-			fmt.Fprintf(&builder, "\n%d. Send an unauthenticated MCP request to obtain the protected-resource metadata URL, then resolve that metadata and the advertised DokoSoko authorization-server metadata. Register the loopback callback dynamically, start Authorization Code with PKCE `S256`, and exchange the returned code for a token scoped to the exact private MCP resource.", step)
-		} else {
-			fmt.Fprintf(&builder, "\n%d. Authenticate the private MCP request through DokoSoko. The MCP client does not integrate directly with the configured issuer or handle the upstream access token.", step)
-		}
-		step++
-	}
-	for _, item := range recipeToolEvidence(analysis.Evidence) {
-		if missingEndpoints {
-			continue
-		}
-		method := strings.ToUpper(recipeEvidenceField(item.Excerpt, "Method"))
-		endpoint := recipeEvidenceField(item.Excerpt, "Fixed endpoint")
-		inputSchema := recipeJSONSchema(recipeEvidenceField(item.Excerpt, "Input schema"))
-		outputSchema := recipeJSONSchema(recipeEvidenceField(item.Excerpt, "Output schema"))
-		if item.Kind == "automatic_tool" {
-			fmt.Fprintf(&builder, "\n%d. Discover and invoke automatic MCP tool %s.", step, recipeCode(item.Label))
-		} else {
-			fmt.Fprintf(&builder, "\n%d. Discover and invoke the bound MCP tool %s.", step, recipeCode(item.Label))
-		}
-		if method != "" && endpoint != "" {
-			fmt.Fprintf(&builder, " Its fixed backend operation is %s %s; invoke it through the MCP tool binding.", recipeCode(method), recipeCode(endpoint))
-		}
-		if grants := recipeToolRequiredGrants(item); len(grants) > 0 {
-			builder.WriteString(" Its authorization policy requires grant")
-			if len(grants) > 1 {
-				builder.WriteString("s")
-			}
-			for _, grant := range grants {
-				builder.WriteString(" " + recipeCode(grant))
-			}
-			builder.WriteString(".")
-		}
-		if inputSchema != "" {
-			if recipeSchemaAcceptsEmptyObject(inputSchema) {
-				builder.WriteString(" Send an empty object as the tool arguments.")
-			} else {
-				builder.WriteString(" Build tool arguments that validate against this exact input schema.")
-			}
-			builder.WriteString("\n")
-			writeRecipeIndentedJSON(&builder, inputSchema)
-		}
-		if item.Kind == "automatic_tool" {
-			details := strings.ToLower(item.Excerpt)
-			switch {
-			case strings.HasSuffix(item.Label, ".credentials.rotate"):
-				builder.WriteString("\n\n   Choose the target environment, scopes, TTL, and optional prior credential ID, show those exact arguments to the operator, and proceed only after they approve issuance or replacement. Supply a stable `params._meta.idempotency_key`. The first mutation attempt returns a server-issued one-time confirmation challenge in error data; retry the exact same tool name, arguments, and idempotency key with `params._meta.confirmation_challenge` and `params._meta.confirmed=true`. Read credential material once from the successful retry, use the returned `environment_variable` name for the operator-selected secret destination, and never print or log the material.")
-			case strings.HasSuffix(item.Label, ".credentials.revoke"):
-				builder.WriteString("\n\n   After cutover, choose the exact credential ID, show the destructive target to the operator, and proceed only after approval. The first mutation attempt returns a separate one-time confirmation challenge in error data. Retry the exact same revoke arguments with `params._meta.confirmation_challenge` and `params._meta.confirmed=true`; never reuse a challenge from rotation.")
-			case strings.HasSuffix(item.Label, ".credentials.list"):
-				builder.WriteString("\n\n   Treat this result as metadata only: it contains states and fingerprints, never credential material.")
-			case strings.Contains(details, "read-only"):
-				builder.WriteString("\n\n   This operation is read-only and needs no confirmation or idempotency key.")
-			}
-		}
-		if outputSchema != "" {
-			builder.WriteString("\n\n   Validate the returned value against this exact output schema:\n")
-			writeRecipeIndentedJSON(&builder, outputSchema)
-		}
-		step++
-	}
-	if step == 1 {
-		builder.WriteString("\n1. Follow the exact endpoint and identity values in the reviewed integration plan; it does not contain a callable endpoint for this seed.")
-	}
-
-	builder.WriteString("\n\n## Verify\n")
-	if missingEndpoints {
-		builder.WriteString("\n- Keep this recipe in review until the seed selects an exact IntegrationPlan endpoint and its identity boundary.")
-	}
-	for _, endpoint := range endpoints {
-		fmt.Fprintf(&builder, "\n- Confirm the client resolves %s against the operator-provided DokoSoko deployment origin and uses %s with identity mode %s.", recipeCode(endpoint.Path), recipeCode(strings.ToUpper(endpoint.Method)), recipeCode(strings.ToLower(endpoint.Identity)))
-	}
-	if usesOAuth {
-		builder.WriteString("\n- Confirm protected-resource and authorization-server discovery resolve to DokoSoko, PKCE uses `S256`, the token is bound to the exact MCP resource, and the MCP client never handles the upstream identity-provider token.")
-		if identityEvidence.OrganisationClaim != "" {
-			fmt.Fprintf(&builder, "\n- Confirm the identity-provider configuration identifies %s as the customer account claim.", recipeCode(identityEvidence.OrganisationClaim))
-		}
-	}
-	for _, item := range analysis.Evidence {
-		if missingEndpoints {
-			continue
-		}
-		if item.Kind == "authorization_point" {
-			grants := recipeCommaSeparatedValues(recipeEvidenceField(item.Excerpt, "Required grants"))
-			fmt.Fprintf(&builder, "\n- Confirm authorization-point configuration %s", recipeCode(item.Label))
-			if action := recipeEvidenceField(item.Excerpt, "Action"); action != "" {
-				fmt.Fprintf(&builder, " governs action %s", recipeCode(action))
-			}
-			if len(grants) > 0 {
-				builder.WriteString(" and declares exact required grant set")
-				for _, grant := range grants {
-					builder.WriteString(" " + recipeCode(grant))
-				}
-			}
-			builder.WriteString(".")
-		}
-		if item.Kind == "tool" || item.Kind == "automatic_tool" {
-			fmt.Fprintf(&builder, "\n- Confirm MCP discovery exposes %s before invoking it; verify pinned revisions in DokoSoko's catalog rather than expecting a revision field in MCP discovery.", recipeCode(item.Label))
-			if grants := recipeToolRequiredGrants(item); len(grants) > 0 {
-				fmt.Fprintf(&builder, "\n- Confirm tool %s declares exact required grant set", recipeCode(item.Label))
-				for _, grant := range grants {
-					builder.WriteString(" " + recipeCode(grant))
-				}
-				builder.WriteString(" in its authorization policy.")
-			}
-			if outputSchema := recipeJSONSchema(recipeEvidenceField(item.Excerpt, "Output schema")); outputSchema != "" {
-				fmt.Fprintf(&builder, "\n- Validate the observed %s result against the exact output schema above; report only values present in the actual response.", recipeCode(item.Label))
-			}
-			if item.Kind == "automatic_tool" && strings.HasSuffix(item.Label, ".credentials.rotate") {
-				fmt.Fprintf(&builder, "\n- Confirm %s returns the expected environment-variable name and one-time material only after confirmation; redact the material from all verification output.", recipeCode(item.Label))
-			}
-			if item.Kind == "automatic_tool" && strings.HasSuffix(item.Label, ".credentials.revoke") {
-				builder.WriteString("\n- List credential metadata again and confirm the selected credential is revoked without exposing material.")
-			}
-		}
-	}
-	if len(references) > 0 {
-		builder.WriteString("\n## References\n")
-		for _, reference := range references {
-			fmt.Fprintf(&builder, "\n- [%s](%s)", recipeLinkLabel(reference.Label), reference.URL)
-		}
-		builder.WriteString("\n")
-	}
-	return builder.String()
 }
 
 func recipeMarkdownSections(markdown string) ([]string, []string, map[string]string) {
@@ -684,8 +326,6 @@ func containsRecipeRawHTML(markdown string) bool {
 		case ' ', '\t', '\r', '\n', '\f', '>', '/':
 			return true
 		case ':':
-			// Preserve standard Markdown URL autolinks such as <https://...>.
-			// Other colon-qualified names are XML/HTML-like markup and fail closed.
 			if closingTag || markdown[nameStart:cursor] != "https" || cursor+2 >= len(markdown) || markdown[cursor:cursor+3] != "://" {
 				return true
 			}
@@ -705,29 +345,28 @@ func isHTMLTagNameByte(value byte) bool {
 func validateRecipeMarkdown(markdown, expectedTitle string, references []model.RecipeReference, groundedURLs ...string) []model.RecipeValidationFinding {
 	findings := make([]model.RecipeValidationFinding, 0)
 	trimmed, lower := strings.TrimSpace(markdown), strings.ToLower(markdown)
-	if len(trimmed) < 120 {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "recipe_too_short", Message: "Explain the outcome, implementation, and verification steps."})
+	if len(trimmed) < 80 {
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "recipe_too_short", Message: "Include a concrete outcome, ordered implementation steps, and observable verification."})
 	}
-	if len(markdown) > 100_000 {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "recipe_too_long", Message: "Keep a recipe under 100,000 characters."})
-	}
-	if strings.Contains(markdown, recipeMissingEndpointMarker) {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "missing_endpoint_selection", Message: "Select an exact IntegrationPlan endpoint before implementing this recipe."})
+	if len([]byte(markdown)) > maxRecipeMarkdownBytes {
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "recipe_too_long", Message: "Keep the rendered recipe under 12 KiB."})
 	}
 	titles, order, sections := recipeMarkdownSections(markdown)
 	if len(titles) != 1 || titles[0] == "" {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "missing_title", Message: "Add one non-empty level-one recipe title."})
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "missing_title", Message: "Use exactly one non-empty level-one title."})
 	} else if expectedTitle != "" && titles[0] != expectedTitle {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "title_mismatch", Message: "Keep the level-one title identical to the reviewed recipe title."})
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "title_mismatch", Message: "Keep the rendered title identical to the structured recipe title."})
 	}
-	requiredHeadings := []string{"outcome", "before you start", "identity", "implementation", "verify"}
-	lastIndex := -1
-	for _, heading := range requiredHeadings {
-		body, exists := sections[heading]
-		if !exists || body == "" {
-			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "missing_section", Message: "Add the required non-empty " + heading + " section."})
-			continue
+	allowedSections := map[string]bool{"outcome": true, "prerequisites": true, "steps": true, "verify": true, "references": true}
+	for _, heading := range order {
+		if !allowedSections[heading] {
+			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unexpected_section", Message: "Recipes may contain only Outcome, Prerequisites, Steps, Verify, and References sections."})
+			break
 		}
+	}
+	last := -1
+	for _, heading := range []string{"outcome", "steps", "verify"} {
+		body, exists := sections[heading]
 		index := -1
 		for candidateIndex, candidate := range order {
 			if candidate == heading {
@@ -735,30 +374,30 @@ func validateRecipeMarkdown(markdown, expectedTitle string, references []model.R
 				break
 			}
 		}
-		if index <= lastIndex {
-			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "section_order", Message: "Keep the required recipe sections in their documented order."})
+		if !exists || body == "" {
+			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "missing_section", Message: "Add the required non-empty " + heading + " section."})
+			continue
+		}
+		if index <= last {
+			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "section_order", Message: "Keep Outcome, Steps, and Verify in that order."})
 			break
 		}
-		lastIndex = index
+		last = index
 	}
-	unsafeContent := containsRecipeRawHTML(markdown) || strings.Contains(lower, "http://") || containsToolBuilderSecretText(markdown)
-	for _, unsafe := range []string{"javascript:", "data:", "authorization: bearer", "sk-proj-", "-----begin private key-----"} {
-		if strings.Contains(lower, unsafe) {
-			unsafeContent = true
-			break
-		}
+	unsafeContent := containsRecipeRawHTML(markdown) || recipeContainsUnsupportedURI(markdown) || containsToolBuilderSecretText(markdown)
+	for _, unsafe := range []string{"javascript:", "data:", "authorization: bearer", "-----begin private key-----"} {
+		unsafeContent = unsafeContent || strings.Contains(lower, unsafe)
 	}
 	if unsafeContent {
 		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unsafe_content", Message: "Remove raw HTML, executable markup, insecure links, or credential-like content."})
 	}
+	allowedURLs := make(map[string]bool, len(references)+len(groundedURLs))
 	for _, reference := range references {
 		parsed, err := url.Parse(reference.URL)
 		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
-			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unsafe_reference", Message: "Recipe references must use a fixed public HTTPS URL."})
+			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unsafe_reference", Message: "Recipe references must use fixed HTTPS URLs."})
+			continue
 		}
-	}
-	allowedURLs := make(map[string]bool, len(references)*2)
-	for _, reference := range references {
 		allowedURLs[reference.URL] = true
 		if reference.Anchor != "" {
 			allowedURLs[reference.URL+"#"+reference.Anchor] = true
@@ -773,14 +412,14 @@ func validateRecipeMarkdown(markdown, expectedTitle string, references []model.R
 		}
 		destination := strings.TrimSpace(match[1])
 		if strings.HasPrefix(match[0], "!") || !allowedURLs[destination] {
-			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unsafe_reference", Message: "Markdown links must select an analysed HTTPS reference; embedded images are not allowed."})
+			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unsafe_reference", Message: "Markdown links must select an exact reviewed HTTPS reference; images are not allowed."})
 			break
 		}
 	}
 	for _, raw := range recipeURLPattern.FindAllString(markdown, -1) {
 		candidate := strings.TrimRight(raw, ".,;:`")
 		if !allowedURLs[candidate] {
-			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unverified_reference", Message: "Every HTTPS URL in a recipe must be grounded in the analysis evidence or select an analysed source."})
+			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "unverified_reference", Message: "Every HTTPS URL must come from the selected reviewed product evidence."})
 			break
 		}
 	}
@@ -796,131 +435,134 @@ func hasRecipeErrors(findings []model.RecipeValidationFinding) bool {
 	return false
 }
 
-func appendRecipeReferences(markdown string, references []model.RecipeReference) string {
-	markdown = strings.TrimSpace(markdown)
-	if len(references) == 0 {
-		return markdown + "\n"
-	}
-	var builder strings.Builder
-	builder.WriteString(markdown)
-	builder.WriteString("\n\n## References\n")
-	for _, reference := range references {
-		fmt.Fprintf(&builder, "\n- [%s](%s)", recipeLinkLabel(reference.Label), reference.URL)
-	}
-	builder.WriteByte('\n')
-	return builder.String()
+type authoredRecipe struct {
+	Spec          model.RecipeSpec
+	Markdown      string
+	References    []model.RecipeReference
+	GeneratedBy   string
+	Model         string
+	PromptVersion string
+	PromptHash    string
 }
 
-func allowedUniqueEvidenceIDs(values []string, evidence []model.IntegrationEvidence) bool {
-	if len(values) == 0 {
-		return false
-	}
-	allowed := make(map[string]bool, len(evidence))
-	for _, item := range evidence {
-		allowed[item.ResourceID] = item.ResourceID != ""
-	}
-	seen := make(map[string]bool, len(values))
-	for _, id := range values {
-		id = strings.TrimSpace(id)
-		if id == "" || !allowed[id] || seen[id] {
-			return false
+func recipeAIRequestHash(invocation aiInvocation) string {
+	encoded, _ := json.Marshal(struct {
+		System     string          `json:"system"`
+		User       string          `json:"user"`
+		SchemaName string          `json:"schema_name"`
+		Schema     json.RawMessage `json:"schema"`
+	}{System: invocation.System, User: invocation.User, SchemaName: invocation.SchemaName, Schema: invocation.Schema})
+	return contentHash(encoded)
+}
+
+func selectRecipeReferences(ids []string, allowed []model.RecipeReference) ([]model.RecipeReference, bool) {
+	byID := make(map[string]model.RecipeReference, len(allowed))
+	ambiguous := make(map[string]bool)
+	for _, reference := range allowed {
+		if reference.ResourceID == "" {
+			continue
 		}
+		if _, exists := byID[reference.ResourceID]; exists {
+			ambiguous[reference.ResourceID] = true
+		}
+		byID[reference.ResourceID] = reference
+	}
+	selected := make([]model.RecipeReference, 0, len(ids))
+	seen := make(map[string]bool)
+	for _, rawID := range ids {
+		id := strings.TrimSpace(rawID)
+		reference, exists := byID[id]
+		if id == "" || !exists || ambiguous[id] || seen[id] {
+			return nil, false
+		}
+		selected = append(selected, reference)
 		seen[id] = true
 	}
-	return true
+	return selected, true
 }
 
-func aiAuthoredRecipeMatchesSelection(markdown string, analysis model.IntegrationAnalysis, seed model.RecipeSeed) bool {
-	selected := recipeSelectedEndpoints(analysis.Plan, seed)
-	if len(selected) == 0 {
-		return false
-	}
-	for _, endpoint := range selected {
-		if !strings.Contains(markdown, endpoint.Path) || !strings.Contains(strings.ToUpper(markdown), strings.ToUpper(endpoint.Method)) || !strings.Contains(strings.ToLower(markdown), strings.ToLower(endpoint.Identity)) {
-			return false
-		}
-	}
-	selectedNames := make(map[string]bool, len(selected))
-	for _, endpoint := range selected {
-		selectedNames[endpoint.Name] = true
-	}
-	for _, endpoint := range analysis.Plan.Endpoints {
-		if !selectedNames[endpoint.Name] && endpoint.Path != "/" && strings.Contains(markdown, endpoint.Path) {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Service) authorRecipe(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, instruction string) (string, []model.RecipeReference, string, string) {
-	selectedEvidence, selectionOK := recipeSelectedEvidence(analysis.Evidence, seed.EvidenceIDs)
-	selectedAnalysis := recipeAnalysisWithEvidence(analysis, selectedEvidence)
-	allowed := recipeReferences(selectedEvidence)
-	fallback := deterministicRecipeMarkdown(product, selectedAnalysis, seed, allowed)
+func (s *Service) authorRecipe(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, instruction string) (authoredRecipe, error) {
+	selectedEvidence, selectionOK := recipeResolveProductSelection(analysis, seed)
 	if !selectionOK {
-		return fallback, nil, "deterministic", ""
+		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
-	if len(recipeSelectedEndpoints(analysis.Plan, seed)) == 0 {
-		return fallback, allowed, "deterministic", ""
+	selectedAnalysis := recipeAnalysisWithEvidence(analysis, selectedEvidence)
+	canonicalSpec, err := deterministicRecipeSpec(analysis, seed)
+	if err != nil {
+		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
-	allowedEvidenceIDs := evidenceIDs(selectedEvidence)
-	allowedReferenceIDs := make([]string, 0, len(allowed))
-	for _, reference := range allowed {
+	allowedReferences := recipeReferences(selectedEvidence)
+	allowedReferenceIDs := make([]string, 0, len(allowedReferences))
+	for _, reference := range allowedReferences {
 		if reference.ResourceID != "" {
 			allowedReferenceIDs = append(allowedReferenceIDs, reference.ResourceID)
 		}
 	}
-	prompt, _ := json.Marshal(map[string]any{"product": map[string]string{"name": product.Name, "slug": product.Slug}, "platform_contract": analysis.Plan, "evidence": selectedEvidence, "recipe": seed, "allowed_evidence_ids": allowedEvidenceIDs, "allowed_reference_ids": allowedReferenceIDs, "editor_instruction": strings.TrimSpace(instruction)})
-	result, err := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_authoring", PromptKey: AIPromptKeyRecipeAuthoring, User: string(prompt), SchemaName: "recipe", Schema: recipeAuthoringSchema, MaxOutput: 8192, Temperature: 0.1})
-	if err != nil {
-		return fallback, allowed, "deterministic", ""
-	}
-	var response recipeAuthoringResponse
-	if decodeStrictAIResult(result.JSON, &response) != nil || strings.TrimSpace(response.Markdown) == "" || !allowedUniqueEvidenceIDs(response.EvidenceIDs, selectedEvidence) {
-		return fallback, allowed, "deterministic", ""
-	}
-	allowedByID := make(map[string]model.RecipeReference, len(allowed))
-	for _, reference := range allowed {
-		allowedByID[reference.ResourceID] = reference
-	}
-	selected := make([]model.RecipeReference, 0, len(response.ReferenceIDs))
-	seen := make(map[string]bool)
-	for _, id := range response.ReferenceIDs {
-		if reference, ok := allowedByID[id]; ok && !seen[id] {
-			selected, seen[id] = append(selected, reference), true
+	prompt, _ := json.Marshal(map[string]any{
+		"product":               map[string]string{"name": product.Name, "slug": product.Slug},
+		"recipe":                seed,
+		"product_evidence":      selectedEvidence,
+		"allowed_evidence_ids":  evidenceIDs(selectedEvidence),
+		"allowed_reference_ids": allowedReferenceIDs,
+		"editor_instruction":    strings.TrimSpace(instruction),
+	})
+	invocation := aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_authoring", PromptKey: AIPromptKeyRecipeAuthoring, User: string(prompt), SchemaName: "recipe", Schema: recipeAuthoringSchema, MaxOutput: 8192, Temperature: 0.1}
+	prepared, prepareErr := s.prepareAIInvocation(ctx, invocation)
+	if prepareErr == nil {
+		result, generateErr := s.generateAIStructured(ctx, prepared)
+		if generateErr == nil {
+			var response recipeAuthoringResponse
+			if decodeStrictAIResult(result.JSON, &response) == nil && response.Status == "ready" && len(response.Gaps) == 0 {
+				references, referencesOK := selectRecipeReferences(response.ReferenceIDs, allowedReferences)
+				if referencesOK {
+					spec := canonicalSpec
+					spec.ReferenceIDs = append([]string(nil), response.ReferenceIDs...)
+					recipe := model.Recipe{IntegrationID: spec.IntegrationID, ContractVersion: model.RecipeContractProductIntegrationV2, Title: seed.Title, Outcome: seed.Outcome, Audience: "coding_agent"}
+					findings := validateRecipeSpec(spec, recipe, selectedEvidence)
+					markdown := renderRecipeSpec(spec, references)
+					findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, references, recipeGroundedURLs(selectedAnalysis)...)...)
+					if !hasRecipeErrors(findings) {
+						return authoredRecipe{Spec: spec, Markdown: markdown, References: references, GeneratedBy: "ai", Model: firstNonEmpty(result.ResolvedModel, result.RequestedModel), PromptVersion: prepared.PromptVersion, PromptHash: recipeAIRequestHash(prepared)}, nil
+					}
+				}
+			}
 		}
 	}
-	markdown := appendRecipeReferences(response.Markdown, selected)
-	if !aiAuthoredRecipeMatchesSelection(markdown, analysis, seed) || hasRecipeErrors(validateRecipeMarkdown(markdown, seed.Title, selected, recipeGroundedURLs(selectedAnalysis)...)) {
-		return fallback, allowed, "deterministic", ""
+
+	spec := canonicalSpec
+	// Deterministic output includes no optional reading list. Its factual URLs
+	// are direct, server-owned operation facts and are validated as grounded.
+	markdown := renderRecipeSpec(spec, nil)
+	recipe := model.Recipe{IntegrationID: spec.IntegrationID, ContractVersion: model.RecipeContractProductIntegrationV2, Title: seed.Title, Outcome: seed.Outcome, Audience: "coding_agent"}
+	findings := validateRecipeSpec(spec, recipe, selectedEvidence)
+	findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, nil, recipeGroundedURLs(selectedAnalysis)...)...)
+	if hasRecipeErrors(findings) {
+		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
-	return markdown, selected, "ai", firstNonEmpty(result.ResolvedModel, result.RequestedModel)
+	return authoredRecipe{Spec: spec, Markdown: markdown, GeneratedBy: "deterministic"}, nil
 }
 
-func (s *Service) reviewRecipe(ctx context.Context, product model.Product, recipe model.Recipe, markdown string, findings []model.RecipeValidationFinding) (string, []model.RecipeValidationFinding) {
-	reviewInput := map[string]any{"recipe": map[string]string{"title": recipe.Title, "outcome": recipe.Outcome, "audience": recipe.Audience}, "markdown": markdown, "deterministic_findings": findings}
-	if analysis, analysisErr := s.store.IntegrationAnalysis(ctx, product.ID, recipe.AnalysisID); analysisErr == nil {
-		reviewInput["integration_plan"] = analysis.Plan
-		if selectedEvidence, ok := recipeEvidenceForDependencies(analysis.Evidence, recipe.Dependencies); ok {
-			reviewInput["evidence"] = selectedEvidence
-		} else {
-			reviewInput["evidence"] = []model.IntegrationEvidence{}
-		}
+func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec model.RecipeSpec, markdown string, selectedEvidence []model.IntegrationEvidence, findings []model.RecipeValidationFinding) (string, []model.RecipeValidationFinding) {
+	reviewInput := map[string]any{
+		"recipe_spec":            spec,
+		"rendered_markdown":      markdown,
+		"product_evidence":       selectedEvidence,
+		"deterministic_findings": findings,
 	}
 	prompt, _ := json.Marshal(reviewInput)
 	result, err := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_review", PromptKey: AIPromptKeyRecipeReview, User: string(prompt), SchemaName: "recipe_review", Schema: recipeReviewSchema, MaxOutput: 4096, Temperature: 0})
 	if err != nil {
-		return "AI review was unavailable; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_unavailable", Message: "The review workload did not complete. Review every claim before approval."})
+		return "AI review was unavailable; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_unavailable", Message: "The advisory review did not complete. Review every claim before approval."})
 	}
 	var response recipeReviewResponse
-	if decodeStrictAIResult(result.JSON, &response) != nil || (response.Recommendation != "pass" && response.Recommendation != "revise") || strings.TrimSpace(response.Summary) == "" || len(response.Summary) > 2000 {
-		return "AI review returned an invalid result; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_invalid", Message: "The review result was invalid. Review every claim before approval."})
+	if decodeStrictAIResult(result.JSON, &response) != nil || (response.Recommendation != "pass" && response.Recommendation != "revise") || strings.TrimSpace(response.Summary) == "" || len(response.Summary) > 2000 || containsToolBuilderSecretText(response.Summary) || containsRecipeRawHTML(response.Summary) || recipeContainsURI(response.Summary) {
+		return "AI review returned an invalid result; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_invalid", Message: "The advisory review was invalid. Review every claim before approval."})
 	}
 	seenFinding := make(map[string]bool)
 	acceptedFindings := 0
 	for _, finding := range response.Findings {
 		finding.Level, finding.Code, finding.Message = strings.ToLower(strings.TrimSpace(finding.Level)), strings.ToLower(strings.TrimSpace(finding.Code)), strings.TrimSpace(finding.Message)
-		if !map[string]bool{"info": true, "warning": true, "error": true}[finding.Level] || finding.Code == "" || len(finding.Code) > 80 || finding.Message == "" || len(finding.Message) > 500 || containsToolBuilderSecretText(finding.Message) {
+		if !map[string]bool{"info": true, "warning": true, "error": true}[finding.Level] || finding.Code == "" || len(finding.Code) > 80 || finding.Message == "" || len(finding.Message) > 500 || containsToolBuilderSecretText(finding.Message) || containsRecipeRawHTML(finding.Message) || recipeContainsURI(finding.Message) {
 			continue
 		}
 		if finding.Level == "error" {
@@ -936,7 +578,7 @@ func (s *Service) reviewRecipe(ctx context.Context, product model.Product, recip
 		acceptedFindings++
 	}
 	if response.Recommendation == "revise" && acceptedFindings == 0 {
-		findings = append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_revise", Message: "The advisory reviewer recommends revision but did not return a usable finding; inspect every claim before approval."})
+		findings = append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_revise", Message: "The advisory reviewer recommends revision but returned no usable finding; inspect every claim before approval."})
 	}
 	return strings.TrimSpace(response.Summary), findings
 }

@@ -4,14 +4,167 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
+
+type publishedRecipeSummary struct {
+	URI             string     `json:"uri"`
+	Slug            string     `json:"slug"`
+	Title           string     `json:"title"`
+	Outcome         string     `json:"outcome"`
+	IntegrationID   string     `json:"integration_id"`
+	ContractVersion string     `json:"contract_version"`
+	RevisionID      string     `json:"revision_id"`
+	PublishedAt     *time.Time `json:"published_at"`
+}
+
+const maxRecipeSelectionCandidates = 25
+
+func recipeSummary(value model.Recipe) publishedRecipeSummary {
+	return publishedRecipeSummary{
+		URI:             value.StableURI,
+		Slug:            value.Slug,
+		Title:           value.Title,
+		Outcome:         value.Outcome,
+		IntegrationID:   value.IntegrationID,
+		ContractVersion: value.ContractVersion,
+		RevisionID:      value.CurrentRevisionID,
+		PublishedAt:     value.PublishedAt,
+	}
+}
+
+func sortedRecipeSummaries(values []model.Recipe) []publishedRecipeSummary {
+	result := make([]publishedRecipeSummary, 0, len(values))
+	for _, value := range values {
+		result = append(result, recipeSummary(value))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := strings.ToLower(result[i].Title), strings.ToLower(result[j].Title)
+		if left != right {
+			return left < right
+		}
+		return result[i].URI < result[j].URI
+	})
+	return result
+}
+
+func boundedRecipeSummaries(values []model.Recipe) ([]publishedRecipeSummary, bool) {
+	result := sortedRecipeSummaries(values)
+	if len(result) <= maxRecipeSelectionCandidates {
+		return result, false
+	}
+	return result[:maxRecipeSelectionCandidates], true
+}
+
+func recipeSummaryOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"uri":              map[string]any{"type": "string"},
+			"slug":             map[string]any{"type": "string"},
+			"title":            map[string]any{"type": "string"},
+			"outcome":          map[string]any{"type": "string"},
+			"integration_id":   map[string]any{"type": "string"},
+			"contract_version": map[string]any{"type": "string", "const": model.RecipeContractProductIntegrationV2},
+			"revision_id":      map[string]any{"type": "string"},
+			"published_at":     map[string]any{"type": "string", "format": "date-time"},
+		},
+		"required": []string{"uri", "slug", "title", "outcome", "integration_id", "contract_version", "revision_id", "published_at"},
+	}
+}
+
+func recipeListOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           map[string]any{"recipes": map[string]any{"type": "array", "items": recipeSummaryOutputSchema()}},
+		"required":             []string{"recipes"},
+	}
+}
+
+func recipePlanOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"recipe_uri":       map[string]any{"type": "string"},
+			"title":            map[string]any{"type": "string"},
+			"outcome":          map[string]any{"type": "string"},
+			"integration_id":   map[string]any{"type": "string"},
+			"contract_version": map[string]any{"type": "string", "const": model.RecipeContractProductIntegrationV2},
+			"revision_id":      map[string]any{"type": "string"},
+			"next_step":        map[string]any{"type": "string"},
+		},
+		"required": []string{"recipe_uri", "title", "outcome", "integration_id", "contract_version", "revision_id", "next_step"},
+	}
+}
+
+func recipeCheckOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"recipe_uri":       map[string]any{"type": "string"},
+			"integration_id":   map[string]any{"type": "string"},
+			"contract_version": map[string]any{"type": "string", "const": model.RecipeContractProductIntegrationV2},
+			"state":            map[string]any{"type": "string", "const": "published"},
+			"current":          map[string]any{"type": "boolean", "const": true},
+			"needs_attention":  map[string]any{"type": "boolean", "const": false},
+			"revision_id":      map[string]any{"type": "string"},
+			"published_at":     map[string]any{"type": "string", "format": "date-time"},
+		},
+		"required": []string{"recipe_uri", "integration_id", "contract_version", "state", "current", "needs_attention", "revision_id", "published_at"},
+	}
+}
+
+func normalizeRecipeLookup(value string) string {
+	parts := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(value)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	return strings.Join(parts, " ")
+}
+
+// exactRecipeMatch deliberately does not rank or guess. A coding agent may
+// select a recipe only when its request exactly identifies one published
+// title, slug, or outcome after harmless punctuation and whitespace folding.
+func exactRecipeMatch(values []model.Recipe, requested string) (*model.Recipe, []model.Recipe) {
+	needle := normalizeRecipeLookup(requested)
+	if needle == "" {
+		return nil, nil
+	}
+	matches := make([]model.Recipe, 0, 1)
+	for _, value := range values {
+		if needle == normalizeRecipeLookup(value.Title) || needle == normalizeRecipeLookup(value.Slug) || needle == normalizeRecipeLookup(value.Outcome) {
+			matches = append(matches, value)
+		}
+	}
+	if len(matches) != 1 {
+		return nil, matches
+	}
+	selected := matches[0]
+	return &selected, matches
+}
+
+func exactRecipeToolStringArgument(arguments map[string]any, key string) (string, bool) {
+	if len(arguments) != 1 {
+		return "", false
+	}
+	value, ok := arguments[key].(string)
+	value = strings.TrimSpace(value)
+	if !ok || value == "" || len([]rune(value)) > 500 {
+		return "", false
+	}
+	return value, true
+}
 
 func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rpcRequest, productID string, public bool, productManifest model.ProductManifest, manifestErr error) {
 	params, err := decodeToolCallParams(request.Params)
@@ -34,44 +187,51 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 	}
 	switch params.Name {
 	case "integration.recipes.list":
+		if len(params.Arguments) != 0 {
+			writeRPCError(w, request.ID, -32602, "Recipe list arguments must be empty")
+			return
+		}
 		values, err := s.publishedRecipes(ctx, productID, public)
 		if err != nil {
 			writeRPCError(w, request.ID, -32603, "Recipes could not be listed")
 			return
 		}
-		writeToolResult(w, request.ID, map[string]any{"recipes": values})
+		writeToolResult(w, request.ID, map[string]any{"recipes": sortedRecipeSummaries(values)})
 	case "integration.plan":
-		outcome, _ := params.Arguments["outcome"].(string)
-		values, err := s.publishedRecipes(ctx, productID, public)
-		if err != nil || strings.TrimSpace(outcome) == "" {
+		outcome, valid := exactRecipeToolStringArgument(params.Arguments, "outcome")
+		if !valid {
 			writeRPCError(w, request.ID, -32602, "A valid integration outcome is required")
 			return
 		}
-		var selected *model.Recipe
-		needle := strings.ToLower(strings.TrimSpace(outcome))
-		for index := range values {
-			candidate := strings.ToLower(values[index].Title + " " + values[index].Outcome)
-			if selected == nil || strings.Contains(candidate, needle) || strings.Contains(needle, strings.ToLower(values[index].Slug)) {
-				copy := values[index]
-				selected = &copy
-				if strings.Contains(candidate, needle) {
-					break
-				}
-			}
-		}
-		if selected == nil {
-			writeRPCError(w, request.ID, -32004, "No published recipe matches this outcome")
+		values, err := s.publishedRecipes(ctx, productID, public)
+		if err != nil {
+			writeRPCError(w, request.ID, -32603, "Recipes could not be listed")
 			return
 		}
-		writeToolResult(w, request.ID, map[string]any{"recipe_uri": selected.StableURI, "title": selected.Title, "outcome": selected.Outcome, "revision_id": selected.CurrentRevisionID, "next_step": "Read the recipe resource, verify its prerequisites, then implement and validate each step."})
+		selected, matches := exactRecipeMatch(values, outcome)
+		if selected == nil {
+			if len(matches) > 1 {
+				candidates, truncated := boundedRecipeSummaries(matches)
+				writeRPCErrorData(w, request.ID, -32009, "More than one published recipe exactly matches this outcome", map[string]any{"reason": "ambiguous_exact_match", "candidate_count": len(matches), "candidates_truncated": truncated, "candidates": candidates})
+				return
+			}
+			candidates, truncated := boundedRecipeSummaries(values)
+			writeRPCErrorData(w, request.ID, -32004, "No published recipe exactly matches this outcome", map[string]any{"reason": "no_exact_match", "candidate_count": len(values), "candidates_truncated": truncated, "candidates": candidates})
+			return
+		}
+		writeToolResult(w, request.ID, map[string]any{"recipe_uri": selected.StableURI, "title": selected.Title, "outcome": selected.Outcome, "integration_id": selected.IntegrationID, "contract_version": selected.ContractVersion, "revision_id": selected.CurrentRevisionID, "next_step": "Read the recipe resource, then implement and verify its minimal product-integration steps. MCP is already connected."})
 	case "integration.check":
-		recipeURI, _ := params.Arguments["recipe_uri"].(string)
+		recipeURI, valid := exactRecipeToolStringArgument(params.Arguments, "recipe_uri")
+		if !valid {
+			writeRPCError(w, request.ID, -32602, "A valid recipe URI is required")
+			return
+		}
 		recipe, err := s.publishedRecipeByURI(ctx, productID, recipeURI, public)
 		if err != nil {
 			writeRPCError(w, request.ID, -32004, "Recipe resource not found")
 			return
 		}
-		writeToolResult(w, request.ID, map[string]any{"recipe_uri": recipe.StableURI, "state": recipe.State, "current": recipe.State == "published" && !recipe.NeedsAttention, "needs_attention": recipe.NeedsAttention, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt})
+		writeToolResult(w, request.ID, map[string]any{"recipe_uri": recipe.StableURI, "integration_id": recipe.IntegrationID, "contract_version": recipe.ContractVersion, "state": recipe.State, "current": recipe.State == "published" && !recipe.NeedsAttention, "needs_attention": recipe.NeedsAttention, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt})
 	case "deployment.get_manifest", "product.get_manifest":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")

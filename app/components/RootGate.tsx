@@ -297,7 +297,7 @@ function LoginScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
 }
 
 function AuthShell({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children?: React.ReactNode }) {
-  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><span className="brand-mark">D</span><strong>DokoSoko</strong></div><span className="auth-icon">{icon}</span><h1 className="type-section-title">{title}</h1><p className="type-body">{description}</p>{children}</section><footer className="type-caption">Private by default · MFA enforced · security events audited</footer></main>;
+  return <main className="auth-shell"><section className="auth-card"><span className="auth-icon">{icon}</span><h1 className="type-section-title">{title}</h1><p className="type-body">{description}</p>{children}</section><footer className="type-caption">Private by default · MFA enforced · security events audited</footer></main>;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {

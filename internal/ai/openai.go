@@ -44,6 +44,10 @@ func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
 	}
+	httpClient, err = boundedNativeHTTPClient(httpClient)
+	if err != nil {
+		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
+	}
 	client := openaisdk.NewClient(
 		openaioption.WithAPIKey(provider.Credential),
 		openaioption.WithBaseURL(strings.TrimRight(provider.Endpoint, "/")+"/v1"),
@@ -65,6 +69,9 @@ func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	response, err := client.Responses.New(ctx, params)
 	duration := time.Since(started)
 	if err != nil {
+		if errors.Is(err, errProviderResponseTooLarge) {
+			return Result{}, nativeTransportError(provider.Provider, err)
+		}
 		var apiError *openaisdk.Error
 		if errors.As(err, &apiError) {
 			return Result{}, nativeHTTPError(provider.Provider, apiError.StatusCode, apiError.Code, apiError.Type, err)
@@ -74,6 +81,9 @@ func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	if response == nil {
 		return Result{}, &Error{Code: ErrorProviderUnavailable, Provider: provider.Provider, Retryable: true}
 	}
+	if openAIResponseRefused(response) {
+		return Result{}, &Error{Code: ErrorRefusedOutput, Provider: provider.Provider}
+	}
 	if finishErr := validateStructuredFinishReason(provider.Provider, firstNonEmpty(response.IncompleteDetails.Reason, string(response.Status)), "completed"); finishErr != nil {
 		return Result{}, finishErr
 	}
@@ -81,6 +91,24 @@ func (a *OpenAIAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	result := Result{Text: text, Provider: provider.Provider, RequestedModel: model, ResolvedModel: string(response.Model), RequestID: response.ID, FinishReason: string(response.Status), InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, Duration: duration}
 	result.JSON = json.RawMessage(text)
 	return result, nil
+}
+
+func openAIResponseRefused(response *responses.Response) bool {
+	if response == nil {
+		return false
+	}
+	errorCode := strings.ToLower(string(response.Error.Code))
+	if strings.Contains(errorCode, "policy") || strings.Contains(errorCode, "safety") || strings.Contains(errorCode, "content_filter") {
+		return true
+	}
+	for _, item := range response.Output {
+		for _, content := range item.Content {
+			if strings.EqualFold(content.Type, "refusal") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var _ Adapter = (*OpenAIAdapter)(nil)

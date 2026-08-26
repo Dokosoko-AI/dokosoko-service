@@ -52,11 +52,18 @@ func (p *Postgres) UpdateDeployment(ctx context.Context, value model.Deployment,
 }
 
 func bumpDeploymentCatalog(ctx context.Context, tx pgx.Tx, deploymentID string) error {
-	if _, err := tx.Exec(ctx, `UPDATE deployments SET catalog_revision=catalog_revision+1,updated_at=now() WHERE id=$1`, deploymentID); err != nil {
+	var revision int64
+	if err := tx.QueryRow(ctx, `UPDATE deployments SET catalog_revision=catalog_revision+1,updated_at=now() WHERE id=$1 RETURNING catalog_revision`, deploymentID).Scan(&revision); err != nil {
 		return databaseError(err)
 	}
-	_, err := tx.Exec(ctx, `UPDATE products SET catalog_revision=catalog_revision+1,updated_at=now() WHERE id=$1`, deploymentID)
-	return databaseError(err)
+	result, err := tx.Exec(ctx, `UPDATE products SET catalog_revision=$2,updated_at=now() WHERE id=$1`, deploymentID, revision)
+	if err != nil {
+		return databaseError(err)
+	}
+	if result.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 const integrationSelect = `SELECT id::text,deployment_id::text,organisation_id::text,family_key,version_key,display_name,description,visibility,lifecycle,coalesce(replacement_integration_id::text,''),sunset_at,revision,created_at,updated_at FROM integrations`

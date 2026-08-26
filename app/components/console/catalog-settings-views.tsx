@@ -18,7 +18,7 @@ import { toolIsCommon } from "../integrations/tool-scope";
 import {
   type AIWorkload, ConsoleLink, EntityLink, SettingsCard, aiModelDefaults,
   activeRecipeIntegrationID, aiModelOptions, aiProviderLabel, aiProviders, aiWorkloads, analysisMatchesIntegration,
-  recipeMatchesIntegration, toolPolicy, toolStateLabel,
+  recipeHasScopeDependencyMismatch, recipeMatchesIntegration, recipeScopeIDs, toolPolicy, toolStateLabel,
 } from "./shared";
 
 function ToolsWorkspaceTabs({ active, onNavigate }: { active: "catalog" | "connections"; onNavigate: (path: string) => void }) {
@@ -33,10 +33,10 @@ export function ToolsView({ tools, integrations, connections, nativePlugins, onS
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
   const visible = tools.filter((tool) => !normalized || `${tool.namespace}.${tool.name} ${tool.description}`.toLowerCase().includes(normalized));
-  return <><PageHeading eyebrow="Execution" title="Tools" action={<ConsoleLink path={toolBuilderPath()} onNavigate={onNavigate} className="button-link"><Plus />Create HTTP tool</ConsoleLink>} /><ToolsWorkspaceTabs active="catalog" onNavigate={onNavigate} />
-    <section className="panel"><PanelHeader title="Native tools" description="Reviewed in-process capabilities registered by the service." />{nativePlugins.map((plugin) => <div className="provider-row" key={plugin.id}><span className="settings-icon"><Wrench /></span><span><strong>{plugin.id}</strong><small>{plugin.description}</small></span><Badge color={plugin.state === "active" ? "green" : "zinc"}>{plugin.state}</Badge><Button outline onClick={() => void onSetNativePluginEnabled(plugin.id, plugin.state !== "active")}>{plugin.state === "active" ? "Disable" : "Enable"}</Button></div>)}{nativePlugins.length === 0 && <div className="empty-row">No native plugin is registered.</div>}</section>
+  return <><PageHeading eyebrow="Execution" title="Tools" action={<ConsoleLink path={toolBuilderPath()} onNavigate={onNavigate} className="core-button core-button-dark"><Plus data-slot="icon" />Create HTTP tool</ConsoleLink>} /><ToolsWorkspaceTabs active="catalog" onNavigate={onNavigate} />
     <div className="toolbar"><div className="search-field"><input aria-label="Search tools" placeholder="Search tools…" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div>
-    <DataTable label="Tool catalog"><DataTableHeader className="tool-columns"><span>Tool</span><span>Backend</span><span>Policy</span><span>State</span><span>Open</span></DataTableHeader>{visible.map((tool) => { const policy = toolPolicy(tool); return <DataTableRow className="tool-columns" key={tool.id}><span className="resource-name"><span className="resource-icon"><TerminalSquare /></span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.owner_integration_id ? integrations.find((item) => item.id === tool.owner_integration_id)?.display_name ?? "API-owned" : toolIsCommon(tool) ? "Common" : "Scoped"}</small></span></span><span>{tool.backend_kind === "mcp" ? connections.find((item) => item.id === tool.mcp_connection_id)?.name ?? "MCP" : tool.http_method}</span><span>{policy.risk} · {policy.requiredGrants.length} grant{policy.requiredGrants.length === 1 ? "" : "s"}</span><Badge color={tool.state === "published" && !tool.upstream_drifted ? "green" : tool.upstream_drifted ? "red" : "amber"}>{tool.upstream_drifted ? "drifted" : toolStateLabel(tool)}</Badge><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow"><ChevronRight /></ConsoleLink></DataTableRow>; })}{visible.length === 0 && <DataTableEmpty columns={5}>No tools match this search.</DataTableEmpty>}</DataTable>
+    <DataTable label="Tool catalog"><DataTableHeader className="tool-columns"><span>Tool</span><span>Backend</span><span>Policy</span><span>State</span><span>Open</span></DataTableHeader>{visible.map((tool) => { const policy = toolPolicy(tool); return <DataTableRow className="tool-columns" key={tool.id}><span className="resource-name"><span className="resource-icon"><TerminalSquare /></span><span><EntityLink entity="tool" uid={tool.id} onNavigate={onNavigate} className="entity-link"><strong>{tool.namespace}.{tool.name}</strong></EntityLink><small>{tool.owner_integration_id ? integrations.find((item) => item.id === tool.owner_integration_id)?.display_name ?? "API-owned" : toolIsCommon(tool) ? "Common" : "Scoped"}</small></span></span><span>{tool.backend_kind === "mcp" ? connections.find((item) => item.id === tool.mcp_connection_id)?.name ?? "MCP" : tool.http_method}</span><span>{policy.risk} · {policy.requiredGrants.length} grant{policy.requiredGrants.length === 1 ? "" : "s"}</span><Badge color={tool.state === "published" && !tool.upstream_drifted ? "green" : tool.upstream_drifted ? "red" : "amber"}>{tool.upstream_drifted ? "drifted" : toolStateLabel(tool)}</Badge><ConsoleLink path={entityPath("tool", tool.id)} onNavigate={onNavigate} className="row-arrow" ariaLabel={`Open ${tool.namespace}.${tool.name}`}><ChevronRight /></ConsoleLink></DataTableRow>; })}{visible.length === 0 && <DataTableEmpty columns={5}>No tools match this search.</DataTableEmpty>}</DataTable>
+    <section className="panel"><PanelHeader title="Native tools" description="Reviewed in-process capabilities registered by the service." />{nativePlugins.map((plugin) => <div className="provider-row" key={plugin.id}><span className="settings-icon"><Wrench /></span><span><strong>{plugin.id}</strong><small>{plugin.description}</small></span><Badge color={plugin.state === "active" ? "green" : "zinc"}>{plugin.state}</Badge><Button outline onClick={() => void onSetNativePluginEnabled(plugin.id, plugin.state !== "active")}>{plugin.state === "active" ? "Disable" : "Enable"}</Button></div>)}{nativePlugins.length === 0 && <div className="empty-row">No native plugin is registered.</div>}</section>
   </>;
 }
 
@@ -52,10 +52,6 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
   onApprove: (recipe: APIRecipe) => void;
   onPublish: (recipe: APIRecipe) => void;
 }) {
-  function recipeScopeIDs(recipe: APIRecipe) {
-    return recipe.dependencies.filter((dependency) => dependency.kind === "integration_scope").map((dependency) => dependency.resource_id);
-  }
-
   const [selectedIntegrationID, setSelectedIntegrationID] = useState("");
   const activeIntegrationID = activeRecipeIntegrationID(integrations, selectedIntegrationID);
   const selectedAnalysis = activeIntegrationID
@@ -63,18 +59,21 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, activeIntegrationID))
       .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]
     : undefined;
-  const visibleRecipes = activeIntegrationID
-    ? recipes.filter((recipe) => recipeMatchesIntegration(recipe, activeIntegrationID))
-    : [];
   const unscopedOrInvalidRecipes = recipes.filter((recipe) => {
     const scopeIDs = recipeScopeIDs(recipe);
-    return scopeIDs.length !== 1 || !integrations.some((integration) => integration.id === scopeIDs[0]);
+    return recipeHasScopeDependencyMismatch(recipe) || scopeIDs.length !== 1 || !integrations.some((integration) => integration.id === scopeIDs[0]);
   });
+  const invalidRecipeIDs = new Set(unscopedOrInvalidRecipes.map((recipe) => recipe.id));
+  const visibleRecipes = activeIntegrationID
+    ? recipes.filter((recipe) => !invalidRecipeIDs.has(recipe.id) && recipeMatchesIntegration(recipe, activeIntegrationID))
+    : [];
 
   function renderRecipe(recipe: APIRecipe) {
     const scopeIDs = recipeScopeIDs(recipe);
     const scopedIntegration = scopeIDs.length === 1 ? integrations.find((integration) => integration.id === scopeIDs[0]) : undefined;
-    const invalidScope = scopeIDs.length > 1 || (scopeIDs.length === 1 && !scopedIntegration);
+    const invalidContract = recipe.contract_version !== "product-integration-v2" || recipe.current_revision?.spec_version !== 2;
+    const dependencyMismatch = recipeHasScopeDependencyMismatch(recipe);
+    const invalidScope = invalidContract || dependencyMismatch || scopeIDs.length !== 1 || !scopedIntegration;
     const scopeLabel = scopeIDs.length === 0
       ? "Deployment-wide"
       : scopeIDs.length > 1
@@ -84,7 +83,7 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       <span className="settings-icon"><BookOpen /></span>
       <span><strong>{recipe.title}</strong><small>{recipe.outcome} · {scopeLabel}</small></span>
       <span className="tool-badges">
-        {invalidScope && <Badge color="red">invalid scope</Badge>}
+        {invalidContract ? <Badge color="red">legacy contract</Badge> : dependencyMismatch ? <Badge color="red">scope dependency mismatch</Badge> : invalidScope && <Badge color="red">invalid scope</Badge>}
         {recipe.needs_attention && <Badge color="amber">needs review</Badge>}
         <Badge color={recipe.state === "published" ? "green" : recipe.state === "approved" ? "blue" : "zinc"}>{recipe.state}</Badge>
       </span>
@@ -107,14 +106,14 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       </span>}
     />
     <section className="panel">
-      <PanelHeader title="Recipe scope" description="Every generated recipe is grounded in one API's exact reviewed evidence." />
+      <PanelHeader title="Recipe scope" description="Each recipe implements one tangible product capability and is grounded in this API's exact reviewed evidence." />
       <div className="recipe-scope-body">
         <label className="auth-field"><span>API</span><Select aria-label="Recipe API" value={activeIntegrationID} onChange={(event) => setSelectedIntegrationID(event.target.value)}><option value="">Choose an API</option>{integrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name} · {integration.version_key}</option>)}</Select></label>
         <IntegrationEvidenceGaps unknowns={selectedAnalysis?.unknowns ?? []} />
       </div>
     </section>
     <section className="panel">
-      <PanelHeader title="Setup and usage recipes" description="Reviewed guidance grounded in published documentation and API evidence." />
+      <PanelHeader title="Coding-agent implementation recipes" description="Minimal product-integration steps delivered after the coding agent connects through MCP." />
       {visibleRecipes.map(renderRecipe)}
       {visibleRecipes.length === 0 && <div className="empty-row">{activeIntegrationID ? "No recipes for this API yet." : "Choose an API to review its recipes."}</div>}
     </section>
@@ -126,7 +125,7 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
 }
 
 export function OutboxView({ submissions, events, onView, onNavigate }: { submissions: APISupportSubmission[]; events: APIAuditEvent[]; onView: (submission: APISupportSubmission) => void; onNavigate: (path: string) => void }) {
-  return <><PageHeading eyebrow="Operations" title="Support outbox" /><div className="notice"><ShieldCheck /><span><strong>Simple local outbox.</strong> User-approved bug reports and feedback remain queued as schema-bounded plaintext for administrator review. There is no delivery worker or external routing.</span></div><section className="panel"><PanelHeader title="Queued submissions" />{submissions.map((submission) => <button type="button" className="provider-row" key={submission.id} onClick={() => onView(submission)}><span className="settings-icon"><BookOpen /></span><span><strong>{submission.summary}</strong><small>{submission.trusted_integration?.display_name ?? "Deployment"} · {new Date(submission.created_at).toLocaleString()}</small></span><Badge color="blue">queued</Badge><ChevronRight /></button>)}{submissions.length === 0 && <div className="empty-row">The outbox is empty.</div>}</section><details className="panel advanced-details"><summary>Recent audit ({events.length})</summary><div className="advanced-details-body">{events.slice(0, 30).map((event) => <ConsoleLink key={event.id} path={entityPath("audit-event", event.id)} onNavigate={onNavigate} className="provider-row"><span><strong>{event.action}</strong><small>{event.target_type} · {event.target_id}</small></span><small>{new Date(event.created_at).toLocaleString()}</small></ConsoleLink>)}</div></details></>;
+  return <><PageHeading eyebrow="Operations" title="Support outbox" /><section className="panel"><PanelHeader title="Queued submissions" />{submissions.map((submission) => <button type="button" className="provider-row" key={submission.id} onClick={() => onView(submission)}><span className="settings-icon"><BookOpen /></span><span><strong>{submission.summary}</strong><small>{submission.trusted_integration?.display_name ?? "Deployment"} · {new Date(submission.created_at).toLocaleString()}</small></span><Badge color="blue">queued</Badge><ChevronRight /></button>)}{submissions.length === 0 && <div className="empty-row">The outbox is empty.</div>}</section><details className="panel advanced-details"><summary>Recent audit ({events.length})</summary><div className="advanced-details-body">{events.slice(0, 30).map((event) => <ConsoleLink key={event.id} path={entityPath("audit-event", event.id)} onNavigate={onNavigate} className="provider-row"><span><strong>{event.action}</strong><small>{event.target_type} · {event.target_id}</small></span><small>{new Date(event.created_at).toLocaleString()}</small></ConsoleLink>)}</div></details></>;
 }
 
 function SettingsTabs({ active, onNavigate }: { active: SettingsTab; onNavigate: (path: string) => void }) {

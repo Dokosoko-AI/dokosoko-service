@@ -37,6 +37,10 @@ func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
 	}
+	httpClient, err = boundedNativeHTTPClient(httpClient)
+	if err != nil {
+		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
+	}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: provider.Credential, Backend: genai.BackendGeminiAPI, HTTPClient: httpClient, HTTPOptions: genai.HTTPOptions{BaseURL: strings.TrimRight(provider.Endpoint, "/") + "/", APIVersion: "v1beta"}})
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
@@ -53,6 +57,9 @@ func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	response, err := client.Models.GenerateContent(ctx, model, genai.Text(user), config)
 	duration := time.Since(started)
 	if err != nil {
+		if errors.Is(err, errProviderResponseTooLarge) {
+			return Result{}, nativeTransportError(provider.Provider, err)
+		}
 		var apiError genai.APIError
 		if errors.As(err, &apiError) {
 			return Result{}, nativeHTTPError(provider.Provider, apiError.Code, apiError.Status, apiError.Message, err)
@@ -61,6 +68,9 @@ func (a *GoogleAdapter) generate(ctx context.Context, provider ProviderConfig, m
 	}
 	if response == nil {
 		return Result{}, &Error{Code: ErrorProviderUnavailable, Provider: provider.Provider, Retryable: true}
+	}
+	if response.PromptFeedback != nil && response.PromptFeedback.BlockReason != "" && response.PromptFeedback.BlockReason != genai.BlockedReasonUnspecified {
+		return Result{}, &Error{Code: ErrorRefusedOutput, Provider: provider.Provider}
 	}
 	finishReason := ""
 	if len(response.Candidates) > 0 && response.Candidates[0] != nil {

@@ -26,6 +26,8 @@ type productBuilderDoer struct {
 
 type aiFailoverDoer struct {
 	primaryStatus int
+	primaryBody   string
+	backupBody    string
 	requests      []string
 }
 
@@ -33,11 +35,62 @@ func (d *aiFailoverDoer) Do(request *http.Request) (*http.Response, error) {
 	d.requests = append(d.requests, request.URL.String())
 	status := http.StatusOK
 	body := `{"id":"resp_backup","model":"gpt-5.6-terra","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"description\":\"A grounded answer from the backup provider.\"}","annotations":[]}]}],"usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}}`
+	if d.backupBody != "" {
+		body = d.backupBody
+	}
 	if request.URL.Host == "primary.example.com" {
 		status = d.primaryStatus
 		body = `{"error":{"type":"provider_error"}}`
+		if d.primaryBody != "" {
+			body = d.primaryBody
+		}
 	}
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}, Request: request}, nil
+}
+
+func compatibleAICompletion(t *testing.T, content, refusal string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"id":    "completion-primary",
+		"model": "primary-analysis",
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message": map[string]string{
+				"content": content,
+				"refusal": refusal,
+			},
+		}},
+		"usage": map[string]int{"prompt_tokens": 11, "completion_tokens": 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func nativeOpenAICompletion(t *testing.T, content string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"id":     "response-backup",
+		"model":  "gpt-5.6-terra",
+		"status": "completed",
+		"output": []any{map[string]any{
+			"type":   "message",
+			"id":     "message-backup",
+			"status": "completed",
+			"role":   "assistant",
+			"content": []any{map[string]any{
+				"type":        "output_text",
+				"text":        content,
+				"annotations": []any{},
+			}},
+		}},
+		"usage": map[string]int{"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }
 
 func configureAIPrimaryAndBackup(t *testing.T, primaryStatus int) (*store.Memory, *platform.Service, model.Product, platform.Actor, *aiFailoverDoer) {
@@ -114,6 +167,95 @@ func TestAIBackupNeverHidesInvalidCredentials(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].ProviderRole != "primary" || events[0].ErrorCode != "invalid_credential" {
 		t.Fatalf("invalid credential usage events = %#v", events)
+	}
+}
+
+func TestAIBackupRetriesOneMalformedStructuredContract(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "invalid JSON", content: `{"description":`},
+		{name: "schema mismatch", content: `{"unexpected":true}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			memory, service, product, actor, doer := configureAIPrimaryAndBackup(t, http.StatusOK)
+			doer.primaryBody = compatibleAICompletion(t, test.content, "")
+
+			draft, err := service.RewriteProductDescription(ctx, product.ID, "Explain the API without inventing capabilities.", actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(draft, "backup provider") || len(doer.requests) != 2 {
+				t.Fatalf("fallback result=%q requests=%#v", draft, doer.requests)
+			}
+			events, err := memory.AIUsageEvents(ctx, product.ID, time.Now().UTC().Add(-time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var primary, backup *model.AIUsageEvent
+			for index := range events {
+				if events[index].ProviderRole == "backup" {
+					backup = &events[index]
+				} else {
+					primary = &events[index]
+				}
+			}
+			if len(events) != 2 || primary == nil || primary.Outcome != "failed" || primary.ErrorCode != "invalid_structured_output" || backup == nil || backup.FallbackReason != "invalid_structured_output" || backup.Outcome != "succeeded" {
+				t.Fatalf("malformed-output usage events = %#v", events)
+			}
+		})
+	}
+}
+
+func TestAIBackupNeverRetriesProviderRefusal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory, service, product, actor, doer := configureAIPrimaryAndBackup(t, http.StatusOK)
+	doer.primaryBody = compatibleAICompletion(t, "", "provider safety refusal")
+
+	if _, err := service.RewriteProductDescription(ctx, product.ID, "Explain the API.", actor); err == nil {
+		t.Fatal("provider refusal was accepted")
+	}
+	if len(doer.requests) != 1 || !strings.Contains(doer.requests[0], "primary.example.com") {
+		t.Fatalf("provider refusal unexpectedly used backup: %#v", doer.requests)
+	}
+	events, err := memory.AIUsageEvents(ctx, product.ID, time.Now().UTC().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].ProviderRole != "primary" || events[0].ErrorCode != "refused_output" {
+		t.Fatalf("provider refusal usage events = %#v", events)
+	}
+}
+
+func TestAIBackupStopsAfterOneMalformedBackupAttempt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory, service, product, actor, doer := configureAIPrimaryAndBackup(t, http.StatusOK)
+	doer.primaryBody = compatibleAICompletion(t, `{"description":`, "")
+	doer.backupBody = nativeOpenAICompletion(t, `{"description":`)
+
+	if _, err := service.RewriteProductDescription(ctx, product.ID, "Explain the API.", actor); err == nil {
+		t.Fatal("two malformed provider results were accepted")
+	}
+	if len(doer.requests) != 2 {
+		t.Fatalf("malformed backup triggered more than one backup attempt: %#v", doer.requests)
+	}
+	events, err := memory.AIUsageEvents(ctx, product.ID, time.Now().UTC().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("malformed backup usage events = %#v", events)
+	}
+	for _, event := range events {
+		if event.Outcome != "failed" || event.ErrorCode != "invalid_structured_output" {
+			t.Fatalf("malformed backup usage event = %#v", event)
+		}
 	}
 }
 

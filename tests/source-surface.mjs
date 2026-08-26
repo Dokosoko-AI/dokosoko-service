@@ -23,6 +23,8 @@ export async function consoleSource() {
     "app/components/console/dialogs/ai-configuration-dialogs.tsx",
     "app/components/console/dialogs/mcp-dialogs.tsx",
     "app/components/console/dialogs/publication-dialogs.tsx",
+    "app/components/console/dialogs/recipe-dialogs.tsx",
+    "app/components/console/dialogs/recipe-spec-editor.ts",
     "app/components/console/dialogs/source-dialogs.tsx",
     "app/components/console/shared.tsx",
     "app/components/console/use-admin-activity-workspace.ts",

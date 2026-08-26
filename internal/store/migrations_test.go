@@ -87,6 +87,19 @@ func TestMigrationFilesAreImmutable(t *testing.T) {
 	}
 }
 
+func TestAuditEventIdempotencyMigrationTemporarilyDisablesMutationGuard(t *testing.T) {
+	t.Parallel()
+
+	const content = "UPDATE audit_events SET event_key = 'legacy:' || id::text;"
+	statement := migrationSQL("0048_audit_event_idempotency.sql", []byte(content))
+	disable := strings.Index(statement, "DISABLE TRIGGER audit_events_no_update")
+	backfill := strings.Index(statement, content)
+	enable := strings.Index(statement, "ENABLE TRIGGER audit_events_no_update")
+	if disable < 0 || backfill < 0 || enable < 0 || disable >= backfill || backfill >= enable {
+		t.Fatalf("migration guard order is unsafe: %q", statement)
+	}
+}
+
 func legacyDuplicateMigrationSequence(sequence, first, second string) bool {
 	if sequence != "0020" {
 		return false

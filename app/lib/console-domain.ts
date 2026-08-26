@@ -25,14 +25,36 @@ export type Source = {
 const integrationRecipeScopeKind = "integration_scope";
 const recipeAnalysisRunningTimeoutMS = 5 * 60 * 1000;
 
+function recipeDependencyScopeIDs(recipe: APIRecipe) {
+  return recipe.dependencies
+    .filter((item) => item.kind === integrationRecipeScopeKind)
+    .map((item) => item.resource_id);
+}
+
 export function analysisMatchesIntegration(analysis: APIIntegrationAnalysis, integrationID?: string) {
   const scopes = analysis.evidence.filter((item) => item.kind === integrationRecipeScopeKind);
   return integrationID ? scopes.length === 1 && scopes[0].resource_id === integrationID : scopes.length === 0;
 }
 
 export function recipeMatchesIntegration(recipe: APIRecipe, integrationID?: string) {
-  const scopes = recipe.dependencies.filter((item) => item.kind === integrationRecipeScopeKind);
-  return integrationID ? scopes.length === 1 && scopes[0].resource_id === integrationID : scopes.length === 0;
+  const scopes = recipeScopeIDs(recipe);
+  return integrationID ? scopes.length === 1 && scopes[0] === integrationID : scopes.length === 0;
+}
+
+export function recipeScopeIDs(recipe: APIRecipe) {
+  if (recipe.contract_version === "product-integration-v2") {
+    const integrationID = recipe.integration_id?.trim();
+    return integrationID ? [integrationID] : [];
+  }
+  return recipeDependencyScopeIDs(recipe);
+}
+
+export function recipeHasScopeDependencyMismatch(recipe: APIRecipe) {
+  if (recipe.contract_version !== "product-integration-v2") return false;
+  const integrationID = recipe.integration_id?.trim();
+  if (!integrationID) return false;
+  const dependencyIDs = recipeDependencyScopeIDs(recipe);
+  return dependencyIDs.length !== 1 || dependencyIDs[0] !== integrationID;
 }
 
 export function activeRecipeIntegrationID(integrations: APIIntegration[], selectedIntegrationID: string) {

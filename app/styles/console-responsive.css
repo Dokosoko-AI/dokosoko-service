@@ -70,7 +70,7 @@
   .entity-contract-list > article { grid-template-columns: 38px minmax(0, 1fr); }
   .entity-contract-list > article > .core-badge { grid-column: 2; justify-self: start; }
   .page-heading { display: grid; }
-  .page-heading .button { width: fit-content; }
+  .page-heading :is(.button, .core-button) { width: fit-content; }
   .panel-heading, .section-heading { align-items: flex-start; flex-direction: column; }
   .panel-heading .heading-actions, .section-heading .heading-actions { width: 100%; flex-wrap: wrap; }
   .public-mcp-card { padding: 19px; }
@@ -83,6 +83,8 @@
   .table-row > span:nth-child(2) { display: none; }
   .table-row > span:nth-child(3) { grid-column: 2; grid-row: 1; }
   .table-row .more { display: none; }
+  .tool-columns.table-row > span:nth-child(4) { grid-column: 2; grid-row: 2; justify-self: end; }
+  .tool-columns.table-row > .row-arrow { display: none; }
   .tool-editor-page { gap: 14px; padding-bottom: 14px; }
   .tool-editor-page > :is(.auth-field, .two-fields, .compact-check, .private-default-note, .capability-unavailable) { margin-inline: 14px; }
   .tool-editor-page > .entity-detail-grid, .tool-editor-page > .tool-test-result { margin-bottom: -14px; }
@@ -261,18 +263,14 @@ html[data-theme="dark"] img { color-scheme: normal; }
 
 @media (max-width: 720px) {
   :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) { font-size: var(--text-heading); line-height: var(--leading-heading); }
-  .identity-setup-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .identity-setup-steps li:nth-child(2) { border-right: 0; }
-  .identity-setup-steps li:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .identity-verification-grid, .identity-summary-grid { grid-template-columns: 1fr; }
+  .identity-summary-grid { grid-template-columns: 1fr; }
   .identity-summary-grid > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .identity-summary-grid > div:last-child { border-bottom: 0; }
   .identity-copy-field, .identity-disable-confirm { grid-template-columns: 1fr; }
   .identity-copy-field .core-button, .identity-form-actions .core-button, .identity-disable-confirm .core-button { width: 100%; }
   .identity-form-actions, .identity-disable-confirm > .heading-actions { align-items: stretch; flex-direction: column; }
-  .identity-verification-card { grid-template-columns: 38px minmax(0, 1fr); }
-  .identity-verification-card > .core-button, .identity-test-result, .identity-active-state, .identity-action-hint { grid-column: 2; justify-self: stretch; }
-  .identity-verification-card > .core-button { width: 100%; }
+  .identity-verification-header { grid-template-columns: 1fr; }
+  .identity-verification-header .core-button { width: 100%; }
   .authorization-policy-grid .panel-heading { align-items: flex-start; flex-direction: column; }
   .authorization-policy-grid .heading-actions { width: 100%; display: grid; grid-template-columns: 1fr; }
   .authorization-policy-grid .api-policy-select select, .authorization-policy-grid .heading-actions .core-button { width: 100%; max-width: none; }

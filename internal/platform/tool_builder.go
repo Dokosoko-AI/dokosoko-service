@@ -25,7 +25,7 @@ var (
 	toolBuilderBearerValue        = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9._~+/=-]{8,})`)
 	toolBuilderBasicValue         = regexp.MustCompile(`(?i)\bbasic\s+([A-Za-z0-9+/=]{8,})`)
 	toolBuilderJWTValue           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b`)
-	toolBuilderKnownSecretValue   = regexp.MustCompile(`\b(?:sk|pk|rk|ghp|gho|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b`)
+	toolBuilderKnownSecretValue   = regexp.MustCompile(`\b(?:(?:sk|pk|rk|xox[baprs])[-_][A-Za-z0-9_-]{8,}|gh[opusr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,})\b`)
 	toolBuilderURLUserInfo        = regexp.MustCompile(`(?i)\bhttps?://[^\s/?#@]+@[^\s/?#]+`)
 )
 

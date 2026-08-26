@@ -20,6 +20,8 @@ import { AdminActivityDialogs } from "./console/dialogs/admin-activity-dialogs";
 import { AIConfigurationDialogs } from "./console/dialogs/ai-configuration-dialogs";
 import { MCPDialogs } from "./console/dialogs/mcp-dialogs";
 import { PublicationDialogs } from "./console/dialogs/publication-dialogs";
+import { RecipeDialogs, type RecipeDialogState } from "./console/dialogs/recipe-dialogs";
+import { parseRecipeSpecEditor, recipeEditableSpec, recipeSpecEditorValue } from "./console/dialogs/recipe-spec-editor";
 import { SourceDialogs } from "./console/dialogs/source-dialogs";
 import { ConsoleLink, type Source, buildAgentSetupEmbedHTML } from "./console/shared";
 import { useAdminActivityWorkspace } from "./console/use-admin-activity-workspace";
@@ -98,6 +100,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const [toolBuilderSelection, setToolBuilderSelection] = useState<{ uid: string; tool: APITool | null; failed: boolean } | null>(null);
   const [toolBuilderLoadAttempt, setToolBuilderLoadAttempt] = useState(0);
   const [toolBuilderSeed, setToolBuilderSeed] = useState<{ toolID: string; revision: number; proposal: APIToolBuilderProposal } | null>(null);
+  const [recipeDialog, setRecipeDialog] = useState<RecipeDialogState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = useCallback((message: string) => {
@@ -257,20 +260,32 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   }
 
   function beginRecipeCreation(integrationID: string) {
-    const prompt = window.prompt("What should this recipe help a developer accomplish?")?.trim();
-    if (!prompt) return;
-    void createRecipe(prompt, integrationID);
+    setRecipeDialog({ kind: "create", integrationID, value: "" });
   }
 
   function beginRecipeEdit(recipe: APIRecipe) {
-    const markdown = window.prompt("Recipe Markdown", recipe.current_revision?.markdown ?? "")?.trim();
-    if (!markdown) return;
-    void editRecipe(recipe, markdown, recipe.current_revision?.references ?? [], recipe.visibility);
+    setRecipeDialog({ kind: "edit", recipe, value: recipeSpecEditorValue(recipe), visibility: recipe.visibility });
   }
 
   function beginRecipeRework(recipe: APIRecipe) {
-    const instruction = window.prompt("What should the AI rework?")?.trim();
-    if (instruction) void reworkRecipe(recipe, instruction);
+    setRecipeDialog({ kind: "rework", recipe, value: "" });
+  }
+
+  async function submitRecipeDialog() {
+    if (!recipeDialog || recipeBusy) return;
+    const value = recipeDialog.value.trim();
+    if (!value) return;
+    let saved: APIRecipe | null;
+    if (recipeDialog.kind === "create") {
+      saved = await createRecipe(value, recipeDialog.integrationID);
+    } else if (recipeDialog.kind === "edit") {
+      const parsed = parseRecipeSpecEditor(value, recipeEditableSpec(recipeDialog.recipe));
+      if (!parsed.ok) return;
+      saved = await editRecipe(recipeDialog.recipe, parsed.spec, recipeDialog.visibility);
+    } else {
+      saved = await reworkRecipe(recipeDialog.recipe, value);
+    }
+    if (saved) setRecipeDialog(null);
   }
 
   const allResources = useMemo(() => sources.map((item) => ({ ...item, resourceType: "source" as const, type: item.kind, detail: item.location })), [sources]);
@@ -336,6 +351,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     <MCPDialogs workspace={mcpWorkspace} connectionReady={mcpConnectionReady} />
     <AdminActivityDialogs workspace={adminWorkspace} />
     <AIConfigurationDialogs workspace={aiWorkspace} ProviderLogo={AIProviderLogo} />
+    <RecipeDialogs state={recipeDialog} busy={recipeBusy} onChange={(value) => setRecipeDialog((current) => current ? { ...current, value } : null)} onVisibilityChange={(visibility) => setRecipeDialog((current) => current?.kind === "edit" ? { ...current, visibility } : current)} onClose={() => setRecipeDialog(null)} onSubmit={() => void submitRecipeDialog()} />
     {toast && <div className="toast" role="status"><Check />{toast}</div>}
   </div></Suspense>;
 }

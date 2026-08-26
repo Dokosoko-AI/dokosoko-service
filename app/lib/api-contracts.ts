@@ -861,7 +861,7 @@ export type APIIntegrationAnalysis = {
     summary: string;
     identity: { mode: string; issuer?: string; audience?: string; grants?: string[]; explanation: string };
     endpoints: Array<{ name: string; method: string; path: string; purpose: string; identity: string; evidence: string[] }>;
-    recipes: Array<{ slug: string; title: string; outcome: string; audience: string; endpoint_ids?: string[] }>;
+    recipes: Contract.RecipeSeed[];
   };
   unknowns: Array<{ id: string; question: string; why: string; blocking: boolean }>;
   error_code?: string;
@@ -872,31 +872,11 @@ export type APIIntegrationAnalysis = {
 
 export type APIRecipeReference = Contract.RecipeReference;
 export type APIRecipeFinding = Contract.RecipeValidationFinding;
-export type APIRecipeRevision = { id: string; recipe_id: string; revision: number; markdown: string; references: APIRecipeReference[]; validation: APIRecipeFinding[]; review?: string; generated_by: "ai" | "human" | "deterministic"; model?: string; created_by: string; created_at: string };
-export type APIRecipe = {
-  id: string;
-  organisation_id: string;
-  product_id: string;
-  analysis_id?: string;
-  slug: string;
-  title: string;
-  outcome: string;
-  audience: string;
-  state: "draft" | "review" | "approved" | "published" | "outdated";
-  generated: boolean;
-  needs_attention: boolean;
-  visibility: APIVisibility;
-  dependencies: Array<{ kind: string; resource_id: string; version: string }>;
-  current_revision_id: string;
-  current_revision?: APIRecipeRevision;
-  stable_uri: string;
-  approved_by?: string;
-  approved_at?: string;
-  published_at?: string;
-  revision: number;
-  created_at: string;
-  updated_at: string;
-};
+export type APIRecipeEvidenceRef = Contract.RecipeEvidenceRef;
+export type APIRecipeInstruction = Contract.RecipeInstruction;
+export type APIRecipeSpec = Contract.RecipeSpec;
+export type APIRecipeRevision = Contract.RecipeRevision;
+export type APIRecipe = Contract.Recipe;
 
 export type APIAIWorkloadUsage = {
   workload: Contract.AiUsageWorkload;

@@ -44,7 +44,7 @@ func (r *Registry) GenerateStructured(ctx context.Context, request StructuredReq
 		result.JSON = json.RawMessage(strings.TrimSpace(result.Text))
 	}
 	if !json.Valid(result.JSON) {
-		return Result{}, &Error{Code: ErrorInvalidStructuredOutput, Provider: request.Provider.Provider}
+		return Result{}, &Error{Code: ErrorInvalidStructuredOutput, Provider: request.Provider.Provider, Retryable: true}
 	}
 	return result, nil
 }

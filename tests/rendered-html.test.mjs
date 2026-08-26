@@ -129,6 +129,7 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
 
 test("ships one evidence-to-recipe review workflow", async () => {
   const source = await consoleSource();
+  const recipeDialog = await readFile(new URL("../app/components/console/dialogs/recipe-dialogs.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /Turn verified integration evidence into implementation guides/);
   const styles = await stylesSource();
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
@@ -136,8 +137,9 @@ test("ships one evidence-to-recipe review workflow", async () => {
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
   assert.match(routes, /recipes: "\/recipes"/);
-  for (const label of ["Create recipe", "Generate from evidence", "Setup and usage recipes", "Approve", "Publish", "Rework"]) assert.match(source, new RegExp(label));
-  assert.match(source, /What should this recipe help a developer accomplish/);
+  for (const label of ["Create recipe", "Generate from evidence", "Coding-agent implementation recipes", "Approve", "Publish", "Rework"]) assert.match(source, new RegExp(label));
+  assert.match(source, /Describe one concrete product capability for the coding agent to implement/);
+  assert.match(source, /The agent already has MCP access/);
   assert.match(source, /aria-label="Recipe API"/);
   assert.match(source, /activeRecipeIntegrationID\(integrations, selectedIntegrationID\)/);
   assert.doesNotMatch(source, /disabled=\{busy \|\| analyses\.length/);
@@ -145,16 +147,45 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(source, /visibleRecipes = activeIntegrationID[\s\S]*recipeMatchesIntegration\(recipe, activeIntegrationID\)/);
   assert.match(source, /unscopedOrInvalidRecipes\.map\(renderRecipe\)/);
   assert.match(source, /disabled=\{busy \|\| invalidScope\} onClick=\{\(\) => on(?:Edit|Rework|Approve|Publish)/);
-  assert.match(source, /Reviewed guidance grounded in published documentation and API evidence/);
-  assert.match(source, /What should the AI rework/);
+  assert.match(source, /Minimal product-integration steps delivered after the coding agent connects through MCP/);
+  assert.match(source, /Each recipe implements one tangible product capability/);
+  assert.match(source, /Describe the specific product-integration step/);
+  assert.match(source, /Structured recipe spec \(JSON\)/);
+  assert.match(source, /parseRecipeSpecEditor/);
+  assert.match(source, /aria-invalid=\{Boolean\(validationError\)\}/);
+  assert.match(source, /visibility: recipe\.visibility/);
+  assert.match(source, /parsed\.spec, recipeDialog\.visibility/);
+  assert.match(source, /api\.reworkRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id, instruction\)/);
+  assert.match(source, /api\.approveRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id\)/);
+  assert.match(source, /api\.publishRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id\)/);
+  assert.match(source, /error instanceof APIError && error\.status === 409[\s\S]*setRecipes\(await api\.recipes\(product\.id\)\)[\s\S]*latest revision is loaded; review it before retrying/);
+  assert.match(recipeDialog, /value=\{state\.visibility\}/);
+  assert.match(recipeDialog, /recipe-dialog-error" role="status" aria-live="polite"/);
+  assert.doesNotMatch(recipeDialog, /recipe-dialog-error" role="alert"/);
+  assert.match(source, /scope dependency mismatch/);
+  assert.doesNotMatch(source, /window\.prompt/);
+  assert.doesNotMatch(source, /Recipe Markdown|current_revision\?\.markdown/);
   assert.doesNotMatch(source, /Start from evidence, not a blank prompt|Review queue|Most used · 30 days/);
-  assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-input/);
+  assert.match(styles, /\.recipe-dialog-form \.recipe-spec-editor textarea/);
+  assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-(?:input|editor)/);
   assert.match(client, /createRecipe/);
   assert.match(client, /integrationID \? \{ prompt, integration_id: integrationID \} : \{ prompt \}/);
+  assert.match(client, /updateRecipe:[\s\S]*JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID, spec, visibility \}\)/);
+  assert.match(client, /reworkRecipe:[^\n]+JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID, instruction \}\)/);
+  assert.match(client, /approveRecipe:[^\n]+JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID \}\)/);
+  assert.match(client, /publishRecipe:[^\n]+JSON\.stringify\(\{ revision, current_revision_id: currentRevisionID \}\)/);
   assert.match(api, /\/api\/v1\/products\/\{product_id\}\/recipes:/);
   assert.match(api, /operationId: createRecipe[\s\S]*integration_id:[\s\S]*omission retains deployment-wide API compatibility/);
+  assert.match(api, /operationId: updateRecipeSpec[\s\S]*raw Markdown is never accepted as an authoring source/);
+  assert.match(api, /RecipeSpec:[\s\S]*capability_ids:[\s\S]*prerequisites:[\s\S]*steps:[\s\S]*checks:/);
+  assert.match(api, /LegacyRecipeSpec:[\s\S]*immutable legacy-mcp-v1 revision history/);
+  assert.match(api, /RecipeRevision:[\s\S]*spec_version:[\s\S]*- 1\n\s+- 2[\s\S]*spec:[\s\S]*LegacyRecipeSpec[\s\S]*RecipeSpec/);
+  assert.match(api, /RecipeResultInstruction:[\s\S]*evidence:[\s\S]*minItems: 1\n\s+maxItems: 8/);
+  assert.match(api, /UpdateRecipeRequest:[\s\S]*revision:[\s\S]*current_revision_id:[\s\S]*spec:[\s\S]*visibility:[\s\S]*required:\n\s+- revision\n\s+- current_revision_id\n\s+- spec\n\s+- visibility/);
   assert.match(api, /- resources\/list/);
   assert.match(api, /- resources\/read/);
+  assert.match(api, /MCPRecipeSummary:[\s\S]*contract_version:[\s\S]*const: product-integration-v2/);
+  assert.match(api, /MCPRecipePlanStructuredContent:[\s\S]*server never chooses a fuzzy or arbitrary match/);
 });
 
 test("keeps read-only integration evidence gaps visible", async () => {
@@ -275,13 +306,15 @@ test("uses a focused deployment tool catalog and token-based MCP connections", a
   assert.match(catalog, /<DataTable label="Tool catalog">/);
   assert.match(catalog, /<DataTableHeader className="tool-columns"><span>Tool<\/span><span>Backend<\/span><span>Policy<\/span><span>State<\/span><span>Open<\/span><\/DataTableHeader>/);
   assert.match(catalog, /toolIsCommon\(tool\)/);
-  assert.match(catalog, /Create HTTP tool/);
+  assert.match(catalog, /className="core-button core-button-dark"><Plus data-slot="icon" \/>Create HTTP tool/);
   assert.match(catalog, /title="Native tools"/);
+  assert.ok(catalog.indexOf("<DataTable label=\"Tool catalog\">") < catalog.indexOf('title="Native tools"'), "native tools should follow the deployment tool catalog");
   assert.match(catalog, /Reviewed in-process capabilities registered by the service/);
   assert.match(catalog, /onSetNativePluginEnabled/);
   assert.match(catalog, /entityPath\("tool", tool\.id\)/);
   assert.match(catalog, /<DataTableEmpty columns=\{5\}>/);
   assert.match(styles, /\.table-row/);
+  assert.match(styles, /\.tool-columns\s*\{[^}]*grid-template-columns:/);
   assert.doesNotMatch(catalog, /api\.publishTool|MCP Tool Editor|Edit & dry-run|Run contract test/);
   assert.doesNotMatch(catalog, /AuthorizationPolicyWorkspace|API action policies|Grant registry/);
 
@@ -712,6 +745,11 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   assert.doesNotMatch(settings, /Customer identity|OIDCIdentitySetup|onConfigureIdentity/);
   assert.doesNotMatch(source, /settingsPath\("identity"\)|function CustomerIdentitySettingsView|function IdentityContractPanel|\bidentityOpen\b|\bsetIdentityOpen\b|title="Customer identity integration"/);
   assert.match(source, /\{section === "identity" && <OIDCIdentitySetup/);
+  assert.match(source, /className="integration-identity-summary"/);
+  assert.equal(styles.match(/\.identity-summary\s*\{/g)?.length, 1, "the OIDC summary layout should not be overridden by another workspace");
+  assert.doesNotMatch(`${identitySetup}\n${styles}`, /identity-setup-steps|OIDC setup progress/);
+  assert.match(styles, /\.identity-verification-grid\s*\{[^}]*grid-template-columns:\s*1fr/);
+  assert.doesNotMatch(`${identitySetup}\n${styles}`, /identity-step-icon/);
 
   for (const label of ["Confidential web app", "Allowed callback URL", "Issuer URL", "Customer account claim", "Authorization API origin", "Save draft", "Test sign-in", "Activate"]) {
     assert.ok(identitySetup.includes(label), `${label} should be present in the OIDC setup workspace`);
@@ -840,14 +878,14 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   assert.doesNotMatch(client, /usage_hook_url|allowed_redirect_uris|entitlement_hook_url|APIAuthorizationSimulation|simulateAuthorizationPoint/);
 });
 
-test("ships a consent-gated plaintext support outbox", async () => {
+test("ships a local support outbox without an introductory notice", async () => {
   const source = await consoleSource();
   const client = await clientSource();
 
-	assert.match(source, /Support outbox/);
-	assert.match(source, /Simple local outbox/);
-	assert.match(source, /schema-bounded plaintext/);
-	assert.match(source, /There is no delivery worker or external routing/);
+  assert.match(source, /Support outbox/);
+  assert.doesNotMatch(source, /Simple local outbox/);
+  assert.doesNotMatch(source, /schema-bounded plaintext/);
+  assert.doesNotMatch(source, /There is no delivery worker or external routing/);
   assert.match(source, /onClick=\{\(\) => onView\(submission\)\}/);
   assert.match(client, /support-submissions/);
   assert.doesNotMatch(client, /backendConnections|createSupportRoute|replaceSupportRoute|createSupportDeliveryAttempt/);

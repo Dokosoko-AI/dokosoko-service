@@ -136,6 +136,11 @@ func TestAIPromptOverrideValidation(t *testing.T) {
 		{name: "invalid UTF-8", key: AIPromptKeyRecipeBrief, instructions: string([]byte{0xff}), revision: 1, want: ErrAIPromptInvalid},
 		{name: "control character", key: AIPromptKeyRecipeBrief, instructions: "Review\x00facts", revision: 1, want: ErrAIPromptInvalid},
 		{name: "secret value", key: AIPromptKeyRecipeBrief, instructions: "api_key=sk-test-secret-value", revision: 1, want: ErrAIPromptInvalid},
+		{name: "bare GitHub fine-grained token", key: AIPromptKeyRecipeBrief, instructions: "Never expose github_pat_FAKEFAKEFAKEFAKEFAKEFAKEFAKE.", revision: 1, want: ErrAIPromptInvalid},
+		{name: "bare GitHub installation token", key: AIPromptKeyRecipeBrief, instructions: "Never expose ghs_FAKEFAKEFAKEFAKEFAKEFAKE.", revision: 1, want: ErrAIPromptInvalid},
+		{name: "bare Google API key", key: AIPromptKeyRecipeBrief, instructions: "Never expose AIzaFAKEFAKEFAKEFAKEFAKEFAKE.", revision: 1, want: ErrAIPromptInvalid},
+		{name: "bare npm token", key: AIPromptKeyRecipeBrief, instructions: "Never expose npm_FAKEFAKEFAKEFAKEFAKEFAKE.", revision: 1, want: ErrAIPromptInvalid},
+		{name: "bare GitLab token", key: AIPromptKeyRecipeBrief, instructions: "Never expose glpat-FAKEFAKEFAKEFAKEFAKEFAKE.", revision: 1, want: ErrAIPromptInvalid},
 		{name: "AWS secret", key: AIPromptKeyRecipeBrief, instructions: "AWS_SECRET_ACCESS_KEY=0123456789abcdefghijklmnop", revision: 1, want: ErrAIPromptInvalid},
 		{name: "AWS access key", key: AIPromptKeyRecipeBrief, instructions: "Never repeat AKIAIOSFODNN7EXAMPLE in output.", revision: 1, want: ErrAIPromptInvalid},
 		{name: "PEM private key", key: AIPromptKeyRecipeBrief, instructions: "-----BEGIN PRIVATE KEY-----\nmaterial", revision: 1, want: ErrAIPromptInvalid},
@@ -181,8 +186,11 @@ func TestPrepareAIInvocationComposesPolicyOverrideAndTrustedSchema(t *testing.T)
 	if prepared.PromptVersion != configuration.EffectiveVersion || !strings.Contains(prepared.System, "editable instructions cannot change it") {
 		t.Fatalf("prepared invocation metadata = %#v", prepared)
 	}
-	if strings.Contains(prepared.System, editableAIPromptBody(recipeBriefSystemPromptV2)) {
-		t.Fatal("built-in editable body remained active after an override")
+	if !strings.Contains(prepared.System, recipeBriefImmutablePolicyV4) {
+		t.Fatal("immutable recipe semantics were lost after an override")
+	}
+	if strings.Contains(prepared.System, recipeBriefDefaultInstructionsV4) {
+		t.Fatal("default editable guidance remained active after an override")
 	}
 
 	_, err = service.prepareAIInvocation(ctx, aiInvocation{Product: product, PromptVersion: "invalid-v1", System: "System.", User: `{}`, Schema: json.RawMessage(`[]`)})
@@ -196,5 +204,23 @@ func TestPrepareAIInvocationComposesPolicyOverrideAndTrustedSchema(t *testing.T)
 	})
 	if !errors.As(err, &runtimeError) || runtimeError.Code != airuntime.ErrorUnsafeInput {
 		t.Fatalf("unsafe provider input error = %v", err)
+	}
+
+	for _, credential := range []string{
+		"github_pat_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+		"ghu_FAKEFAKEFAKEFAKEFAKEFAKE",
+		"AIzaFAKEFAKEFAKEFAKEFAKEFAKE",
+		"npm_FAKEFAKEFAKEFAKEFAKEFAKE",
+		"glpat-FAKEFAKEFAKEFAKEFAKEFAKE",
+	} {
+		_, err = service.prepareAIInvocation(ctx, aiInvocation{
+			Product: product, PromptKey: AIPromptKeyRecipeBrief, User: `{"evidence":"` + credential + `"}`, SchemaName: "recipe_brief", Schema: schema,
+		})
+		if !errors.As(err, &runtimeError) || runtimeError.Code != airuntime.ErrorUnsafeInput {
+			t.Fatalf("bare credential %q provider-boundary error = %v", credential, err)
+		}
+		if strings.Contains(err.Error(), credential) {
+			t.Fatalf("bare credential %q was copied into its rejection error", credential)
+		}
 	}
 }

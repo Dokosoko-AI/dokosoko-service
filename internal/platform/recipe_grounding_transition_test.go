@@ -2,6 +2,7 @@ package platform_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -11,11 +12,12 @@ import (
 )
 
 type recipeGroundingTransitionFixture struct {
-	ctx     context.Context
-	memory  *store.Memory
-	service *platform.Service
-	actor   platform.Actor
-	recipe  model.Recipe
+	ctx           context.Context
+	memory        *store.Memory
+	service       *platform.Service
+	actor         platform.Actor
+	integrationID string
+	recipe        model.Recipe
 }
 
 type recipeGroundingRaceStore struct {
@@ -32,181 +34,224 @@ func (r *recipeGroundingRaceStore) SaveRecipe(ctx context.Context, recipe model.
 	return r.Store.SaveRecipe(ctx, recipe, expectedRevision)
 }
 
-func newRecipeGroundingTransitionFixture(t *testing.T) recipeGroundingTransitionFixture {
+func createTransitionRecipe(t *testing.T, backend store.Store) recipeGroundingTransitionFixture {
 	t.Helper()
 	ctx := context.Background()
-	memory := store.NewMemory()
-	service := platform.New(memory)
+	memory, ok := backend.(*store.Memory)
+	if !ok {
+		if racing, racingOK := backend.(*recipeGroundingRaceStore); racingOK {
+			memory = racing.Store.(*store.Memory)
+		}
+	}
+	service := platform.New(backend)
 	actor := platform.Actor{ID: "grounding-reviewer", RequestID: "recipe-grounding-transition"}
-	analysis, err := service.AnalyseIntegration(ctx, "prod_acme", actor)
+	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "grounding-api", VersionKey: "v1", DisplayName: "Grounding API", Description: "Create readiness checks.", Visibility: model.VisibilityPublic, AcknowledgePublic: true, Lifecycle: "active"}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipes, err := service.GenerateRecipes(ctx, "prod_acme", analysis.ID, actor)
+	point, err := service.SaveAuthorizationPoint(ctx, integration.ID, "", platform.AuthorizationPointInput{Key: "grounding.read", Name: "Read grounding state", Description: "Read grounding state.", ActionType: "read", DecisionTTLSeconds: 60, State: "active"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := service.CreateTool(ctx, platform.ToolInput{ProductID: "prod_acme", Scope: model.ToolScopeAPI, OwnerIntegrationID: integration.ID, Namespace: "grounding", Name: "readiness", Description: "Read product readiness.", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ready":{"type":"boolean"}},"required":["ready"]}`), Endpoint: "https://api.example.test/readiness", HTTPMethod: "GET", UpstreamAuth: json.RawMessage(`{"type":"none"}`), AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false}`), TimeoutMS: 1000}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err = service.PublishTool(ctx, "prod_acme", tool.ID, tool.Revision, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetIntegrationToolBindings(ctx, integration.ID, []platform.ToolRevisionSelection{{ToolID: tool.ID, Revision: tool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PublishIntegration(ctx, integration.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err := service.AnalyseIntegrationFor(ctx, "prod_acme", integration.ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipes, err := service.GenerateRecipesForIntegration(ctx, "prod_acme", analysis.ID, integration.ID, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(recipes) != 1 || recipes[0].CurrentRevision == nil {
 		t.Fatalf("generated recipes = %#v", recipes)
 	}
-	return recipeGroundingTransitionFixture{ctx: ctx, memory: memory, service: service, actor: actor, recipe: recipes[0]}
+	return recipeGroundingTransitionFixture{ctx: ctx, memory: memory, service: service, actor: actor, integrationID: integration.ID, recipe: recipes[0]}
+}
+
+func newRecipeGroundingTransitionFixture(t *testing.T) recipeGroundingTransitionFixture {
+	return createTransitionRecipe(t, store.NewMemory())
 }
 
 func newRecipeGroundingRaceFixture(t *testing.T) (recipeGroundingTransitionFixture, *recipeGroundingRaceStore) {
-	t.Helper()
-	ctx := context.Background()
 	memory := store.NewMemory()
 	racing := &recipeGroundingRaceStore{Store: memory}
-	service := platform.New(racing)
-	actor := platform.Actor{ID: "grounding-reviewer", RequestID: "recipe-grounding-race"}
-	analysis, err := service.AnalyseIntegration(ctx, "prod_acme", actor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipes, err := service.GenerateRecipes(ctx, "prod_acme", analysis.ID, actor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(recipes) != 1 || recipes[0].CurrentRevision == nil {
-		t.Fatalf("generated recipes = %#v", recipes)
-	}
-	return recipeGroundingTransitionFixture{ctx: ctx, memory: memory, service: service, actor: actor, recipe: recipes[0]}, racing
+	return createTransitionRecipe(t, racing), racing
 }
 
 func (fixture recipeGroundingTransitionFixture) changeEvidence(t *testing.T) {
 	t.Helper()
-	source, err := fixture.memory.Source(fixture.ctx, fixture.recipe.ProductID, "src_docs")
+	integration, err := fixture.memory.Integration(fixture.ctx, fixture.recipe.ProductID, fixture.integrationID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.Name = "Developer documentation changed after recipe generation"
-	if _, err := fixture.memory.UpdateSource(fixture.ctx, source, source.Revision); err != nil {
+	integration, err = fixture.service.UpdateIntegration(fixture.ctx, integration.ID, platform.IntegrationInput{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description + " Changed.", Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, Revision: integration.Revision}, fixture.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.PublishIntegration(fixture.ctx, integration.ID, fixture.actor); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func (fixture recipeGroundingTransitionFixture) requireStoredOutdated(t *testing.T, originalRevisionID string) model.Recipe {
+func (fixture recipeGroundingTransitionFixture) requireStoredOutdated(t *testing.T, originalRevisionID string) {
 	t.Helper()
 	stored, err := fixture.memory.Recipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != "outdated" || !stored.NeedsAttention {
-		t.Fatalf("stale recipe was not marked for review: %#v", stored)
+	if stored.State != "outdated" || !stored.NeedsAttention || stored.CurrentRevisionID != originalRevisionID || stored.ApprovedAt != nil || stored.PublishedAt != nil {
+		t.Fatalf("stale recipe transition was not denied safely: %#v", stored)
 	}
-	if stored.CurrentRevisionID != originalRevisionID {
-		t.Fatalf("denied transition changed recipe content: revision ID = %q, want %q", stored.CurrentRevisionID, originalRevisionID)
-	}
-	return stored
 }
 
-func TestRecipeEditChecksCurrentEvidenceSynchronously(t *testing.T) {
-	t.Parallel()
-	fixture := newRecipeGroundingTransitionFixture(t)
-	originalRevisionID := fixture.recipe.CurrentRevisionID
-	fixture.changeEvidence(t)
+func TestRecipeEditApprovalAndPublicationCheckCurrentGrounding(t *testing.T) {
+	t.Run("structured edit", func(t *testing.T) {
+		fixture := newRecipeGroundingTransitionFixture(t)
+		originalRevisionID := fixture.recipe.CurrentRevisionID
+		fixture.changeEvidence(t)
+		var spec model.RecipeSpec
+		if err := json.Unmarshal(fixture.recipe.CurrentRevision.Spec, &spec); err != nil {
+			t.Fatal(err)
+		}
+		updated, err := fixture.service.UpdateRecipeSpec(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, spec, fixture.recipe.Visibility, fixture.actor)
+		if !errors.Is(err, platform.ErrRecipeGroundingChanged) || updated.State != "outdated" {
+			t.Fatalf("edit result=%#v err=%v", updated, err)
+		}
+		fixture.requireStoredOutdated(t, originalRevisionID)
+	})
 
-	updated, err := fixture.service.UpdateRecipeMarkdown(
-		fixture.ctx,
-		fixture.recipe.ProductID,
-		fixture.recipe.ID,
-		fixture.recipe.CurrentRevision.Markdown+"\n",
-		fixture.recipe.CurrentRevision.References,
-		fixture.recipe.Visibility,
-		fixture.actor,
-	)
-	if !errors.Is(err, platform.ErrRecipeGroundingChanged) {
-		t.Fatalf("edit error = %v, want %v", err, platform.ErrRecipeGroundingChanged)
-	}
-	if updated.State != "outdated" || !updated.NeedsAttention {
-		t.Fatalf("returned recipe = %#v", updated)
-	}
-	fixture.requireStoredOutdated(t, originalRevisionID)
+	t.Run("approval", func(t *testing.T) {
+		fixture := newRecipeGroundingTransitionFixture(t)
+		originalRevisionID := fixture.recipe.CurrentRevisionID
+		fixture.changeEvidence(t)
+		approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, fixture.actor)
+		if !errors.Is(err, platform.ErrRecipeGroundingChanged) || approved.State != "outdated" {
+			t.Fatalf("approval result=%#v err=%v", approved, err)
+		}
+		fixture.requireStoredOutdated(t, originalRevisionID)
+	})
+
+	t.Run("publication", func(t *testing.T) {
+		fixture := newRecipeGroundingTransitionFixture(t)
+		approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, fixture.actor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.recipe = approved
+		originalRevisionID := approved.CurrentRevisionID
+		fixture.changeEvidence(t)
+		published, err := fixture.service.PublishRecipe(fixture.ctx, approved.ProductID, approved.ID, approved.Revision, approved.CurrentRevisionID, fixture.actor)
+		if !errors.Is(err, platform.ErrRecipeGroundingChanged) || published.State != "outdated" {
+			t.Fatalf("publication result=%#v err=%v", published, err)
+		}
+		fixture.requireStoredOutdated(t, originalRevisionID)
+	})
 }
 
-func TestRecipeApprovalChecksCurrentEvidenceSynchronously(t *testing.T) {
-	t.Parallel()
+func TestRecipeApprovalDoesNotRegressPublishedLifecycle(t *testing.T) {
 	fixture := newRecipeGroundingTransitionFixture(t)
-	originalRevisionID := fixture.recipe.CurrentRevisionID
-	fixture.changeEvidence(t)
-
-	approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.actor)
-	if !errors.Is(err, platform.ErrRecipeGroundingChanged) {
-		t.Fatalf("approval error = %v, want %v", err, platform.ErrRecipeGroundingChanged)
-	}
-	if approved.State != "outdated" || !approved.NeedsAttention || approved.ApprovedAt != nil {
-		t.Fatalf("returned recipe = %#v", approved)
-	}
-	fixture.requireStoredOutdated(t, originalRevisionID)
-}
-
-func TestRecipePublicationChecksCurrentEvidenceSynchronously(t *testing.T) {
-	t.Parallel()
-	fixture := newRecipeGroundingTransitionFixture(t)
-	approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.actor)
+	approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, fixture.actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.recipe = approved
-	originalRevisionID := approved.CurrentRevisionID
-	fixture.changeEvidence(t)
-
-	published, err := fixture.service.PublishRecipe(fixture.ctx, approved.ProductID, approved.ID, fixture.actor)
-	if !errors.Is(err, platform.ErrRecipeGroundingChanged) {
-		t.Fatalf("publication error = %v, want %v", err, platform.ErrRecipeGroundingChanged)
-	}
-	if published.State != "outdated" || !published.NeedsAttention || published.PublishedAt != nil {
-		t.Fatalf("returned recipe = %#v", published)
-	}
-	stored := fixture.requireStoredOutdated(t, originalRevisionID)
-	if stored.PublishedAt != nil {
-		t.Fatalf("denied publication set published_at: %#v", stored)
-	}
-}
-
-func TestRecipeApprovalDetectsEvidenceChangeDuringTransition(t *testing.T) {
-	t.Parallel()
-	fixture, racing := newRecipeGroundingRaceFixture(t)
-	originalRevisionID := fixture.recipe.CurrentRevisionID
-	racing.beforeSave = func(recipe model.Recipe) {
-		if recipe.State != "approved" {
-			t.Fatalf("intercepted recipe state = %q, want approved", recipe.State)
-		}
-		fixture.changeEvidence(t)
-	}
-
-	approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.actor)
-	if !errors.Is(err, platform.ErrRecipeGroundingChanged) {
-		t.Fatalf("approval error = %v, want %v", err, platform.ErrRecipeGroundingChanged)
-	}
-	if approved.State != "outdated" || approved.ApprovedAt != nil {
-		t.Fatalf("raced approval result = %#v", approved)
-	}
-	fixture.requireStoredOutdated(t, originalRevisionID)
-}
-
-func TestRecipePublicationDetectsEvidenceChangeDuringTransition(t *testing.T) {
-	t.Parallel()
-	fixture, racing := newRecipeGroundingRaceFixture(t)
-	approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.actor)
+	published, err := fixture.service.PublishRecipe(fixture.ctx, approved.ProductID, approved.ID, approved.Revision, approved.CurrentRevisionID, fixture.actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.recipe = approved
-	originalRevisionID := approved.CurrentRevisionID
-	racing.beforeSave = func(recipe model.Recipe) {
-		if recipe.State != "published" {
-			t.Fatalf("intercepted recipe state = %q, want published", recipe.State)
-		}
-		fixture.changeEvidence(t)
+
+	result, err := fixture.service.ApproveRecipe(fixture.ctx, published.ProductID, published.ID, published.Revision, published.CurrentRevisionID, fixture.actor)
+	if err == nil {
+		t.Fatalf("published recipe was moved backward to approval: %#v", result)
+	}
+	stored, lookupErr := fixture.memory.Recipe(fixture.ctx, published.ProductID, published.ID)
+	if lookupErr != nil {
+		t.Fatal(lookupErr)
+	}
+	if stored.State != "published" || stored.PublishedAt == nil || stored.Revision != published.Revision {
+		t.Fatalf("rejected approval mutated the publication: %#v", stored)
+	}
+}
+
+func TestRecipeDecisionsRejectStaleOperatorRevision(t *testing.T) {
+	fixture := newRecipeGroundingTransitionFixture(t)
+	original := fixture.recipe
+	var spec model.RecipeSpec
+	if err := json.Unmarshal(original.CurrentRevision.Spec, &spec); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := fixture.service.UpdateRecipeSpec(fixture.ctx, original.ProductID, original.ID, original.Revision, original.CurrentRevisionID, spec, original.Visibility, fixture.actor)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	published, err := fixture.service.PublishRecipe(fixture.ctx, approved.ProductID, approved.ID, fixture.actor)
-	if !errors.Is(err, platform.ErrRecipeGroundingChanged) {
-		t.Fatalf("publication error = %v, want %v", err, platform.ErrRecipeGroundingChanged)
+	if result, approveErr := fixture.service.ApproveRecipe(fixture.ctx, original.ProductID, original.ID, original.Revision, original.CurrentRevisionID, fixture.actor); !errors.Is(approveErr, store.ErrConflict) {
+		t.Fatalf("stale approval result=%#v err=%v", result, approveErr)
 	}
-	if published.State != "outdated" || published.PublishedAt != nil {
-		t.Fatalf("raced publication result = %#v", published)
+	stored, err := fixture.memory.Recipe(fixture.ctx, original.ProductID, original.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	fixture.requireStoredOutdated(t, originalRevisionID)
+	if stored.State != "review" || stored.CurrentRevisionID != updated.CurrentRevisionID || stored.Revision != updated.Revision {
+		t.Fatalf("stale approval changed the recipe: %#v", stored)
+	}
+
+	approved, err := fixture.service.ApproveRecipe(fixture.ctx, updated.ProductID, updated.ID, updated.Revision, updated.CurrentRevisionID, fixture.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bumped, err := fixture.memory.SaveRecipe(fixture.ctx, approved, approved.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, publishErr := fixture.service.PublishRecipe(fixture.ctx, approved.ProductID, approved.ID, approved.Revision, approved.CurrentRevisionID, fixture.actor); !errors.Is(publishErr, store.ErrConflict) {
+		t.Fatalf("stale publication result=%#v err=%v", result, publishErr)
+	}
+	stored, err = fixture.memory.Recipe(fixture.ctx, original.ProductID, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != "approved" || stored.Revision != bumped.Revision || stored.CurrentRevisionID != approved.CurrentRevisionID {
+		t.Fatalf("stale publication changed the recipe: %#v", stored)
+	}
+}
+
+func TestRecipeTransitionsDetectIntegrationChangeDuringSave(t *testing.T) {
+	for _, transition := range []string{"approve", "publish"} {
+		t.Run(transition, func(t *testing.T) {
+			fixture, racing := newRecipeGroundingRaceFixture(t)
+			if transition == "publish" {
+				approved, err := fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, fixture.actor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixture.recipe = approved
+			}
+			originalRevisionID := fixture.recipe.CurrentRevisionID
+			racing.beforeSave = func(recipe model.Recipe) { fixture.changeEvidence(t) }
+			var result model.Recipe
+			var err error
+			if transition == "approve" {
+				result, err = fixture.service.ApproveRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, fixture.actor)
+			} else {
+				result, err = fixture.service.PublishRecipe(fixture.ctx, fixture.recipe.ProductID, fixture.recipe.ID, fixture.recipe.Revision, fixture.recipe.CurrentRevisionID, fixture.actor)
+			}
+			if !errors.Is(err, platform.ErrRecipeGroundingChanged) || result.State != "outdated" {
+				t.Fatalf("raced %s result=%#v err=%v", transition, result, err)
+			}
+			fixture.requireStoredOutdated(t, originalRevisionID)
+		})
+	}
 }

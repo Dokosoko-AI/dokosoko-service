@@ -4,9 +4,83 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 )
+
+var errProviderResponseTooLarge = errors.New("AI provider response exceeds the size limit")
+
+type boundedProviderResponseBody struct {
+	body      io.ReadCloser
+	remaining int64
+	closed    bool
+}
+
+func (body *boundedProviderResponseBody) Read(buffer []byte) (int, error) {
+	if body.remaining < 0 {
+		return 0, errProviderResponseTooLarge
+	}
+	if int64(len(buffer)) > body.remaining+1 {
+		buffer = buffer[:body.remaining+1]
+	}
+	read, err := body.body.Read(buffer)
+	if int64(read) > body.remaining {
+		allowed := int(body.remaining)
+		body.remaining = -1
+		_ = body.close()
+		return allowed, errProviderResponseTooLarge
+	}
+	body.remaining -= int64(read)
+	return read, err
+}
+
+func (body *boundedProviderResponseBody) close() error {
+	if body.closed {
+		return nil
+	}
+	body.closed = true
+	return body.body.Close()
+}
+
+func (body *boundedProviderResponseBody) Close() error { return body.close() }
+
+type boundedProviderTransport struct {
+	next http.RoundTripper
+}
+
+func (transport boundedProviderTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := transport.next.RoundTrip(request)
+	if err != nil || response == nil || response.Body == nil {
+		return response, err
+	}
+	if response.ContentLength > maxProviderResponse {
+		_ = response.Body.Close()
+		return nil, errProviderResponseTooLarge
+	}
+	response.Body = &boundedProviderResponseBody{body: response.Body, remaining: maxProviderResponse}
+	return response, nil
+}
+
+// boundedNativeHTTPClient applies the same response limit to SDK-backed
+// providers that the compatible adapter applies before decoding. The wrapper
+// is installed around custom clients too, so tests, injected transports, and
+// production transports have one memory boundary.
+func boundedNativeHTTPClient(client *http.Client) (*http.Client, error) {
+	if client == nil {
+		return nil, errors.New("provider HTTP client is nil")
+	}
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	return &http.Client{
+		Transport:     boundedProviderTransport{next: transport},
+		CheckRedirect: client.CheckRedirect,
+		Jar:           client.Jar,
+		Timeout:       client.Timeout,
+	}, nil
+}
 
 func nativeHTTPError(provider string, status int, codeValue, typeValue string, cause error) error {
 	encoded, _ := json.Marshal(map[string]any{"error": map[string]string{"code": codeValue, "type": typeValue}})
@@ -56,13 +130,13 @@ func validateStructuredFinishReason(provider, value string, successful ...string
 		strings.Contains(value, "prohibited"),
 		strings.Contains(value, "blocklist"),
 		strings.Contains(value, "content_filter"),
-		value == "recitation",
+		strings.Contains(value, "recitation"),
 		value == "spii":
 		code = ErrorRefusedOutput
 	case value == "model_context_window_exceeded", value == "context_length_exceeded":
 		code = ErrorContextTooLarge
 	}
-	return &Error{Code: code, Provider: provider}
+	return &Error{Code: code, Provider: provider, Retryable: code == ErrorInvalidStructuredOutput}
 }
 
 func statusFromResponse(response *http.Response) int {

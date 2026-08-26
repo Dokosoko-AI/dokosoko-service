@@ -14,11 +14,42 @@ import (
 )
 
 func (s *Server) recipeCreationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, platform.ErrRecipeAnalysisScope) {
+		writeError(w, http.StatusBadRequest, "recipe_scope_mismatch", err.Error(), nil)
+		return
+	}
 	if errors.Is(err, platform.ErrRecipeNeedsInput) {
 		writeError(w, http.StatusUnprocessableEntity, "recipe_evidence_gap", err.Error(), nil)
 		return
 	}
 	s.creationError(w, err)
+}
+
+func (s *Server) recipeUpdateError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "recipe_revision_conflict", "The recipe changed. Reload it and review the latest revision before saving again.", nil)
+		return
+	}
+	s.recipeCreationError(w, err)
+}
+
+type recipeRevisionExpectation struct {
+	Revision          int64  `json:"revision"`
+	CurrentRevisionID string `json:"current_revision_id"`
+}
+
+func (value recipeRevisionExpectation) valid() bool {
+	return value.Revision >= 1 && strings.TrimSpace(value.CurrentRevisionID) != ""
+}
+
+func recipeAvailableForMCP(recipe model.Recipe, public bool) bool {
+	if recipe.State != "published" || recipe.NeedsAttention || recipe.ContractVersion != model.RecipeContractProductIntegrationV2 {
+		return false
+	}
+	if recipe.PublishedAt == nil || strings.TrimSpace(recipe.IntegrationID) == "" || strings.TrimSpace(recipe.StableURI) == "" || strings.TrimSpace(recipe.CurrentRevisionID) == "" {
+		return false
+	}
+	return !public || recipe.Visibility == model.VisibilityPublic
 }
 
 func (s *Server) publishedRecipes(ctx context.Context, productID string, public bool) ([]model.Recipe, error) {
@@ -28,7 +59,7 @@ func (s *Server) publishedRecipes(ctx context.Context, productID string, public 
 	}
 	result := make([]model.Recipe, 0, len(values))
 	for _, recipe := range values {
-		if recipe.State != "published" || recipe.NeedsAttention || (public && recipe.Visibility != model.VisibilityPublic) {
+		if !recipeAvailableForMCP(recipe, public) {
 			continue
 		}
 		result = append(result, recipe)
@@ -165,21 +196,34 @@ func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recip
 			s.storeError(w, err)
 			return
 		}
-		revisions, _ := s.service.Store().RecipeRevisions(r.Context(), value.ID)
+		revisions, err := s.service.Store().RecipeRevisions(r.Context(), value.ID)
+		if err != nil {
+			s.storeError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"recipe": value, "revisions": revisions})
 	case http.MethodPatch:
 		var input struct {
-			Markdown   string                  `json:"markdown"`
-			References []model.RecipeReference `json:"references"`
-			Visibility model.Visibility        `json:"visibility"`
+			Spec              *model.RecipeSpec `json:"spec"`
+			Visibility        model.Visibility  `json:"visibility"`
+			Revision          int64             `json:"revision"`
+			CurrentRevisionID string            `json:"current_revision_id"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.UpdateRecipeMarkdown(r.Context(), productID, recipeID, input.Markdown, input.References, input.Visibility, actor(r))
+		if input.Spec == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "spec is required", nil)
+			return
+		}
+		if input.Revision < 1 || strings.TrimSpace(input.CurrentRevisionID) == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
+			return
+		}
+		value, err := s.service.UpdateRecipeSpec(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, *input.Spec, input.Visibility, actor(r))
 		if err != nil {
-			s.creationError(w, err)
+			s.recipeUpdateError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, value)
@@ -191,33 +235,48 @@ func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recip
 
 func (s *Server) reworkRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
 	var input struct {
+		recipeRevisionExpectation
 		Instruction string `json:"instruction"`
 	}
 	if err := decodeJSON(r.Body, &input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	value, err := s.service.ReworkRecipe(r.Context(), productID, recipeID, input.Instruction, actor(r))
+	if !input.recipeRevisionExpectation.valid() {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
+		return
+	}
+	value, err := s.service.ReworkRecipe(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, input.Instruction, actor(r))
 	if err != nil {
-		s.creationError(w, err)
+		s.recipeUpdateError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) approveRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
-	value, err := s.service.ApproveRecipe(r.Context(), productID, recipeID, actor(r))
+	var input recipeRevisionExpectation
+	if err := decodeJSON(r.Body, &input); err != nil || !input.valid() {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
+		return
+	}
+	value, err := s.service.ApproveRecipe(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, actor(r))
 	if err != nil {
-		s.creationError(w, err)
+		s.recipeUpdateError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) publishRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
-	value, err := s.service.PublishRecipe(r.Context(), productID, recipeID, actor(r))
+	var input recipeRevisionExpectation
+	if err := decodeJSON(r.Body, &input); err != nil || !input.valid() {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
+		return
+	}
+	value, err := s.service.PublishRecipe(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, actor(r))
 	if err != nil {
-		s.creationError(w, err)
+		s.recipeUpdateError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)

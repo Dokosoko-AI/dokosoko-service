@@ -1,6 +1,15 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
+
+const (
+	RecipeContractLegacyMCPV1          = "legacy-mcp-v1"
+	RecipeContractProductIntegrationV2 = "product-integration-v2"
+	RecipeSpecVersion2                 = 2
+)
 
 type IntegrationEvidence struct {
 	Kind        string            `json:"kind"`
@@ -39,12 +48,49 @@ type IntegrationIdentityPlan struct {
 }
 
 type RecipeSeed struct {
-	Slug        string   `json:"slug"`
-	Title       string   `json:"title"`
-	Outcome     string   `json:"outcome"`
-	Audience    string   `json:"audience"`
+	Slug          string   `json:"slug"`
+	Title         string   `json:"title"`
+	Outcome       string   `json:"outcome"`
+	Audience      string   `json:"audience"`
+	CapabilityIDs []string `json:"capability_ids,omitempty"`
+	SDKID         string   `json:"sdk_id,omitempty"`
+	EvidenceIDs   []string `json:"evidence_ids,omitempty"`
+	// EndpointIDs is retained only to decode historical analysis snapshots.
+	// Product-integration recipe v2 never populates or consumes it.
 	EndpointIDs []string `json:"endpoint_ids,omitempty"`
-	EvidenceIDs []string `json:"evidence_ids,omitempty"`
+}
+
+// RecipeEvidenceRef records the exact reviewed fact that supports one recipe
+// instruction. Fingerprints make the stored spec independently auditable and
+// prevent a reused resource ID from silently changing meaning.
+type RecipeEvidenceRef struct {
+	Kind        string `json:"kind"`
+	ResourceID  string `json:"resource_id"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// RecipeInstruction is intentionally small. A recipe is an ordered product
+// implementation plan, not a workflow language or a free-form article.
+type RecipeInstruction struct {
+	Action         string              `json:"action"`
+	ExpectedResult string              `json:"expected_result,omitempty"`
+	Evidence       []RecipeEvidenceRef `json:"evidence"`
+}
+
+// RecipeSpec is the canonical recipe representation. Markdown is a rendered
+// publication format; approval and drift decisions are made against this
+// structured, evidence-bound spec.
+type RecipeSpec struct {
+	SchemaVersion int                 `json:"schema_version"`
+	IntegrationID string              `json:"integration_id"`
+	Title         string              `json:"title"`
+	Outcome       string              `json:"outcome"`
+	SDKID         string              `json:"sdk_id,omitempty"`
+	CapabilityIDs []string            `json:"capability_ids"`
+	Prerequisites []RecipeInstruction `json:"prerequisites"`
+	Steps         []RecipeInstruction `json:"steps"`
+	Checks        []RecipeInstruction `json:"checks"`
+	ReferenceIDs  []string            `json:"reference_ids,omitempty"`
 }
 
 type IntegrationPlan struct {
@@ -91,24 +137,32 @@ type RecipeValidationFinding struct {
 }
 
 type RecipeRevision struct {
-	ID          string                    `json:"id"`
-	RecipeID    string                    `json:"recipe_id"`
-	Revision    int                       `json:"revision"`
-	Markdown    string                    `json:"markdown"`
-	References  []RecipeReference         `json:"references"`
-	Validation  []RecipeValidationFinding `json:"validation"`
-	Review      string                    `json:"review,omitempty"`
-	GeneratedBy string                    `json:"generated_by"`
-	Model       string                    `json:"model,omitempty"`
-	CreatedBy   string                    `json:"created_by"`
-	CreatedAt   time.Time                 `json:"created_at"`
+	ID                      string                    `json:"id"`
+	RecipeID                string                    `json:"recipe_id"`
+	Revision                int                       `json:"revision"`
+	SpecVersion             int                       `json:"spec_version"`
+	Spec                    json.RawMessage           `json:"spec"`
+	Markdown                string                    `json:"markdown"`
+	References              []RecipeReference         `json:"references"`
+	Validation              []RecipeValidationFinding `json:"validation"`
+	Review                  string                    `json:"review,omitempty"`
+	GeneratedBy             string                    `json:"generated_by"`
+	Model                   string                    `json:"model,omitempty"`
+	IntegrationRevisionID   string                    `json:"integration_revision_id,omitempty"`
+	IntegrationManifestHash string                    `json:"integration_manifest_hash,omitempty"`
+	PromptVersion           string                    `json:"prompt_version,omitempty"`
+	PromptHash              string                    `json:"prompt_hash,omitempty"`
+	CreatedBy               string                    `json:"created_by"`
+	CreatedAt               time.Time                 `json:"created_at"`
 }
 
 type Recipe struct {
 	ID                string             `json:"id"`
 	OrganisationID    string             `json:"organisation_id"`
 	ProductID         string             `json:"product_id"`
+	IntegrationID     string             `json:"integration_id,omitempty"`
 	AnalysisID        string             `json:"analysis_id,omitempty"`
+	ContractVersion   string             `json:"contract_version"`
 	Slug              string             `json:"slug"`
 	Title             string             `json:"title"`
 	Outcome           string             `json:"outcome"`

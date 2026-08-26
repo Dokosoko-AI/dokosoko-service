@@ -201,7 +201,6 @@ html[data-preview="fixtures"] .app-shell .sidebar { height: 100vh; }
 
 .auth-shell { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 24px; padding: 32px 18px; background: var(--surface-subtle); }
 .auth-card { width: min(500px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-overlay); }
-.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 30px; font-size: var(--text-label); }
 .auth-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 18px; border-radius: 11px; color: var(--accent); background: var(--accent-soft); }
 .auth-icon svg { width: 20px; height: 20px; }
 .auth-card h1 { font-size: var(--text-metric); font-weight: var(--weight-semibold); line-height: var(--leading-section); }
@@ -382,6 +381,11 @@ h1 { margin: 0; font-size: var(--text-title); font-weight: var(--weight-semibold
 .table-head { min-height: 40px; padding-block: 0; border-bottom: 1px solid var(--line); background: var(--surface-subtle); color: var(--muted); font-size: var(--text-caption); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: .06em; }
 .table-row { border-bottom: 1px solid var(--line); color: var(--text); font-size: var(--text-body); }
 .table-row:last-child { border-bottom: 0; }
+.tool-columns { grid-template-columns: minmax(220px, 1.6fr) minmax(64px, .5fr) minmax(108px, .8fr) minmax(92px, .6fr) 32px; }
+.tool-columns > :last-child { justify-self: end; }
+.tool-columns .row-arrow { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-control); color: var(--muted); }
+.tool-columns .row-arrow:hover { color: var(--accent-strong); background: var(--accent-soft); }
+.tool-columns .row-arrow svg { width: 16px; height: 16px; }
 .resource-name { display: flex; align-items: center; gap: 11px; }
 .resource-name > span:last-child { display: grid; gap: 3px; }
 .resource-name strong { color: var(--text-strong); font-size: var(--text-body); }

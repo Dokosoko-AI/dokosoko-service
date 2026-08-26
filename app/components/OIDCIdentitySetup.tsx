@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Check,
   CheckCircle2,
   Copy,
   ExternalLink,
@@ -378,15 +377,6 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
   return <>
     <PageHeader eyebrow="Identity" title="Customer sign-in" description="Connect an OIDC provider, verify a real customer login, then activate customer sign-in." action={pageActions} />
 
-    <ol className="identity-setup-steps" aria-label="OIDC setup progress">
-      {[
-        { label: "Connect", complete: configured },
-        { label: "Map claim", complete: configured && Boolean(identity.customer_account_claim) },
-        { label: "Test", complete: testPassedForCurrentState },
-        { label: "Activate", complete: active },
-      ].map((step, index) => <li className={step.complete ? "complete" : ""} key={step.label}><span>{step.complete ? <Check /> : index + 1}</span><strong>{step.label}</strong></li>)}
-    </ol>
-
     {(error || loadError) && <div className="identity-error" role="alert"><XCircle /><span>{error || loadError}</span></div>}
 
     {callbackTestError && <div className="identity-callback-warning" role="alert"><TriangleAlert /><span><strong>This OIDC test could not be completed</strong><small>The callback was expired, already used, or invalid. It did not pass or change the saved test result. Start a sign-in test again.</small></span></div>}
@@ -449,9 +439,10 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
 
       <div className="identity-verification-grid">
         <section className="panel identity-verification-card">
-          <span className={`identity-step-icon ${testPassedForCurrentState ? "complete" : ""}`}>{testPassedForCurrentState ? <Check /> : "3"}</span>
-          <div><h2 className="type-heading">Test sign-in</h2><p className="type-body">Sign in as a real test customer. This verifies only the OIDC sign-in and mapped customer claim. Use each API&apos;s Test tab to verify end-to-end authorization.</p></div>
-          <Button color={testPassedForCurrentState ? "dark" : "indigo"} outline={testPassedForCurrentState} disabled={operation !== null || callbackTestLoading} onClick={() => void beginTest()}>{operation === "test" ? "Opening provider…" : testPassedForCurrentState ? "Test again" : "Test sign-in"}<ExternalLink data-slot="icon" /></Button>
+          <header className="identity-verification-header">
+            <div className="identity-verification-copy"><h2 className="type-heading">Test sign-in</h2><p className="type-body">This verifies only the OIDC sign-in and mapped customer claim. Use each API&apos;s Test tab to verify end-to-end authorization.</p></div>
+            <Button color={testPassedForCurrentState ? "dark" : "indigo"} outline={testPassedForCurrentState} disabled={operation !== null || callbackTestLoading} onClick={() => void beginTest()}>{operation === "test" ? "Opening provider…" : testPassedForCurrentState ? "Test again" : "Test sign-in"}<ExternalLink data-slot="icon" /></Button>
+          </header>
           <div className={`identity-test-result ${callbackTestLoading ? "pending" : callbackTestFailure ? "failed" : testStaleForCurrentRevision ? "stale" : draftTestExpiredForActivation ? "expired" : lastTest?.status ?? "untested"}`}>
             {callbackTestLoading ? <RefreshCw /> : callbackTestFailure ? <XCircle /> : testStaleForCurrentRevision || draftTestExpiredForActivation ? <TriangleAlert /> : lastTest?.status === "passed" ? <CheckCircle2 /> : lastTest?.status === "failed" || lastTest?.status === "expired" ? <XCircle /> : <RefreshCw />}
             <span><strong>{callbackTestLoading ? "Loading returned OIDC test" : callbackTestFailure ? "Could not load returned OIDC test" : testStaleForCurrentRevision ? "Not tested for this revision" : draftTestExpiredForActivation ? "Test expired for activation" : testStatusLabel(lastTest?.status)}</strong><small>{callbackTestLoading ? "Retrieving the exact test transaction from this OIDC callback." : callbackTestFailure || (testStaleForCurrentRevision ? `Run Test sign-in for revision ${identity.revision}.` : draftTestExpiredForActivation ? "Run Test sign-in again, then activate before the new test expires." : identityTestMessage(lastTest, identity.customer_account_claim))}</small>{callbackTestFailure && <Button outline className="identity-test-retry" disabled={callbackTestLoading || operation !== null} onClick={() => void retryCallbackTest()}>Retry</Button>}</span>
@@ -459,9 +450,11 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
         </section>
 
         <section className="panel identity-verification-card">
-          <span className={`identity-step-icon ${active ? "complete" : ""}`}>{active ? <Check /> : "4"}</span>
-          <div><h2 className="type-heading">Activate customer sign-in</h2><p className="type-body">Activation is allowed only for the exact configuration revision that passed the OIDC sign-in test.</p></div>
-          {active ? <div className="identity-active-state"><LockKeyhole /><span><strong>Private identity is active</strong><small>Revision {identity.revision} fails closed if this connection is disabled.</small></span></div> : <Button color="indigo" disabled={operation !== null || !draftTestPassed} onClick={() => void activate()}>{operation === "activate" ? "Activating…" : "Activate"}</Button>}
+          <header className="identity-verification-header">
+            <div className="identity-verification-copy"><h2 className="type-heading">Activate customer sign-in</h2><p className="type-body">Activation is allowed only for the exact configuration revision that passed the OIDC sign-in test.</p></div>
+            {!active && <Button color="indigo" disabled={operation !== null || !draftTestPassed} onClick={() => void activate()}>{operation === "activate" ? "Activating…" : "Activate"}</Button>}
+          </header>
+          {active && <div className="identity-active-state"><LockKeyhole /><span><strong>Private identity is active</strong><small>Revision {identity.revision}. Disabling this connection fails closed.</small></span></div>}
           {!active && !draftTestPassed && <small className="identity-action-hint">{draftTestExpiredForActivation ? "The passed test expired. Test sign-in again to activate this draft." : <>Pass the OIDC sign-in test for revision {identity.revision} first.</>}</small>}
         </section>
       </div>

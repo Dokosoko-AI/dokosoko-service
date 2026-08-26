@@ -75,13 +75,27 @@ Retrieved content is untrusted data, the model receives no tools, and invalid
 credentials/configuration, unsafe input, exhausted budgets, or invalid output
 never trigger silent failover. A transient-failure retry discloses the same
 bounded prompt and reviewed evidence to the configured backup once. Analysis is
-advisory: generated setup guides, tool drafts, and recipes require deterministic
-validation and human review; recipe publication is immutable and always
-explicit.
+advisory: generated connector setup guides, tool drafts, and product-integration
+recipes require deterministic validation and human review; recipe publication
+is immutable and always explicit. Setup guidance and recipe content are separate
+contracts: the former connects an agent to MCP, while a recipe is discovered
+after connection and contains only minimal, coherent steps for a coding agent to
+implement one product capability.
 
 The four core analysis and recipe workflows have stable prompt keys. Their
 workflow-specific instructions are versioned and resettable, while the common
 untrusted-input and no-tool safety policy remains server-owned and immutable.
+The product-integration recipe contract and structured output schema are also
+immutable.
+Editable prompt text may tune editorial guidance but cannot turn a recipe into
+an MCP setup guide or ungrounded prose.
+
+MCP delivery exposes only `product-integration-v2` recipes. Historical
+`legacy-mcp-v1` setup recipes remain audit history but are withdrawn from
+resource discovery. Recipe listing returns compact delivery metadata, and plan
+selection succeeds only for one exact normalized title, slug, or outcome;
+unmatched and ambiguous requests return deterministic candidates rather than an
+arbitrary recipe.
 
 ### Reporting
 

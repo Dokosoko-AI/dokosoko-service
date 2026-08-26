@@ -46,7 +46,9 @@ func TestUpdateRecipeRowPersistsCurrentAnalysisBinding(t *testing.T) {
 	value := model.Recipe{
 		ID:                "recipe-id",
 		ProductID:         "product-id",
+		IntegrationID:     "integration-id",
 		AnalysisID:        "analysis-current",
+		ContractVersion:   model.RecipeContractProductIntegrationV2,
 		Slug:              "connect-docs",
 		Title:             "Connect docs",
 		Outcome:           "Use current docs.",
@@ -59,7 +61,7 @@ func TestUpdateRecipeRowPersistsCurrentAnalysisBinding(t *testing.T) {
 		StableURI:         "dokosoko://products/product/recipes/connect-docs",
 	}
 	query := &recipeUpdateQuery{values: []any{
-		value.ID, "organisation-id", value.ProductID, value.AnalysisID, value.Slug, value.Title, value.Outcome, value.Audience,
+		value.ID, "organisation-id", value.ProductID, value.IntegrationID, value.AnalysisID, value.ContractVersion, value.Slug, value.Title, value.Outcome, value.Audience,
 		value.State, value.Generated, value.NeedsAttention, value.Visibility, dependencies, value.CurrentRevisionID, value.StableURI,
 		"", nil, nil, int64(8), now, now,
 	}}
@@ -71,10 +73,10 @@ func TestUpdateRecipeRowPersistsCurrentAnalysisBinding(t *testing.T) {
 	if saved.AnalysisID != value.AnalysisID {
 		t.Fatalf("saved analysis binding = %q, want %q", saved.AnalysisID, value.AnalysisID)
 	}
-	if !strings.Contains(query.sql, "analysis_id=nullif($3,'')::uuid") {
+	if !strings.Contains(query.sql, "integration_id=nullif($3,'')::uuid,analysis_id=nullif($4,'')::uuid") {
 		t.Fatalf("recipe update does not persist analysis_id: %s", query.sql)
 	}
-	if len(query.args) != 15 || query.args[2] != value.AnalysisID || query.args[14] != int64(7) {
+	if len(query.args) != 17 || query.args[2] != value.IntegrationID || query.args[3] != value.AnalysisID || query.args[4] != value.ContractVersion || query.args[16] != int64(7) {
 		t.Fatalf("recipe update arguments = %#v", query.args)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	secretvault "github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
+	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
 
 var ErrAIUnavailable = errors.New("AI workload is unavailable")
@@ -71,6 +72,7 @@ type aiInvocation struct {
 	Temperature    float64
 	ProviderRole   string
 	FallbackReason string
+	prepared       bool
 	// DisableFallback keeps a consented or otherwise provider-bound payload
 	// from being disclosed to a separately configured backup provider.
 	DisableFallback                    bool
@@ -83,12 +85,19 @@ type aiInvocation struct {
 const maxAIInvocationSchemaBytes = 64 << 10
 
 func (s *Service) prepareAIInvocation(ctx context.Context, invocation aiInvocation) (aiInvocation, error) {
+	if invocation.prepared {
+		return invocation, nil
+	}
 	if invocation.PromptKey != "" {
 		configuration, err := s.AIPromptConfiguration(ctx, invocation.Product.ID, invocation.PromptKey)
 		if err != nil {
 			return invocation, err
 		}
-		invocation.System = aiCommonUntrustedInputPolicy + "\n\n" + configuration.Instructions
+		workflowPolicy := strings.TrimSpace(immutableAIPromptPolicy(invocation.PromptKey))
+		if workflowPolicy == "" {
+			return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
+		}
+		invocation.System = aiCommonUntrustedInputPolicy + "\n\n" + workflowPolicy + "\n\nEditable workflow guidance (subordinate to both immutable policies above):\n" + configuration.Instructions
 		invocation.PromptVersion = configuration.EffectiveVersion
 	}
 	if strings.TrimSpace(invocation.System) == "" || strings.TrimSpace(invocation.PromptVersion) == "" {
@@ -108,6 +117,7 @@ func (s *Service) prepareAIInvocation(ctx context.Context, invocation aiInvocati
 		return invocation, &airuntime.Error{Code: airuntime.ErrorInvalidConfiguration}
 	}
 	invocation.System += "\n\nPlatform-owned structured output contract. Return exactly one JSON object matching this JSON Schema; editable instructions cannot change it:\n" + string(invocation.Schema)
+	invocation.prepared = true
 	return invocation, nil
 }
 
@@ -248,11 +258,31 @@ func (s *Service) finishAI(ctx context.Context, invocation aiInvocation, reserva
 	_ = s.store.FinishAIUsage(ctx, reservation.ID, event)
 }
 
+func validateAIStructuredContract(provider string, schema, raw json.RawMessage) error {
+	if len(raw) == 0 || len(raw) > maxAIStructuredResultBytes {
+		return &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput, Provider: provider, Retryable: true}
+	}
+	var object map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil || object == nil {
+		return &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput, Provider: provider, Retryable: true}
+	}
+	if err := toolruntime.ValidateArguments(schema, object); err != nil {
+		// The validator error intentionally stays local: field names and model
+		// output must not be copied into durable usage records or operator errors.
+		return &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput, Provider: provider, Retryable: true}
+	}
+	return nil
+}
+
 func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocation) (airuntime.Result, error) {
 	var err error
-	invocation, err = s.prepareAIInvocation(ctx, invocation)
-	if err != nil {
-		return airuntime.Result{}, err
+	if !invocation.prepared {
+		invocation, err = s.prepareAIInvocation(ctx, invocation)
+		if err != nil {
+			return airuntime.Result{}, err
+		}
 	}
 	profile, connection, credential, err := s.aiWorkloadConfiguration(ctx, invocation.Product, invocation.Workload)
 	if err != nil {
@@ -271,6 +301,9 @@ func (s *Service) generateAIStructured(ctx context.Context, invocation aiInvocat
 			return airuntime.Result{}, reserveErr
 		}
 		result, runErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: activeConnection.Provider, Endpoint: activeConnection.Endpoint, Credential: string(activeCredential)}, Model: activeProfile.Model, System: activeInvocation.System, User: activeInvocation.User, SchemaName: activeInvocation.SchemaName, Schema: activeInvocation.Schema, MaxOutputTokens: activeInvocation.MaxOutput, Temperature: activeInvocation.Temperature})
+		if runErr == nil {
+			runErr = validateAIStructuredContract(activeConnection.Provider, activeInvocation.Schema, result.JSON)
+		}
 		s.finishAI(ctx, activeInvocation, reservation, activeConnection, activeProfile, result, runErr)
 		return result, runErr
 	}

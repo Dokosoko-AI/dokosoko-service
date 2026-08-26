@@ -122,7 +122,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		if public {
 			cacheScope = "public"
 		}
-		instructions := "Use the current deployment catalog and the exact immutable API publication revisions returned in discovery."
+		instructions := "You are already connected to this MCP server. Recipes are minimal product-integration instructions for a coding agent, not MCP setup guides. Resolve one exact recipe, read its resource, and implement only its grounded steps against the immutable API publication revisions returned in discovery."
 		if !public && s.reporting != nil {
 			capabilities, _ := s.reporting.Capabilities(r.Context(), productID)
 			reportingEnabled := false
@@ -141,8 +141,8 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			return
 		}
 		resources := make([]map[string]any, 0, len(values))
-		for _, recipe := range values {
-			resources = append(resources, map[string]any{"uri": recipe.StableURI, "name": recipe.Slug, "title": recipe.Title, "description": recipe.Outcome, "mimeType": "text/markdown", "_meta": map[string]any{"generated": recipe.Generated, "state": recipe.State, "revision_id": recipe.CurrentRevisionID}})
+		for _, recipe := range sortedRecipeSummaries(values) {
+			resources = append(resources, map[string]any{"uri": recipe.URI, "name": recipe.Slug, "title": recipe.Title, "description": "Product integration implementation: " + recipe.Outcome, "mimeType": "text/markdown", "_meta": map[string]any{"integration_id": recipe.IntegrationID, "contract_version": recipe.ContractVersion, "revision_id": recipe.RevisionID, "published_at": recipe.PublishedAt}})
 		}
 		writeRPC(w, request.ID, map[string]any{"resources": resources})
 	case "resources/read":
@@ -158,7 +158,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 			writeRPCError(w, request.ID, -32004, "Recipe resource not found")
 			return
 		}
-		writeRPC(w, request.ID, map[string]any{"contents": []map[string]any{{"uri": recipe.StableURI, "mimeType": "text/markdown", "text": recipe.CurrentRevision.Markdown, "_meta": map[string]any{"revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt}}}})
+		writeRPC(w, request.ID, map[string]any{"contents": []map[string]any{{"uri": recipe.StableURI, "mimeType": "text/markdown", "text": recipe.CurrentRevision.Markdown, "_meta": map[string]any{"integration_id": recipe.IntegrationID, "contract_version": recipe.ContractVersion, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt}}}})
 	case "tools/list":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")
@@ -166,9 +166,9 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		}
 		tools := []map[string]any{
 			{"name": "deployment.get_manifest", "description": "Return this DokoSoko deployment and its exact immutable API publication revisions.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "integration.recipes.list", "description": "List published implementation recipes and their stable MCP resource URIs.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
-			{"name": "integration.plan", "description": "Choose the closest published recipe for a requested integration outcome. This returns a plan reference, not a claim that work was completed.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"outcome"}}},
-			{"name": "integration.check", "description": "Check whether a published recipe URI is current or needs attention before implementation.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"recipe_uri": map[string]any{"type": "string", "maxLength": 500}}, "required": []string{"recipe_uri"}}},
+			{"name": "integration.recipes.list", "description": "List compact metadata and stable resource URIs for published product-integration recipes. MCP is already connected; these recipes tell a coding agent what to implement.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}, "outputSchema": recipeListOutputSchema()},
+			{"name": "integration.plan", "description": "Resolve one exact published product-integration recipe by title, slug, or outcome. This tool never guesses; ambiguous or unmatched requests return candidates.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "minLength": 1, "maxLength": 500}}, "required": []string{"outcome"}}, "outputSchema": recipePlanOutputSchema()},
+			{"name": "integration.check", "description": "Check whether a published recipe URI is current before implementation.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"recipe_uri": map[string]any{"type": "string", "minLength": 1, "maxLength": 500}}, "required": []string{"recipe_uri"}}, "outputSchema": recipeCheckOutputSchema()},
 		}
 		principal, _ := r.Context().Value(principalKey).(identity.Principal)
 		if len(productManifest.Integrations) == 0 {

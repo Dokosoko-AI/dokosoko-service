@@ -59,7 +59,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, directory string) error {
 		case err != pgx.ErrNoRows:
 			return fmt.Errorf("check migration %s: %w", name, err)
 		}
-		if _, err := tx.Exec(ctx, string(content)); err != nil {
+		if _, err := tx.Exec(ctx, migrationSQL(name, content)); err != nil {
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations(name, checksum) VALUES ($1, $2)`, name, checksum[:]); err != nil {
@@ -70,6 +70,20 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, directory string) error {
 		return fmt.Errorf("commit migrations: %w", err)
 	}
 	return nil
+}
+
+func migrationSQL(name string, content []byte) string {
+	statement := string(content)
+	if name != "0048_audit_event_idempotency.sql" {
+		return statement
+	}
+
+	// Migration 0048 backfills the append-only audit table. Keep the migration
+	// immutable while suspending its mutation guard only for the transactional
+	// backfill, then restore the guard before the migration is recorded.
+	return "ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update;\n" +
+		statement +
+		"\nALTER TABLE audit_events ENABLE TRIGGER audit_events_no_update;"
 }
 
 func migrationNameBefore(first, second string) bool {

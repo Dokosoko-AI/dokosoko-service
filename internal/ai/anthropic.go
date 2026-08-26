@@ -38,6 +38,10 @@ func (a *AnthropicAdapter) generate(ctx context.Context, provider ProviderConfig
 	if err != nil {
 		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
 	}
+	httpClient, err = boundedNativeHTTPClient(httpClient)
+	if err != nil {
+		return Result{}, &Error{Code: ErrorInvalidConfiguration, Provider: provider.Provider, Cause: err}
+	}
 	client := anthropicsdk.NewClient(
 		anthropicoption.WithoutEnvironmentDefaults(),
 		anthropicoption.WithAPIKey(provider.Credential),
@@ -59,6 +63,9 @@ func (a *AnthropicAdapter) generate(ctx context.Context, provider ProviderConfig
 	response, err := client.Messages.New(ctx, params)
 	duration := time.Since(started)
 	if err != nil {
+		if errors.Is(err, errProviderResponseTooLarge) {
+			return Result{}, nativeTransportError(provider.Provider, err)
+		}
 		var apiError *anthropicsdk.Error
 		if errors.As(err, &apiError) {
 			return Result{}, nativeHTTPError(provider.Provider, apiError.StatusCode, "", string(apiError.Type()), err)

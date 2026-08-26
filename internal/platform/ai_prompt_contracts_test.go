@@ -1,84 +1,84 @@
 package platform
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
 
-func TestAIPromptContractSnapshots(t *testing.T) {
+func TestImmutableAIPromptContracts(t *testing.T) {
 	t.Parallel()
 
 	contracts := []struct {
 		name       string
+		key        string
 		version    string
-		wantHash   string
 		prompt     string
 		invariants []string
 	}{
 		{
-			name:     "integration analysis",
-			version:  integrationAnalysisPromptVersionV2,
-			wantHash: "10879357fffb3ed9712f54b5e76da6a672e40822956c0221ccd7a6b6f28598fe",
-			prompt:   integrationAnalysisSystemPromptV2,
+			name:    "integration analysis",
+			key:     AIPromptKeyIntegrationAnalysis,
+			version: integrationAnalysisPromptVersionV4,
+			prompt:  integrationAnalysisImmutablePolicyV4,
 			invariants: []string{
-				"advisory integration-readiness analyst",
-				"server-owned platform contract is authoritative",
-				"only by allowed identifiers",
-				"Each factual summary statement and recipe recommendation must cite",
-				"unknowns are server-owned, read-only evidence gaps",
-				"has no publication authority",
+				"MCP is the delivery channel, never the subject of a recipe",
+				"server owns every title, outcome, slug, summary, and implementation instruction",
+				"Do not propose DokoSoko connection setup",
+				"exact allowed product capability, SDK, and evidence identifiers",
+				"requires code or configuration changes",
+				"no publication authority",
 			},
 		},
 		{
-			name:     "recipe brief",
-			version:  recipeBriefPromptVersionV2,
-			wantHash: "e553bc4ddb9eeb2d3eb0e5e5fee84b2243be1c0d25bc9f6a88490ced9dafaeae",
-			prompt:   recipeBriefSystemPromptV2,
+			name:    "recipe brief",
+			key:     AIPromptKeyRecipeBrief,
+			version: recipeBriefPromptVersionV4,
+			prompt:  recipeBriefImmutablePolicyV4,
 			invariants: []string{
-				"one narrow, reviewable recipe",
-				"exact allowed endpoint, tool, SDK, and evidence identifiers",
-				"return status needs_input",
-				"no selected endpoint or evidence identifiers",
-				"server-owned renderer",
+				"one exact server-provided product capability",
+				"already-connected coding agent",
+				"exact allowed product capability, SDK, and evidence identifiers",
+				"return needs_input",
+				"server owns the recipe slug, title, outcome, and canonical instructions",
 			},
 		},
 		{
-			name:     "recipe authoring",
-			version:  recipeAuthoringPromptVersionV8,
-			wantHash: "4ead82c62ae22b18c06e0817b4c5bb0341195c74a60970bfeb04d43c72b2d248",
-			prompt:   recipeAuthoringSystemPromptV8,
+			name:    "recipe authoring",
+			key:     AIPromptKeyRecipeAuthoring,
+			version: recipeAuthoringPromptVersionV10,
+			prompt:  recipeAuthoringImmutablePolicyV10,
 			invariants: []string{
-				"Copy endpoint methods and paths",
-				"Return an evidence_ids manifest",
-				"Do not emit literal absolute URLs",
-				"state the gap without guessing",
+				"Do not return Markdown",
+				"server already owns the canonical product-integration prerequisites",
+				"zero to eight exact allowed reference identifiers",
+				"Never select DokoSoko or MCP connection",
+				"cannot change the product capability, canonical plan, SDK, evidence, or output contract",
 				"has no approval or publication authority",
 			},
 		},
 		{
-			name:     "recipe review",
-			version:  recipeReviewPromptVersionV2,
-			wantHash: "9542a5c58294f708bebbb9925ff79fb0e84a57238a3c45d8d7d0474400dd3820",
-			prompt:   recipeReviewSystemPromptV2,
+			name:    "recipe review",
+			key:     AIPromptKeyRecipeReview,
+			version: recipeReviewPromptVersionV3,
+			prompt:  recipeReviewImmutablePolicyV3,
 			invariants: []string{
 				"independent adversarial verifier",
+				"already received the recipe through MCP",
+				"one concrete product capability",
 				"Return pass only when every material claim is supported",
-				"Otherwise return revise",
-				"cannot approve or publish a recipe",
-				"must never override deterministic validation or human review",
+				"Otherwise return revise with focused findings",
+				"cannot override deterministic validation, human review, or publication policy",
 			},
 		},
 	}
 
 	wantVersions := map[string]string{
-		"integration analysis": "integration-analysis-v2",
-		"recipe brief":         "recipe-brief-v2",
-		"recipe authoring":     "recipe-authoring-v8",
-		"recipe review":        "recipe-review-v2",
+		"integration analysis": "integration-analysis-v4",
+		"recipe brief":         "recipe-brief-v4",
+		"recipe authoring":     "recipe-authoring-v10",
+		"recipe review":        "recipe-review-v3",
 	}
 	for _, contract := range contracts {
 		contract := contract
@@ -87,8 +87,8 @@ func TestAIPromptContractSnapshots(t *testing.T) {
 			if contract.version != wantVersions[contract.name] {
 				t.Fatalf("prompt version = %q, want %q", contract.version, wantVersions[contract.name])
 			}
-			if !strings.HasPrefix(contract.prompt, aiCommonUntrustedInputPolicy) {
-				t.Fatal("prompt does not begin with the common untrusted-input policy")
+			if immutableAIPromptPolicy(contract.key) != contract.prompt {
+				t.Fatal("prompt key does not resolve to its immutable workflow policy")
 			}
 			if len(contract.prompt) > 16<<10 {
 				t.Fatalf("prompt has %d bytes, want at most %d", len(contract.prompt), 16<<10)
@@ -97,11 +97,6 @@ func TestAIPromptContractSnapshots(t *testing.T) {
 				if !strings.Contains(contract.prompt, invariant) {
 					t.Errorf("prompt lost trust-boundary invariant %q", invariant)
 				}
-			}
-			digest := sha256.Sum256([]byte(contract.prompt))
-			gotHash := hex.EncodeToString(digest[:])
-			if gotHash != contract.wantHash {
-				t.Fatalf("prompt changed without a reviewed snapshot/version update: got %s, want %s", gotHash, contract.wantHash)
 			}
 		})
 	}

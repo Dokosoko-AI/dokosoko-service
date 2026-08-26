@@ -37,43 +37,31 @@ var aiPromptDefinitions = []aiPromptDefinition{
 	{
 		key:            AIPromptKeyIntegrationAnalysis,
 		label:          "Integration analysis",
-		description:    "Plans the smallest evidence-grounded integration and recipe set from reviewed catalog and documentation evidence.",
-		instructions:   editableAIPromptBody(integrationAnalysisSystemPromptV2),
-		defaultVersion: integrationAnalysisPromptVersionV2,
+		description:    "Discovers a small set of product implementation outcomes from reviewed API evidence.",
+		instructions:   integrationAnalysisDefaultInstructionsV4,
+		defaultVersion: integrationAnalysisPromptVersionV4,
 	},
 	{
 		key:            AIPromptKeyRecipeBrief,
 		label:          "Recipe brief",
-		description:    "Maps one operator outcome to a narrow, reviewable recipe brief.",
-		instructions:   editableAIPromptBody(recipeBriefSystemPromptV2),
-		defaultVersion: recipeBriefPromptVersionV2,
+		description:    "Maps one operator outcome to exact product capabilities and evidence.",
+		instructions:   recipeBriefDefaultInstructionsV4,
+		defaultVersion: recipeBriefPromptVersionV4,
 	},
 	{
 		key:            AIPromptKeyRecipeAuthoring,
 		label:          "Recipe authoring",
-		description:    "Writes one evidence-grounded Markdown recipe from server-owned selections.",
-		instructions:   editableAIPromptBody(recipeAuthoringSystemPromptV8),
-		defaultVersion: recipeAuthoringPromptVersionV8,
+		description:    "Builds one bounded, structured product-integration plan from server-owned selections.",
+		instructions:   recipeAuthoringDefaultInstructionsV10,
+		defaultVersion: recipeAuthoringPromptVersionV10,
 	},
 	{
 		key:            AIPromptKeyRecipeReview,
 		label:          "Recipe review",
-		description:    "Adversarially checks a draft for unsupported claims and missing boundaries.",
-		instructions:   editableAIPromptBody(recipeReviewSystemPromptV2),
-		defaultVersion: recipeReviewPromptVersionV2,
+		description:    "Adversarially checks product-only scope, grounding, minimalism, and observable verification.",
+		instructions:   recipeReviewDefaultInstructionsV3,
+		defaultVersion: recipeReviewPromptVersionV3,
 	},
-}
-
-func editableAIPromptBody(systemPrompt string) string {
-	body, ok := strings.CutPrefix(systemPrompt, aiCommonUntrustedInputPolicy)
-	if !ok {
-		panic("AI workflow prompt is missing the immutable safety policy")
-	}
-	body = strings.TrimSpace(body)
-	if body == "" {
-		panic("AI workflow prompt has no editable instructions")
-	}
-	return body
 }
 
 func aiPromptDefinitionForKey(key string) (aiPromptDefinition, bool) {

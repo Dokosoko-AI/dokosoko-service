@@ -450,37 +450,71 @@ func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
 	memory := store.NewMemory()
 	service := platform.New(memory)
 	actor := platform.Actor{ID: "root-test", RequestID: "req-recipe-resource"}
-	analysis, err := service.AnalyseIntegration(ctx, "prod_acme", actor)
+	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true})
+	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "orders-api", VersionKey: "v1", DisplayName: "Orders API", Description: "Read order status.", Visibility: model.VisibilityPrivate, Lifecycle: "active"}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipes, err := service.GenerateRecipes(ctx, "prod_acme", analysis.ID, actor)
+	prepareHTTPPrivateIntegrationFoundations(t, handler, integration.ID)
+	preparePublishedRecipeHTTPIntegration(t, ctx, memory, service, integration, "orders", actor)
+	analysis, err := service.AnalyseIntegrationFor(ctx, "prod_acme", integration.ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipes, err := service.GenerateRecipesForIntegration(ctx, "prod_acme", analysis.ID, integration.ID, actor)
 	if err != nil || len(recipes) != 1 {
 		t.Fatalf("generate recipes: values=%#v err=%v", recipes, err)
 	}
-	recipe, err := service.ApproveRecipe(ctx, "prod_acme", recipes[0].ID, actor)
+	recipe, err := service.ApproveRecipe(ctx, "prod_acme", recipes[0].ID, recipes[0].Revision, recipes[0].CurrentRevisionID, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipe, err = service.PublishRecipe(ctx, "prod_acme", recipe.ID, actor)
+	recipe, err = service.PublishRecipe(ctx, "prod_acme", recipe.ID, recipe.Revision, recipe.CurrentRevisionID, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true})
+	discovery := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":0,"method":"server/discover","params":{}}`)
+	if discovery.Code != http.StatusOK || !strings.Contains(discovery.Body.String(), "already connected to this MCP server") || !strings.Contains(discovery.Body.String(), "not MCP setup guides") {
+		t.Fatalf("recipe discovery instructions status=%d body=%s", discovery.Code, discovery.Body.String())
+	}
+	tools := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":10,"method":"tools/list","params":{}}`)
+	if tools.Code != http.StatusOK || !strings.Contains(tools.Body.String(), `"name":"integration.recipes.list"`) || !strings.Contains(tools.Body.String(), `"outputSchema"`) || !strings.Contains(tools.Body.String(), `"const":"product-integration-v2"`) || !strings.Contains(tools.Body.String(), "This tool never guesses") {
+		t.Fatalf("recipe tool contracts status=%d body=%s", tools.Code, tools.Body.String())
+	}
 
 	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"mimeType":"text/markdown"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"description":"Product integration implementation:`) || !strings.Contains(w.Body.String(), `"mimeType":"text/markdown"`) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) || !strings.Contains(w.Body.String(), `"integration_id":"`+recipe.IntegrationID+`"`) || !strings.Contains(w.Body.String(), `"published_at"`) {
 		t.Fatalf("recipe resource list status=%d body=%s", w.Code, w.Body.String())
 	}
 	readBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": map[string]any{"uri": recipe.StableURI}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(readBody))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), "## Implementation") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) {
 		t.Fatalf("recipe resource read status=%d body=%s", w.Code, w.Body.String())
+	}
+	checkBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": map[string]any{"name": "integration.check", "arguments": map[string]any{"recipe_uri": recipe.StableURI}}})
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(checkBody))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) || !strings.Contains(w.Body.String(), `"integration_id":"`+recipe.IntegrationID+`"`) || !strings.Contains(w.Body.String(), `"current":true`) {
+		t.Fatalf("recipe check status=%d body=%s", w.Code, w.Body.String())
+	}
+	listBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": map[string]any{"name": "integration.recipes.list", "arguments": map[string]any{}}})
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(listBody))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) {
+		t.Fatalf("compact recipe list status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, internalField := range []string{`"organisation_id"`, `"product_id"`, `"dependencies"`, `"current_revision"`, `"analysis_id"`} {
+		if strings.Contains(w.Body.String(), internalField) {
+			t.Fatalf("compact recipe list leaked %s: %s", internalField, w.Body.String())
+		}
 	}
 	planBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "integration.plan", "arguments": map[string]any{"outcome": recipe.Outcome}}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(planBody))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) {
 		t.Fatalf("recipe plan status=%d body=%s", w.Code, w.Body.String())
+	}
+	noMatchBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 30, "method": "tools/call", "params": map[string]any{"name": "integration.plan", "arguments": map[string]any{"outcome": "unrelated outcome that is not published"}}})
+	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(noMatchBody))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"code":-32004`) || !strings.Contains(w.Body.String(), `"reason":"no_exact_match"`) || !strings.Contains(w.Body.String(), recipe.StableURI) {
+		t.Fatalf("recipe plan no-match status=%d body=%s", w.Code, w.Body.String())
 	}
 	product, _ := memory.Product(ctx, "prod_acme")
 	product.PublicMCPEnabled = true

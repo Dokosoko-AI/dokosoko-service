@@ -8,7 +8,9 @@ import {
   buildAgentSetupEmbedHTML,
   integrationIncludesSourcePublication,
   recipeAnalysisIsFreshlyRunning,
+  recipeHasScopeDependencyMismatch,
   recipeMatchesIntegration,
+  recipeScopeIDs,
   sourcePublicationManifestEntry,
   toolPolicy,
   unavailableConsoleCapability,
@@ -34,6 +36,27 @@ test("console domain helpers keep integration-scoped analysis and recipes isolat
   assert.equal(recipeMatchesIntegration(ambiguousRecipe), false);
   assert.equal(analysisMatchesIntegration(generalAnalysis), true);
   assert.equal(recipeMatchesIntegration(generalRecipe), true);
+});
+
+test("product-integration recipe scope follows the canonical integration and reports dependency drift", () => {
+  const current = {
+    contract_version: "product-integration-v2",
+    integration_id: "integration-canonical",
+    dependencies: [{ kind: "integration_scope", resource_id: "integration-canonical" }],
+  } as APIRecipe;
+  const drifted = {
+    ...current,
+    dependencies: [{ kind: "integration_scope", resource_id: "integration-stale" }],
+  } as APIRecipe;
+  const missingDependency = { ...current, dependencies: [] } as unknown as APIRecipe;
+
+  assert.deepEqual(recipeScopeIDs(current), ["integration-canonical"]);
+  assert.equal(recipeMatchesIntegration(current, "integration-canonical"), true);
+  assert.equal(recipeMatchesIntegration(drifted, "integration-canonical"), true);
+  assert.equal(recipeMatchesIntegration(drifted, "integration-stale"), false);
+  assert.equal(recipeHasScopeDependencyMismatch(current), false);
+  assert.equal(recipeHasScopeDependencyMismatch(drifted), true);
+  assert.equal(recipeHasScopeDependencyMismatch(missingDependency), true);
 });
 
 test("recipe generation waits only for a recent running analysis", () => {

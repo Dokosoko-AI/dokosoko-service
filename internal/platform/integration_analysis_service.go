@@ -49,13 +49,20 @@ func (s *Service) analyseIntegration(ctx context.Context, productID, integration
 	if err != nil {
 		return analysis, err
 	}
+	productEvidence := unambiguousIntegrationProductEvidence(evidence)
+	allowedCapabilityIDs := []string(nil)
+	allowedSDKIDs := []string(nil)
+	if selectedIntegration != nil {
+		allowedCapabilityIDs = viableIntegrationRecipeCapabilityIDs(productEvidence, selectedIntegration.ID)
+		allowedSDKIDs = viableIntegrationRecipeSDKIDs(productEvidence)
+	}
 	promptInput := map[string]any{
-		"product":              map[string]any{"name": product.Name, "slug": product.Slug, "description": product.Description, "public_mcp_enabled": product.PublicMCPEnabled},
-		"platform_contract":    fallback,
-		"evidence":             evidence,
-		"unknowns":             unknowns,
-		"allowed_endpoint_ids": integrationEndpointIDs(fallback),
-		"allowed_evidence_ids": evidenceIDs(evidence),
+		"product":                map[string]any{"name": product.Name, "slug": product.Slug, "description": product.Description},
+		"evidence":               productEvidence,
+		"unknowns":               integrationProductRecipeUnknowns(unknowns),
+		"allowed_capability_ids": allowedCapabilityIDs,
+		"allowed_sdk_ids":        allowedSDKIDs,
+		"allowed_evidence_ids":   evidenceIDs(productEvidence),
 	}
 	if selectedIntegration != nil {
 		promptInput["integration"] = map[string]any{"id": selectedIntegration.ID, "family_key": selectedIntegration.FamilyKey, "version_key": selectedIntegration.VersionKey, "display_name": selectedIntegration.DisplayName, "description": selectedIntegration.Description}
@@ -70,9 +77,6 @@ func (s *Service) analyseIntegration(ctx context.Context, productID, integration
 				analysis.ErrorCode = string(airuntime.ErrorInvalidStructuredOutput)
 			} else {
 				analysis.Plan = normalizeIntegrationPlan(aiPlan, fallback, evidence)
-				if selectedIntegration != nil {
-					analysis.Plan = namespaceIntegrationRecipes(analysis.Plan, product, *selectedIntegration)
-				}
 				analysis.GeneratedBy = "ai_assisted"
 			}
 		} else {
@@ -80,6 +84,9 @@ func (s *Service) analyseIntegration(ctx context.Context, productID, integration
 		}
 	} else {
 		analysis.ErrorCode = string(airuntime.Code(aiErr))
+	}
+	if len(analysis.Plan.Recipes) == 0 {
+		analysis.Unknowns = ensureMissingIntegrationRecipeUnknown(analysis.Unknowns)
 	}
 	now := s.now()
 	analysis.State, analysis.CompletedAt = "review", &now
@@ -96,6 +103,62 @@ func (s *Service) analyseIntegration(ctx context.Context, productID, integration
 	return analysis, runErr
 }
 
+func viableIntegrationRecipeCapabilityIDs(evidence []model.IntegrationEvidence, integrationID string) []string {
+	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(evidence))
+	result := make([]string, 0)
+	for _, id := range recipeProductCapabilityIDs(evidence) {
+		item, exists := byID[id]
+		if exists && !ambiguous[id] && integrationRecipeCapabilityViable(item, integrationID) {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func viableIntegrationRecipeSDKIDs(evidence []model.IntegrationEvidence) []string {
+	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(evidence))
+	result := make([]string, 0)
+	for _, id := range recipeProductSDKIDs(evidence) {
+		item, exists := byID[id]
+		if exists && !ambiguous[id] && integrationRecipeSDKViable(item) {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func unambiguousIntegrationProductEvidence(evidence []model.IntegrationEvidence) []model.IntegrationEvidence {
+	productEvidence := recipeProductEvidence(evidence)
+	_, ambiguous := recipeUniqueEvidenceByID(productEvidence)
+	result := make([]model.IntegrationEvidence, 0, len(productEvidence))
+	for _, item := range productEvidence {
+		id := strings.TrimSpace(item.ResourceID)
+		if id != "" && !ambiguous[id] {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func ensureMissingIntegrationRecipeUnknown(values []model.IntegrationUnknown) []model.IntegrationUnknown {
+	for _, value := range values {
+		if value.ID == "integration-scope" || value.ID == "product-capability" {
+			return values
+		}
+	}
+	return append(values, model.IntegrationUnknown{ID: "product-capability", Question: "Which exact product operation or API contract should the recipe implement?", Why: "No candidate selected exactly one viable product capability with its exact reviewed evidence.", Blocking: true})
+}
+
+func integrationProductRecipeUnknowns(values []model.IntegrationUnknown) []model.IntegrationUnknown {
+	result := make([]model.IntegrationUnknown, 0, len(values))
+	for _, value := range values {
+		if value.ID == "integration-scope" || value.ID == "product-capability" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
 func integrationEndpointIDs(plan model.IntegrationPlan) []string {
 	values := make([]string, 0, len(plan.Endpoints))
 	for _, endpoint := range plan.Endpoints {
@@ -106,57 +169,55 @@ func integrationEndpointIDs(plan model.IntegrationPlan) []string {
 	return values
 }
 
+func recipeSeedForCapability(values []model.RecipeSeed, capabilityID string) (model.RecipeSeed, bool) {
+	for _, value := range values {
+		if len(value.CapabilityIDs) == 1 && value.CapabilityIDs[0] == capabilityID {
+			return value, true
+		}
+	}
+	return model.RecipeSeed{}, false
+}
+
 func integrationAnalysisResponsePlan(response integrationAnalysisAIResponse, fallback model.IntegrationPlan, evidence []model.IntegrationEvidence) (model.IntegrationPlan, bool) {
-	response.Summary = strings.TrimSpace(response.Summary)
-	if response.Summary == "" || len(response.Summary) > 1000 || containsToolBuilderSecretText(response.Summary) || !allowedUniqueEvidenceIDs(response.SummaryEvidenceIDs, evidence) || len(response.Recipes) == 0 {
+	if len(response.Recipes) > 12 {
 		return model.IntegrationPlan{}, false
 	}
-	allowedEndpoints := make(map[string]model.IntegrationEndpointPlan, len(fallback.Endpoints))
-	for _, endpoint := range fallback.Endpoints {
-		allowedEndpoints[endpoint.Name] = endpoint
-	}
+	// The model may select among server-derived operation candidates, but it
+	// does not author product facts. Titles, outcomes, slugs, and the summary
+	// remain canonical server output derived from exact structured evidence.
 	plan := fallback
-	plan.Summary = response.Summary
+	if len(response.Recipes) == 0 {
+		return plan, true
+	}
 	plan.Recipes = make([]model.RecipeSeed, 0, len(response.Recipes))
-	seenSlugs := make(map[string]bool, len(response.Recipes))
+	seenCapabilities := make(map[string]bool, len(response.Recipes))
 	for _, candidate := range response.Recipes {
-		seed := candidate.RecipeSeed
-		seed.EvidenceIDs = append([]string(nil), candidate.EvidenceIDs...)
-		seed.Slug = slugify(seed.Slug)
-		seed.Title = strings.TrimSpace(seed.Title)
-		seed.Outcome = strings.TrimSpace(seed.Outcome)
-		seed.Audience = strings.TrimSpace(seed.Audience)
+		seed := model.RecipeSeed{
+			Audience:      "coding_agent",
+			CapabilityIDs: append([]string(nil), candidate.CapabilityIDs...),
+			SDKID:         strings.TrimSpace(candidate.SDKID),
+			EvidenceIDs:   append([]string(nil), candidate.EvidenceIDs...),
+		}
+		for index := range seed.CapabilityIDs {
+			seed.CapabilityIDs[index] = strings.TrimSpace(seed.CapabilityIDs[index])
+		}
 		for index := range seed.EvidenceIDs {
 			seed.EvidenceIDs[index] = strings.TrimSpace(seed.EvidenceIDs[index])
 		}
-		candidate.Rationale = strings.TrimSpace(candidate.Rationale)
-		if seed.Slug == "" || seenSlugs[seed.Slug] || seed.Title == "" || len(seed.Title) > 160 || seed.Outcome == "" || len(seed.Outcome) > 1000 || seed.Audience == "" || len(seed.Audience) > 80 || candidate.Rationale == "" || len(candidate.Rationale) > 1000 || containsToolBuilderSecretText(seed.Title+" "+seed.Outcome+" "+seed.Audience+" "+candidate.Rationale) || !allowedUniqueEvidenceIDs(candidate.EvidenceIDs, evidence) {
+		if len(seed.CapabilityIDs) != 1 || seenCapabilities[seed.CapabilityIDs[0]] {
 			return model.IntegrationPlan{}, false
 		}
-		seenEndpointIDs := make(map[string]bool, len(seed.EndpointIDs))
-		endpointEvidence := make(map[string]bool)
-		for index, endpointID := range seed.EndpointIDs {
-			endpointID = strings.TrimSpace(endpointID)
-			endpoint, ok := allowedEndpoints[endpointID]
-			if !ok || seenEndpointIDs[endpointID] {
-				return model.IntegrationPlan{}, false
-			}
-			seed.EndpointIDs[index] = endpointID
-			seenEndpointIDs[endpointID] = true
-			for _, evidenceID := range endpoint.Evidence {
-				endpointEvidence[evidenceID] = true
-			}
-		}
-		if len(seed.EndpointIDs) == 0 {
+		if _, valid := integrationRecipeSelection(evidence, seed); !valid {
 			return model.IntegrationPlan{}, false
 		}
-		for _, evidenceID := range seed.EvidenceIDs {
-			if !endpointEvidence[evidenceID] {
-				return model.IntegrationPlan{}, false
-			}
+		canonical, exists := recipeSeedForCapability(fallback.Recipes, seed.CapabilityIDs[0])
+		if !exists {
+			return model.IntegrationPlan{}, false
 		}
-		seenSlugs[seed.Slug] = true
-		plan.Recipes = append(plan.Recipes, seed)
+		canonical.SDKID = seed.SDKID
+		canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
+		seenCapabilities[seed.CapabilityIDs[0]] = true
+		plan.Recipes = append(plan.Recipes, canonical)
 	}
 	return plan, true
 }

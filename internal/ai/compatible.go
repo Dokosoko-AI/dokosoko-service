@@ -112,7 +112,7 @@ func (a *CompatibleAdapter) generate(ctx context.Context, provider ProviderConfi
 		} `json:"usage"`
 	}
 	if json.Unmarshal(encoded, &completion) != nil || len(completion.Choices) == 0 {
-		return Result{}, &Error{Code: ErrorProviderUnavailable, Provider: provider.Provider}
+		return Result{}, &Error{Code: ErrorProviderUnavailable, Provider: provider.Provider, Retryable: true}
 	}
 	choice := completion.Choices[0]
 	if choice.Message.Refusal != "" {

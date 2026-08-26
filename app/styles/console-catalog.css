@@ -138,10 +138,10 @@
 .runtime-revoke-summary > span { display: grid; gap: 4px; }
 .runtime-revoke-summary strong { font-size: var(--text-body); }
 .runtime-revoke-summary small { color: var(--muted); font-size: var(--text-caption); }
-.identity-summary { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 18px; }
-.identity-summary > span:nth-child(2) { display: grid; gap: 5px; }
-.identity-summary strong { font-size: var(--text-body); }
-.identity-summary small { color: var(--muted); font-size: var(--text-caption); }
+.integration-identity-summary { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 18px; }
+.integration-identity-summary > span:nth-child(2) { display: grid; gap: 5px; }
+.integration-identity-summary strong { font-size: var(--text-body); }
+.integration-identity-summary small { color: var(--muted); font-size: var(--text-caption); }
 .integration-revision-row { width: 100%; display: grid; grid-template-columns: 46px minmax(180px, 1fr) 16px; align-items: center; gap: 13px; min-height: var(--height-row); padding: 12px 18px; border: 0; border-bottom: 1px solid var(--line); color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .integration-revision-row:hover { background: var(--accent-soft); }
 .integration-revision-row > svg { width: 15px; height: 15px; color: var(--subtle); }
@@ -336,6 +336,8 @@
 .acceptance-scenarios small { color: var(--muted); font-size: var(--text-caption); line-height: 1.45; }
 .builder-review-link { border: 1px solid var(--accent-line); border-radius: 9px; background: var(--accent-soft); }
 .dialog-panel:has(.publish-review), .dialog-panel:has(.revision-inspector) { width: min(760px, 100%); }
+.dialog-panel:has(.recipe-dialog-form) { width: min(760px, 100%); }
+.recipe-dialog-form .recipe-spec-editor textarea { min-height: 420px; font-family: var(--font-code); }
 .publish-review, .revision-inspector { display: grid; gap: 14px; }
 .publish-review-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .publish-review-summary > span { min-width: 0; display: grid; gap: 5px; }

@@ -11,7 +11,7 @@ import type {
   APIIntegrationAnalysis,
   APIProduct,
   APIRecipe,
-  APIRecipeReference,
+  APIRecipeSpec,
 } from "../../lib/api";
 import {
   type AIWorkload,
@@ -296,65 +296,82 @@ export function useAIWorkspaceState({
     }
   }
 
-	  async function generateIntegrationSetupGuide(integrationID: string) {
-		const analysis = await api.analyseIntegration(product.id, integrationID);
-		setAnalyses((items) => [analysis, ...items.filter((item) => item.id !== analysis.id)]);
-		return analysis;
-	  }
+  async function generateIntegrationSetupGuide(integrationID: string) {
+    const analysis = await api.analyseIntegration(product.id, integrationID);
+    setAnalyses((items) => [analysis, ...items.filter((item) => item.id !== analysis.id)]);
+    return analysis;
+  }
 
-	  async function reworkRecipe(recipe: APIRecipe, instruction: string) {
-	    setRecipeBusy(true);
-	    try {
-	      const value = await api.reworkRecipe(product.id, recipe.id, instruction);
-	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-	      showToast("A new recipe revision is ready for review.");
-	    } catch (error) {
-	      showToast(error instanceof APIError ? error.message : "Could not rework this recipe.");
-	    } finally {
-	      setRecipeBusy(false);
-	    }
-	  }
+  async function handleRecipeMutationError(error: unknown, fallback: string) {
+    if (error instanceof APIError && error.status === 409) {
+      try {
+        setRecipes(await api.recipes(product.id));
+        showToast("This recipe changed. The latest revision is loaded; review it before retrying.");
+      } catch {
+        showToast("This recipe changed, but the latest revision could not be loaded. Refresh before retrying.");
+      }
+      return;
+    }
+    showToast(error instanceof APIError ? error.message : fallback);
+  }
 
-	  async function editRecipe(recipe: APIRecipe, markdown: string, references: APIRecipeReference[], visibility: APIRecipe["visibility"]) {
-	    setRecipeBusy(true);
-	    try {
-	      const value = await api.updateRecipe(product.id, recipe.id, markdown, references, visibility);
-	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-	      showToast("Human-authored recipe revision saved for review.");
-	    } catch (error) {
-	      showToast(error instanceof APIError ? error.message : "Could not save this recipe revision.");
-	    } finally {
-	      setRecipeBusy(false);
-	    }
-	  }
+  async function reworkRecipe(recipe: APIRecipe, instruction: string): Promise<APIRecipe | null> {
+    setRecipeBusy(true);
+    try {
+      const value = await api.reworkRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, instruction);
+      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+      showToast("A new recipe revision is ready for review.");
+      return value;
+    } catch (error) {
+      await handleRecipeMutationError(error, "Could not rework this recipe.");
+      return null;
+    } finally {
+      setRecipeBusy(false);
+    }
+  }
 
-	  async function approveRecipe(recipe: APIRecipe) {
-	    setRecipeBusy(true);
-	    try {
-	      const value = await api.approveRecipe(product.id, recipe.id);
-	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-	      showToast("Current recipe revision approved.");
-	    } catch (error) {
-	      showToast(error instanceof APIError ? error.message : "Could not approve this recipe.");
-	    } finally {
-	      setRecipeBusy(false);
-	    }
-	  }
+  async function editRecipe(recipe: APIRecipe, spec: APIRecipeSpec, visibility: APIRecipe["visibility"]): Promise<APIRecipe | null> {
+    setRecipeBusy(true);
+    try {
+      const value = await api.updateRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, spec, visibility);
+      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+      showToast("Human-authored recipe revision saved for review.");
+      return value;
+    } catch (error) {
+      await handleRecipeMutationError(error, "Could not save this recipe revision.");
+      return null;
+    } finally {
+      setRecipeBusy(false);
+    }
+  }
 
-	  async function publishRecipe(recipe: APIRecipe) {
-	    setRecipeBusy(true);
-	    try {
-	      const value = await api.publishRecipe(product.id, recipe.id);
-	      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-	      showToast("Recipe published to MCP resources.");
-	    } catch (error) {
-	      showToast(error instanceof APIError ? error.message : "Could not publish this recipe.");
-	    } finally {
-	      setRecipeBusy(false);
-	    }
-	  }
+  async function approveRecipe(recipe: APIRecipe) {
+    setRecipeBusy(true);
+    try {
+      const value = await api.approveRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id);
+      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+      showToast("Current recipe revision approved.");
+    } catch (error) {
+      await handleRecipeMutationError(error, "Could not approve this recipe.");
+    } finally {
+      setRecipeBusy(false);
+    }
+  }
 
-	  async function runSystemDoctor() {
+  async function publishRecipe(recipe: APIRecipe) {
+    setRecipeBusy(true);
+    try {
+      const value = await api.publishRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id);
+      setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
+      showToast("Recipe published to MCP resources.");
+    } catch (error) {
+      await handleRecipeMutationError(error, "Could not publish this recipe.");
+    } finally {
+      setRecipeBusy(false);
+    }
+  }
+
+  async function runSystemDoctor() {
     try {
       const value = await api.systemDoctor();
       const passing = value.checks.filter((check) => check.status === "ok").length;
@@ -363,7 +380,6 @@ export function useAIWorkspaceState({
       showToast(error instanceof APIError ? error.message : "System Doctor could not run.");
     }
   }
-
 
   return {
     aiConnections, setAIConnections,

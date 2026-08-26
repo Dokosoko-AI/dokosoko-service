@@ -63,10 +63,33 @@ func TestCompatibleAdapterRejectsIncompleteAndUnknownStructuredResults(t *testin
 			doer := &responseDoer{status: http.StatusOK, body: string(body)}
 			adapter := NewCompatibleAdapter(fixedTestFactory(doer))
 			_, err = adapter.GenerateStructured(context.Background(), StructuredRequest{Provider: ProviderConfig{Provider: "openai-compatible", Endpoint: "https://provider.example", Credential: "secret"}, Model: "model", System: "System", User: "User", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 32})
-			if Code(err) != ErrorInvalidStructuredOutput || Retryable(err) {
-				t.Fatalf("finish reason %q was not rejected safely: err=%v code=%q retryable=%t", finishReason, err, Code(err), Retryable(err))
+			if Code(err) != ErrorInvalidStructuredOutput || !Retryable(err) {
+				t.Fatalf("finish reason %q was not rejected with bounded failover eligibility: err=%v code=%q retryable=%t", finishReason, err, Code(err), Retryable(err))
 			}
 		})
+	}
+}
+
+func TestCompatibleAdapterMakesMalformedSuccessfulResponsesFailoverEligible(t *testing.T) {
+	for _, body := range []string{
+		`{`,
+		`{"id":"completion-1","model":"resolved-model","choices":[]}`,
+	} {
+		doer := &responseDoer{status: http.StatusOK, body: body}
+		adapter := NewCompatibleAdapter(fixedTestFactory(doer))
+		_, err := adapter.GenerateStructured(context.Background(), StructuredRequest{Provider: ProviderConfig{Provider: "openai-compatible", Endpoint: "https://provider.example", Credential: "secret"}, Model: "model", System: "System", User: "User", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 32})
+		if Code(err) != ErrorProviderUnavailable || !Retryable(err) {
+			t.Fatalf("malformed successful response %q = %v (code %q, retryable %v)", body, err, Code(err), Retryable(err))
+		}
+	}
+}
+
+func TestCompatibleAdapterRefusalRemainsTerminal(t *testing.T) {
+	doer := &responseDoer{status: http.StatusOK, body: `{"id":"completion-1","model":"resolved-model","choices":[{"finish_reason":"stop","message":{"content":"","refusal":"safety policy"}}]}`}
+	adapter := NewCompatibleAdapter(fixedTestFactory(doer))
+	_, err := adapter.GenerateStructured(context.Background(), StructuredRequest{Provider: ProviderConfig{Provider: "openai-compatible", Endpoint: "https://provider.example", Credential: "secret"}, Model: "model", System: "System", User: "User", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 32})
+	if Code(err) != ErrorRefusedOutput || Retryable(err) {
+		t.Fatalf("refusal = %v (code %q, retryable %v)", err, Code(err), Retryable(err))
 	}
 }
 

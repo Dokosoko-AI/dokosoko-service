@@ -14,6 +14,28 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
+type countingProviderBody struct {
+	remaining int64
+	read      int64
+}
+
+func (body *countingProviderBody) Read(buffer []byte) (int, error) {
+	if body.remaining == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(buffer)) > body.remaining {
+		buffer = buffer[:body.remaining]
+	}
+	for index := range buffer {
+		buffer[index] = 'x'
+	}
+	body.remaining -= int64(len(buffer))
+	body.read += int64(len(buffer))
+	return len(buffer), nil
+}
+
+func (*countingProviderBody) Close() error { return nil }
+
 func fixtureHTTPFactory(body string, inspect func(*http.Request, []byte)) HTTPClientFactory {
 	return func(context.Context, string) (*http.Client, error) {
 		return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -127,8 +149,86 @@ func TestNativeProvidersRejectIncompleteAndUnknownStructuredResults(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			request.Provider = ProviderConfig{Provider: test.provider, Endpoint: "https://provider.example", Credential: "provider-secret"}
 			_, err := test.adapter.GenerateStructured(context.Background(), request)
-			if Code(err) != ErrorInvalidStructuredOutput || Retryable(err) {
-				t.Fatalf("finish reason was not rejected safely: err=%v code=%q retryable=%t", err, Code(err), Retryable(err))
+			if Code(err) != ErrorInvalidStructuredOutput || !Retryable(err) {
+				t.Fatalf("finish reason was not rejected with bounded failover eligibility: err=%v code=%q retryable=%t", err, Code(err), Retryable(err))
+			}
+		})
+	}
+}
+
+func TestStructuredSafetyAndRefusalReasonsRemainTerminal(t *testing.T) {
+	for _, reason := range []string{"refusal", "safety", "image_safety", "prohibited_content", "blocklist", "content_filter", "recitation", "image_recitation", "spii"} {
+		err := validateStructuredFinishReason("provider", reason, "stop")
+		if Code(err) != ErrorRefusedOutput || Retryable(err) {
+			t.Fatalf("safety reason %q = %v (code %q, retryable %v)", reason, err, Code(err), Retryable(err))
+		}
+	}
+}
+
+func TestNativeProviderSafetySignalsRemainTerminal(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		adapter  Adapter
+	}{
+		{
+			name:     "openai refusal content",
+			provider: "openai",
+			adapter:  NewOpenAIAdapter(fixtureHTTPFactory(`{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"safety policy"}]}],"usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}`, nil)),
+		},
+		{
+			name:     "anthropic refusal stop",
+			provider: "anthropic",
+			adapter:  NewAnthropicAdapter(fixtureHTTPFactory(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"refusal","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}`, nil)),
+		},
+		{
+			name:     "google safety finish",
+			provider: "google",
+			adapter:  NewGoogleAdapter(fixtureHTTPFactory(`{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"SAFETY"}],"modelVersion":"gemini-test","responseId":"response-1"}`, nil)),
+		},
+		{
+			name:     "google prompt block",
+			provider: "google",
+			adapter:  NewGoogleAdapter(fixtureHTTPFactory(`{"candidates":[],"promptFeedback":{"blockReason":"JAILBREAK"},"modelVersion":"gemini-test","responseId":"response-1"}`, nil)),
+		},
+	}
+	request := StructuredRequest{Model: "fixture-model", System: "Return JSON.", User: "Return an object.", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 16}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request.Provider = ProviderConfig{Provider: test.provider, Endpoint: "https://provider.example", Credential: "provider-secret"}
+			_, err := test.adapter.GenerateStructured(context.Background(), request)
+			if Code(err) != ErrorRefusedOutput || Retryable(err) {
+				t.Fatalf("safety result = %v (code %q, retryable %v)", err, Code(err), Retryable(err))
+			}
+		})
+	}
+}
+
+func TestNativeProvidersBoundResponseBodiesBeforeSDKDecoding(t *testing.T) {
+	providers := []struct {
+		name    string
+		adapter func(HTTPClientFactory) Adapter
+	}{
+		{name: "openai", adapter: func(factory HTTPClientFactory) Adapter { return NewOpenAIAdapter(factory) }},
+		{name: "anthropic", adapter: func(factory HTTPClientFactory) Adapter { return NewAnthropicAdapter(factory) }},
+		{name: "google", adapter: func(factory HTTPClientFactory) Adapter { return NewGoogleAdapter(factory) }},
+	}
+	request := StructuredRequest{Model: "fixture-model", System: "Return JSON.", User: "Return an object.", SchemaName: "result", Schema: json.RawMessage(`{"type":"object"}`), MaxOutputTokens: 16}
+	for _, provider := range providers {
+		t.Run(provider.name, func(t *testing.T) {
+			body := &countingProviderBody{remaining: 4 * maxProviderResponse}
+			factory := func(context.Context, string) (*http.Client, error) {
+				return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: body, Request: request}, nil
+				})}, nil
+			}
+			request.Provider = ProviderConfig{Provider: provider.name, Endpoint: "https://provider.example", Credential: "provider-secret"}
+			_, err := provider.adapter(factory).GenerateStructured(context.Background(), request)
+			if Code(err) != ErrorProviderUnavailable || !Retryable(err) {
+				t.Fatalf("oversized response error = %v (code %q, retryable %v)", err, Code(err), Retryable(err))
+			}
+			if body.read > maxProviderResponse+1 {
+				t.Fatalf("SDK read %d bytes, limit is %d", body.read, maxProviderResponse)
 			}
 		})
 	}

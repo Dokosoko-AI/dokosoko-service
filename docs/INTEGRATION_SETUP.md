@@ -59,10 +59,14 @@ an administrator reviews and republishes it.
 ### 5. Add recipes
 
 Select one API, analyse its bounded published evidence, resolve blocking gaps by
-attaching or configuring the missing evidence, review citations and commands,
-and publish an immutable recipe revision. Analysis unknowns are read-only
-findings, not free-form assertions. Evidence changes make affected recipes stale
-until reviewed; no model output publishes itself.
+attaching or configuring the missing evidence, then review one minimal plan for
+one tangible product capability. A recipe is consumed by a coding agent that is
+already connected through MCP; it contains product prerequisites, ordered
+implementation steps, observable checks, and grounded references—not DokoSoko
+or MCP setup instructions. Publish only an immutable recipe revision whose
+structured specification and rendered Markdown agree. Analysis unknowns are
+read-only findings, not free-form assertions. Evidence changes make affected
+recipes stale until reviewed; no model output publishes itself.
 
 ### 6. Test and publish
 
@@ -78,7 +82,9 @@ upstream calls, confirmation, revoked access, and request/audit correlation.
 
 Private MCP serves authorized customer resources and tools. Optional Public MCP
 serves only explicitly public, published, read-only material and is disabled by
-default. Agent setup pages describe both endpoints.
+default. Agent setup pages describe both endpoints. After connection, agents
+list compact recipe metadata, resolve an exact title, slug, or outcome without
+fuzzy guessing, and read the selected product-integration recipe resource.
 
 Support tools require a user-approved preview and append a bounded plaintext
 record to the local queued outbox. They do not route or deliver it.

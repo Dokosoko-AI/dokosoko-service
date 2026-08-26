@@ -2,7 +2,6 @@ package platform
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -99,9 +98,13 @@ func integrationCatalogExcerpt(value model.Integration, limit int) string {
 
 func toolCatalogExcerpt(value model.Tool, limit int) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Description: %s\nBackend: %s\nMethod: %s", evidenceText(value.Description), value.BackendKind, value.HTTPMethod)
-	if value.BackendKind == "http" && strings.TrimSpace(value.BaseURL) != "" {
-		fmt.Fprintf(&builder, "\nFixed endpoint: %s", value.BaseURL)
+	fmt.Fprintf(&builder, "Description: %s\nScope: %s", evidenceText(value.Description), value.Scope)
+	if value.OwnerIntegrationID != "" {
+		fmt.Fprintf(&builder, "\nOwner integration ID: %s", value.OwnerIntegrationID)
+	}
+	fmt.Fprintf(&builder, "\nBackend: %s\nMethod: %s", value.BackendKind, value.HTTPMethod)
+	if endpoint := integrationRecipeToolEndpoint(value); endpoint != "" {
+		fmt.Fprintf(&builder, "\nFixed endpoint: %s", endpoint)
 	}
 	if len(value.InputSchema) > 0 {
 		fmt.Fprintf(&builder, "\nInput schema: %s", value.InputSchema)
@@ -115,6 +118,36 @@ func toolCatalogExcerpt(value model.Tool, limit int) string {
 	return truncateRunes(builder.String(), limit)
 }
 
+// integrationRecipeToolEndpoint returns an endpoint only when the exact
+// published tool revision establishes one unambiguous product endpoint. A
+// runtime-backed tool pins one target revision per environment; choosing the
+// first of several different endpoints would turn an environment detail into
+// a false product fact, so those tools require AI-authored, environment-aware
+// instructions (or a reviewed API contract) instead of a deterministic seed.
+func integrationRecipeToolEndpoint(value model.Tool) string {
+	if value.BackendKind != "http" {
+		return ""
+	}
+	if endpoint := strings.TrimSpace(value.BaseURL); endpoint != "" {
+		return endpoint
+	}
+	if value.RuntimeServiceConnectionID == "" || value.HTTPPath == "" || len(value.RuntimeTargets) == 0 {
+		return ""
+	}
+	endpoint := ""
+	for _, target := range value.RuntimeTargets {
+		if target.RuntimeServiceConnectionID != value.RuntimeServiceConnectionID || target.ConnectionRevisionID == "" {
+			return ""
+		}
+		candidate, err := composeRuntimeToolEndpoint(target.BaseURL, value.HTTPPath)
+		if err != nil || endpoint != "" && candidate != endpoint {
+			return ""
+		}
+		endpoint = candidate
+	}
+	return endpoint
+}
+
 func recipeToolLabel(value model.Tool, integration *model.Integration) string {
 	switch value.Scope {
 	case model.ToolScopeCommon:
@@ -125,27 +158,6 @@ func recipeToolLabel(value model.Tool, integration *model.Integration) string {
 		}
 	}
 	return value.Namespace + "." + value.Name
-}
-
-func automaticToolEvidence(integration model.Integration, name, description, inputSchema, details, version string) model.IntegrationEvidence {
-	excerpt := "Description: " + evidenceText(description) + "\nInput schema: " + inputSchema
-	if details != "" {
-		excerpt += "\n" + details
-	}
-	resourceID := "automatic-tool:" + integration.ID + ":" + name
-	return model.IntegrationEvidence{Kind: "automatic_tool", ResourceID: resourceID, Label: name, Excerpt: truncateRunes(excerpt, maxAnalysisToolItem), Version: version, Visibility: model.VisibilityPrivate, Fingerprint: evidenceFingerprint("automatic_tool", resourceID, version, excerpt)}
-}
-
-func accessOperationNames(raw json.RawMessage) map[string]bool {
-	var values map[string]json.RawMessage
-	if json.Unmarshal(raw, &values) != nil {
-		return nil
-	}
-	result := make(map[string]bool, len(values))
-	for key := range values {
-		result[key] = true
-	}
-	return result
 }
 
 func integrationScopeID(evidence []model.IntegrationEvidence) (string, bool) {
@@ -163,25 +175,6 @@ func integrationRecipePrefix(product model.Product, integration model.Integratio
 		prefix = slugify(integration.ID)
 	}
 	return prefix
-}
-
-func namespaceIntegrationRecipes(plan model.IntegrationPlan, product model.Product, integration model.Integration) model.IntegrationPlan {
-	prefix := integrationRecipePrefix(product, integration)
-	defaultSlug := "connect-" + prefix + "-to-mcp"
-	productDefault := "connect-" + slugify(product.Slug) + "-to-mcp"
-	for index := range plan.Recipes {
-		slug := slugify(plan.Recipes[index].Slug)
-		switch {
-		case slug == "", slug == productDefault, slug == "connect-to-mcp":
-			plan.Recipes[index].Slug = defaultSlug
-			plan.Recipes[index].Title = "Connect " + integration.DisplayName + " to MCP"
-		case slug == defaultSlug, strings.HasPrefix(slug, prefix+"-"):
-			plan.Recipes[index].Slug = slug
-		default:
-			plan.Recipes[index].Slug = prefix + "-" + slug
-		}
-	}
-	return plan
 }
 
 func scopedResourceExcerpt(link model.IntegrationResourceLink, limit int) string {
@@ -210,6 +203,9 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 	if err != nil {
 		return nil, model.Integration{}, err
 	}
+	if integration.Lifecycle == "retired" {
+		return nil, model.Integration{}, ErrRecipeNeedsInput
+	}
 	version := strconv.FormatInt(integration.Revision, 10)
 	values := []model.IntegrationEvidence{
 		{Kind: integrationScopeEvidenceKind, ResourceID: integration.ID, Label: integration.DisplayName, Version: version, Visibility: model.VisibilityPrivate, Fingerprint: evidenceFingerprint(integrationScopeEvidenceKind, integration.ID, version)},
@@ -223,8 +219,6 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 	} else if providerErr != nil && !errors.Is(providerErr, store.ErrNotFound) {
 		return nil, model.Integration{}, providerErr
 	}
-	oauthExcerpt := "Private MCP endpoint: POST /mcp\nAn unauthenticated MCP request returns HTTP 401 with a WWW-Authenticate resource_metadata URL for the exact /mcp resource.\nThe protected-resource metadata advertises the DokoSoko authorization server; its metadata advertises authorization, token, and dynamic client-registration endpoints.\nDynamic registration accepts an exact loopback callback for a public client.\nAuthorization Code uses PKCE method S256 and the exact MCP resource parameter; the code exchange repeats the same client, callback, verifier, and resource.\nMCP protocol: Stateless MCPv2 2026-07-28\nThe MCP client authenticates to DokoSoko; DokoSoko brokers the configured upstream OIDC provider and keeps the upstream token out of the MCP client."
-	values = append(values, model.IntegrationEvidence{Kind: "mcp_oauth", ResourceID: "mcp-oauth-contract-v1", Label: "Private MCP OAuth contract", Excerpt: oauthExcerpt, Version: "1", Visibility: model.VisibilityPrivate, Fingerprint: evidenceFingerprint("mcp_oauth", "1", oauthExcerpt)})
 	resourceRunes := 0
 	publicationNames := make(map[string]string)
 	for _, link := range integration.Resources {
@@ -307,28 +301,25 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 		if remaining <= 0 {
 			break
 		}
-		toolVersion := strconv.FormatInt(binding.ToolRevision, 10)
-		label := binding.ToolID
-		excerpt := "Exact bound tool revision: " + toolVersion
-		if binding.Tool != nil {
-			label = recipeToolLabel(*binding.Tool, &integration)
-			if binding.Tool.Revision == binding.ToolRevision {
-				excerpt += "\n" + toolCatalogExcerpt(*binding.Tool, min(maxAnalysisToolItem, remaining))
-			}
+		if binding.Tool == nil || binding.Tool.Revision != binding.ToolRevision || binding.Tool.Scope != model.ToolScopeAPI || binding.Tool.OwnerIntegrationID != integration.ID {
+			continue
 		}
+		tool, lookupErr := s.store.Tool(ctx, product.ID, binding.ToolID)
+		if lookupErr != nil {
+			if errors.Is(lookupErr, store.ErrNotFound) {
+				continue
+			}
+			return nil, model.Integration{}, lookupErr
+		}
+		if tool.Revision != binding.ToolRevision || tool.Scope != model.ToolScopeAPI || tool.OwnerIntegrationID != integration.ID {
+			continue
+		}
+		toolVersion := strconv.FormatInt(binding.ToolRevision, 10)
+		label := recipeToolLabel(tool, &integration)
+		excerpt := "Exact bound tool revision: " + toolVersion + "\n" + toolCatalogExcerpt(tool, min(maxAnalysisToolItem, remaining))
 		excerpt = truncateRunes(excerpt, min(maxAnalysisToolItem, remaining))
 		toolRunes += len([]rune(excerpt))
-		values = append(values, model.IntegrationEvidence{Kind: "tool", ResourceID: binding.ToolID, Label: label, Excerpt: excerpt, Version: toolVersion, Visibility: model.VisibilityPrivate, Fingerprint: evidenceFingerprint("tool_binding", integration.ID, binding.ToolID, toolVersion, excerpt)})
-	}
-	hasDocumentation := false
-	for _, link := range integration.Resources {
-		if link.Kind == "documentation" && link.ResolvedRevision != nil {
-			hasDocumentation = true
-			break
-		}
-	}
-	if hasDocumentation {
-		values = append(values, automaticToolEvidence(integration, integration.FamilyKey+".knowledge.search", "Search only the reviewed documentation pinned by this published API revision.", `{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string","minLength":1,"maxLength":2000}},"required":["query"]}`, "Read-only. No confirmation or idempotency key is required.", version))
+		values = append(values, model.IntegrationEvidence{Kind: "tool", ResourceID: binding.ToolID, Label: label, Excerpt: excerpt, Version: toolVersion, Visibility: integration.Visibility, Fingerprint: evidenceFingerprint("tool_binding", integration.ID, binding.ToolID, toolVersion, string(integration.Visibility), excerpt)})
 	}
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].Kind == values[j].Kind {
@@ -437,7 +428,7 @@ func (s *Service) deterministicIntegrationPlan(ctx context.Context, product mode
 	if integration != nil {
 		subjectName = integration.DisplayName
 	}
-	plan := model.IntegrationPlan{Summary: "Expose " + subjectName + " through one discoverable MCP endpoint, with private identity only where customer data or actions require it."}
+	plan := model.IntegrationPlan{Summary: "Review the exact product evidence for " + subjectName + " and identify independently implementable capabilities."}
 	provider, err := s.store.IdentityProvider(ctx, product.ID)
 	if err == nil && provider.State == "active" {
 		plan.Identity = model.IntegrationIdentityPlan{Mode: "oauth2", Issuer: provider.Issuer, Audience: provider.Audience, Explanation: "DokoSoko brokers customer sign-in through the configured OIDC provider and keeps vendor access tokens out of MCP clients."}
@@ -447,37 +438,177 @@ func (s *Service) deterministicIntegrationPlan(ctx context.Context, product mode
 	plan.Endpoints = []model.IntegrationEndpointPlan{
 		{Name: "mcp", Method: "POST", Path: "/mcp", Purpose: "Private MCP discovery and tool execution.", Identity: "oauth2", Evidence: evidenceIDs(evidence)},
 	}
-	recipeEndpointIDs := []string{"mcp"}
 	if product.PublicMCPEnabled {
 		plan.Endpoints = append(plan.Endpoints, model.IntegrationEndpointPlan{Name: "public-mcp", Method: "POST", Path: "/mcp/public", Purpose: "Anonymous access to explicitly public recipes and knowledge.", Identity: "none", Evidence: evidenceIDs(evidence)})
-		recipeEndpointIDs = append(recipeEndpointIDs, "public-mcp")
 	}
 	if plan.Identity.Mode == "oauth2" {
 		plan.Endpoints = append(plan.Endpoints, model.IntegrationEndpointPlan{Name: "access-evaluation", Method: "POST", Path: "/v1/access/evaluations", Purpose: "Resolve the authenticated customer to bounded grants before private authorization.", Identity: "oauth2", Evidence: evidenceIDs(evidence)})
 	}
-	plan.Recipes = []model.RecipeSeed{{Slug: "connect-" + slugify(product.Slug) + "-to-mcp", Title: "Connect " + product.Name + " to MCP", Outcome: "An MCP client can discover the connector and verify access.", Audience: "developer", EndpointIDs: recipeEndpointIDs, EvidenceIDs: evidenceIDs(evidence)}}
 	if integration != nil {
-		plan = namespaceIntegrationRecipes(plan, product, *integration)
+		plan.Recipes = deterministicIntegrationRecipeSeeds(product, *integration, evidence)
+		if len(plan.Recipes) > 0 {
+			plan.Summary = fmt.Sprintf("Reviewed evidence supports %d independently implementable product capability recipe candidate(s) for %s.", len(plan.Recipes), subjectName)
+		}
 	}
 	unknowns := make([]model.IntegrationUnknown, 0)
 	if plan.Identity.Mode == "none" {
 		unknowns = append(unknowns, model.IntegrationUnknown{ID: "private-access", Question: "Will developers access customer-specific data or perform actions?", Why: "Private operations require an identity boundary and explicit grants; public MCP must remain read-only and deliberately published.", Blocking: false})
 	}
-	if len(evidence) == 0 {
-		unknowns = append(unknowns, model.IntegrationUnknown{ID: "source-of-truth", Question: "Which API specification or documentation is the source of truth?", Why: "DokoSoko cannot produce trustworthy endpoints or implementation steps without evidence.", Blocking: true})
+	if integration == nil {
+		unknowns = append(unknowns, model.IntegrationUnknown{ID: "integration-scope", Question: "Which product API should the recipe implement?", Why: "A product-integration recipe must be bound to one selected API and its exact reviewed evidence.", Blocking: true})
+	} else if len(plan.Recipes) == 0 {
+		unknowns = append(unknowns, model.IntegrationUnknown{ID: "product-capability", Question: "Which exact product operation should the recipe implement?", Why: "No revision-exact API-owned tool currently supplies one callable, schema-bound operation for a tangible recipe.", Blocking: true})
 	}
 	return plan, unknowns
+}
+
+func integrationRecipeCapabilityViable(item model.IntegrationEvidence, integrationID string) bool {
+	if integrationID == "" || strings.TrimSpace(item.ResourceID) == "" || strings.TrimSpace(item.Label) == "" || !recipeCapabilityEvidence(item) {
+		return false
+	}
+	switch item.Kind {
+	case "tool":
+		if recipeEvidenceField(item.Excerpt, "Exact bound tool revision") != item.Version || recipeEvidenceField(item.Excerpt, "Scope") != model.ToolScopeAPI || recipeEvidenceField(item.Excerpt, "Owner integration ID") != integrationID || recipeEvidenceField(item.Excerpt, "Backend") == "" {
+			return false
+		}
+		if recipeEvidenceField(item.Excerpt, "Input schema") == "" || recipeEvidenceField(item.Excerpt, "Output schema") == "" {
+			return false
+		}
+		switch recipeEvidenceField(item.Excerpt, "Backend") {
+		case "http":
+			return recipeEvidenceField(item.Excerpt, "Method") != "" && recipeEvidenceField(item.Excerpt, "Fixed endpoint") != ""
+		case "mcp":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func integrationRecipeSDKViable(item model.IntegrationEvidence) bool {
+	return item.Kind == "sdk" && strings.TrimSpace(item.ResourceID) != "" && item.Version != "" && recipeEvidenceField(item.Excerpt, "Coordinate") != "" && recipeEvidenceField(item.Excerpt, "Exact version") == item.Version && recipeEvidenceField(item.Excerpt, "Install") != ""
+}
+
+func integrationRecipeSelection(evidence []model.IntegrationEvidence, seed model.RecipeSeed) (map[string]model.IntegrationEvidence, bool) {
+	integrationID, scoped := integrationScopeID(evidence)
+	if !scoped || len(seed.EndpointIDs) != 0 || len(seed.CapabilityIDs) != 1 || len(seed.EvidenceIDs) == 0 || len(seed.EvidenceIDs) > 24 {
+		return nil, false
+	}
+	selected, ok := recipeResolveProductSelection(model.IntegrationAnalysis{Evidence: evidence}, seed)
+	if !ok {
+		return nil, false
+	}
+	byID, ambiguous := recipeUniqueEvidenceByID(selected)
+	if len(ambiguous) != 0 {
+		return nil, false
+	}
+	capabilityID := seed.CapabilityIDs[0]
+	capability, ok := byID[capabilityID]
+	if !ok || !integrationRecipeCapabilityViable(capability, integrationID) {
+		return nil, false
+	}
+	if seed.SDKID != "" {
+		if sdk, exists := byID[seed.SDKID]; !exists || !integrationRecipeSDKViable(sdk) {
+			return nil, false
+		}
+	}
+	for id, item := range byID {
+		if recipeCapabilityEvidence(item) && id != capabilityID || item.Kind == "sdk" && id != seed.SDKID {
+			return nil, false
+		}
+	}
+	return byID, true
+}
+
+func deterministicIntegrationSDKID(evidence []model.IntegrationEvidence) string {
+	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(evidence))
+	result := ""
+	for id, item := range byID {
+		if ambiguous[id] || !integrationRecipeSDKViable(item) {
+			continue
+		}
+		if result != "" {
+			return ""
+		}
+		result = id
+	}
+	return result
+}
+
+func boundedIntegrationRecipeSlug(value string, limit int) string {
+	value = strings.Trim(slugify(value), "-")
+	if len(value) <= limit {
+		return value
+	}
+	return strings.Trim(value[:limit], "-")
+}
+
+func deterministicIntegrationRecipeSeeds(product model.Product, integration model.Integration, evidence []model.IntegrationEvidence) []model.RecipeSeed {
+	productEvidence := recipeProductEvidence(evidence)
+	byID, ambiguous := recipeUniqueEvidenceByID(productEvidence)
+	toolCapabilityIDs := make([]string, 0)
+	for _, capabilityID := range recipeProductCapabilityIDs(productEvidence) {
+		item, exists := byID[capabilityID]
+		if !exists || ambiguous[capabilityID] || !integrationRecipeCapabilityViable(item, integration.ID) {
+			continue
+		}
+		toolCapabilityIDs = append(toolCapabilityIDs, capabilityID)
+	}
+	capabilityIDs := toolCapabilityIDs
+	sdkID := deterministicIntegrationSDKID(productEvidence)
+	prefix := integrationRecipePrefix(product, integration)
+	result := make([]model.RecipeSeed, 0, min(len(capabilityIDs), 12))
+	seenSlugs := make(map[string]bool)
+	for _, capabilityID := range capabilityIDs {
+		item, exists := byID[capabilityID]
+		if !exists {
+			continue
+		}
+		label := evidenceText(item.Label)
+		slug := boundedIntegrationRecipeSlug(prefix+"-"+label, 160)
+		if slug == "" || seenSlugs[slug] {
+			suffix := evidenceFingerprint(item.ResourceID)[:8]
+			slug = boundedIntegrationRecipeSlug(prefix+"-"+label, 151) + "-" + suffix
+		}
+		if slug == "" || seenSlugs[slug] {
+			continue
+		}
+		seed := model.RecipeSeed{
+			Slug:          slug,
+			Title:         truncateRunes("Implement "+label, 160),
+			Outcome:       truncateRunes("The consuming project implements and verifies the reviewed "+label+" product capability.", 1000),
+			Audience:      "coding_agent",
+			CapabilityIDs: []string{item.ResourceID},
+			EvidenceIDs:   []string{item.ResourceID},
+		}
+		if sdkID != "" {
+			seed.SDKID = sdkID
+			seed.EvidenceIDs = append(seed.EvidenceIDs, sdkID)
+		}
+		if _, valid := integrationRecipeSelection(evidence, seed); !valid {
+			continue
+		}
+		seenSlugs[slug] = true
+		result = append(result, seed)
+		if len(result) == 12 {
+			break
+		}
+	}
+	return result
 }
 
 func evidenceIDs(evidence []model.IntegrationEvidence) []string {
 	result := make([]string, 0, len(evidence))
 	seen := make(map[string]bool, len(evidence))
 	for _, item := range evidence {
-		if seen[item.ResourceID] {
+		id := strings.TrimSpace(item.ResourceID)
+		if id == "" || seen[id] {
 			continue
 		}
-		seen[item.ResourceID] = true
-		result = append(result, item.ResourceID)
+		seen[id] = true
+		result = append(result, id)
 	}
 	return result
 }
@@ -487,57 +618,29 @@ func normalizeIntegrationPlan(plan model.IntegrationPlan, fallback model.Integra
 	// content. The model may improve the narrative and propose recipes, but it
 	// cannot add an endpoint, change a method/path, downgrade authentication, or
 	// invent issuer/audience/grant values.
-	allowedEvidence := make(map[string]bool, len(evidence))
-	for _, item := range evidence {
-		allowedEvidence[item.ResourceID] = item.ResourceID != ""
-	}
 	if strings.TrimSpace(plan.Summary) == "" || len(plan.Summary) > 1000 {
 		plan.Summary = fallback.Summary
 	}
 	plan.Identity = fallback.Identity
 	plan.Endpoints = append([]model.IntegrationEndpointPlan(nil), fallback.Endpoints...)
-	allowedEndpoints := make(map[string]bool, len(fallback.Endpoints))
-	for _, endpoint := range fallback.Endpoints {
-		allowedEndpoints[endpoint.Name] = true
-	}
 	cleanRecipes := make([]model.RecipeSeed, 0, len(plan.Recipes))
 	seenRecipe := make(map[string]bool)
 	for _, seed := range plan.Recipes {
 		seed.Slug = slugify(seed.Slug)
-		seed.Title, seed.Outcome, seed.Audience = strings.TrimSpace(seed.Title), strings.TrimSpace(seed.Outcome), strings.TrimSpace(seed.Audience)
-		endpointIDs := make([]string, 0, len(seed.EndpointIDs))
-		seenEndpointID := make(map[string]bool, len(seed.EndpointIDs))
-		for _, rawEndpointID := range seed.EndpointIDs {
-			endpointID := strings.TrimSpace(rawEndpointID)
-			if allowedEndpoints[endpointID] && !seenEndpointID[endpointID] {
-				endpointIDs = append(endpointIDs, endpointID)
-				seenEndpointID[endpointID] = true
-			}
+		seed.Title, seed.Outcome = strings.TrimSpace(seed.Title), strings.TrimSpace(seed.Outcome)
+		seed.Audience = "coding_agent"
+		seed.SDKID = strings.TrimSpace(seed.SDKID)
+		seed.EndpointIDs = nil
+		for index := range seed.CapabilityIDs {
+			seed.CapabilityIDs[index] = strings.TrimSpace(seed.CapabilityIDs[index])
 		}
-		seed.EndpointIDs = endpointIDs
-		endpointEvidence := make(map[string]bool)
-		for _, endpoint := range fallback.Endpoints {
-			if !seenEndpointID[endpoint.Name] {
-				continue
-			}
-			for _, evidenceID := range endpoint.Evidence {
-				endpointEvidence[evidenceID] = true
-			}
+		for index := range seed.EvidenceIDs {
+			seed.EvidenceIDs[index] = strings.TrimSpace(seed.EvidenceIDs[index])
 		}
-		evidenceIDs := make([]string, 0, len(seed.EvidenceIDs))
-		seenEvidenceID := make(map[string]bool, len(seed.EvidenceIDs))
-		validEvidenceSelection := true
-		for _, rawEvidenceID := range seed.EvidenceIDs {
-			evidenceID := strings.TrimSpace(rawEvidenceID)
-			if evidenceID == "" || !allowedEvidence[evidenceID] || !endpointEvidence[evidenceID] || seenEvidenceID[evidenceID] {
-				validEvidenceSelection = false
-				break
-			}
-			evidenceIDs = append(evidenceIDs, evidenceID)
-			seenEvidenceID[evidenceID] = true
+		if seed.Slug == "" || seenRecipe[seed.Slug] || seed.Title == "" || seed.Outcome == "" || len(seed.Slug) > 160 || len(seed.Title) > 160 || len(seed.Outcome) > 1000 {
+			continue
 		}
-		seed.EvidenceIDs = evidenceIDs
-		if seed.Slug == "" || seenRecipe[seed.Slug] || seed.Title == "" || seed.Outcome == "" || seed.Audience == "" || len(seed.Title) > 160 || len(seed.Outcome) > 1000 || len(seed.Audience) > 80 || len(seed.EndpointIDs) == 0 || !validEvidenceSelection {
+		if _, valid := integrationRecipeSelection(evidence, seed); !valid {
 			continue
 		}
 		seenRecipe[seed.Slug] = true
@@ -545,9 +648,6 @@ func normalizeIntegrationPlan(plan model.IntegrationPlan, fallback model.Integra
 		if len(cleanRecipes) == 12 {
 			break
 		}
-	}
-	if len(cleanRecipes) == 0 {
-		cleanRecipes = fallback.Recipes
 	}
 	plan.Recipes = cleanRecipes
 	return plan
