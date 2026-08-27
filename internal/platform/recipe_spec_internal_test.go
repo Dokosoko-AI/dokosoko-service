@@ -71,6 +71,38 @@ func TestRecipeGroundingUsesOnlyExactProductSelection(t *testing.T) {
 	}
 }
 
+func TestDeterministicRecipeSpecUsesPublishedContractOperation(t *testing.T) {
+	t.Parallel()
+	integrationID := "integration-payments-v2"
+	operation := productAnalysisContractOperation(integrationID, "contract-r7", "operation-create")
+	analysis := model.IntegrationAnalysis{Evidence: []model.IntegrationEvidence{
+		productAnalysisScope(integrationID),
+		productAnalysisIntegration(integrationID),
+		operation,
+	}}
+	seed := deterministicIntegrationRecipeSeeds(model.Product{Slug: "acme"}, model.Integration{ID: integrationID, FamilyKey: "payments", VersionKey: "v2"}, analysis.Evidence)[0]
+	spec, err := deterministicRecipeSpec(analysis, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Prerequisites) != 1 || len(spec.Steps) != 2 || len(spec.Checks) != 1 {
+		t.Fatalf("contract recipe shape = %#v", spec)
+	}
+	rendered := renderRecipeSpec(spec, nil)
+	for _, required := range []string{"`POST`", "`/payments`", "`CreatePaymentRequest`", "`Payment`", "`apiKey`"} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("contract recipe omitted %s:\n%s", required, rendered)
+		}
+	}
+	if lower := strings.ToLower(rendered); strings.Contains(lower, "dokosoko") || strings.Contains(lower, "connect to mcp") || strings.Contains(lower, "mcp client") {
+		t.Fatalf("product recipe leaked connector-delivery instructions:\n%s", rendered)
+	}
+	recipe := model.Recipe{IntegrationID: integrationID, ContractVersion: model.RecipeContractProductIntegrationV2, Title: spec.Title, Outcome: spec.Outcome}
+	if findings := validateRecipeSpec(spec, recipe, analysis.Evidence); len(findings) != 0 {
+		t.Fatalf("canonical contract recipe failed validation: %#v\n%s", findings, rendered)
+	}
+}
+
 func TestRecipeAnalysisWithoutPublicationEvidenceKeepsProductContract(t *testing.T) {
 	t.Parallel()
 	analysis, _ := productRecipeFixture()

@@ -1,15 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createElement } from "react";
+import { createInstance } from "i18next";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider, initReactI18next } from "react-i18next";
 
 import { ConsoleSidebar, ConsoleTopbar } from "../app/components/console/workspace-navigation";
+import { i18nOptions } from "../app/i18n/options";
 
 const noop = () => {};
+const testI18n = createInstance();
+await testI18n.use(initReactI18next).init(i18nOptions("en"));
+
+function render(element: ReactElement) {
+  return renderToStaticMarkup(createElement(I18nextProvider, { i18n: testI18n }, element));
+}
 
 test("renders the promoted developer-asset destinations as accessible primary links", () => {
-  const html = renderToStaticMarkup(createElement(ConsoleSidebar, {
+  const html = render(createElement(ConsoleSidebar, {
     section: "tools",
     activeNavigationID: "tools",
     currentUser: {
@@ -40,7 +49,7 @@ test("renders the promoted developer-asset destinations as accessible primary li
 });
 
 test("renders the same destination model in the mobile console selector", () => {
-  const html = renderToStaticMarkup(createElement(ConsoleTopbar, {
+  const html = render(createElement(ConsoleTopbar, {
     productName: "Developer Platform",
     section: "recipes",
     activeNavigationID: "recipes",

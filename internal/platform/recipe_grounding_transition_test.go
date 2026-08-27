@@ -25,6 +25,19 @@ type recipeGroundingRaceStore struct {
 	beforeSave func(model.Recipe)
 }
 
+type recipeDeleteCatalogConflictStore struct {
+	store.Store
+	deleteCalls int
+}
+
+func (r *recipeDeleteCatalogConflictStore) DeleteRecipe(ctx context.Context, productID, recipeID string, mutation store.RecipeMutation) error {
+	r.deleteCalls++
+	if r.deleteCalls == 1 {
+		return store.ErrCatalogConflict
+	}
+	return r.Store.DeleteRecipe(ctx, productID, recipeID, mutation)
+}
+
 func (r *recipeGroundingRaceStore) SaveRecipeTransition(ctx context.Context, recipe model.Recipe, mutation store.RecipeMutation) (model.Recipe, error) {
 	if r.beforeSave != nil {
 		hook := r.beforeSave
@@ -182,6 +195,84 @@ func TestRecipeApprovalDoesNotRegressPublishedLifecycle(t *testing.T) {
 	}
 	if stored.State != "published" || stored.PublishedAt == nil || stored.Revision != published.Revision {
 		t.Fatalf("rejected approval mutated the publication: %#v", stored)
+	}
+}
+
+func TestDeleteRecipeRejectsCurrentV2AndRemovesOutdatedAggregate(t *testing.T) {
+	fixture := newRecipeGroundingTransitionFixture(t)
+	current := fixture.recipe
+	if err := fixture.service.DeleteRecipe(fixture.ctx, current.ProductID, current.ID, current.Revision, current.CurrentRevisionID, fixture.actor); !errors.Is(err, platform.ErrRecipeDeletionNotAllowed) {
+		t.Fatalf("current v2 recipe deletion error = %v, want deletion not allowed", err)
+	}
+	if _, err := fixture.memory.Recipe(fixture.ctx, current.ProductID, current.ID); err != nil {
+		t.Fatalf("rejected deletion removed the current recipe: %v", err)
+	}
+
+	fixture.changeEvidence(t)
+	values, err := fixture.service.ReconcileRecipeDrift(fixture.ctx, current.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outdated model.Recipe
+	for _, value := range values {
+		if value.ID == current.ID {
+			outdated = value
+			break
+		}
+	}
+	if outdated.State != "outdated" || outdated.CurrentRevisionID == "" {
+		t.Fatalf("recipe was not reconciled to an outdated deletable record: %#v", outdated)
+	}
+	if err := fixture.service.DeleteRecipe(fixture.ctx, outdated.ProductID, outdated.ID, outdated.Revision, outdated.CurrentRevisionID, fixture.actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.memory.Recipe(fixture.ctx, outdated.ProductID, outdated.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted recipe lookup error = %v, want not found", err)
+	}
+	if _, err := fixture.memory.RecipeRevisions(fixture.ctx, outdated.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted revisions lookup error = %v, want not found", err)
+	}
+	events, err := fixture.memory.AuditEvents(fixture.ctx, outdated.OrganisationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundDelete := false
+	for _, event := range events {
+		foundDelete = foundDelete || event.Action == "recipe.deleted" && event.TargetID == outdated.ID
+	}
+	if !foundDelete {
+		t.Fatalf("recipe deletion audit was not retained: %#v", events)
+	}
+}
+
+func TestDeleteRecipeRetriesCatalogConflictWhenRecipeRevisionIsStillCurrent(t *testing.T) {
+	fixture := newRecipeGroundingTransitionFixture(t)
+	fixture.changeEvidence(t)
+	values, err := fixture.service.ReconcileRecipeDrift(fixture.ctx, fixture.recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outdated model.Recipe
+	for _, value := range values {
+		if value.ID == fixture.recipe.ID {
+			outdated = value
+			break
+		}
+	}
+	if outdated.State != "outdated" {
+		t.Fatalf("recipe was not reconciled to an outdated record: %#v", outdated)
+	}
+
+	conflicting := &recipeDeleteCatalogConflictStore{Store: fixture.memory}
+	service := platform.New(conflicting)
+	if err := service.DeleteRecipe(fixture.ctx, outdated.ProductID, outdated.ID, outdated.Revision, outdated.CurrentRevisionID, fixture.actor); err != nil {
+		t.Fatal(err)
+	}
+	if conflicting.deleteCalls != 2 {
+		t.Fatalf("delete calls = %d, want one catalog-conflict retry", conflicting.deleteCalls)
+	}
+	if _, err := fixture.memory.Recipe(fixture.ctx, outdated.ProductID, outdated.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted recipe lookup error = %v, want not found", err)
 	}
 }
 

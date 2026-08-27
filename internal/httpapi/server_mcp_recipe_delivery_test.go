@@ -54,7 +54,7 @@ func TestSortedRecipeSummariesExposeOnlyDeliveryMetadata(t *testing.T) {
 	if len(summaries) != 2 || summaries[0].Slug != "alpha" || summaries[1].Slug != "zeta" {
 		t.Fatalf("summaries are not deterministic: %#v", summaries)
 	}
-	if summaries[0].IntegrationID != "integration-alpha" || summaries[0].ContractVersion != "product-integration-v2" || summaries[0].RevisionID != "revision-alpha" || summaries[0].PublishedAt != &publishedAt {
+	if len(summaries[0].IntegrationIDs) != 1 || summaries[0].IntegrationIDs[0] != "integration-alpha" || summaries[0].ContractVersion != "product-integration-v2" || summaries[0].RevisionID != "revision-alpha" || summaries[0].PublishedAt != &publishedAt {
 		t.Fatalf("delivery metadata = %#v", summaries[0])
 	}
 }
@@ -115,6 +115,48 @@ func TestRecipeAvailableForMCPRequiresCompleteV2Publication(t *testing.T) {
 				t.Fatalf("invalid recipe was available: %#v", candidate)
 			}
 		})
+	}
+}
+
+func TestRecipeAvailableForMCPRequiresCompleteV3Publication(t *testing.T) {
+	publishedAt := time.Now().UTC()
+	valid := model.Recipe{
+		State:           "published",
+		ContractVersion: model.RecipeContractDeploymentV3,
+		APIAttachments: []model.RecipeAPIAttachment{
+			{IntegrationID: "integration-customers"},
+			{IntegrationID: "integration-billing"},
+		},
+		StableURI:         "dokosoko://products/demo/recipes/provision-customer",
+		CurrentRevisionID: "revision",
+		CurrentRevision: &model.RecipeRevision{SpecVersion: model.RecipeSpecVersion3, APIBindings: []model.RecipeAPIBinding{
+			{IntegrationID: "integration-customers", IntegrationRevisionID: "revision-customers", IntegrationManifestHash: "sha256:customers"},
+			{IntegrationID: "integration-billing", IntegrationRevisionID: "revision-billing", IntegrationManifestHash: "sha256:billing"},
+		}},
+		PublishedAt: &publishedAt,
+		Visibility:  model.VisibilityPrivate,
+	}
+	if !recipeAvailableForMCP(valid, false) {
+		t.Fatal("complete private v3 publication was rejected")
+	}
+	missingBinding := valid
+	missingBinding.CurrentRevision = &model.RecipeRevision{SpecVersion: model.RecipeSpecVersion3, APIBindings: valid.CurrentRevision.APIBindings[:1]}
+	if recipeAvailableForMCP(missingBinding, false) {
+		t.Fatal("v3 publication with an incomplete immutable API binding set was exposed")
+	}
+	mismatchedBinding := valid
+	mismatchedBinding.CurrentRevision = &model.RecipeRevision{SpecVersion: model.RecipeSpecVersion3, APIBindings: []model.RecipeAPIBinding{
+		{IntegrationID: "integration-customers", IntegrationRevisionID: "revision-customers", IntegrationManifestHash: "sha256:customers"},
+		{IntegrationID: "integration-orders", IntegrationRevisionID: "revision-orders", IntegrationManifestHash: "sha256:orders"},
+	}}
+	if recipeAvailableForMCP(mismatchedBinding, false) {
+		t.Fatal("v3 publication with a same-size but mismatched API binding set was exposed")
+	}
+	missingExactRevision := valid
+	missingExactRevision.CurrentRevision = &model.RecipeRevision{SpecVersion: model.RecipeSpecVersion3, APIBindings: append([]model.RecipeAPIBinding(nil), valid.CurrentRevision.APIBindings...)}
+	missingExactRevision.CurrentRevision.APIBindings[0].IntegrationRevisionID = ""
+	if recipeAvailableForMCP(missingExactRevision, false) {
+		t.Fatal("v3 publication without an exact immutable API revision was exposed")
 	}
 }
 

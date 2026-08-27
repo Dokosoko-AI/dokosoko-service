@@ -38,12 +38,13 @@ func TestImmutableAIPromptContracts(t *testing.T) {
 			version: recipeBriefPromptVersionV5,
 			prompt:  recipeBriefImmutablePolicyV5,
 			invariants: []string{
-				"one exact server-provided product capability",
+				"smallest coherent set of one to four exact server-provided product capabilities",
 				"already-connected coding agent",
-				"exact allowed product capability and evidence identifiers",
+				"exact allowed product capability and evidence identifiers from available_apis",
+				"server derives API attachments from the selected capabilities",
 				"dedicated applicability workflow owns SDK-to-API suggestions",
 				"return needs_input",
-				"server owns the recipe slug, title, outcome, and canonical instructions",
+				"owns the recipe slug, title, outcome, and canonical instructions",
 			},
 		},
 		{
@@ -68,7 +69,7 @@ func TestImmutableAIPromptContracts(t *testing.T) {
 			invariants: []string{
 				"independent adversarial verifier",
 				"already received the recipe through MCP",
-				"one concrete product capability",
+				"one coherent workflow using only the minimum necessary product capabilities and attached APIs",
 				"Never write a summary, message, explanation, replacement prose",
 				"server owns the meaning and message for every code",
 				"exact identifiers from allowed_evidence_ids",
@@ -132,7 +133,7 @@ func TestImmutableAIPromptContracts(t *testing.T) {
 
 	wantVersions := map[string]string{
 		"integration analysis":         "integration-analysis-v5",
-		"recipe brief":                 "recipe-brief-v5",
+		"recipe brief":                 "recipe-brief-v6",
 		"recipe authoring":             "recipe-authoring-v11",
 		"recipe review":                "recipe-review-v5",
 		"documentation map enrichment": "documentation-map-enrichment-v1",

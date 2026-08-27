@@ -7,7 +7,14 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+type recipeQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
 
 const analysisSelect = `SELECT id::text,organisation_id::text,product_id::text,schema_version,state,generated_by,evidence,plan,unknowns,error_code,revision,created_at,completed_at FROM integration_analyses`
 
@@ -81,6 +88,11 @@ func scanRecipe(row pgx.Row) (model.Recipe, error) {
 }
 
 func (p *Postgres) hydrateRecipe(ctx context.Context, value model.Recipe) (model.Recipe, error) {
+	var err error
+	value.APIAttachments, err = recipeAPIAttachments(ctx, p.pool, value.ID)
+	if err != nil {
+		return value, err
+	}
 	if value.CurrentRevisionID == "" {
 		return value, nil
 	}
@@ -88,8 +100,67 @@ func (p *Postgres) hydrateRecipe(ctx context.Context, value model.Recipe) (model
 	if err != nil {
 		return value, err
 	}
+	revision, err = hydrateRecipeRevision(ctx, p.pool, revision)
+	if err != nil {
+		return value, err
+	}
 	value.CurrentRevision = &revision
 	return value, nil
+}
+
+func recipeAPIAttachments(ctx context.Context, query recipeQuerier, recipeID string) ([]model.RecipeAPIAttachment, error) {
+	rows, err := query.Query(ctx, `SELECT integration_id::text FROM recipe_api_attachments WHERE recipe_id=$1 ORDER BY integration_id`, recipeID)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.RecipeAPIAttachment, 0)
+	for rows.Next() {
+		var value model.RecipeAPIAttachment
+		if err := rows.Scan(&value.IntegrationID); err != nil {
+			return nil, databaseError(err)
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func hydrateRecipeRevision(ctx context.Context, query recipeQuerier, value model.RecipeRevision) (model.RecipeRevision, error) {
+	rows, err := query.Query(ctx, `SELECT integration_id::text,integration_revision_id::text,integration_manifest_hash FROM recipe_revision_api_bindings WHERE recipe_revision_id=$1 ORDER BY integration_id`, value.ID)
+	if err != nil {
+		return value, databaseError(err)
+	}
+	defer rows.Close()
+	value.APIBindings = make([]model.RecipeAPIBinding, 0)
+	for rows.Next() {
+		var binding model.RecipeAPIBinding
+		if err := rows.Scan(&binding.IntegrationID, &binding.IntegrationRevisionID, &binding.IntegrationManifestHash); err != nil {
+			return value, databaseError(err)
+		}
+		value.APIBindings = append(value.APIBindings, binding)
+	}
+	return value, rows.Err()
+}
+
+func replaceRecipeAPIAttachments(ctx context.Context, query recipeQuerier, recipe model.Recipe, actorID string) error {
+	if _, err := query.Exec(ctx, `DELETE FROM recipe_api_attachments WHERE recipe_id=$1`, recipe.ID); err != nil {
+		return databaseError(err)
+	}
+	for _, attachment := range recipe.APIAttachments {
+		if _, err := query.Exec(ctx, `INSERT INTO recipe_api_attachments(recipe_id,deployment_id,integration_id,created_by) VALUES($1,$2,$3,$4)`, recipe.ID, recipe.ProductID, attachment.IntegrationID, actorID); err != nil {
+			return databaseError(err)
+		}
+	}
+	return nil
+}
+
+func insertRecipeAPIBindings(ctx context.Context, query recipeQuerier, recipe model.Recipe, revision model.RecipeRevision) error {
+	for _, binding := range revision.APIBindings {
+		if _, err := query.Exec(ctx, `INSERT INTO recipe_revision_api_bindings(recipe_revision_id,recipe_id,deployment_id,integration_id,integration_revision_id,integration_manifest_hash) VALUES($1,$2,$3,$4,$5,$6)`, revision.ID, recipe.ID, recipe.ProductID, binding.IntegrationID, binding.IntegrationRevisionID, binding.IntegrationManifestHash); err != nil {
+			return databaseError(err)
+		}
+	}
+	return nil
 }
 
 func (p *Postgres) Recipes(ctx context.Context, productID string) ([]model.Recipe, error) {
@@ -134,6 +205,51 @@ func (p *Postgres) RecipeBySlug(ctx context.Context, productID, slug string) (mo
 	return p.hydrateRecipe(ctx, value)
 }
 
+func (p *Postgres) DeleteRecipe(ctx context.Context, productID, recipeID string, mutation RecipeMutation) error {
+	if err := validateRecipeMutation(mutation); err != nil {
+		return err
+	}
+	if mutation.Audit == nil {
+		return errors.New("recipe deletion requires an audit event")
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return databaseError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	stored, err := scanRecipe(tx.QueryRow(ctx, recipeSelect+` WHERE product_id=$1 AND id=$2 FOR UPDATE`, productID, recipeID))
+	if err != nil {
+		return err
+	}
+	if stored.Revision != mutation.ExpectedRevision || !recipeDeletionAllowed(stored) {
+		return ErrConflict
+	}
+	prior, current, outcome, err := prepareRecipeAudit(stored, mutation.Audit, "recipe.deleted")
+	if err != nil {
+		return err
+	}
+	if err := insertRecipeAudit(ctx, tx, *mutation.Audit, prior, current, outcome); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM recipes WHERE product_id=$1 AND id=$2 AND revision=$3`, productID, recipeID, mutation.ExpectedRevision)
+	if err != nil {
+		return databaseError(err)
+	}
+	if result.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	if stored.State == "published" {
+		if err := bumpProductCatalogRevisionTx(ctx, tx, productID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return databaseError(err)
+	}
+	return nil
+}
+
 func updateRecipeRow(ctx context.Context, query pgxRowQuerier, value model.Recipe, dependencies []byte, expected int64) (model.Recipe, error) {
 	return scanRecipe(query.QueryRow(ctx, `UPDATE recipes SET integration_id=nullif($3,'')::uuid,analysis_id=nullif($4,'')::uuid,contract_version=coalesce(nullif($5,''),contract_version),title=$6,outcome=$7,audience=$8,state=$9,needs_attention=$10,visibility=$11,dependencies=$12,current_revision_id=nullif($13,'')::uuid,approved_by=$14,approved_at=$15,published_at=$16,revision=revision+1,updated_at=now() WHERE product_id=$1 AND id=$2 AND revision=$17 RETURNING id::text,organisation_id::text,product_id::text,coalesce(integration_id::text,''),coalesce(analysis_id::text,''),contract_version,slug,title,outcome,audience,state,generated,needs_attention,visibility,dependencies,coalesce(current_revision_id::text,''),stable_uri,approved_by,approved_at,published_at,revision,created_at,updated_at`, value.ProductID, value.ID, value.IntegrationID, value.AnalysisID, value.ContractVersion, value.Title, value.Outcome, value.Audience, value.State, value.NeedsAttention, value.Visibility, dependencies, value.CurrentRevisionID, value.ApprovedBy, value.ApprovedAt, value.PublishedAt, expected))
 }
@@ -172,6 +288,10 @@ func (p *Postgres) SaveRecipeTransition(ctx context.Context, recipe model.Recipe
 	if err != nil {
 		return model.Recipe{}, err
 	}
+	stored.APIAttachments, err = recipeAPIAttachments(ctx, tx, stored.ID)
+	if err != nil {
+		return model.Recipe{}, err
+	}
 	if stored.Revision != mutation.ExpectedRevision {
 		return model.Recipe{}, ErrConflict
 	}
@@ -200,8 +320,13 @@ func (p *Postgres) SaveRecipeTransition(ctx context.Context, recipe model.Recipe
 		if err != nil {
 			return model.Recipe{}, err
 		}
+		revision, err = hydrateRecipeRevision(ctx, tx, revision)
+		if err != nil {
+			return model.Recipe{}, err
+		}
 		saved.CurrentRevision = &revision
 	}
+	saved.APIAttachments = append([]model.RecipeAPIAttachment(nil), recipe.APIAttachments...)
 	if err := tx.Commit(ctx); err != nil {
 		return model.Recipe{}, databaseError(err)
 	}
@@ -240,7 +365,16 @@ func (p *Postgres) RecipeRevisions(ctx context.Context, recipeID string) ([]mode
 		}
 		values = append(values, value)
 	}
-	return values, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range values {
+		values[index], err = hydrateRecipeRevision(ctx, p.pool, values[index])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return values, nil
 }
 
 func createRecipeRevisionRow(ctx context.Context, query pgxRowQuerier, value model.RecipeRevision) (model.RecipeRevision, error) {
@@ -303,10 +437,17 @@ func (p *Postgres) CreateRecipeWithRevision(ctx context.Context, recipe model.Re
 	if err != nil {
 		return model.Recipe{}, err
 	}
+	if err := replaceRecipeAPIAttachments(ctx, tx, recipe, revision.CreatedBy); err != nil {
+		return model.Recipe{}, err
+	}
 	created, err := createRecipeRevisionRow(ctx, tx, revision)
 	if err != nil {
 		return model.Recipe{}, err
 	}
+	if err := insertRecipeAPIBindings(ctx, tx, recipe, revision); err != nil {
+		return model.Recipe{}, err
+	}
+	created.APIBindings = append([]model.RecipeAPIBinding(nil), revision.APIBindings...)
 	result, err := tx.Exec(ctx, `UPDATE recipes SET current_revision_id=$3 WHERE product_id=$1 AND id=$2 AND current_revision_id IS NULL`, saved.ProductID, saved.ID, created.ID)
 	if err != nil {
 		return model.Recipe{}, databaseError(err)
@@ -324,6 +465,7 @@ func (p *Postgres) CreateRecipeWithRevision(ctx context.Context, recipe model.Re
 	}
 	saved.CurrentRevisionID = created.ID
 	saved.CurrentRevision = &created
+	saved.APIAttachments = append([]model.RecipeAPIAttachment(nil), recipe.APIAttachments...)
 	return saved, nil
 }
 
@@ -376,6 +518,13 @@ func (p *Postgres) SaveRecipeRevision(ctx context.Context, recipe model.Recipe, 
 	if err != nil {
 		return model.Recipe{}, err
 	}
+	if err := replaceRecipeAPIAttachments(ctx, tx, recipe, value.CreatedBy); err != nil {
+		return model.Recipe{}, err
+	}
+	if err := insertRecipeAPIBindings(ctx, tx, recipe, value); err != nil {
+		return model.Recipe{}, err
+	}
+	created.APIBindings = append([]model.RecipeAPIBinding(nil), value.APIBindings...)
 	recipe.CurrentRevisionID, recipe.CurrentRevision = created.ID, nil
 	dependencies, _ := json.Marshal(recipe.Dependencies)
 	saved, err := updateRecipeRow(ctx, tx, recipe, dependencies, mutation.ExpectedRevision)
@@ -399,6 +548,7 @@ func (p *Postgres) SaveRecipeRevision(ctx context.Context, recipe model.Recipe, 
 		return model.Recipe{}, databaseError(err)
 	}
 	saved.CurrentRevision = &created
+	saved.APIAttachments = append([]model.RecipeAPIAttachment(nil), recipe.APIAttachments...)
 	return saved, nil
 }
 

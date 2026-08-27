@@ -43,6 +43,7 @@ test("product-integration recipe scope follows the canonical integration and rep
     contract_version: "product-integration-v2",
     integration_id: "integration-canonical",
     dependencies: [{ kind: "integration_scope", resource_id: "integration-canonical" }],
+    current_revision: { spec_version: 2, spec: { integration_id: "integration-canonical" } },
   } as APIRecipe;
   const drifted = {
     ...current,
@@ -57,6 +58,33 @@ test("product-integration recipe scope follows the canonical integration and rep
   assert.equal(recipeHasScopeDependencyMismatch(current), false);
   assert.equal(recipeHasScopeDependencyMismatch(drifted), true);
   assert.equal(recipeHasScopeDependencyMismatch(missingDependency), true);
+});
+
+test("deployment recipes filter by every attached API and require exact revision bindings", () => {
+  const current = {
+    contract_version: "deployment-recipe-v3",
+    api_attachments: [{ integration_id: "integration-customers" }, { integration_id: "integration-billing" }],
+    current_revision: {
+      spec_version: 3,
+      spec: { api_attachments: [{ integration_id: "integration-billing" }, { integration_id: "integration-customers" }] },
+      api_bindings: [
+        { integration_id: "integration-customers", integration_revision_id: "customers-r1", integration_manifest_hash: "sha256:customers" },
+        { integration_id: "integration-billing", integration_revision_id: "billing-r2", integration_manifest_hash: "sha256:billing" },
+      ],
+    },
+    dependencies: [],
+  } as unknown as APIRecipe;
+
+  assert.deepEqual(recipeScopeIDs(current), ["integration-billing", "integration-customers"]);
+  assert.equal(recipeMatchesIntegration(current, "integration-customers"), true);
+  assert.equal(recipeMatchesIntegration(current, "integration-billing"), true);
+  assert.equal(recipeMatchesIntegration(current, "integration-other"), false);
+  assert.equal(recipeMatchesIntegration(current), true);
+  assert.equal(recipeHasScopeDependencyMismatch(current), false);
+  assert.equal(recipeHasScopeDependencyMismatch({
+    ...current,
+    current_revision: { ...current.current_revision!, api_bindings: current.current_revision!.api_bindings?.slice(0, 1) },
+  }), true);
 });
 
 test("recipe generation waits only for a recent running analysis", () => {
@@ -123,7 +151,13 @@ test("console domain helpers derive safe tool policy defaults and capability fai
 });
 
 test("console embed output escapes tenant-controlled values", () => {
-  const embed = buildAgentSetupEmbedHTML(`<img src=x onerror="alert(1)">`, "https://console.example/agent-setup/public/prompt.md?a=1&b=2", "public");
+  const tenant = `<img src=x onerror="alert(1)">`;
+  const embed = buildAgentSetupEmbedHTML("https://console.example/agent-setup/public/prompt.md?a=1&b=2", "public", {
+    deploymentName: tenant,
+    kindLabel: "Public",
+    connectLabel: `Connect your agent to ${tenant}`,
+    ariaLabel: `Connect your agent to ${tenant} using public MCP`,
+  });
   assert.doesNotMatch(embed, /<img src=x onerror=/);
   assert.match(embed, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.match(embed, /a=1&amp;b=2/);

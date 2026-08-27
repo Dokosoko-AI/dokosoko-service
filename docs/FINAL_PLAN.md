@@ -172,7 +172,12 @@ recipes require deterministic validation and human review; recipe publication
 is immutable and always explicit. Setup guidance and recipe content are separate
 contracts: the former connects an agent to MCP, while a recipe is discovered
 after connection and contains only minimal, coherent steps for a coding agent to
-implement one product capability.
+implement one product capability. An exact operation from the selected published
+API contract is the preferred recipe capability; a revision-exact reviewed tool
+is used only when no published contract operation is available. Search ranks
+candidate operations, but method, path, schemas, security, visibility, and drift
+identity are reconstructed from the immutable contract graph rather than from
+retrieved prose. An SDK is never inferred from package membership alone.
 
 The four core analysis and recipe workflows and the four developer-asset
 enrichment workflows have stable prompt keys. The enrichment keys cover
@@ -199,14 +204,22 @@ schema-invalid runs persist no advisory result and never change the
 deterministic Map, review state, binding, index, or publication. The console
 labels these results as advisory and keeps deterministic evidence visible next
 to them.
-The product-integration recipe contract and structured output schema are also
-immutable.
+The deployment recipe contract and structured output schema are also
+immutable. Recipes are deployment-owned and may attach one or more APIs; every
+immutable recipe revision freezes the exact published revision and manifest
+hash for each attached API. The recipe AI generator enumerates eligible
+published APIs, exposes only their exact reviewed capability and evidence IDs
+to the configured model, derives attachments from the selected capabilities,
+and fails closed when the request is unsupported or ambiguous.
 Editable prompt text may tune editorial guidance but cannot turn a recipe into
 an MCP setup guide or ungrounded prose.
 
-MCP delivery exposes only `product-integration-v2` recipes. Historical
-`legacy-mcp-v1` setup recipes remain audit history but are withdrawn from
-resource discovery. Recipe listing returns compact delivery metadata, and plan
+MCP delivery exposes both immutable `deployment-recipe-v3` recipes and
+historical `product-integration-v2` recipes. Historical `legacy-mcp-v1` setup
+recipes are withdrawn from resource discovery. Root
+administrators may permanently delete legacy or outdated recipe records and
+their immutable revisions through an explicit concurrency-guarded action; the
+deletion audit event remains. Recipe listing returns compact delivery metadata, and plan
 selection succeeds only for one exact normalized title, slug, or outcome;
 unmatched and ambiguous requests return deterministic candidates rather than an
 arbitrary recipe.

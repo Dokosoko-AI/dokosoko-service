@@ -1,0 +1,17 @@
+import { jaUI } from "./ui/ja";
+
+export const ja = {
+  metadata: { title: "DokoSoko — エージェント配信コントロールプレーン", description: "信頼できる API ナレッジ、ツール、顧客 ID、MCP アクセスを 1 つのコンソールで設定します。" },
+  languages: { label: "言語", select: "言語を選択", en: "English", es: "Español", fr: "Français", de: "Deutsch", ja: "日本語", uk: "Українська", ptBR: "Português (Brasil)" },
+  theme: { darkMode: "ダークモード", switchToLight: "ライトモードに切り替え", switchToDark: "ダークモードに切り替え" },
+  navigation: { main: "メインナビゲーション", sectionLabel: "{{name}}のセクション", consoleSection: "コンソールセクション", deployment: "デプロイメント", apis: "API", docs: "ドキュメント", sdksAndPackages: "SDK とパッケージ", identity: "ID", tools: "ツール", recipes: "レシピ", agentAccess: "エージェントアクセス", supportOutbox: "サポート送信箱", settings: "設定", sources: "ソース", allFiles: "すべてのファイル", collections: "コレクション", apiContracts: "API コントラクト", queryLab: "クエリラボ", packages: "パッケージ", customerSignIn: "顧客サインイン", catalog: "カタログ", connections: "接続", mcpPreview: "MCP プレビュー" },
+  account: { defaultName: "Yuriy", defaultAdminName: "Yuriy 管理者", rootAdministrator: "ルート管理者", platformAdmin: "プラットフォーム管理者", signOut: "サインアウト" },
+  common: { skipToContent: "コンテンツへ移動", reload: "再読み込み", retry: "再試行", close: "閉じる", save: "保存", cancel: "キャンセル", loading: "読み込み中…", saving: "保存中…", creating: "作成中…", verifying: "確認中…", copied: "コピーしました", notAvailable: "利用できません", notSpecified: "指定なし", none: "なし", all: "すべて", public: "公開", private: "非公開", global: "グローバル", combined: "統合", contract: "コントラクト", execution: "実行", authorization: "認可", tests: "テスト", usage: "使用状況", files: "ファイル", symbols: "シンボル", samples: "サンプル", map: "マップ", diagnostics: "診断", usedByApis: "使用中の API", members: "メンバー", manifest: "マニフェスト", review: "レビュー", operations: "オペレーション", schemas: "スキーマ", examples: "例", normalized: "正規化済み", aiAssist: "AI 支援", import: "インポート", manual: "手動", detail: "詳細", sections: "セクション", runStatus: "実行状態", active: "有効", archived: "アーカイブ済み" },
+  enumLabels: { active: "有効", archived: "アーカイブ済み", attached: "関連付け済み", cancelled: "キャンセル済み", critical: "重大", deprecated: "非推奨", detached: "関連付け解除済み", draft: "下書き", excluded: "除外", failed: "失敗", high: "高", included: "含める", low: "低", medium: "中", needsReview: "レビューが必要", partial: "一部完了", published: "公開済み", quarantined: "隔離済み", queued: "待機中", ready: "準備完了", retired: "廃止", review: "レビュー中", reviewReady: "レビュー準備完了", running: "実行中", suspended: "停止中", valid: "有効", validated: "検証済み", yanked: "取り下げ済み", metadataOnly: "メタデータのみ", resolvedSource: "解決済みソース", sourcePublication: "ソース公開版", document: "ドキュメント", section: "セクション", unknown: "不明（{{value}}）" },
+  format: { dateTime: "{{value, datetime}}", date: "{{value, datetime(year: numeric; month: short; day: numeric)}}", time: "{{value, datetime(hour: numeric; minute: 2-digit)}}", number: "{{value, number}}" },
+  routes: { quickStart: "クイックスタート", resources: "リソース", keysAccess: "キーとアクセス", tools: "ツール", test: "テスト", history: "履歴", documentation: "ドキュメント", apiContracts: "API コントラクト", sdks: "SDK", overview: "概要", databaseStorage: "データベースとストレージ", aiConfiguration: "AI 設定", rootAccess: "ルートアクセス" },
+  workspace: { fixturePreview: "テストデータのプレビュー", fixtureDescription: "開発専用のサンプルデータです。", loadingData: "デプロイメントデータを読み込み中", partialLoadFailure: "一部のデータを読み込めませんでした", loadingToolDraft: "HTTP ツールの下書きを読み込み中", toolDraftUnavailable: "HTTP ツールの下書きを利用できません", owningApiUnavailable: "所有元 API を利用できません", returnToTools: "ツールに戻る" },
+  title: { main: "DokoSoko" },
+  ...jaUI,
+  settings: { ...jaUI.settings, title: "設定", allAPIs: "すべての API", noRecipesYet: "レシピはまだありません" },
+};

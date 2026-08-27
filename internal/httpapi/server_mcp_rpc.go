@@ -149,7 +149,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		}
 		resources := make([]map[string]any, 0, len(values)+len(developerAssets))
 		for _, recipe := range sortedRecipeSummaries(values) {
-			resources = append(resources, map[string]any{"uri": recipe.URI, "name": recipe.Slug, "title": recipe.Title, "description": "Product integration implementation: " + recipe.Outcome, "mimeType": "text/markdown", "_meta": map[string]any{"integration_id": recipe.IntegrationID, "contract_version": recipe.ContractVersion, "revision_id": recipe.RevisionID, "published_at": recipe.PublishedAt}})
+			resources = append(resources, map[string]any{"uri": recipe.URI, "name": recipe.Slug, "title": recipe.Title, "description": "Product integration implementation: " + recipe.Outcome, "mimeType": "text/markdown", "_meta": map[string]any{"integration_ids": recipe.IntegrationIDs, "contract_version": recipe.ContractVersion, "revision_id": recipe.RevisionID, "published_at": recipe.PublishedAt}})
 		}
 		for _, resource := range developerAssets {
 			resources = append(resources, map[string]any{"uri": resource.URI, "name": resource.Name, "title": resource.Title, "description": resource.Description, "mimeType": resource.MIMEType, "_meta": resource.Meta})
@@ -172,7 +172,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, productID str
 		}
 		recipe, recipeErr := s.publishedRecipeByURI(r.Context(), productID, params.URI, public)
 		if recipeErr == nil && recipe.CurrentRevision != nil {
-			writeRPC(w, request.ID, map[string]any{"contents": []map[string]any{{"uri": recipe.StableURI, "mimeType": "text/markdown", "text": recipe.CurrentRevision.Markdown, "_meta": map[string]any{"integration_id": recipe.IntegrationID, "contract_version": recipe.ContractVersion, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt}}}})
+			writeRPC(w, request.ID, map[string]any{"contents": []map[string]any{{"uri": recipe.StableURI, "mimeType": "text/markdown", "text": recipe.CurrentRevision.Markdown, "_meta": map[string]any{"integration_ids": recipeAPIIDs(recipe), "contract_version": recipe.ContractVersion, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt}}}})
 			return
 		}
 		deploymentID := productManifest.DeploymentID

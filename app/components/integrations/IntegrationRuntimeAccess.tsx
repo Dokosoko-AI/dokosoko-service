@@ -1,5 +1,8 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { CheckCircle2, KeyRound, RefreshCw, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useCallback, useMemo, useState, useEffect } from "react";
 import {
@@ -19,18 +22,6 @@ import { Badge, Button, Dialog } from "../core/control";
 import { PanelHeader } from "../core/layout";
 
 type CredentialChoice = "dedicated" | "shared" | "existing";
-
-const authenticationLabels: Record<APIRuntimeAuthenticationType, string> = {
-  none: "No authentication",
-  delegated_oauth: "Customer OAuth token",
-  api_key_header: "API key header",
-  bearer: "Bearer token",
-  authorization_scheme: "Authorization scheme",
-  api_key_query: "API key query parameter",
-  basic: "Basic authentication",
-  oauth_client_credentials: "OAuth client credentials",
-  custom_header: "Custom header",
-};
 
 const commonAuthenticationTypes: APIRuntimeAuthenticationType[] = ["none", "api_key_header", "bearer", "delegated_oauth"];
 const advancedAuthenticationTypes: APIRuntimeAuthenticationType[] = ["authorization_scheme", "api_key_query", "basic", "oauth_client_credentials", "custom_header"];
@@ -68,14 +59,22 @@ function currentCredential(setup: APIRuntimeSetup, revision?: APIRuntimeServiceC
   return revision?.credential_set_id ? setup.credential_sets.find((credentialSet) => credentialSet.id === revision.credential_set_id) : undefined;
 }
 
-function prettyAuthentication(authenticationType: APIRuntimeAuthenticationType) {
-  return authenticationLabels[authenticationType] ?? authenticationType;
+function prettyAuthentication(authenticationType: APIRuntimeAuthenticationType, t: TFunction) {
+  return authenticationType === "none" ? t("tools.noAuthentication")
+    : authenticationType === "delegated_oauth" ? t("runtimeAccess.customerOAuthToken")
+      : authenticationType === "api_key_header" ? t("tools.apiKeyHeader")
+        : authenticationType === "bearer" ? t("tools.bearerToken")
+          : authenticationType === "authorization_scheme" ? t("tools.authorizationScheme")
+            : authenticationType === "api_key_query" ? t("tools.apiKeyQueryParameter")
+              : authenticationType === "basic" ? t("tools.httpBasic")
+                : authenticationType === "oauth_client_credentials" ? t("tools.oauthClientCredentials")
+                  : t("tools.customSecretHeader");
 }
 
-function formatDate(value?: string) {
+function formatDate(value: string | undefined, t: TFunction) {
   if (!value) return "—";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : t("format.dateTime", { value: date });
 }
 
 export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, onChanged }: {
@@ -84,6 +83,7 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
   onNavigate: (path: string) => void;
   onChanged?: () => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [setup, setSetup] = useState<APIRuntimeSetup | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -120,7 +120,7 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
     setEnvironmentID(selected);
     setBaseURL(revision?.base_url ?? "");
     setAuthenticationType(nextAuthenticationType);
-    setConnectionName(connection?.name ?? `${integration.display_name} service`);
+    setConnectionName(connection?.name ?? t("runtimeAccess.defaultServiceName", { name: integration.display_name }));
     setConnectionDescription(connection?.description ?? "");
     setAuthConfig(JSON.stringify(revision?.auth_config ?? {}, null, 2));
     setCredential("");
@@ -134,11 +134,11 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
     } else {
       setCredentialChoice("dedicated");
       setExistingCredentialSetID("");
-      setCredentialName(`${integration.display_name} credential`);
+      setCredentialName(t("runtimeAccess.defaultCredentialName", { name: integration.display_name }));
       setEnvironmentVariable(defaultEnvironmentVariable(integration, "dedicated"));
       setHeaderName(nextAuthenticationType === "api_key_header" || nextAuthenticationType === "custom_header" ? "X-API-Key" : "");
     }
-  }, [integration]);
+  }, [integration, t]);
 
   const loadSetup = useCallback(async () => {
     setLoading(true);
@@ -150,11 +150,11 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
       setUsageLoaded(false);
       setUsageCounts({});
     } catch (error) {
-      setLoadError(errorMessage(error, "Runtime service access could not be loaded."));
+      setLoadError(errorMessage(error, t("runtimeAccess.loadFailed")));
     } finally {
       setLoading(false);
     }
-  }, [environmentID, hydrateForm, integration.id]);
+  }, [environmentID, hydrateForm, integration.id, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,12 +164,12 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
       hydrateForm(value, "");
       setLoadError("");
     }).catch((error) => {
-      if (!cancelled) setLoadError(errorMessage(error, "Runtime service access could not be loaded."));
+      if (!cancelled) setLoadError(errorMessage(error, t("runtimeAccess.loadFailed")));
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [hydrateForm, integration.id]);
+  }, [hydrateForm, integration.id, t]);
 
   const current = setup ? currentConnectionForEnvironment(setup, environmentID) : {};
   const selectedCurrentCredential = setup ? currentCredential(setup, current.revision) : undefined;
@@ -196,7 +196,7 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
     if (!existing || existing.authentication_type !== nextAuthenticationType || existing.environment_id !== environmentID) {
       setExistingCredentialSetID("");
       setCredentialChoice("dedicated");
-      setCredentialName(`${integration.display_name} credential`);
+      setCredentialName(t("runtimeAccess.defaultCredentialName", { name: integration.display_name }));
       setEnvironmentVariable(defaultEnvironmentVariable(integration, "dedicated"));
     }
     setHeaderName(nextAuthenticationType === "api_key_header" || nextAuthenticationType === "custom_header" ? existing?.header_name ?? "X-API-Key" : "");
@@ -208,7 +208,7 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
     setFormError("");
     if (choice === "dedicated" || choice === "shared") {
       setExistingCredentialSetID("");
-      setCredentialName(choice === "shared" ? "Shared service credential" : `${integration.display_name} credential`);
+      setCredentialName(choice === "shared" ? t("runtimeAccess.sharedServiceCredential") : t("runtimeAccess.defaultCredentialName", { name: integration.display_name }));
       setEnvironmentVariable(defaultEnvironmentVariable(integration, choice));
       return;
     }
@@ -224,22 +224,22 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
   const saveSetup = async () => {
     setFormError("");
     if (!environmentID) {
-      setFormError("Choose an environment first.");
+      setFormError(t("runtimeAccess.chooseAnEnvironmentFirst"));
       return;
     }
     try {
       const parsedURL = new URL(baseURL);
       if (parsedURL.protocol !== "https:" && parsedURL.protocol !== "http:") throw new Error();
     } catch {
-      setFormError("Enter a complete HTTP or HTTPS service URL.");
+      setFormError(t("runtimeAccess.enterACompleteHTTPOrHTTPSServiceURL"));
       return;
     }
     if (credentialRequired && credentialChoice === "existing" && !existingCredentialSetID) {
-      setFormError("Choose an existing credential set.");
+      setFormError(t("runtimeAccess.chooseAnExistingCredentialSet"));
       return;
     }
     if (credentialRequired && credentialChoice !== "existing" && !credential.trim()) {
-      setFormError("Enter the credential DokoSoko should store for this service.");
+      setFormError(t("runtimeAccess.enterTheCredentialDokoSokoShouldStoreForThisService"));
       return;
     }
     let parsedAuthConfig: Record<string, unknown> = {};
@@ -248,7 +248,7 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
       if (!value || Array.isArray(value) || typeof value !== "object") throw new Error();
       parsedAuthConfig = value as Record<string, unknown>;
     } catch {
-      setFormError("Advanced authentication configuration must be a JSON object.");
+      setFormError(t("runtimeAccess.advancedAuthenticationConfigurationMustBeAJSONObject"));
       return;
     }
     setSaving(true);
@@ -276,9 +276,9 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
       setUsageCounts({});
       setConfigurationCheck(null);
       await onChanged?.();
-      onMessage("Service endpoint and authentication saved.");
+      onMessage(t("runtimeAccess.serviceEndpointAndAuthenticationSaved"));
     } catch (error) {
-      setFormError(errorMessage(error, "Service access could not be saved."));
+      setFormError(errorMessage(error, t("runtimeAccess.saveFailed")));
     } finally {
       setSaving(false);
     }
@@ -304,9 +304,9 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
     try {
       const value = await api.checkRuntimeServiceConnection(current.connection.id);
       setConfigurationCheck(value);
-      onMessage(value.ready ? "Saved service configuration is ready." : "Saved service configuration needs attention.");
+      onMessage(value.ready ? t("runtimeAccess.savedServiceConfigurationIsReady") : t("runtimeAccess.savedServiceConfigurationNeedsAttention"));
     } catch (error) {
-      onMessage(errorMessage(error, "Service configuration could not be checked."));
+      onMessage(errorMessage(error, t("runtimeAccess.checkFailed")));
     } finally {
       setCheckingConfiguration(false);
     }
@@ -322,9 +322,9 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
       setRotationExpiresAt("");
       await loadSetup();
       await onChanged?.();
-      onMessage(`${rotateSet.name} rotated. Existing connections now use the new active version.`);
+      onMessage(t("runtimeAccess.rotatedExistingConnectionsNowUseTheNewActiveVersion", { name: String(rotateSet.name) }));
     } catch (error) {
-      onMessage(errorMessage(error, "Credential could not be rotated."));
+      onMessage(errorMessage(error, t("runtimeAccess.rotateFailed")));
     } finally {
       setCredentialBusy(false);
     }
@@ -339,20 +339,20 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
       setRevokeTarget(null);
       await loadSetup();
       await onChanged?.();
-      onMessage(`${name} version revoked.`);
+      onMessage(t("runtimeAccess.versionRevoked", { name: String(name) }));
     } catch (error) {
-      onMessage(errorMessage(error, "Credential version could not be revoked."));
+      onMessage(errorMessage(error, t("runtimeAccess.revokeFailed")));
     } finally {
       setCredentialBusy(false);
     }
   };
 
   if (loading && !setup) {
-    return <section className="panel runtime-access-panel"><PanelHeader title="Service connection" description="Configure the endpoint and credential DokoSoko uses when an agent calls this API." /><div className="runtime-access-loading"><RefreshCw /><span>Loading service access…</span></div></section>;
+    return <section className="panel runtime-access-panel"><PanelHeader title={t("runtimeAccess.serviceConnection")} description={t("runtimeAccess.configureTheEndpointAndCredentialDokoSokoUsesWhenAn")} /><div className="runtime-access-loading"><RefreshCw /><span>{t("runtimeAccess.loadingServiceAccess")}</span></div></section>;
   }
 
   if (loadError && !setup) {
-    return <section className="panel runtime-access-panel"><PanelHeader title="Service connection" description="Configure the endpoint and credential DokoSoko uses when an agent calls this API." /><div className="capability-unavailable"><TriangleAlert /><span><strong>Service access is unavailable</strong><small>{loadError}</small></span><Button outline onClick={() => void loadSetup()}>Retry</Button></div></section>;
+    return <section className="panel runtime-access-panel"><PanelHeader title={t("runtimeAccess.serviceConnection")} description={t("runtimeAccess.configureTheEndpointAndCredentialDokoSokoUsesWhenAn")} /><div className="capability-unavailable"><TriangleAlert /><span><strong>{t("runtimeAccess.serviceAccessIsUnavailable")}</strong><small>{loadError}</small></span><Button outline onClick={() => void loadSetup()}>{t("common.retry")}</Button></div></section>;
   }
 
   if (!setup) return null;
@@ -360,68 +360,68 @@ export function IntegrationRuntimeAccess({ integration, onMessage, onNavigate, o
   return <>
     <section className="panel runtime-access-panel">
       <PanelHeader
-        title="Service connection"
-        description="Add the service URL, choose how it authenticates, and save. DokoSoko encrypts credentials and never shows them again."
-        action={<span className="heading-actions">{current.revision ? <Badge color="green">Configured</Badge> : <Badge color="amber">Setup required</Badge>}{current.connection && <Button outline disabled={checkingConfiguration} onClick={() => void checkConfiguration()}>{checkingConfiguration ? "Checking…" : "Check configuration"}</Button>}{current.revision && <Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}>Create API tool</Button>}</span>}
+        title={t("runtimeAccess.serviceConnection")}
+        description={t("runtimeAccess.addTheServiceURLChooseHowItAuthenticatesAnd")}
+        action={<span className="heading-actions">{current.revision ? <Badge color="green">{t("runtimeAccess.configured")}</Badge> : <Badge color="amber">{t("runtimeAccess.setupRequired")}</Badge>}{current.connection && <Button outline disabled={checkingConfiguration} onClick={() => void checkConfiguration()}>{checkingConfiguration ? t("runtimeAccess.checking") : t("runtimeAccess.checkConfiguration")}</Button>}{current.revision && <Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}>{t("runtimeAccess.createAPITool")}</Button>}</span>}
       />
       {current.revision && <div className="runtime-current-summary">
         <span className="settings-icon"><CheckCircle2 /></span>
-        <span><strong>{current.connection?.name ?? "Service connection"}</strong><small>{current.revision.base_url}</small></span>
-        <span><small>Authentication</small><strong>{prettyAuthentication(current.revision.authentication_type)}</strong></span>
-        <span><small>Credential</small><strong>{selectedCurrentCredential?.environment_variable ?? "Not required"}</strong></span>
+        <span><strong>{current.connection?.name ?? t("runtimeAccess.serviceConnection")}</strong><small>{current.revision.base_url}</small></span>
+        <span><small>{t("runtimeAccess.authentication")}</small><strong>{prettyAuthentication(current.revision.authentication_type, t)}</strong></span>
+        <span><small>{t("runtimeAccess.credential")}</small><strong>{selectedCurrentCredential?.environment_variable ?? t("runtimeAccess.notRequired")}</strong></span>
       </div>}
       {configurationCheck && <div className={`runtime-configuration-check ${configurationCheck.ready ? "ready" : "needs-attention"}`}>
-        <div><span className={`health-icon ${configurationCheck.ready ? "ready" : ""}`}>{configurationCheck.ready ? <CheckCircle2 /> : <TriangleAlert />}</span><span><strong>{configurationCheck.ready ? "Configuration ready" : "Configuration needs attention"}</strong><small>This checks saved endpoint and credential metadata only. Live upstream behavior is tested from an attached tool.</small></span></div>
+        <div><span className={`health-icon ${configurationCheck.ready ? "ready" : ""}`}>{configurationCheck.ready ? <CheckCircle2 /> : <TriangleAlert />}</span><span><strong>{configurationCheck.ready ? t("runtimeAccess.configurationReady") : t("runtimeAccess.configurationNeedsAttention")}</strong><small>{t("runtimeAccess.thisChecksSavedEndpointAndCredentialMetadataOnlyLive")}</small></span></div>
         <div>{configurationCheck.checks.map((check) => <span key={`${check.key}:${check.environment_id ?? "all"}`}><span className={`health-icon ${check.ready ? "ready" : ""}`}>{check.ready ? <CheckCircle2 /> : <TriangleAlert />}</span><span><strong>{check.label}</strong><small>{check.message}</small></span></span>)}</div>
-        {configurationCheck.ready && <div className="heading-actions"><Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}>Create API tool</Button><Button outline onClick={() => onNavigate(integrationPath(integration.id, "test"))}>Open Test</Button></div>}
+        {configurationCheck.ready && <div className="heading-actions"><Button color="indigo" onClick={() => onNavigate(integrationToolBuilderPath(integration.id))}>{t("runtimeAccess.createAPITool")}</Button><Button outline onClick={() => onNavigate(integrationPath(integration.id, "test"))}>{t("runtimeAccess.openTest")}</Button></div>}
       </div>}
       <div className="runtime-access-form">
         <div className="two-fields">
-          <label className="auth-field"><span>Environment</span><select value={environmentID} onChange={(event) => selectEnvironment(event.target.value)}>{setup.environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}{environment.is_production ? " · Production" : ""}</option>)}</select></label>
-          <label className="auth-field"><span>Service URL</span><input type="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="https://api.example.com" autoComplete="url" /></label>
+          <label className="auth-field"><span>{t("runtimeAccess.environment")}</span><select value={environmentID} onChange={(event) => selectEnvironment(event.target.value)}>{setup.environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}{environment.is_production ? t("runtimeAccess.production") : ""}</option>)}</select></label>
+          <label className="auth-field"><span>{t("runtimeAccess.serviceURL")}</span><input type="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="https://api.example.com" autoComplete="url" /></label>
         </div>
-        <label className="auth-field"><span>Authentication</span><select value={authenticationType} onChange={(event) => selectAuthentication(event.target.value as APIRuntimeAuthenticationType)}><optgroup label="Common">{commonAuthenticationTypes.map((value) => <option key={value} value={value}>{authenticationLabels[value]}</option>)}</optgroup><optgroup label="Advanced">{advancedAuthenticationTypes.map((value) => <option key={value} value={value}>{authenticationLabels[value]}</option>)}</optgroup></select><small>Choose the credential the upstream API expects. Customer sign-in is configured separately below.</small></label>
+        <label className="auth-field"><span>{t("runtimeAccess.authentication")}</span><select value={authenticationType} onChange={(event) => selectAuthentication(event.target.value as APIRuntimeAuthenticationType)}><optgroup label={t("runtimeAccess.common")}>{commonAuthenticationTypes.map((value) => <option key={value} value={value}>{prettyAuthentication(value, t)}</option>)}</optgroup><optgroup label={t("runtimeAccess.advanced")}>{advancedAuthenticationTypes.map((value) => <option key={value} value={value}>{prettyAuthentication(value, t)}</option>)}</optgroup></select><small>{t("runtimeAccess.chooseTheCredentialTheUpstreamAPIExpectsCustomerSign")}</small></label>
 
         {credentialRequired && <fieldset className="runtime-credential-choice">
-          <legend>Credential</legend>
+          <legend>{t("runtimeAccess.credential")}</legend>
           <div className="runtime-choice-grid">
-            <label className={credentialChoice === "dedicated" ? "selected" : ""} aria-label="Only this API"><input type="radio" name={`runtime-credential-${integration.id}`} checked={credentialChoice === "dedicated"} onChange={() => selectCredentialChoice("dedicated")} /><span><strong>Only this API</strong><small>A dedicated {defaultEnvironmentVariable(integration, "dedicated")} secret.</small></span></label>
-            <label className={credentialChoice === "shared" ? "selected" : ""} aria-label="Share across APIs"><input type="radio" name={`runtime-credential-${integration.id}`} checked={credentialChoice === "shared"} onChange={() => selectCredentialChoice("shared")} /><span><strong>Share across APIs</strong><small>A reusable SERVICE_API_KEY for this environment.</small></span></label>
-            <label className={credentialChoice === "existing" ? "selected" : ""} aria-label="Use existing credential" aria-disabled={eligibleExistingCredentials.length === 0}><input type="radio" name={`runtime-credential-${integration.id}`} checked={credentialChoice === "existing"} disabled={eligibleExistingCredentials.length === 0} onChange={() => selectCredentialChoice("existing")} /><span><strong>Use existing</strong><small>{eligibleExistingCredentials.length > 0 ? `${eligibleExistingCredentials.length} compatible credential${eligibleExistingCredentials.length === 1 ? "" : "s"}.` : "No compatible credential yet."}</small></span></label>
+            <label className={credentialChoice === "dedicated" ? "selected" : ""} aria-label={t("runtimeAccess.onlyThisAPI")}><input type="radio" name={`runtime-credential-${integration.id}`} checked={credentialChoice === "dedicated"} onChange={() => selectCredentialChoice("dedicated")} /><span><strong>{t("runtimeAccess.onlyThisAPI")}</strong><small>{t("runtimeAccess.dedicatedSecret", { variable: defaultEnvironmentVariable(integration, "dedicated") })}</small></span></label>
+            <label className={credentialChoice === "shared" ? "selected" : ""} aria-label={t("runtimeAccess.shareAcrossAPIs")}><input type="radio" name={`runtime-credential-${integration.id}`} checked={credentialChoice === "shared"} onChange={() => selectCredentialChoice("shared")} /><span><strong>{t("runtimeAccess.shareAcrossAPIs")}</strong><small>{t("runtimeAccess.aReusableSERVICEAPIKEYForThisEnvironment")}</small></span></label>
+            <label className={credentialChoice === "existing" ? "selected" : ""} aria-label={t("runtimeAccess.useExistingCredential")} aria-disabled={eligibleExistingCredentials.length === 0}><input type="radio" name={`runtime-credential-${integration.id}`} checked={credentialChoice === "existing"} disabled={eligibleExistingCredentials.length === 0} onChange={() => selectCredentialChoice("existing")} /><span><strong>{t("runtimeAccess.useExisting")}</strong><small>{eligibleExistingCredentials.length > 0 ? t("runtimeAccess.compatibleCredentials", { count: eligibleExistingCredentials.length }) : t("runtimeAccess.noCompatibleCredentialYet")}</small></span></label>
           </div>
-          {credentialChoice === "existing" ? <label className="auth-field"><span>Existing credential</span><select value={existingCredentialSetID} onChange={(event) => setExistingCredentialSetID(event.target.value)}><option value="">Choose a credential</option>{eligibleExistingCredentials.map((credentialSet) => <option key={credentialSet.id} value={credentialSet.id}>{credentialSet.name} · {credentialSet.environment_variable} · {credentialSet.scope}</option>)}</select><small>{selectedExistingCredential?.active_fingerprint ? `Active fingerprint ${selectedExistingCredential.active_fingerprint}` : "Only masked metadata is visible here."}</small></label> : <label className="auth-field"><span>{current.revision && selectedCurrentCredential ? "New credential" : "Credential value"}</span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={selectedCurrentCredential?.credential_present ? "••••••••••••" : "Paste the credential"} autoComplete="new-password" /><small>{selectedCurrentCredential?.credential_present ? "A credential is already stored. Leave this path by selecting Use existing, or enter a new value to create a separate credential set." : "Encrypted at rest and omitted from every response."}</small></label>}
+          {credentialChoice === "existing" ? <label className="auth-field"><span>{t("runtimeAccess.existingCredential")}</span><select value={existingCredentialSetID} onChange={(event) => setExistingCredentialSetID(event.target.value)}><option value="">{t("runtimeAccess.chooseACredential")}</option>{eligibleExistingCredentials.map((credentialSet) => <option key={credentialSet.id} value={credentialSet.id}>{credentialSet.name} · {credentialSet.environment_variable} · {credentialSet.scope}</option>)}</select><small>{selectedExistingCredential?.active_fingerprint ? t("runtimeAccess.activeFingerprint2", { active_fingerprint: String(selectedExistingCredential.active_fingerprint) }) : t("runtimeAccess.onlyMaskedMetadataIsVisibleHere")}</small></label> : <label className="auth-field"><span>{current.revision && selectedCurrentCredential ? t("runtimeAccess.newCredential") : t("runtimeAccess.credentialValue")}</span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={selectedCurrentCredential?.credential_present ? "••••••••••••" : t("runtimeAccess.pasteTheCredential")} autoComplete="new-password" /><small>{selectedCurrentCredential?.credential_present ? t("runtimeAccess.aCredentialIsAlreadyStoredLeaveThisPathBy") : t("runtimeAccess.encryptedAtRestAndOmittedFromEveryResponse")}</small></label>}
         </fieldset>}
 
         <details className="advanced-details inline-advanced runtime-advanced">
-          <summary>Advanced connection settings</summary>
+          <summary>{t("runtimeAccess.advancedConnectionSettings")}</summary>
           <div className="advanced-details-body">
-            <div className="two-fields"><label className="auth-field"><span>Connection name</span><input value={connectionName} onChange={(event) => setConnectionName(event.target.value)} /></label><label className="auth-field"><span>Description</span><input value={connectionDescription} onChange={(event) => setConnectionDescription(event.target.value)} placeholder="Optional operator note" /></label></div>
-            {credentialRequired && credentialChoice !== "existing" && <><div className="two-fields"><label className="auth-field"><span>Credential name</span><input value={credentialName} onChange={(event) => setCredentialName(event.target.value)} /></label><label className="auth-field"><span>Environment variable</span><input value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value.toUpperCase())} /></label></div><div className="two-fields"><label className="auth-field"><span>Header name</span><input value={headerName} onChange={(event) => setHeaderName(event.target.value)} disabled={authenticationType !== "api_key_header" && authenticationType !== "custom_header"} placeholder="X-API-Key" /></label><label className="auth-field"><span>Credential expires (optional)</span><input type="datetime-local" value={credentialExpiresAt} onChange={(event) => setCredentialExpiresAt(event.target.value)} /></label></div></>}
-            <label className="auth-field"><span>Authentication configuration (JSON)</span><textarea className="code-input" value={authConfig} onChange={(event) => setAuthConfig(event.target.value)} spellCheck={false} /><small>Use only for provider-specific, non-secret authentication options. Never place credentials in this object.</small></label>
+            <div className="two-fields"><label className="auth-field"><span>{t("runtimeAccess.connectionName")}</span><input value={connectionName} onChange={(event) => setConnectionName(event.target.value)} /></label><label className="auth-field"><span>{t("runtimeAccess.description")}</span><input value={connectionDescription} onChange={(event) => setConnectionDescription(event.target.value)} placeholder={t("runtimeAccess.optionalOperatorNote")} /></label></div>
+            {credentialRequired && credentialChoice !== "existing" && <><div className="two-fields"><label className="auth-field"><span>{t("runtimeAccess.credentialName")}</span><input value={credentialName} onChange={(event) => setCredentialName(event.target.value)} /></label><label className="auth-field"><span>{t("runtimeAccess.environmentVariable")}</span><input value={environmentVariable} onChange={(event) => setEnvironmentVariable(event.target.value.toUpperCase())} /></label></div><div className="two-fields"><label className="auth-field"><span>{t("runtimeAccess.headerName")}</span><input value={headerName} onChange={(event) => setHeaderName(event.target.value)} disabled={authenticationType !== "api_key_header" && authenticationType !== "custom_header"} placeholder={t("runtimeAccess.xAPIKey")} /></label><label className="auth-field"><span>{t("runtimeAccess.credentialExpiresOptional")}</span><input type="datetime-local" value={credentialExpiresAt} onChange={(event) => setCredentialExpiresAt(event.target.value)} /></label></div></>}
+            <label className="auth-field"><span>{t("runtimeAccess.authenticationConfigurationJSON")}</span><textarea className="code-input" value={authConfig} onChange={(event) => setAuthConfig(event.target.value)} spellCheck={false} /><small>{t("runtimeAccess.useOnlyForProviderSpecificNonSecretAuthenticationOptions")}</small></label>
           </div>
         </details>
         {formError && <div className="auth-problem"><TriangleAlert /><span>{formError}</span></div>}
-        <div className="runtime-save-row"><span>{current.revision ? `Current revision ${current.revision.revision}` : "No connection has been saved for this environment."}</span><Button color="indigo" disabled={saving || setup.environments.length === 0 || !baseURL.trim()} onClick={() => void saveSetup()}>{saving ? "Saving…" : current.revision ? "Save changes" : "Connect service"}</Button></div>
+        <div className="runtime-save-row"><span>{current.revision ? t("runtimeAccess.currentRevision", { revision: String(current.revision.revision) }) : t("runtimeAccess.noConnectionHasBeenSavedForThisEnvironment")}</span><Button color="indigo" disabled={saving || setup.environments.length === 0 || !baseURL.trim()} onClick={() => void saveSetup()}>{saving ? t("common.saving") : current.revision ? t("runtimeAccess.saveChanges") : t("runtimeAccess.connectService")}</Button></div>
       </div>
     </section>
 
     <details className="panel advanced-details runtime-credential-management" onToggle={(event) => { if (event.currentTarget.open) void loadUsage(); }}>
-      <summary>Credential lifecycle and connection metadata — Advanced</summary>
+      <summary>{t("runtimeAccess.credentialLifecycleAndConnectionMetadataAdvanced")}</summary>
       <div className="advanced-details-body">
-        <PanelHeader title="Stored credentials" description="Rotate or revoke encrypted versions without changing API tool definitions." />
+        <PanelHeader title={t("runtimeAccess.storedCredentials")} description={t("runtimeAccess.rotateOrRevokeEncryptedVersionsWithoutChangingAPITool")} />
         {setup.credential_sets.map((credentialSet) => <div className="runtime-credential-set" key={credentialSet.id}>
-          <div className="runtime-credential-heading"><span className="settings-icon"><KeyRound /></span><span><strong>{credentialSet.name}</strong><small>{credentialSet.environment_variable} · {credentialSet.scope === "shared" ? "Shared across APIs" : "Dedicated to this API"} · {usageCounts[credentialSet.id] === undefined ? "Usage loading…" : usageCounts[credentialSet.id] < 0 ? "Usage unavailable" : `${usageCounts[credentialSet.id]} connection${usageCounts[credentialSet.id] === 1 ? "" : "s"}`}</small></span><Badge color={credentialSet.state === "active" && credentialSet.credential_present ? "green" : "amber"}>{credentialSet.credential_present ? credentialSet.state : "Missing"}</Badge><Button outline onClick={() => { setRotateSet(credentialSet); setRotationCredential(""); setRotationExpiresAt(""); }}><RotateCcw data-slot="icon" />Rotate</Button></div>
-          <dl className="runtime-metadata-grid"><div><dt>Authentication</dt><dd>{prettyAuthentication(credentialSet.authentication_type)}</dd></div><div><dt>Header</dt><dd>{credentialSet.header_name || "—"}</dd></div><div><dt>Active fingerprint</dt><dd><code>{credentialSet.active_fingerprint || "—"}</code></dd></div><div><dt>Revision</dt><dd>{credentialSet.revision}</dd></div></dl>
-          {(credentialSet.versions ?? []).length > 0 && <div className="runtime-version-list">{credentialSet.versions?.map((version) => <div key={version.id}><span><strong>{version.state}</strong><small>Fingerprint {version.fingerprint} · created {formatDate(version.created_at)}{version.expires_at ? ` · expires ${formatDate(version.expires_at)}` : ""}</small></span>{version.state !== "revoked" && <Button outline disabled={credentialBusy} onClick={() => setRevokeTarget({ credentialSet, version })}>Revoke</Button>}</div>)}</div>}
+          <div className="runtime-credential-heading"><span className="settings-icon"><KeyRound /></span><span><strong>{credentialSet.name}</strong><small>{credentialSet.environment_variable} · {credentialSet.scope === "shared" ? t("runtimeAccess.sharedAcrossAPIs") : t("runtimeAccess.dedicatedToThisAPI")} · {usageCounts[credentialSet.id] === undefined ? t("runtimeAccess.usageLoading") : usageCounts[credentialSet.id] < 0 ? t("runtimeAccess.usageUnavailable") : t("runtimeAccess.connections", { count: usageCounts[credentialSet.id] })}</small></span><Badge color={credentialSet.state === "active" && credentialSet.credential_present ? "green" : "amber"}>{credentialSet.credential_present ? credentialSet.state === "active" ? t("runtimeAccess.active") : t("runtimeAccess.revoked") : t("runtimeAccess.missing")}</Badge><Button outline onClick={() => { setRotateSet(credentialSet); setRotationCredential(""); setRotationExpiresAt(""); }}><RotateCcw data-slot="icon" />{t("runtimeAccess.rotate")}</Button></div>
+          <dl className="runtime-metadata-grid"><div><dt>{t("runtimeAccess.authentication")}</dt><dd>{prettyAuthentication(credentialSet.authentication_type, t)}</dd></div><div><dt>{t("runtimeAccess.header")}</dt><dd>{credentialSet.header_name || "—"}</dd></div><div><dt>{t("runtimeAccess.activeFingerprint")}</dt><dd><code>{credentialSet.active_fingerprint || "—"}</code></dd></div><div><dt>{t("runtimeAccess.revision")}</dt><dd>{credentialSet.revision}</dd></div></dl>
+          {(credentialSet.versions ?? []).length > 0 && <div className="runtime-version-list">{credentialSet.versions?.map((version) => <div key={version.id}><span><strong>{version.state === "revoked" ? t("runtimeAccess.revoked") : t("runtimeAccess.active")}</strong><small>{t("runtimeAccess.fingerprint")} {version.fingerprint} {t("runtimeAccess.created")} {formatDate(version.created_at, t)}{version.expires_at ? t("runtimeAccess.expires", { value1: formatDate(version.expires_at, t) }) : ""}</small></span>{version.state !== "revoked" && <Button outline disabled={credentialBusy} onClick={() => setRevokeTarget({ credentialSet, version })}>{t("runtimeAccess.revoke")}</Button>}</div>)}</div>}
         </div>)}
-        {setup.credential_sets.length === 0 && <div className="empty-row">No runtime credentials have been created for this API or shared into its environments.</div>}
+        {setup.credential_sets.length === 0 && <div className="empty-row">{t("runtimeAccess.noRuntimeCredentialsHaveBeenCreatedForThisAPI")}</div>}
 
-        {current.connection && current.revision && <><PanelHeader title="Current connection metadata" description="Immutable revision identifiers for auditing and support." /><dl className="entity-detail-grid runtime-connection-details"><div><dt>Connection ID</dt><dd>{current.connection.id}</dd></div><div><dt>Connection revision</dt><dd>{current.revision.id}</dd></div><div><dt>Configuration revision</dt><dd>{current.revision.revision}</dd></div><div><dt>Content hash</dt><dd>{current.revision.content_hash}</dd></div></dl></>}
+        {current.connection && current.revision && <><PanelHeader title={t("runtimeAccess.currentConnectionMetadata")} description={t("runtimeAccess.immutableRevisionIdentifiersForAuditingAndSupport")} /><dl className="entity-detail-grid runtime-connection-details"><div><dt>{t("runtimeAccess.connectionID")}</dt><dd>{current.connection.id}</dd></div><div><dt>{t("runtimeAccess.connectionRevision")}</dt><dd>{current.revision.id}</dd></div><div><dt>{t("runtimeAccess.configurationRevision")}</dt><dd>{current.revision.revision}</dd></div><div><dt>{t("runtimeAccess.contentHash")}</dt><dd>{current.revision.content_hash}</dd></div></dl></>}
       </div>
     </details>
 
-    <Dialog open={Boolean(rotateSet)} onClose={(open) => { if (!open && !credentialBusy) setRotateSet(null); }} title={`Rotate ${rotateSet?.name ?? "credential"}`} description="The new encrypted version becomes active for every connection that references this credential set." actions={<><Button outline disabled={credentialBusy} onClick={() => setRotateSet(null)}>Cancel</Button><Button color="indigo" disabled={credentialBusy || !rotationCredential.trim()} onClick={() => void rotateCredential()}>{credentialBusy ? "Rotating…" : "Rotate credential"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>New credential</span><input type="password" value={rotationCredential} onChange={(event) => setRotationCredential(event.target.value)} placeholder="Paste the new credential" autoComplete="new-password" /></label><label className="auth-field"><span>Expires (optional)</span><input type="datetime-local" value={rotationExpiresAt} onChange={(event) => setRotationExpiresAt(event.target.value)} /></label><div className="private-default-note"><ShieldCheck /><span>The existing secret is never returned to this browser.</span></div></div></Dialog>
+    <Dialog open={Boolean(rotateSet)} onClose={(open) => { if (!open && !credentialBusy) setRotateSet(null); }} title={t("runtimeAccess.rotate2", { value1: String(rotateSet?.name ?? "credential") })} description={t("runtimeAccess.theNewEncryptedVersionBecomesActiveForEveryConnection")} actions={<><Button outline disabled={credentialBusy} onClick={() => setRotateSet(null)}>{t("common.cancel")}</Button><Button color="indigo" disabled={credentialBusy || !rotationCredential.trim()} onClick={() => void rotateCredential()}>{credentialBusy ? t("runtimeAccess.rotating") : t("runtimeAccess.rotateCredential")}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>{t("runtimeAccess.newCredential")}</span><input type="password" value={rotationCredential} onChange={(event) => setRotationCredential(event.target.value)} placeholder={t("runtimeAccess.pasteTheNewCredential")} autoComplete="new-password" /></label><label className="auth-field"><span>{t("runtimeAccess.expiresOptional")}</span><input type="datetime-local" value={rotationExpiresAt} onChange={(event) => setRotationExpiresAt(event.target.value)} /></label><div className="private-default-note"><ShieldCheck /><span>{t("runtimeAccess.theExistingSecretIsNeverReturnedToThisBrowser")}</span></div></div></Dialog>
 
-    <Dialog open={Boolean(revokeTarget)} onClose={(open) => { if (!open && !credentialBusy) setRevokeTarget(null); }} title="Revoke credential version?" description="Revocation is immediate and cannot be undone. Rotate first if any active connection still depends on this version." actions={<><Button outline disabled={credentialBusy} onClick={() => setRevokeTarget(null)}>Cancel</Button><Button color="red" disabled={credentialBusy} onClick={() => void revokeCredentialVersion()}>{credentialBusy ? "Revoking…" : "Revoke version"}</Button></>}><div className="runtime-revoke-summary"><TriangleAlert /><span><strong>{revokeTarget?.credentialSet.name}</strong><small>Fingerprint {revokeTarget?.version.fingerprint}</small></span></div></Dialog>
+    <Dialog open={Boolean(revokeTarget)} onClose={(open) => { if (!open && !credentialBusy) setRevokeTarget(null); }} title={t("runtimeAccess.revokeCredentialVersion")} description={t("runtimeAccess.revocationIsImmediateAndCannotBeUndoneRotateFirst")} actions={<><Button outline disabled={credentialBusy} onClick={() => setRevokeTarget(null)}>{t("common.cancel")}</Button><Button color="red" disabled={credentialBusy} onClick={() => void revokeCredentialVersion()}>{credentialBusy ? t("runtimeAccess.revoking") : t("runtimeAccess.revokeVersion")}</Button></>}><div className="runtime-revoke-summary"><TriangleAlert /><span><strong>{revokeTarget?.credentialSet.name}</strong><small>{t("runtimeAccess.fingerprint")} {revokeTarget?.version.fingerprint}</small></span></div></Dialog>
   </>;
 }

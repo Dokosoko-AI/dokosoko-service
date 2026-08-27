@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { resolveEnglishTranslations } from "./source-surface.mjs";
+
 const read = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
 
 test("developer asset advisory UI is persisted, evidence-bounded, and explicitly non-authoritative", async () => {
   const [component, client] = await Promise.all([
-    read("../app/components/console/developer-assets/developer-asset-ai-advisory.tsx"),
+    read("../app/components/console/developer-assets/developer-asset-ai-advisory.tsx").then(resolveEnglishTranslations),
     read("../app/lib/developer-assets-api.ts"),
   ]);
 
@@ -35,7 +37,7 @@ test("advisory actions are attached only to exact reviewed or published scopes",
   const [sources, explorer, sdk, resources] = await Promise.all([
     read("../app/components/console/agent-access-views.tsx"),
     read("../app/components/console/developer-assets/documentation-explorer-view.tsx"),
-    read("../app/components/console/developer-assets/sdk-catalog-view.tsx"),
+    read("../app/components/console/developer-assets/sdk-catalog-view.tsx").then(resolveEnglishTranslations),
     read("../app/components/console/developer-assets/api-resources-workspace.tsx"),
   ]);
 
@@ -55,7 +57,7 @@ test("advisory actions are attached only to exact reviewed or published scopes",
 
 test("SDK console exposes effective lifecycle controls and bounded local ingestion/explorer tooling", async () => {
   const [sdk, client] = await Promise.all([
-    read("../app/components/console/developer-assets/sdk-catalog-view.tsx"),
+    read("../app/components/console/developer-assets/sdk-catalog-view.tsx").then(resolveEnglishTranslations),
     read("../app/lib/developer-assets-api.ts"),
   ]);
 

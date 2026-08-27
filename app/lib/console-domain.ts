@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+
 import { APIError } from "./api";
 import type {
   APIIntegration,
@@ -38,6 +40,7 @@ export function analysisMatchesIntegration(analysis: APIIntegrationAnalysis, int
 
 export function recipeMatchesIntegration(recipe: APIRecipe, integrationID?: string) {
   const scopes = recipeScopeIDs(recipe);
+  if (recipe.contract_version === "deployment-recipe-v3") return integrationID ? scopes.includes(integrationID) : true;
   return integrationID ? scopes.length === 1 && scopes[0] === integrationID : scopes.length === 0;
 }
 
@@ -46,15 +49,24 @@ export function recipeScopeIDs(recipe: APIRecipe) {
     const integrationID = recipe.integration_id?.trim();
     return integrationID ? [integrationID] : [];
   }
+  if (recipe.contract_version === "deployment-recipe-v3") {
+    return [...new Set((recipe.api_attachments ?? []).map((item) => item.integration_id.trim()).filter(Boolean))].sort();
+  }
   return recipeDependencyScopeIDs(recipe);
 }
 
 export function recipeHasScopeDependencyMismatch(recipe: APIRecipe) {
-  if (recipe.contract_version !== "product-integration-v2") return false;
-  const integrationID = recipe.integration_id?.trim();
-  if (!integrationID) return false;
-  const dependencyIDs = recipeDependencyScopeIDs(recipe);
-  return dependencyIDs.length !== 1 || dependencyIDs[0] !== integrationID;
+  const scopeIDs = recipeScopeIDs(recipe);
+  const revision = recipe.current_revision;
+  if (!revision) return true;
+  if (recipe.contract_version === "product-integration-v2") {
+    const dependencyIDs = recipeDependencyScopeIDs(recipe);
+    return revision.spec_version !== 2 || revision.spec.integration_id !== scopeIDs[0] || dependencyIDs.length !== 1 || dependencyIDs[0] !== scopeIDs[0];
+  }
+  if (recipe.contract_version !== "deployment-recipe-v3" || revision.spec_version !== 3) return true;
+  const specIDs = [...new Set((revision.spec.api_attachments ?? []).map((item) => item.integration_id.trim()).filter(Boolean))].sort();
+  const bindingIDs = [...new Set((revision.api_bindings ?? []).map((item) => item.integration_id.trim()).filter(Boolean))].sort();
+  return scopeIDs.length === 0 || scopeIDs.join("\u0000") !== specIDs.join("\u0000") || scopeIDs.join("\u0000") !== bindingIDs.join("\u0000");
 }
 
 export function activeRecipeIntegrationID(integrations: APIIntegration[], selectedIntegrationID: string) {
@@ -103,8 +115,9 @@ export function toolPolicy(tool: APITool) {
   };
 }
 
-export function toolStateLabel(tool: APITool) {
-  return `${tool.state[0].toUpperCase()}${tool.state.slice(1)}: Rev ${tool.revision}`;
+export function toolStateLabel(tool: APITool, t: TFunction) {
+  const state = tool.state === "draft" ? t("enumLabels.draft") : tool.state === "published" ? t("enumLabels.published") : tool.state === "retired" ? t("enumLabels.retired") : tool.state;
+  return t("settings.toolStateRevision", { state: String(state), revision: tool.revision });
 }
 
 export function unavailableConsoleCapability(error: unknown) {
@@ -132,12 +145,14 @@ export function agentClientAssetURL(setupURL: string, filename: string) {
   return `${origin}/agent-client-icons/${filename}`;
 }
 
-export function buildAgentSetupEmbedHTML(tenantName: string, setupURL: string, kind: "public" | "private") {
-  const name = escapeEmbedHTML(tenantName);
+export function buildAgentSetupEmbedHTML(setupURL: string, kind: "public" | "private", copy: { deploymentName: string; kindLabel: string; connectLabel: string; ariaLabel: string }) {
   const url = escapeEmbedHTML(setupURL);
-  const label = kind === "public" ? "Public" : "Private";
+  const name = escapeEmbedHTML(copy.deploymentName);
+  const label = escapeEmbedHTML(copy.kindLabel);
+  const connectLabel = escapeEmbedHTML(copy.connectLabel);
+  const ariaLabel = escapeEmbedHTML(copy.ariaLabel);
   const chipColor = kind === "public" ? "#4338ca" : "#3f3f46";
   const chipBackground = kind === "public" ? "#eef2ff" : "#f4f4f5";
   const clients = agentClients.map((client) => `<img src="${escapeEmbedHTML(agentClientAssetURL(setupURL, client.file))}" alt="${client.name}" title="${client.name}" data-agent-client="${client.id}" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain">`).join("");
-  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" aria-label="Connect your agent to ${name} using ${kind} MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to ${name}</span><span style="padding:4px 8px;border-radius:999px;color:${chipColor};background:${chipBackground};font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">${label}</span>${clients}</a>`;
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" data-dokosoko-deployment="${name}" aria-label="${ariaLabel}" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>${connectLabel}</span><span style="padding:4px 8px;border-radius:999px;color:${chipColor};background:${chipBackground};font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">${label}</span>${clients}</a>`;
 }

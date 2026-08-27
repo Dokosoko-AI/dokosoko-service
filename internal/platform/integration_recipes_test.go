@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dokosoko/dokosoko-service/internal/ai"
+	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
@@ -101,7 +102,7 @@ func TestUnscopedIntegrationAnalysisRequiresSelectedProductAPI(t *testing.T) {
 	}
 }
 
-func TestScopedRecipeV2GenerationIsProductOnlyAndRevisionBound(t *testing.T) {
+func TestScopedRecipeGenerationIsDeploymentOwnedAndRevisionBound(t *testing.T) {
 	t.Parallel()
 	fixture := newRecipeV2Fixture(t)
 	analysis, recipe := analyseAndGenerateRecipeV2(t, fixture)
@@ -124,14 +125,18 @@ func TestScopedRecipeV2GenerationIsProductOnlyAndRevisionBound(t *testing.T) {
 	if lower := strings.ToLower(seed.Title + " " + seed.Outcome); strings.Contains(lower, "dokosoko") || strings.Contains(lower, "mcp") {
 		t.Fatalf("recipe seed describes its delivery channel: %#v", seed)
 	}
-	if recipe.ContractVersion != model.RecipeContractProductIntegrationV2 || recipe.IntegrationID != fixture.integration.ID || recipe.Audience != "coding_agent" || recipe.CurrentRevision.SpecVersion != model.RecipeSpecVersion2 || recipe.CurrentRevision.IntegrationRevisionID != fixture.publication.ID || recipe.CurrentRevision.IntegrationManifestHash != fixture.publication.ManifestHash {
+	if recipe.ContractVersion != model.RecipeContractDeploymentV3 || recipe.IntegrationID != "" || recipe.Audience != "coding_agent" || recipe.CurrentRevision.SpecVersion != model.RecipeSpecVersion3 || len(recipe.APIAttachments) != 1 || recipe.APIAttachments[0].IntegrationID != fixture.integration.ID || len(recipe.CurrentRevision.APIBindings) != 1 {
 		t.Fatalf("generated recipe contract = %#v", recipe)
+	}
+	binding := recipe.CurrentRevision.APIBindings[0]
+	if binding.IntegrationID != fixture.integration.ID || binding.IntegrationRevisionID != fixture.publication.ID || binding.IntegrationManifestHash != fixture.publication.ManifestHash || recipe.CurrentRevision.IntegrationRevisionID != "" || recipe.CurrentRevision.IntegrationManifestHash != "" {
+		t.Fatalf("generated recipe API binding = %#v", recipe.CurrentRevision)
 	}
 	var spec model.RecipeSpec
 	if err := json.Unmarshal(recipe.CurrentRevision.Spec, &spec); err != nil {
 		t.Fatal(err)
 	}
-	if len(spec.CapabilityIDs) != 1 || spec.CapabilityIDs[0] != fixture.tool.ID || spec.IntegrationID != fixture.integration.ID || len(spec.Steps) < 2 || len(spec.Checks) < 1 {
+	if spec.SchemaVersion != model.RecipeSpecVersion3 || spec.IntegrationID != "" || len(spec.APIAttachments) != 1 || spec.APIAttachments[0].IntegrationID != fixture.integration.ID || len(spec.CapabilityIDs) != 1 || spec.CapabilityIDs[0] != fixture.tool.ID || len(spec.Steps) < 2 || len(spec.Checks) < 1 {
 		t.Fatalf("recipe spec = %#v", spec)
 	}
 	lowerMarkdown := strings.ToLower(recipe.CurrentRevision.Markdown)
@@ -180,7 +185,7 @@ func TestScopedRecipeV2GenerationIsProductOnlyAndRevisionBound(t *testing.T) {
 	}
 
 	regroundAnalysis, regrounded := analyseAndGenerateRecipeV2(t, fixture)
-	if regrounded.ID != recipe.ID || regrounded.AnalysisID != regroundAnalysis.ID || regrounded.State != "review" || regrounded.CurrentRevisionID == recipe.CurrentRevisionID || regrounded.CurrentRevision.IntegrationRevisionID != newPublication.ID {
+	if regrounded.ID != recipe.ID || regrounded.AnalysisID != regroundAnalysis.ID || regrounded.State != "review" || regrounded.CurrentRevisionID == recipe.CurrentRevisionID || len(regrounded.CurrentRevision.APIBindings) != 1 || regrounded.CurrentRevision.APIBindings[0].IntegrationRevisionID != newPublication.ID || regrounded.CurrentRevision.APIBindings[0].IntegrationManifestHash != newPublication.ManifestHash {
 		t.Fatalf("stable recipe was not regrounded to the exact publication: %#v", regrounded)
 	}
 	repeated, err := fixture.service.GenerateRecipesForIntegration(t.Context(), fixture.integration.DeploymentID, regroundAnalysis.ID, fixture.integration.ID, fixture.actor)
@@ -211,6 +216,193 @@ func (d *adversarialRecipeV2Doer) Do(request *http.Request) (*http.Response, err
 		"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 10},
 	})
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(payload))), Request: request}, nil
+}
+
+type multiAPIRecipeDoer struct {
+	capabilityIDs []string
+	bodies        []string
+}
+
+func (d *multiAPIRecipeDoer) Do(request *http.Request) (*http.Response, error) {
+	body, _ := io.ReadAll(request.Body)
+	d.bodies = append(d.bodies, string(body))
+	content := `{"status":"ready","reference_ids":[],"gaps":[]}`
+	switch {
+	case strings.Contains(string(body), "Recipe brief contract:"):
+		encoded, _ := json.Marshal(map[string]any{"status": "ready", "capability_ids": d.capabilityIDs, "evidence_ids": d.capabilityIDs, "gaps": []string{}})
+		content = string(encoded)
+	case strings.Contains(string(body), "Recipe review contract:"):
+		content = `{"recommendation":"pass","findings":[]}`
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"id": "resp_multi_api_recipe", "model": "fixture",
+		"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": content}}},
+		"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 10},
+	})
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(payload))), Request: request}, nil
+}
+
+func configureMultiAPIRecipeIntegration(t *testing.T, memory *store.Memory, service *platform.Service, familyKey, namespace, displayName string, actor platform.Actor) (model.Integration, model.Tool, model.IntegrationRevision) {
+	t.Helper()
+	ctx := t.Context()
+	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{
+		FamilyKey: familyKey, VersionKey: "v1", DisplayName: displayName,
+		Description: "Perform the reviewed " + displayName + " operation.", Visibility: model.VisibilityPrivate, Lifecycle: "active",
+	}, actor)
+	if err != nil {
+		t.Fatalf("create %s integration: %v", namespace, err)
+	}
+	publication, err := memory.SourcePublication(ctx, integration.DeploymentID, "pub_docs_seed")
+	if err != nil {
+		t.Fatalf("load %s documentation publication: %v", namespace, err)
+	}
+	documentationManifest, err := json.Marshal([]map[string]any{{"source_publication_id": publication.ID, "source_id": publication.SourceID, "revision": publication.Revision, "content_hash": publication.ContentHash, "name": "Reviewed documentation"}})
+	if err != nil {
+		t.Fatalf("encode %s documentation manifest: %v", namespace, err)
+	}
+	for _, resource := range []struct {
+		kind     string
+		name     string
+		manifest json.RawMessage
+	}{
+		{kind: "documentation", name: displayName + " documentation", manifest: documentationManifest},
+		{kind: "api", name: displayName + " contract", manifest: json.RawMessage(`[{"name":"perform","path":"/perform"}]`)},
+	} {
+		set, createErr := service.CreateResourceSet(ctx, platform.ResourceSetInput{Kind: resource.kind, Name: resource.name, Description: resource.name, State: "active", Manifest: resource.manifest}, actor)
+		if createErr != nil {
+			t.Fatalf("create %s %s resource: %v", namespace, resource.kind, createErr)
+		}
+		if _, attachErr := service.AttachResourceSet(ctx, integration.ID, set.ID, set.Latest.ID, actor); attachErr != nil {
+			t.Fatalf("attach %s %s resource: %v", namespace, resource.kind, attachErr)
+		}
+	}
+	provider, providerErr := memory.IdentityProvider(ctx, integration.DeploymentID)
+	if errors.Is(providerErr, store.ErrNotFound) {
+		provider = identity.ProviderConfig{ID: "idp_multi_api_recipe", OrganisationID: integration.OrganisationID, DeploymentID: integration.DeploymentID, Issuer: "https://identity.example.test", ClientID: "multi-api-client", Scopes: []string{"openid"}, Audience: "https://api.example.test", OAuthResource: "https://api.example.test", OrganisationClaim: "tenant_id", DelegatedAPIOrigin: "https://api.example.test", State: "active"}
+	} else if providerErr != nil {
+		t.Fatalf("load %s identity provider: %v", namespace, providerErr)
+	}
+	provider.Scopes = append(provider.Scopes, namespace+".read")
+	if _, err = memory.SaveIdentityProvider(ctx, provider); err != nil {
+		t.Fatalf("save %s identity provider: %v", namespace, err)
+	}
+	grant, err := service.SaveGrantDefinition(ctx, "", platform.GrantDefinitionInput{Key: namespace + ".read", DisplayName: "Use " + displayName, Description: "Perform one reviewed product operation.", Risk: "low", State: "active"}, actor)
+	if err != nil {
+		t.Fatalf("save %s grant: %v", namespace, err)
+	}
+	point, err := service.SaveAuthorizationPoint(ctx, integration.ID, "", platform.AuthorizationPointInput{Key: namespace + ".perform", Name: "Use " + displayName, Description: "Perform one reviewed product operation.", ActionType: "read", RequiredGrants: []string{grant.Key}, DecisionTTLSeconds: 60, State: "active"}, actor)
+	if err != nil {
+		t.Fatalf("save %s authorization point: %v", namespace, err)
+	}
+	setup, err := service.ConfigureRuntimeSetup(ctx, integration.ID, platform.RuntimeSetupInput{EnvironmentID: "env_prod", BaseURL: "https://" + namespace + ".api.example.test", AuthenticationType: "none"}, actor)
+	if err != nil || len(setup.Connections) != 1 {
+		t.Fatalf("runtime setup = %#v, err = %v", setup, err)
+	}
+	tool, err := service.CreateTool(ctx, platform.ToolInput{
+		ProductID: integration.DeploymentID, Scope: model.ToolScopeAPI, OwnerIntegrationID: integration.ID,
+		RuntimeServiceConnectionID: setup.Connections[0].ID, HTTPPath: "/perform", Namespace: namespace, Name: "perform",
+		Description:  "Perform the reviewed " + displayName + " operation.",
+		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"resource_id":{"type":"string"}},"required":["resource_id"]}`),
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"}},"required":["id"]}`),
+		HTTPMethod:   http.MethodGet, AuthorizationPolicy: json.RawMessage(`{"required_grants":["` + grant.Key + `"],"confirmation_required":false,"risk":"low"}`), TimeoutMS: 1000,
+	}, actor)
+	if err != nil {
+		t.Fatalf("create %s tool: %v", namespace, err)
+	}
+	tool, err = service.PublishTool(ctx, integration.DeploymentID, tool.ID, tool.Revision, actor)
+	if err != nil {
+		t.Fatalf("publish %s tool: %v", namespace, err)
+	}
+	if _, err = service.SetIntegrationToolBindings(ctx, integration.ID, []platform.ToolRevisionSelection{{ToolID: tool.ID, Revision: tool.Revision, AuthorizationPointID: point.ID, AuthorizationPointRevision: point.Revision}}, actor); err != nil {
+		t.Fatalf("bind %s tool: %v", namespace, err)
+	}
+	apiPublication, err := service.PublishIntegration(ctx, integration.ID, actor)
+	if err != nil {
+		t.Fatalf("publish %s integration: %v", namespace, err)
+	}
+	return integration, tool, apiPublication
+}
+
+func TestAIRecipeGeneratorDetectsAndBindsMultipleAPIs(t *testing.T) {
+	memory := store.NewMemory()
+	setupService := platform.New(memory)
+	actor := platform.Actor{ID: "root_multi_api_recipe", RequestID: "req_multi_api_recipe"}
+	customers, customerTool, customerPublication := configureMultiAPIRecipeIntegration(t, memory, setupService, "customers-api", "customers", "Customers API", actor)
+	billing, billingTool, billingPublication := configureMultiAPIRecipeIntegration(t, memory, setupService, "billing-api", "billing", "Billing API", actor)
+
+	doer := &multiAPIRecipeDoer{capabilityIDs: []string{customerTool.ID, billingTool.ID}}
+	service := platform.NewWithVaultAndProductBuilderDoer(memory, nil, doer)
+	if err := service.ConfigureEnvironmentAI(t.Context(), platform.AIEnvironmentConfig{
+		Provider: "openai-compatible", APIKey: "fixture-secret", Endpoint: "https://llm.example.com",
+		Models: map[ai.Workload]string{ai.WorkloadAnalysis: "fixture"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recipe, err := service.CreateRecipeFromPrompt(t.Context(), "prod_acme", "Create a customer and provision their billing account.", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recipe.ContractVersion != model.RecipeContractDeploymentV3 || recipe.IntegrationID != "" || recipe.CurrentRevision == nil || recipe.CurrentRevision.SpecVersion != model.RecipeSpecVersion3 {
+		t.Fatalf("multi-API recipe contract = %#v", recipe)
+	}
+	wantAPIs := map[string]model.IntegrationRevision{customers.ID: customerPublication, billing.ID: billingPublication}
+	if len(recipe.APIAttachments) != len(wantAPIs) || len(recipe.CurrentRevision.APIBindings) != len(wantAPIs) {
+		t.Fatalf("multi-API attachment projection = %#v", recipe)
+	}
+	for _, attachment := range recipe.APIAttachments {
+		if _, ok := wantAPIs[attachment.IntegrationID]; !ok {
+			t.Fatalf("unexpected API attachment: %#v", attachment)
+		}
+	}
+	for _, binding := range recipe.CurrentRevision.APIBindings {
+		publication, ok := wantAPIs[binding.IntegrationID]
+		if !ok || binding.IntegrationRevisionID != publication.ID || binding.IntegrationManifestHash != publication.ManifestHash {
+			t.Fatalf("incorrect immutable API binding: %#v", binding)
+		}
+	}
+	var spec model.RecipeSpec
+	if err := json.Unmarshal(recipe.CurrentRevision.Spec, &spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.SchemaVersion != model.RecipeSpecVersion3 || len(spec.APIAttachments) != 2 || len(spec.CapabilityIDs) != 2 || len(spec.Steps) < 4 || len(spec.Checks) != 2 {
+		t.Fatalf("multi-API recipe spec = %#v", spec)
+	}
+	analysis, err := memory.IntegrationAnalysis(t.Context(), recipe.ProductID, recipe.AnalysisID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopes := make(map[string]bool)
+	for _, evidence := range analysis.Evidence {
+		if evidence.Kind == "integration_scope" {
+			scopes[evidence.ResourceID] = true
+		}
+	}
+	if len(scopes) != 2 || !scopes[customers.ID] || !scopes[billing.ID] {
+		t.Fatalf("persisted auto-detection scope = %#v", scopes)
+	}
+	foundDetectionPrompt := false
+	for _, body := range doer.bodies {
+		if strings.Contains(body, "Recipe brief contract:") {
+			foundDetectionPrompt = strings.Contains(body, `available_apis`) && strings.Contains(body, customers.ID) && strings.Contains(body, billing.ID) && strings.Contains(body, customerTool.ID) && strings.Contains(body, billingTool.ID)
+		}
+	}
+	if !foundDetectionPrompt {
+		t.Fatalf("recipe brief did not receive all eligible APIs and exact capabilities: %#v", doer.bodies)
+	}
+	reconciled, err := service.ReconcileRecipeDrift(t.Context(), recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciled) != 1 || reconciled[0].ID != recipe.ID || reconciled[0].State != "review" || reconciled[0].NeedsAttention != recipe.NeedsAttention || len(reconciled[0].APIAttachments) != 2 {
+		t.Fatalf("current multi-API recipe was incorrectly reconciled: %#v", reconciled)
+	}
+	reworked, err := service.ReworkRecipe(t.Context(), recipe.ProductID, recipe.ID, recipe.Revision, recipe.CurrentRevisionID, "Clarify the verification steps for both APIs.", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reworked.CurrentRevision == nil || reworked.CurrentRevisionID == recipe.CurrentRevisionID || reworked.ContractVersion != model.RecipeContractDeploymentV3 || len(reworked.APIAttachments) != 2 || len(reworked.CurrentRevision.APIBindings) != 2 {
+		t.Fatalf("reworked multi-API recipe lost its immutable API scope: %#v", reworked)
+	}
 }
 
 func TestRecipeV2RejectsPlatformAIOutputAndUsesProductOnlyFallback(t *testing.T) {

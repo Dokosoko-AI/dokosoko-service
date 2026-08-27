@@ -48,14 +48,14 @@ var aiPromptDefinitions = []aiPromptDefinition{
 	{
 		key:            AIPromptKeyRecipeBrief,
 		label:          "Recipe brief",
-		description:    "Maps one operator outcome to exact product capabilities and evidence.",
+		description:    "Detects the APIs and exact reviewed capabilities required by one operator outcome.",
 		instructions:   recipeBriefDefaultInstructionsV5,
 		defaultVersion: recipeBriefPromptVersionV5,
 	},
 	{
 		key:            AIPromptKeyRecipeAuthoring,
 		label:          "Recipe authoring",
-		description:    "Builds one bounded, structured product-integration plan from server-owned selections.",
+		description:    "Builds one bounded single- or multi-API implementation plan from server-owned selections.",
 		instructions:   recipeAuthoringDefaultInstructionsV11,
 		defaultVersion: recipeAuthoringPromptVersionV11,
 	},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 
@@ -16,6 +17,7 @@ var ErrRecipeNeedsInput = errors.New("the requested recipe is not supported by t
 var ErrRecipeGroundingChanged = errors.New("recipe product evidence changed; analyse and regenerate the recipe before continuing")
 var ErrRecipeAnalysisScope = errors.New("the analysis is not scoped to the requested integration")
 var ErrPublicMCPRecipe = errors.New("MCP-backed product recipes are private-only until public custom-tool exposure is supported")
+var ErrRecipeDeletionNotAllowed = errors.New("only legacy or outdated recipes can be deleted")
 var errPublicRecipeEvidence = errors.New("public recipes can only depend on public evidence and reference published, non-quarantined public sources")
 
 func recipeProductIntentTextValid(title, outcome string) bool {
@@ -39,7 +41,7 @@ func recipeProductIntentTextValid(title, outcome string) bool {
 }
 
 func recipeSeedTextValid(seed model.RecipeSeed) bool {
-	if seed.Slug == "" || len(seed.CapabilityIDs) != 1 || len(seed.EvidenceIDs) == 0 || len(seed.EvidenceIDs) > 24 || !recipeProductIntentTextValid(seed.Title, seed.Outcome) {
+	if seed.Slug == "" || len(seed.CapabilityIDs) < 1 || len(seed.CapabilityIDs) > 4 || len(seed.EvidenceIDs) == 0 || len(seed.EvidenceIDs) > 48 || !recipeProductIntentTextValid(seed.Title, seed.Outcome) {
 		return false
 	}
 	return true
@@ -59,23 +61,53 @@ func recipeBriefResponseSeed(response recipeBriefAIResponse, analysis model.Inte
 	for index := range seed.EvidenceIDs {
 		seed.EvidenceIDs[index] = strings.TrimSpace(seed.EvidenceIDs[index])
 	}
-	if len(seed.CapabilityIDs) != 1 || len(seed.EvidenceIDs) == 0 || len(seed.EvidenceIDs) > 24 {
+	if len(seed.CapabilityIDs) < 1 || len(seed.CapabilityIDs) > 4 || len(seed.EvidenceIDs) == 0 || len(seed.EvidenceIDs) > 48 {
 		return model.RecipeSeed{}, false
 	}
 	selected, ok := recipeResolveProductSelection(analysis, seed)
 	if !ok {
 		return model.RecipeSeed{}, false
 	}
-	if _, valid := integrationRecipeSelection(analysis.Evidence, seed); !valid {
-		return model.RecipeSeed{}, false
+	if len(seed.CapabilityIDs) == 1 {
+		canonical, ok := recipeSeedForCapability(analysis.Plan.Recipes, seed.CapabilityIDs[0])
+		if !ok {
+			return model.RecipeSeed{}, false
+		}
+		canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
+		return canonical, true
 	}
-	canonical, ok := recipeSeedForCapability(analysis.Plan.Recipes, seed.CapabilityIDs[0])
+	canonical, ok := multiCapabilityRecipeSeed(seed, selected)
 	if !ok {
 		return model.RecipeSeed{}, false
 	}
-	canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
-	_ = selected
 	return canonical, true
+}
+
+func multiCapabilityRecipeSeed(seed model.RecipeSeed, selected []model.IntegrationEvidence) (model.RecipeSeed, bool) {
+	byID, ambiguous := recipeUniqueEvidenceByID(selected)
+	capabilityIDs := append([]string(nil), seed.CapabilityIDs...)
+	sort.Strings(capabilityIDs)
+	labels := make([]string, 0, len(capabilityIDs))
+	for _, capabilityID := range capabilityIDs {
+		item, ok := byID[capabilityID]
+		if !ok || ambiguous[capabilityID] || recipeCapabilityIntegrationID(item) == "" {
+			return model.RecipeSeed{}, false
+		}
+		labels = append(labels, evidenceText(item.Label))
+	}
+	title := truncateRunes("Implement "+strings.Join(labels, " and "), 160)
+	slug := boundedIntegrationRecipeSlug("workflow-"+strings.Join(labels, "-"), 151)
+	if slug == "" {
+		slug = "workflow-" + evidenceFingerprint(strings.Join(capabilityIDs, "\x00"))[:8]
+	}
+	return model.RecipeSeed{
+		Slug:          slug,
+		Title:         title,
+		Outcome:       truncateRunes("The consuming project implements and verifies one reviewed workflow spanning "+strings.Join(labels, ", ")+".", 1000),
+		Audience:      "coding_agent",
+		CapabilityIDs: capabilityIDs,
+		EvidenceIDs:   append([]string(nil), seed.EvidenceIDs...),
+	}, true
 }
 
 func appendUniqueRecipeEvidenceIDs(seed model.RecipeSeed, evidence []model.IntegrationEvidence) model.RecipeSeed {
@@ -85,7 +117,7 @@ func appendUniqueRecipeEvidenceIDs(seed model.RecipeSeed, evidence []model.Integ
 	}
 	for _, item := range evidence {
 		supporting := item.Kind == "integration" || item.Kind == "source_publication" || recipeDeveloperAssetSupportingKind(item.Kind)
-		if !supporting || item.ResourceID == "" || seen[item.ResourceID] || len(seed.EvidenceIDs) == 24 {
+		if !supporting || item.ResourceID == "" || seen[item.ResourceID] || len(seed.EvidenceIDs) == 48 {
 			continue
 		}
 		seed.EvidenceIDs = append(seed.EvidenceIDs, item.ResourceID)
@@ -194,30 +226,59 @@ func (s *Service) prepareRecipeSeed(ctx context.Context, product model.Product, 
 	for index := range seed.EvidenceIDs {
 		seed.EvidenceIDs[index] = strings.TrimSpace(seed.EvidenceIDs[index])
 	}
-	integrationID, scoped := integrationScopeID(analysis.Evidence)
-	if !scoped || integrationID == "" || len(seed.CapabilityIDs) != 1 {
+	integrationIDs := integrationScopeIDs(analysis.Evidence)
+	if len(integrationIDs) == 0 || len(seed.CapabilityIDs) < 1 || len(seed.CapabilityIDs) > 4 {
 		return analysis, seed, ErrRecipeNeedsInput
 	}
-	integration, err := s.store.Integration(ctx, product.ID, integrationID)
-	if err != nil {
-		return analysis, seed, err
+	attached := make(map[string]model.Integration, len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		integration, err := s.store.Integration(ctx, product.ID, integrationID)
+		if err != nil {
+			return analysis, seed, err
+		}
+		if integration.Lifecycle == "retired" {
+			return analysis, seed, ErrRecipeNeedsInput
+		}
+		attached[integrationID] = integration
 	}
-	if integration.Lifecycle == "retired" {
-		return analysis, seed, ErrRecipeNeedsInput
+	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(analysis.Evidence))
+	for _, capabilityID := range seed.CapabilityIDs {
+		item, ok := byID[capabilityID]
+		ownerID := recipeCapabilityIntegrationID(item)
+		if !ok || ambiguous[capabilityID] || ownerID == "" || !integrationRecipeCapabilityViable(item, ownerID) {
+			return analysis, seed, ErrRecipeNeedsInput
+		}
+		if _, ok := attached[ownerID]; !ok {
+			return analysis, seed, ErrRecipeNeedsInput
+		}
 	}
-	canonical, ok := recipeSeedForCapability(deterministicIntegrationRecipeSeeds(product, integration, analysis.Evidence), seed.CapabilityIDs[0])
-	if !ok {
-		return analysis, seed, ErrRecipeNeedsInput
+	if len(seed.CapabilityIDs) == 1 && len(integrationIDs) == 1 {
+		canonical, ok := recipeSeedForCapability(deterministicIntegrationRecipeSeeds(product, attached[integrationIDs[0]], analysis.Evidence), seed.CapabilityIDs[0])
+		if !ok {
+			return analysis, seed, ErrRecipeNeedsInput
+		}
+		canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
+		seed = canonical
+	} else {
+		selected, ok := recipeResolveProductSelection(analysis, seed)
+		if !ok {
+			return analysis, seed, ErrRecipeNeedsInput
+		}
+		seed, ok = multiCapabilityRecipeSeed(seed, selected)
+		if !ok {
+			return analysis, seed, ErrRecipeNeedsInput
+		}
 	}
-	canonical.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
-	seed = canonical
 	if !recipeSeedTextValid(seed) {
 		return analysis, seed, ErrRecipeNeedsInput
 	}
 	selectedDeveloperAssets := selectedRecipeDeveloperAssetEvidence(analysis.Evidence, seed.EvidenceIDs)
-	analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, seed.Outcome)
-	if err != nil {
-		return analysis, seed, err
+	if len(integrationIDs) == 1 {
+		var err error
+		analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, seed.Outcome)
+		if err != nil {
+			return analysis, seed, err
+		}
 	}
 	analysis.Evidence = prioritizeRecipeDeveloperAssetEvidence(analysis.Evidence, selectedDeveloperAssets)
 	seed = appendUniqueRecipeEvidenceIDs(seed, analysis.Evidence)
@@ -243,6 +304,18 @@ func (s *Service) currentPublishedRecipeIntegration(ctx context.Context, integra
 	return *status.LatestRevision, nil
 }
 
+func (s *Service) currentPublishedRecipeAPIBindings(ctx context.Context, integrationIDs []string) ([]model.RecipeAPIBinding, error) {
+	values := make([]model.RecipeAPIBinding, 0, len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		revision, err := s.currentPublishedRecipeIntegration(ctx, integrationID)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, model.RecipeAPIBinding{IntegrationID: integrationID, IntegrationRevisionID: revision.ID, IntegrationManifestHash: revision.ManifestHash})
+	}
+	return values, nil
+}
+
 func recipeSpecJSON(spec model.RecipeSpec) (json.RawMessage, error) {
 	encoded, err := json.Marshal(spec)
 	if err != nil {
@@ -252,8 +325,8 @@ func recipeSpecJSON(spec model.RecipeSpec) (json.RawMessage, error) {
 }
 
 func decodeRecipeSpec(revision *model.RecipeRevision) (model.RecipeSpec, error) {
-	if revision == nil || revision.SpecVersion != model.RecipeSpecVersion2 || len(revision.Spec) == 0 {
-		return model.RecipeSpec{}, errors.New("recipe revision has no product-integration v2 spec")
+	if revision == nil || (revision.SpecVersion != model.RecipeSpecVersion2 && revision.SpecVersion != model.RecipeSpecVersion3) || len(revision.Spec) == 0 {
+		return model.RecipeSpec{}, errors.New("recipe revision has no supported structured spec")
 	}
 	var spec model.RecipeSpec
 	if err := strictJSON(revision.Spec, &spec); err != nil {
@@ -282,8 +355,12 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 	if recipe.Visibility == model.VisibilityPublic && recipeEvidenceUsesMCP(selectedEvidence) {
 		return recipe, ErrPublicMCPRecipe
 	}
-	if draft.Spec.SchemaVersion != model.RecipeSpecVersion2 || draft.Spec.IntegrationID != recipe.IntegrationID || draft.Spec.Title != recipe.Title || draft.Spec.Outcome != recipe.Outcome {
-		return recipe, errors.New("recipe spec cannot change its integration, title, outcome, or schema")
+	expectedSpecVersion := model.RecipeSpecVersion3
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 {
+		expectedSpecVersion = model.RecipeSpecVersion2
+	}
+	if draft.Spec.SchemaVersion != expectedSpecVersion || !slices.Equal(recipeSpecIntegrationIDs(draft.Spec), recipeIntegrationIDs(recipe)) || draft.Spec.Title != recipe.Title || draft.Spec.Outcome != recipe.Outcome {
+		return recipe, errors.New("recipe spec cannot change its API attachments, title, outcome, or schema")
 	}
 	references, referencesOK := selectRecipeReferences(draft.Spec.ReferenceIDs, recipeReferences(selectedEvidence))
 	if !referencesOK || !equalRecipeReferences(references, draft.References) {
@@ -299,7 +376,7 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 	if review == "" {
 		review, findings = s.reviewRecipe(ctx, product, draft.Spec, draft.Markdown, selectedEvidence, findings)
 	}
-	binding, err := s.currentPublishedRecipeIntegration(ctx, recipe.IntegrationID)
+	bindings, err := s.currentPublishedRecipeAPIBindings(ctx, recipeIntegrationIDs(recipe))
 	if err != nil {
 		return recipe, err
 	}
@@ -314,21 +391,24 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 	recipe.State, recipe.NeedsAttention = "review", true
 	recipe.ApprovedAt, recipe.ApprovedBy, recipe.PublishedAt = nil, "", nil
 	value := model.RecipeRevision{
-		ID:                      revisionID,
-		RecipeID:                recipe.ID,
-		SpecVersion:             model.RecipeSpecVersion2,
-		Spec:                    specJSON,
-		Markdown:                draft.Markdown,
-		References:              draft.References,
-		Validation:              findings,
-		Review:                  review,
-		GeneratedBy:             draft.GeneratedBy,
-		Model:                   draft.Model,
-		IntegrationRevisionID:   binding.ID,
-		IntegrationManifestHash: binding.ManifestHash,
-		PromptVersion:           draft.PromptVersion,
-		PromptHash:              draft.PromptHash,
-		CreatedBy:               actor.ID,
+		ID:            revisionID,
+		RecipeID:      recipe.ID,
+		SpecVersion:   expectedSpecVersion,
+		Spec:          specJSON,
+		Markdown:      draft.Markdown,
+		References:    draft.References,
+		Validation:    findings,
+		Review:        review,
+		GeneratedBy:   draft.GeneratedBy,
+		Model:         draft.Model,
+		APIBindings:   bindings,
+		PromptVersion: draft.PromptVersion,
+		PromptHash:    draft.PromptHash,
+		CreatedBy:     actor.ID,
+	}
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 && len(bindings) == 1 {
+		value.IntegrationRevisionID = bindings[0].IntegrationRevisionID
+		value.IntegrationManifestHash = bindings[0].IntegrationManifestHash
 	}
 	audit := model.AuditEvent{
 		ID:             randomID("audit"),
@@ -338,7 +418,7 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 		Action:         auditAction,
 		TargetType:     "recipe",
 		TargetID:       recipe.ID,
-		Current:        map[string]any{"analysis_id": analysis.ID, "integration_id": recipe.IntegrationID, "revision_id": value.ID},
+		Current:        map[string]any{"analysis_id": analysis.ID, "integration_ids": recipeIntegrationIDs(recipe), "revision_id": value.ID},
 		RequestID:      recipeAuditRequestID(actor),
 		CreatedAt:      s.now(),
 	}
@@ -362,11 +442,11 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 }
 
 func (s *Service) createPreparedRecipe(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, instruction string, actor Actor) (model.Recipe, error) {
-	integrationID, scoped := integrationScopeID(analysis.Evidence)
-	if !scoped || integrationID == "" {
+	integrationIDs := integrationScopeIDs(analysis.Evidence)
+	if len(integrationIDs) == 0 {
 		return model.Recipe{}, ErrRecipeNeedsInput
 	}
-	if _, err := s.currentPublishedRecipeIntegration(ctx, integrationID); err != nil {
+	if _, err := s.currentPublishedRecipeAPIBindings(ctx, integrationIDs); err != nil {
 		return model.Recipe{}, err
 	}
 	recipeID, err := randomUUID()
@@ -376,11 +456,8 @@ func (s *Service) createPreparedRecipe(ctx context.Context, product model.Produc
 	if seed.Slug == "" {
 		seed.Slug = "recipe"
 	}
-	if existing, lookupErr := s.store.RecipeBySlug(ctx, product.ID, seed.Slug); lookupErr == nil {
-		if existing.IntegrationID == integrationID {
-			return model.Recipe{}, store.ErrConflict
-		}
-		seed.Slug = scopedRecipeCollisionSlug(seed.Slug, integrationID, seed.CapabilityIDs[0])
+	if _, lookupErr := s.store.RecipeBySlug(ctx, product.ID, seed.Slug); lookupErr == nil {
+		seed.Slug = scopedRecipeCollisionSlug(seed.Slug, strings.Join(integrationIDs, ":"), strings.Join(seed.CapabilityIDs, ":"))
 		if _, collisionErr := s.store.RecipeBySlug(ctx, product.ID, seed.Slug); collisionErr == nil {
 			return model.Recipe{}, store.ErrConflict
 		} else if !errors.Is(collisionErr, store.ErrNotFound) {
@@ -397,9 +474,9 @@ func (s *Service) createPreparedRecipe(ctx context.Context, product model.Produc
 		ID:              recipeID,
 		OrganisationID:  product.OrganisationID,
 		ProductID:       product.ID,
-		IntegrationID:   integrationID,
+		APIAttachments:  recipeAPIAttachments(integrationIDs),
 		AnalysisID:      analysis.ID,
-		ContractVersion: model.RecipeContractProductIntegrationV2,
+		ContractVersion: model.RecipeContractDeploymentV3,
 		Slug:            seed.Slug,
 		Title:           seed.Title,
 		Outcome:         seed.Outcome,
@@ -408,7 +485,7 @@ func (s *Service) createPreparedRecipe(ctx context.Context, product model.Produc
 		Generated:       true,
 		NeedsAttention:  true,
 		Visibility:      model.VisibilityPrivate,
-		Dependencies:    recipeGroundingDependencies(analysis, seed),
+		Dependencies:    recipeGroundingDependenciesForContract(analysis, seed, model.RecipeContractDeploymentV3),
 		StableURI:       "dokosoko://products/" + product.Slug + "/recipes/" + seed.Slug,
 	}
 	if len(recipe.Dependencies) == 0 {
@@ -431,53 +508,199 @@ func (s *Service) createRecipeFromSeed(ctx context.Context, product model.Produc
 }
 
 func (s *Service) CreateRecipeFromPrompt(ctx context.Context, productID, instruction string, actor Actor) (model.Recipe, error) {
-	return s.CreateRecipeFromPromptFor(ctx, productID, "", instruction, actor)
-}
-
-func (s *Service) resolveRecipeIntegrationID(ctx context.Context, productID, requested string) (string, error) {
-	requested = strings.TrimSpace(requested)
-	if requested != "" {
-		return requested, nil
-	}
-	integrations, err := s.store.Integrations(ctx, productID)
-	if err != nil {
-		return "", err
-	}
-	eligible := make([]string, 0, len(integrations))
-	for _, integration := range integrations {
-		if integration.Lifecycle != "retired" {
-			eligible = append(eligible, integration.ID)
-		}
-	}
-	if len(eligible) != 1 {
-		return "", ErrRecipeNeedsInput
-	}
-	return eligible[0], nil
+	return s.CreateRecipeFromPromptWithAPIs(ctx, productID, nil, instruction, actor)
 }
 
 func (s *Service) CreateRecipeFromPromptFor(ctx context.Context, productID, integrationID, instruction string, actor Actor) (recipe model.Recipe, runErr error) {
+	integrationID = strings.TrimSpace(integrationID)
+	if integrationID == "" {
+		return s.CreateRecipeFromPromptWithAPIs(ctx, productID, nil, instruction, actor)
+	}
+	return s.CreateRecipeFromPromptWithAPIs(ctx, productID, []string{integrationID}, instruction, actor)
+}
+
+type recipeAPIOption struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Version       string   `json:"version"`
+	Description   string   `json:"description,omitempty"`
+	CapabilityIDs []string `json:"capability_ids"`
+}
+
+func normalizeRequestedRecipeAPIs(values []string) ([]string, error) {
+	if len(values) > 8 {
+		return nil, errors.New("a recipe may attach at most 8 APIs")
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]bool)
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" || seen[value] {
+			return nil, errors.New("recipe integration_ids must contain unique non-empty IDs")
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func mergeRecipeAPIEvidence(values []model.IntegrationEvidence) []model.IntegrationEvidence {
+	type evidenceKey struct{ kind, resourceID, fingerprint, version string }
+	merged := make(map[evidenceKey]model.IntegrationEvidence)
+	order := make([]evidenceKey, 0)
+	for _, item := range values {
+		key := evidenceKey{item.Kind, item.ResourceID, item.Fingerprint, item.Version}
+		current, exists := merged[key]
+		if !exists {
+			current = item
+			current.IntegrationIDs = nil
+			order = append(order, key)
+		}
+		seen := make(map[string]bool, len(current.IntegrationIDs))
+		for _, integrationID := range current.IntegrationIDs {
+			seen[integrationID] = true
+		}
+		for _, integrationID := range item.IntegrationIDs {
+			if integrationID != "" && !seen[integrationID] {
+				current.IntegrationIDs = append(current.IntegrationIDs, integrationID)
+				seen[integrationID] = true
+			}
+		}
+		sort.Strings(current.IntegrationIDs)
+		merged[key] = current
+	}
+	result := make([]model.IntegrationEvidence, 0, len(order))
+	for _, key := range order {
+		result = append(result, merged[key])
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Kind != result[j].Kind {
+			return result[i].Kind < result[j].Kind
+		}
+		if result[i].ResourceID != result[j].ResourceID {
+			return result[i].ResourceID < result[j].ResourceID
+		}
+		return result[i].Fingerprint < result[j].Fingerprint
+	})
+	return result
+}
+
+func recipeEvidenceForAPIs(values []model.IntegrationEvidence, integrationIDs []string) []model.IntegrationEvidence {
+	selected := make(map[string]bool, len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		selected[integrationID] = true
+	}
+	result := make([]model.IntegrationEvidence, 0, len(values))
+	for _, item := range values {
+		include := false
+		for _, integrationID := range item.IntegrationIDs {
+			include = include || selected[integrationID]
+		}
+		if include {
+			result = append(result, item)
+		}
+	}
+	return mergeRecipeAPIEvidence(result)
+}
+
+func recipeCapabilityAPIIDs(analysis model.IntegrationAnalysis, capabilityIDs []string) ([]string, bool) {
+	byID, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(analysis.Evidence))
+	seen := make(map[string]bool)
+	values := make([]string, 0)
+	for _, capabilityID := range capabilityIDs {
+		item, ok := byID[capabilityID]
+		integrationID := recipeCapabilityIntegrationID(item)
+		if !ok || ambiguous[capabilityID] || integrationID == "" {
+			return nil, false
+		}
+		if !seen[integrationID] {
+			seen[integrationID] = true
+			values = append(values, integrationID)
+		}
+	}
+	sort.Strings(values)
+	return values, len(values) > 0
+}
+
+func (s *Service) recipeAPIDetectionAnalysis(ctx context.Context, product model.Product, requestedIDs []string, instruction string) (model.IntegrationAnalysis, []recipeAPIOption, error) {
+	integrations, err := s.store.Integrations(ctx, product.ID)
+	if err != nil {
+		return model.IntegrationAnalysis{}, nil, err
+	}
+	requested := make(map[string]bool, len(requestedIDs))
+	for _, integrationID := range requestedIDs {
+		requested[integrationID] = true
+	}
+	seenRequested := make(map[string]bool, len(requestedIDs))
+	analysis := model.IntegrationAnalysis{OrganisationID: product.OrganisationID, ProductID: product.ID, SchemaVersion: integrationAnalysisSchemaVersion + 1, State: "review", GeneratedBy: "ai_assisted"}
+	options := make([]recipeAPIOption, 0)
+	for _, integration := range integrations {
+		if integration.Lifecycle == "retired" || len(requested) > 0 && !requested[integration.ID] {
+			continue
+		}
+		seenRequested[integration.ID] = true
+		if _, bindingErr := s.currentPublishedRecipeIntegration(ctx, integration.ID); bindingErr != nil {
+			if len(requested) > 0 {
+				return analysis, nil, bindingErr
+			}
+			continue
+		}
+		evidence, _, evidenceErr := s.scopedIntegrationEvidence(ctx, product, integration.ID)
+		if evidenceErr != nil {
+			if len(requested) > 0 {
+				return analysis, nil, evidenceErr
+			}
+			continue
+		}
+		scoped := model.IntegrationAnalysis{Evidence: evidence}
+		scoped, evidenceErr = s.relevantRecipeAnalysis(ctx, product, scoped, instruction)
+		if evidenceErr != nil {
+			return analysis, nil, evidenceErr
+		}
+		seeds := deterministicIntegrationRecipeSeeds(product, integration, scoped.Evidence)
+		capabilityIDs := make([]string, 0, len(seeds))
+		for _, seed := range seeds {
+			capabilityIDs = append(capabilityIDs, seed.CapabilityIDs...)
+		}
+		if len(capabilityIDs) == 0 {
+			if len(requested) > 0 {
+				return analysis, nil, ErrRecipeNeedsInput
+			}
+			continue
+		}
+		analysis.Evidence = append(analysis.Evidence, scoped.Evidence...)
+		analysis.Plan.Recipes = append(analysis.Plan.Recipes, seeds...)
+		options = append(options, recipeAPIOption{ID: integration.ID, Name: integration.DisplayName, Version: integration.VersionKey, Description: integration.Description, CapabilityIDs: capabilityIDs})
+	}
+	for integrationID := range requested {
+		if !seenRequested[integrationID] {
+			return analysis, nil, store.ErrNotFound
+		}
+	}
+	analysis.Evidence = mergeRecipeAPIEvidence(analysis.Evidence)
+	analysis.Plan.Summary = "Select the exact reviewed APIs and capabilities required for one implementation workflow."
+	if len(options) == 0 || len(analysis.Plan.Recipes) == 0 {
+		return analysis, nil, ErrRecipeNeedsInput
+	}
+	sort.Slice(options, func(i, j int) bool { return options[i].ID < options[j].ID })
+	return analysis, options, nil
+}
+
+func (s *Service) CreateRecipeFromPromptWithAPIs(ctx context.Context, productID string, requestedIntegrationIDs []string, instruction string, actor Actor) (recipe model.Recipe, runErr error) {
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" || len(instruction) > 4000 || containsToolBuilderSecretText(instruction) {
-		return recipe, errors.New("describe one non-secret product integration outcome in 1 to 4,000 characters")
+		return recipe, errors.New("describe one non-secret product workflow in 1 to 4,000 characters")
 	}
 	product, err := s.store.Product(ctx, productID)
 	if err != nil {
 		return recipe, err
 	}
-	integrationID, err = s.resolveRecipeIntegrationID(ctx, productID, integrationID)
+	requestedIntegrationIDs, err = normalizeRequestedRecipeAPIs(requestedIntegrationIDs)
 	if err != nil {
 		return recipe, err
 	}
-	analysis, err := s.AnalyseIntegrationFor(ctx, productID, integrationID, actor)
-	if err != nil {
-		return recipe, err
-	}
-	for _, unknown := range analysis.Unknowns {
-		if unknown.Blocking {
-			return recipe, ErrRecipeNeedsInput
-		}
-	}
-	analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, instruction)
+	analysis, availableAPIs, err := s.recipeAPIDetectionAnalysis(ctx, product, requestedIntegrationIDs, instruction)
 	if err != nil {
 		return recipe, err
 	}
@@ -485,6 +708,7 @@ func (s *Service) CreateRecipeFromPromptFor(ctx context.Context, productID, inte
 	prompt, _ := json.Marshal(map[string]any{
 		"request":                instruction,
 		"product":                map[string]string{"name": product.Name, "description": product.Description},
+		"available_apis":         availableAPIs,
 		"product_evidence":       productEvidence,
 		"allowed_capability_ids": recipeProductCapabilityIDs(productEvidence),
 		"allowed_evidence_ids":   evidenceIDs(productEvidence),
@@ -500,6 +724,31 @@ func (s *Service) CreateRecipeFromPromptFor(ctx context.Context, productID, inte
 	seed, valid := recipeBriefResponseSeed(response, analysis)
 	if !valid {
 		return recipe, ErrRecipeNeedsInput
+	}
+	selectedAPIIDs, valid := recipeCapabilityAPIIDs(analysis, seed.CapabilityIDs)
+	if !valid {
+		return recipe, ErrRecipeNeedsInput
+	}
+	analysis.Evidence = recipeEvidenceForAPIs(analysis.Evidence, selectedAPIIDs)
+	selectedEvidenceSet := make(map[string]bool)
+	for _, item := range analysis.Evidence {
+		selectedEvidenceSet[item.ResourceID] = true
+	}
+	for _, evidenceID := range seed.EvidenceIDs {
+		if !selectedEvidenceSet[evidenceID] {
+			return recipe, ErrRecipeNeedsInput
+		}
+	}
+	analysis.Plan.Recipes = []model.RecipeSeed{seed}
+	analysis.ID, err = randomUUID()
+	if err != nil {
+		return recipe, err
+	}
+	completedAt := s.now()
+	analysis.CompletedAt = &completedAt
+	analysis, err = s.store.SaveIntegrationAnalysis(ctx, analysis, 0)
+	if err != nil {
+		return recipe, err
 	}
 	return s.createRecipeFromSeed(ctx, product, analysis, seed, instruction, actor)
 }
@@ -556,10 +805,11 @@ func (s *Service) generateRecipes(ctx context.Context, productID, analysisID, re
 			return recipes, prepareErr
 		}
 		existing, lookupErr := s.store.RecipeBySlug(ctx, productID, seed.Slug)
-		if lookupErr == nil && existing.IntegrationID != integrationID {
+		expectedIntegrationIDs := integrationScopeIDs(preparedAnalysis.Evidence)
+		if lookupErr == nil && (existing.ContractVersion != model.RecipeContractDeploymentV3 || !slices.Equal(recipeIntegrationIDs(existing), expectedIntegrationIDs)) {
 			seed.Slug = scopedRecipeCollisionSlug(seed.Slug, integrationID, seed.CapabilityIDs[0])
 			existing, lookupErr = s.store.RecipeBySlug(ctx, productID, seed.Slug)
-			if lookupErr == nil && existing.IntegrationID != integrationID {
+			if lookupErr == nil && (existing.ContractVersion != model.RecipeContractDeploymentV3 || !slices.Equal(recipeIntegrationIDs(existing), expectedIntegrationIDs)) {
 				return recipes, store.ErrConflict
 			}
 		}
@@ -582,13 +832,14 @@ func (s *Service) generateRecipes(ctx context.Context, productID, analysisID, re
 		if authorErr != nil {
 			return recipes, authorErr
 		}
-		existing.IntegrationID = integrationID
+		existing.IntegrationID = ""
+		existing.APIAttachments = recipeAPIAttachments(expectedIntegrationIDs)
 		existing.AnalysisID = analysis.ID
-		existing.ContractVersion = model.RecipeContractProductIntegrationV2
+		existing.ContractVersion = model.RecipeContractDeploymentV3
 		existing.Title = seed.Title
 		existing.Outcome = seed.Outcome
 		existing.Audience = "coding_agent"
-		existing.Dependencies = recipeGroundingDependencies(preparedAnalysis, seed)
+		existing.Dependencies = recipeGroundingDependenciesForContract(preparedAnalysis, seed, model.RecipeContractDeploymentV3)
 		regrounded, refreshErr := s.createRecipeRevision(ctx, product, existing, preparedAnalysis, draft, "", "recipe.regrounded", actor)
 		if refreshErr != nil {
 			if errors.Is(refreshErr, store.ErrConflict) {
@@ -646,11 +897,11 @@ func (s *Service) ReworkRecipe(ctx context.Context, productID, recipeID string, 
 		return recipe, ErrRecipeGroundingChanged
 	}
 	seed := model.RecipeSeed{Slug: recipe.Slug, Title: recipe.Title, Outcome: recipe.Outcome, Audience: "coding_agent", CapabilityIDs: append([]string(nil), spec.CapabilityIDs...), SDKID: spec.SDKID, EvidenceIDs: evidenceIDs}
-	draft, err := s.authorRecipe(ctx, product, analysis, seed, instruction)
+	draft, err := s.authorRecipeForContract(ctx, product, analysis, seed, instruction, recipe.ContractVersion)
 	if err != nil {
 		return recipe, err
 	}
-	recipe.Dependencies = recipeGroundingDependencies(analysis, seed)
+	recipe.Dependencies = recipeGroundingDependenciesForContract(analysis, seed, recipe.ContractVersion)
 	return s.createRecipeRevision(ctx, product, recipe, analysis, draft, "", "recipe.reworked", actor)
 }
 
@@ -729,47 +980,55 @@ func requireExpectedRecipeRevision(recipe model.Recipe, expectedRevision int64, 
 }
 
 func (s *Service) currentRecipeEvidence(ctx context.Context, product model.Product, recipe model.Recipe, evidenceByScope map[string][]model.IntegrationEvidence) ([]model.IntegrationEvidence, bool, error) {
-	if recipe.ContractVersion != model.RecipeContractProductIntegrationV2 || strings.TrimSpace(recipe.IntegrationID) == "" {
+	if recipe.ContractVersion != model.RecipeContractProductIntegrationV2 && recipe.ContractVersion != model.RecipeContractDeploymentV3 {
 		return nil, false, nil
 	}
-	cacheKey := recipe.IntegrationID + "\x00" + recipe.Outcome
-	var evidence []model.IntegrationEvidence
-	if evidenceByScope != nil {
-		if cached, ok := evidenceByScope[cacheKey]; ok {
-			evidence = append([]model.IntegrationEvidence(nil), cached...)
-		}
+	integrationIDs := recipeIntegrationIDs(recipe)
+	if len(integrationIDs) == 0 {
+		return nil, false, nil
 	}
-	if evidence == nil {
-		var err error
-		evidence, _, err = s.scopedIntegrationEvidence(ctx, product, recipe.IntegrationID)
-		if errors.Is(err, store.ErrNotFound) || errors.Is(err, ErrRecipeNeedsInput) {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		analysis := model.IntegrationAnalysis{Evidence: evidence}
-		analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, recipe.Outcome)
-		if errors.Is(err, ErrRecipeNeedsInput) {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		evidence = analysis.Evidence
+	combined := make([]model.IntegrationEvidence, 0)
+	for _, integrationID := range integrationIDs {
+		cacheKey := integrationID + "\x00" + recipe.Outcome
+		var evidence []model.IntegrationEvidence
 		if evidenceByScope != nil {
-			evidenceByScope[cacheKey] = append([]model.IntegrationEvidence(nil), evidence...)
+			if cached, ok := evidenceByScope[cacheKey]; ok {
+				evidence = append([]model.IntegrationEvidence(nil), cached...)
+			}
 		}
+		if evidence == nil {
+			var err error
+			evidence, _, err = s.scopedIntegrationEvidence(ctx, product, integrationID)
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, ErrRecipeNeedsInput) {
+				return nil, false, nil
+			}
+			if err != nil {
+				return nil, false, err
+			}
+			analysis := model.IntegrationAnalysis{Evidence: evidence}
+			analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, recipe.Outcome)
+			if errors.Is(err, ErrRecipeNeedsInput) {
+				return nil, false, nil
+			}
+			if err != nil {
+				return nil, false, err
+			}
+			evidence = analysis.Evidence
+			if evidenceByScope != nil {
+				evidenceByScope[cacheKey] = append([]model.IntegrationEvidence(nil), evidence...)
+			}
+		}
+		integration, err := s.store.Integration(ctx, product.ID, integrationID)
+		if err != nil {
+			return nil, false, err
+		}
+		evidence, err = s.restoreRecipeDeveloperAssetDependencies(ctx, integration, evidence, recipe.Dependencies)
+		if err != nil {
+			return nil, false, err
+		}
+		combined = append(combined, evidence...)
 	}
-	integration, err := s.store.Integration(ctx, product.ID, recipe.IntegrationID)
-	if err != nil {
-		return nil, false, err
-	}
-	evidence, err = s.restoreRecipeDeveloperAssetDependencies(ctx, integration, evidence, recipe.Dependencies)
-	if err != nil {
-		return nil, false, err
-	}
-	return evidence, true, nil
+	return mergeRecipeAPIEvidence(combined), true, nil
 }
 
 func (s *Service) recipeGroundingCurrent(ctx context.Context, product model.Product, recipe model.Recipe, evidenceByScope map[string][]model.IntegrationEvidence) (bool, error) {
@@ -781,8 +1040,8 @@ func (s *Service) recipeGroundingCurrent(ctx context.Context, product model.Prod
 	if !selected {
 		return false, nil
 	}
-	// IntegrationRevisionID and IntegrationManifestHash remain immutable creation
-	// provenance. Currentness is decided by the exact selected evidence below;
+	// Revision-level API bindings remain immutable creation provenance.
+	// Currentness is decided by the exact selected evidence below;
 	// otherwise an unrelated attachment added to a later API publication would
 	// invalidate every recipe for that API.
 	spec, specErr := decodeRecipeSpec(recipe.CurrentRevision)
@@ -902,7 +1161,7 @@ func (s *Service) ApproveRecipe(ctx context.Context, productID, recipeID string,
 	}
 	now := s.now()
 	recipe.State, recipe.NeedsAttention, recipe.ApprovedBy, recipe.ApprovedAt = "approved", false, actor.ID, &now
-	audit := model.AuditEvent{ID: randomID("audit"), OrganisationID: recipe.OrganisationID, ProductID: recipe.ProductID, ActorID: actor.ID, Action: "recipe.approved", TargetType: "recipe", TargetID: recipe.ID, Prior: map[string]any{"state": "review"}, Current: map[string]any{"state": "approved", "revision_id": recipe.CurrentRevisionID, "integration_revision_id": recipe.CurrentRevision.IntegrationRevisionID}, RequestID: recipeAuditRequestID(actor), CreatedAt: now}
+	audit := model.AuditEvent{ID: randomID("audit"), OrganisationID: recipe.OrganisationID, ProductID: recipe.ProductID, ActorID: actor.ID, Action: "recipe.approved", TargetType: "recipe", TargetID: recipe.ID, Prior: map[string]any{"state": "review"}, Current: map[string]any{"state": "approved", "revision_id": recipe.CurrentRevisionID, "api_bindings": recipe.CurrentRevision.APIBindings}, RequestID: recipeAuditRequestID(actor), CreatedAt: now}
 	recipe, err = s.store.SaveRecipeTransition(ctx, recipe, store.RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit})
 	if errors.Is(err, store.ErrCatalogConflict) {
 		return s.resolveRecipeCatalogConflict(ctx, productID, recipeID)
@@ -1012,6 +1271,64 @@ func (s *Service) PublishRecipe(ctx context.Context, productID, recipeID string,
 		return s.resolveRecipeCatalogConflict(ctx, productID, recipeID)
 	}
 	return recipe, err
+}
+
+func (s *Service) DeleteRecipe(ctx context.Context, productID, recipeID string, expectedRevision int64, expectedCurrentRevisionID string, actor Actor) error {
+	recipe, err := s.store.Recipe(ctx, productID, recipeID)
+	if err != nil {
+		return err
+	}
+	if err := requireExpectedRecipeRevision(recipe, expectedRevision, expectedCurrentRevisionID); err != nil {
+		return err
+	}
+	if recipe.ContractVersion != model.RecipeContractLegacyMCPV1 && recipe.State != "outdated" {
+		return ErrRecipeDeletionNotAllowed
+	}
+	product, err := s.store.Product(ctx, productID)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	audit := model.AuditEvent{
+		ID:             randomID("audit"),
+		OrganisationID: recipe.OrganisationID,
+		ProductID:      recipe.ProductID,
+		ActorID:        actor.ID,
+		Action:         "recipe.deleted",
+		TargetType:     "recipe",
+		TargetID:       recipe.ID,
+		Prior: map[string]any{
+			"contract_version":    recipe.ContractVersion,
+			"state":               recipe.State,
+			"title":               recipe.Title,
+			"current_revision_id": recipe.CurrentRevisionID,
+		},
+		Current:   map[string]any{"deleted": true},
+		RequestID: recipeAuditRequestID(actor),
+		CreatedAt: now,
+	}
+	mutation := store.RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit}
+	if err := s.store.DeleteRecipe(ctx, productID, recipeID, mutation); !errors.Is(err, store.ErrCatalogConflict) {
+		return err
+	}
+
+	// A catalog publication may race with this confirmed deletion without
+	// changing the recipe itself. Refresh both guards and retry once, but only
+	// while the operator's exact recipe revision is still current.
+	latest, err := s.store.Recipe(ctx, productID, recipeID)
+	if err != nil {
+		return err
+	}
+	if err := requireExpectedRecipeRevision(latest, expectedRevision, expectedCurrentRevisionID); err != nil {
+		return err
+	}
+	product, err = s.store.Product(ctx, productID)
+	if err != nil {
+		return err
+	}
+	mutation.ExpectedRevision = latest.Revision
+	mutation.ExpectedCatalogRevision = product.CatalogRevision
+	return s.store.DeleteRecipe(ctx, productID, recipeID, mutation)
 }
 
 func (s *Service) ReconcileRecipeDrift(ctx context.Context, productID string) ([]model.Recipe, error) {

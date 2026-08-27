@@ -32,6 +32,7 @@ import {
   type CrawlerSettings,
   type Job,
   validateOpenAPIDocument,
+  websiteURLWithinScope,
 } from "./index";
 
 function settings(overrides: Partial<CrawlerSettings> = {}): CrawlerSettings {
@@ -441,6 +442,17 @@ test("bounded response reads reject bodies beyond the configured byte budget", a
   await assert.rejects(boundedResponseText(new Response("hello!"), 5), errorCode("source_too_large"));
 });
 
+test("website directory boundaries match only the exact path and descendants", () => {
+  const root = new URL("https://example.com/docs");
+  assert.equal(websiteURLWithinScope(root, new URL("https://example.com/docs")), true);
+  assert.equal(websiteURLWithinScope(root, new URL("https://example.com/docs/quickstart")), true);
+  assert.equal(websiteURLWithinScope(root, new URL("https://example.com/docs2")), false);
+  assert.equal(websiteURLWithinScope(root, new URL("https://example.com/blog/docs")), false);
+  assert.equal(websiteURLWithinScope(root, new URL("https://other.example.com/docs")), false);
+  assert.equal(websiteURLWithinScope(root, new URL("https://example.com/docs/%2e%2e/admin")), false);
+  assert.equal(websiteURLWithinScope(new URL("https://example.com/"), new URL("https://example.com/anything")), true);
+});
+
 test("website ingestion records failed, skipped, redirected, and partial coverage explicitly", async (t) => {
   let origin = "";
   const server = createServer((request, response) => {
@@ -488,6 +500,55 @@ test("website ingestion records failed, skipped, redirected, and partial coverag
   assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_sitemap_entry_skipped"));
   assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_page_redirected" && diagnostic.redirectedTo === `${origin}/final`));
   assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_partial_coverage"));
+});
+
+test("website ingestion never requests pages outside a configured directory", async (t) => {
+  let origin = "";
+  const requested: string[] = [];
+  const server = createServer((request, response) => {
+    requested.push(request.url ?? "");
+    if (request.url === "/docs/sitemap.xml") {
+      response.writeHead(200, { "content-type": "application/xml" });
+      response.end(`<urlset><url><loc>${origin}/docs/from-sitemap</loc></url><url><loc>${origin}/outside-from-sitemap</loc></url></urlset>`);
+      return;
+    }
+    if (request.url === "/docs/redirect-out") {
+      response.writeHead(302, { location: "/outside-redirect-target" });
+      response.end();
+      return;
+    }
+    if (request.url === "/docs/guide" || request.url === "/docs/from-sitemap") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<title>${request.url}</title><main>${"reviewable scoped content ".repeat(20)}</main>`);
+      return;
+    }
+    if (request.url === "/docs") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<title>Docs</title><main>${"root documentation ".repeat(20)}<a href="/docs/guide">guide</a><a href="/docs2">similar prefix</a><a href="/outside">outside</a><a href="/docs/redirect-out">redirect</a></main>`);
+      return;
+    }
+    response.writeHead(500, { "content-type": "text/plain" });
+    response.end("This path must not be requested.");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  origin = `http://docs.scope.localhost:${address.port}`;
+
+  const result = await collectSource(
+    job({ source_kind: "website", location: `${origin}/docs` }),
+    settings({ allowLocalhostSubdomains: true, localhostPorts: new Set([address.port]), maxPages: 10, maxBytes: 16_384 }),
+  );
+  assert.deepEqual(result.pages.map((page) => page.url).sort(), [`${origin}/docs`, `${origin}/docs/from-sitemap`, `${origin}/docs/guide`]);
+  assert.equal(result.failedCount, 1);
+  assert.ok(result.skippedCount >= 3);
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "website_link_outside_scope_skipped"));
+  assert.ok(requested.includes("/docs/sitemap.xml"));
+  assert.ok(requested.every((value) => value === "/docs" || value.startsWith("/docs/")), `out-of-scope request observed: ${requested.join(", ")}`);
 });
 
 test("upload ingestion stays inside its dedicated root and preserves quarantine", async (t) => {

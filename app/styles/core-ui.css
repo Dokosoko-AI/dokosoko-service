@@ -20,9 +20,11 @@
 .core-button-indigo { color: var(--on-accent); border-color: color-mix(in srgb, var(--accent-fill) 82%, var(--ink)); background: var(--accent-fill); }
 .core-button-red { color: var(--on-accent); border-color: var(--danger); background: var(--danger); }
 .core-button-outline { color: var(--text-strong); border-color: var(--line-strong); background: var(--surface); }
+.core-button-outline.recipe-delete-button { --btn-icon: var(--danger); color: var(--danger); border-color: var(--danger-line); background: var(--danger-soft); }
 .core-button:not(:disabled):hover { filter: none; }
 .core-button-indigo:not(:disabled):hover { background: var(--accent-strong); }
 .core-button-outline:not(:disabled):hover { color: var(--ink); background: var(--soft); }
+.core-button-outline.recipe-delete-button:not(:disabled):hover { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 .core-button:focus-visible, .core-switch:focus-visible, .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .core-button:disabled { cursor: not-allowed; opacity: .45; }
 .core-button.full { width: 100%; margin-top: auto; }

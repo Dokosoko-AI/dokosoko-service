@@ -104,6 +104,51 @@ func (m *Memory) RecipeBySlug(_ context.Context, productID, slug string) (model.
 	return model.Recipe{}, ErrNotFound
 }
 
+func (m *Memory) DeleteRecipe(_ context.Context, productID, recipeID string, mutation RecipeMutation) error {
+	if err := validateRecipeMutation(mutation); err != nil {
+		return err
+	}
+	if mutation.Audit == nil {
+		return errors.New("recipe deletion requires an audit event")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.products[productID]; !exists {
+		return ErrNotFound
+	}
+	stored, exists := m.recipes[productID][recipeID]
+	if !exists {
+		return ErrNotFound
+	}
+	if stored.Revision != mutation.ExpectedRevision {
+		return ErrConflict
+	}
+	if !recipeDeletionAllowed(stored) {
+		return ErrConflict
+	}
+	if m.recipeAuditExistsLocked(mutation.Audit.ID) {
+		return ErrConflict
+	}
+	_, _, auditOutcome, err := prepareRecipeAudit(stored, mutation.Audit, "recipe.deleted")
+	if err != nil {
+		return err
+	}
+
+	delete(m.recipes[productID], recipeID)
+	delete(m.recipeRevisions, recipeID)
+	if stored.State == "published" {
+		now := time.Now().UTC()
+		if _, err := m.bumpProductCatalogRevisionLocked(productID, now); err != nil {
+			return err
+		}
+	}
+	event := memoryClone(*mutation.Audit)
+	event.Outcome = auditOutcome
+	m.audit = append(m.audit, event)
+	return nil
+}
+
 func (m *Memory) CreateRecipeWithRevision(_ context.Context, recipe model.Recipe, revision model.RecipeRevision, mutation RecipeMutation) (model.Recipe, error) {
 	var err error
 	recipe, err = prepareRecipeRecord(recipe)
@@ -145,20 +190,8 @@ func (m *Memory) CreateRecipeWithRevision(_ context.Context, recipe model.Recipe
 	if _, ok := m.products[recipe.ProductID]; !ok {
 		return model.Recipe{}, ErrNotFound
 	}
-	if recipe.ContractVersion != model.RecipeContractLegacyMCPV1 {
-		integration, ok := m.integrations[recipe.IntegrationID]
-		if !ok || integration.DeploymentID != recipe.ProductID {
-			return model.Recipe{}, ErrNotFound
-		}
-	}
-	if revision.IntegrationRevisionID != "" {
-		bound, ok := m.integrationRevisions[recipe.IntegrationID][revision.IntegrationRevisionID]
-		if !ok {
-			return model.Recipe{}, ErrNotFound
-		}
-		if bound.ManifestHash != revision.IntegrationManifestHash {
-			return model.Recipe{}, ErrConflict
-		}
+	if err := m.validateRecipeAPIBindingsLocked(recipe, revision); err != nil {
+		return model.Recipe{}, err
 	}
 	for _, recipes := range m.recipes {
 		if _, exists := recipes[recipe.ID]; exists {
@@ -237,11 +270,8 @@ func (m *Memory) SaveRecipeTransition(_ context.Context, recipe model.Recipe, mu
 	if err := validateRecipeTransition(current, recipe); err != nil {
 		return model.Recipe{}, err
 	}
-	if recipe.ContractVersion != model.RecipeContractLegacyMCPV1 {
-		integration, ok := m.integrations[recipe.IntegrationID]
-		if !ok || integration.DeploymentID != recipe.ProductID {
-			return model.Recipe{}, ErrNotFound
-		}
+	if err := m.validateRecipeAPIAttachmentsLocked(recipe); err != nil {
+		return model.Recipe{}, err
 	}
 	if mutation.Audit != nil && m.recipeAuditExistsLocked(mutation.Audit.ID) {
 		return model.Recipe{}, ErrConflict
@@ -306,14 +336,8 @@ func (m *Memory) SaveRecipeRevision(_ context.Context, recipe model.Recipe, valu
 	if _, err := m.validateRecipeCatalogLocked(recipe.ProductID, mutation.ExpectedCatalogRevision); err != nil {
 		return model.Recipe{}, err
 	}
-	if value.IntegrationRevisionID != "" {
-		bound, ok := m.integrationRevisions[recipe.IntegrationID][value.IntegrationRevisionID]
-		if !ok {
-			return model.Recipe{}, ErrNotFound
-		}
-		if bound.ManifestHash != value.IntegrationManifestHash {
-			return model.Recipe{}, ErrConflict
-		}
+	if err := m.validateRecipeAPIBindingsLocked(recipe, value); err != nil {
+		return model.Recipe{}, err
 	}
 	current, exists := m.recipes[recipe.ProductID][recipe.ID]
 	if !exists {
@@ -396,4 +420,30 @@ func (m *Memory) recipeAuditExistsLocked(id string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Memory) validateRecipeAPIAttachmentsLocked(recipe model.Recipe) error {
+	for _, attachment := range recipe.APIAttachments {
+		integration, ok := m.integrations[attachment.IntegrationID]
+		if !ok || integration.DeploymentID != recipe.ProductID {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+func (m *Memory) validateRecipeAPIBindingsLocked(recipe model.Recipe, revision model.RecipeRevision) error {
+	if err := m.validateRecipeAPIAttachmentsLocked(recipe); err != nil {
+		return err
+	}
+	for _, binding := range revision.APIBindings {
+		bound, ok := m.integrationRevisions[binding.IntegrationID][binding.IntegrationRevisionID]
+		if !ok {
+			return ErrNotFound
+		}
+		if bound.State != "published" || bound.ManifestHash != binding.IntegrationManifestHash {
+			return ErrConflict
+		}
+	}
+	return nil
 }

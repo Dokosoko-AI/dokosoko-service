@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   ArrowLeft, BookOpen, CheckCircle2, ChevronRight, Copy,
   GitBranch, KeyRound, LockKeyhole, MessageSquareText, Plus, RefreshCw, Search,
@@ -23,19 +25,20 @@ import { PageHeader as PageHeading, PanelHeader } from "../core/layout";
 import { ConsoleLink, EntityDetail, toolPolicy, unavailableConsoleCapability } from "./shared";
 
 export function EntityDetailView({ route, detail, onNavigate }: { route: Extract<ConsoleRoute, { kind: "entity" }>; detail: EntityDetail | null; onNavigate: (path: string) => void }) {
+  const { t } = useTranslation();
   const parentPath = sectionPath(route.section);
   return <>
     <div className="entity-breadcrumb">
-      <ConsoleLink path={parentPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to {route.section === "product" ? "APIs" : route.section}</ConsoleLink>
+      <ConsoleLink path={parentPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.backTo")} {route.section === "product" ? t("navigation.apis") : route.section}</ConsoleLink>
       <code>{route.path}</code>
     </div>
     {detail ? <>
       <PageHeading eyebrow={detail.eyebrow} title={detail.title} description={detail.description || undefined} />
       <section className="panel entity-detail-panel">
-        <PanelHeader title="Details" action={<Badge color="violet">{route.entity}</Badge>} />
+        <PanelHeader title={t("tools.details")} action={<Badge color="violet">{route.entity}</Badge>} />
         <dl className="entity-detail-grid">{detail.fields.map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl>
       </section>
-    </> : <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Item unavailable</h1><p>No {route.entity.replaceAll("-", " ")} with UID <code>{route.uid}</code> is available in this deployment, or it is still loading.</p></div><ConsoleLink path={parentPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to the directory</ConsoleLink></section>}
+    </> : <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>{t("tools.itemUnavailable")}</h1><p>{t("tools.no")} {route.entity.replaceAll("-", " ")} {t("tools.withUID")} <code>{route.uid}</code> {t("tools.isAvailableInThisDeploymentOrItIsStill")}</p></div><ConsoleLink path={parentPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.returnToTheDirectory")}</ConsoleLink></section>}
   </>;
 }
 
@@ -50,44 +53,45 @@ function manifestString(entry: Record<string, unknown>, keys: string[]) {
   return "";
 }
 
-function manifestEntryTitle(entry: Record<string, unknown>, index: number) {
-  return manifestString(entry, ["title", "name", "operationId", "operation_id", "path", "url", "location"]) || `Contract entry ${index + 1}`;
+function manifestEntryTitle(entry: Record<string, unknown>, index: number, t: TFunction) {
+  return manifestString(entry, ["title", "name", "operationId", "operation_id", "path", "url", "location"]) || t("tools.contractEntry", { index: index + 1 });
 }
 
-function manifestEntrySummary(entry: Record<string, unknown>) {
+function manifestEntrySummary(entry: Record<string, unknown>, t: TFunction) {
   const method = manifestString(entry, ["method", "http_method"]).toUpperCase();
   const location = manifestString(entry, ["path", "url", "location"]);
   const description = manifestString(entry, ["description", "summary"]);
-  return [method, location, description].filter(Boolean).join(" · ") || `${Object.keys(entry).length} configured field${Object.keys(entry).length === 1 ? "" : "s"}`;
+  return [method, location, description].filter(Boolean).join(" · ") || t("tools.configuredFields", { count: Object.keys(entry).length });
 }
 
 export function ResourceSetDetailView({ resource, integrations, onNavigate }: { resource: APIResourceSet | null; integrations: APIIntegration[]; onNavigate: (path: string) => void }) {
-  if (!resource) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Resource set unavailable</h1><p>This resource set does not exist or is still loading.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
+  const { t } = useTranslation();
+  if (!resource) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>{t("tools.resourceSetUnavailable")}</h1><p>{t("tools.thisResourceSetDoesNotExistOrIsStill")}</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.returnToAPIs")}</ConsoleLink></section>;
   const owners = resourceSetIntegrations(resource, integrations);
   const resourceTab: IntegrationResourceTab = resource.kind === "api" ? "contracts" : "documentation";
   const backPath = owners.length === 1 ? integrationPath(owners[0].id, "documentation", resourceTab) : sectionPath("product");
-  const backLabel = owners.length === 1 ? owners[0].display_name : "APIs";
+  const backLabel = owners.length === 1 ? owners[0].display_name : t("navigation.apis");
   const revision = resource.latest_revision;
   const entries = revision?.manifest ?? [];
 
   return <>
-    <div className="entity-breadcrumb"><ConsoleLink path={backPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Back to {backLabel}</ConsoleLink><Badge color={resource.kind === "api" ? "violet" : "blue"}>{resource.kind === "api" ? "API contract" : "Documentation"}</Badge></div>
-    <PageHeading eyebrow="Reusable resource set" title={resource.name} description={resource.description || "Reusable resource configuration shared explicitly between APIs."} action={<Badge color={resource.state === "active" ? "green" : "zinc"}>{resource.state}</Badge>} />
+    <div className="entity-breadcrumb"><ConsoleLink path={backPath} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.backTo")} {backLabel}</ConsoleLink><Badge color={resource.kind === "api" ? "violet" : "blue"}>{resource.kind === "api" ? t("tools.apiContract") : t("tools.documentation")}</Badge></div>
+    <PageHeading eyebrow={t("tools.reusableResourceSet")} title={resource.name} description={resource.description || t("tools.reusableResourceConfigurationSharedExplicitlyBetweenAPIs")} action={<Badge color={resource.state === "active" ? "green" : "zinc"}>{resource.state}</Badge>} />
     <dl className="compact-metrics resource-detail-metrics">
-      <div className="compact-metric"><dt>Latest revision</dt><dd><strong>r{revision?.revision ?? resource.revision}</strong><small>Immutable snapshot</small></dd></div>
-      <div className="compact-metric"><dt>Contract entries</dt><dd><strong>{entries.length}</strong><small>{resource.kind === "api" ? "API definitions" : "Documentation records"}</small></dd></div>
-      <div className="compact-metric"><dt>Used by APIs</dt><dd><strong>{owners.length}</strong><small>Explicit attachments</small></dd></div>
-      <div className="compact-metric"><dt>Updated</dt><dd><strong>{revision?.created_at ? new Date(revision.created_at).toLocaleDateString() : "—"}</strong><small>{revision?.created_at ? new Date(revision.created_at).toLocaleTimeString() : "No revision date"}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.latestRevision")}</dt><dd><strong>r{revision?.revision ?? resource.revision}</strong><small>{t("tools.immutableSnapshot")}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.contractEntries")}</dt><dd><strong>{entries.length}</strong><small>{resource.kind === "api" ? t("tools.apiDefinitions") : t("tools.documentationRecords")}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.usedByAPIs")}</dt><dd><strong>{owners.length}</strong><small>{t("tools.explicitAttachments")}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.updated")}</dt><dd><strong>{revision?.created_at ? t("format.date", { value: new Date(revision.created_at) }) : "—"}</strong><small>{revision?.created_at ? t("format.time", { value: new Date(revision.created_at) }) : t("tools.noRevisionDate")}</small></dd></div>
     </dl>
     <div className="entity-workspace-grid">
       <section className="panel entity-contract-panel">
-        <PanelHeader title="Contract contents" description="What this reusable revision contributes when attached to an API." action={<Badge color="zinc">r{revision?.revision ?? resource.revision}</Badge>} />
-        <div className="entity-contract-list">{entries.map((entry, index) => <article key={`${manifestEntryTitle(entry, index)}:${index}`}><span className="resource-icon">{resource.kind === "api" ? <TerminalSquare /> : <BookOpen />}</span><span><strong>{manifestEntryTitle(entry, index)}</strong><small>{manifestEntrySummary(entry)}</small></span><Badge color={resource.kind === "api" ? "violet" : "blue"}>{manifestString(entry, ["kind", "type", "method"]) || resource.kind}</Badge></article>)}{entries.length === 0 && <div className="empty-row">This revision contains no contract entries.</div>}</div>
-        <details className="advanced-details inline-advanced"><summary>View revision JSON</summary><pre className="entity-contract-json">{JSON.stringify(entries, null, 2)}</pre></details>
+        <PanelHeader title={t("tools.contractContents")} description={t("tools.whatThisReusableRevisionContributesWhenAttachedToAn")} action={<Badge color="zinc">r{revision?.revision ?? resource.revision}</Badge>} />
+        <div className="entity-contract-list">{entries.map((entry, index) => <article key={`${manifestEntryTitle(entry, index, t)}:${index}`}><span className="resource-icon">{resource.kind === "api" ? <TerminalSquare /> : <BookOpen />}</span><span><strong>{manifestEntryTitle(entry, index, t)}</strong><small>{manifestEntrySummary(entry, t)}</small></span><Badge color={resource.kind === "api" ? "violet" : "blue"}>{manifestString(entry, ["kind", "type", "method"]) || resource.kind}</Badge></article>)}{entries.length === 0 && <div className="empty-row">{t("tools.thisRevisionContainsNoContractEntries")}</div>}</div>
+        <details className="advanced-details inline-advanced"><summary>{t("tools.viewRevisionJSON")}</summary><pre className="entity-contract-json">{JSON.stringify(entries, null, 2)}</pre></details>
       </section>
       <aside className="entity-workspace-rail">
-        <section className="panel entity-related-panel"><PanelHeader title="Used by APIs" description="Open the exact API workspace tab that attaches this set." />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "documentation", resourceTab)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><Badge color={integration.lifecycle === "active" ? "green" : "zinc"}>{integration.lifecycle}</Badge><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">This set is not attached to an API.</div>}</section>
-        <section className="panel entity-detail-panel"><PanelHeader title="Revision identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Resource set ID</dt><dd>{resource.id}</dd></div><div><dt>Content hash</dt><dd>{revision?.content_hash || "—"}</dd></div><div><dt>Revision ID</dt><dd>{revision?.id || "—"}</dd></div><div><dt>Attachment policy</dt><dd>Explicit only</dd></div></dl></section>
+        <section className="panel entity-related-panel"><PanelHeader title={t("tools.usedByAPIs")} description={t("tools.openTheExactAPIWorkspaceTabThatAttachesThis")} />{owners.map((integration) => <ConsoleLink key={integration.id} path={integrationPath(integration.id, "documentation", resourceTab)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key}</small></span><Badge color={integration.lifecycle === "active" ? "green" : "zinc"}>{integration.lifecycle}</Badge><ChevronRight /></ConsoleLink>)}{owners.length === 0 && <div className="empty-row">{t("tools.thisSetIsNotAttachedToAnAPI")}</div>}</section>
+        <section className="panel entity-detail-panel"><PanelHeader title={t("tools.revisionIdentity")} /><dl className="entity-detail-grid compact-detail-grid"><div><dt>{t("tools.resourceSetID")}</dt><dd>{resource.id}</dd></div><div><dt>{t("tools.contentHash")}</dt><dd>{revision?.content_hash || "—"}</dd></div><div><dt>{t("tools.revisionID")}</dt><dd>{revision?.id || "—"}</dd></div><div><dt>{t("tools.attachmentPolicy")}</dt><dd>{t("tools.explicitOnly")}</dd></div></dl></section>
       </aside>
     </div>
   </>;
@@ -95,27 +99,7 @@ export function ResourceSetDetailView({ resource, integrations, onNavigate }: { 
 
 type ToolDetailTab = "overview" | "contract" | "execution" | "authorization" | "tests" | "usage" | "history";
 
-const TOOL_DETAIL_TABS: Array<{ id: ToolDetailTab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "contract", label: "Contract" },
-  { id: "execution", label: "Execution" },
-  { id: "authorization", label: "Authorization" },
-  { id: "tests", label: "Tests" },
-  { id: "usage", label: "Usage" },
-  { id: "history", label: "History" },
-];
-
-const toolUpstreamAuthCopy: Record<NonNullable<APITool["upstream_auth"]>["type"], { label: string; description: string; credentialRequired: boolean }> = {
-  delegated_oauth: { label: "Delegated OAuth", description: "During an authorized end-user execution, the caller's delegated OAuth token is forwarded to the fixed endpoint and is never stored on the tool. Administrator live tests cannot accept that user token.", credentialRequired: false },
-  none: { label: "No authentication", description: "No upstream credential is added to the request.", credentialRequired: false },
-  bearer: { label: "Bearer token", description: "An encrypted bearer token is injected server-side.", credentialRequired: true },
-  authorization_scheme: { label: "Authorization scheme", description: "An encrypted credential is combined with the configured fixed vendor scheme server-side.", credentialRequired: true },
-  api_key_header: { label: "API key header", description: "An encrypted API key is injected into the configured fixed header.", credentialRequired: true },
-  api_key_query: { label: "API key query parameter", description: "An encrypted API key is injected into the configured fixed query parameter.", credentialRequired: true },
-  basic: { label: "HTTP Basic", description: "An encrypted password is combined with the configured username server-side.", credentialRequired: true },
-  oauth_client_credentials: { label: "OAuth client credentials", description: "An encrypted client secret is exchanged at the fixed token URL server-side.", credentialRequired: true },
-  custom_header: { label: "Custom secret header", description: "An encrypted value is injected into the configured fixed header.", credentialRequired: true },
-};
+const TOOL_DETAIL_TABS: ToolDetailTab[] = ["overview", "contract", "execution", "authorization", "tests", "usage", "history"];
 
 function toolJSON(value: unknown, fallback: string) {
   if (value === undefined) return fallback;
@@ -133,32 +117,36 @@ function validToolTestIdempotencyKey(value: string) {
 }
 
 function ToolLiveTestEvidence({ run }: { run: APIToolTestRun }) {
+  const { t } = useTranslation();
   const succeeded = run.outcome === "success";
   return <div className={`tool-live-test-evidence ${succeeded ? "passed" : "failed"}`}>
-    <div className="tool-live-test-heading" role="status" aria-live="polite"><span><strong>{succeeded ? "Live test completed" : "Live test found an issue"}</strong><small>{run.tool_name} · exact revision {run.tool_revision} · {run.method} · {run.authentication_type}</small></span><Badge color={succeeded ? "green" : "red"}>{run.outcome}</Badge></div>
+    <div className="tool-live-test-heading" role="status" aria-live="polite"><span><strong>{succeeded ? t("tools.liveTestCompleted") : t("tools.liveTestFoundAnIssue")}</strong><small>{run.tool_name} {t("tools.exactRevision")} {run.tool_revision} · {run.method} · {run.authentication_type}</small></span><Badge color={succeeded ? "green" : "red"}>{run.outcome}</Badge></div>
     <dl className="compact-metrics tool-live-test-metrics">
-      <div className="compact-metric"><dt>Phase</dt><dd><strong>{run.phase}</strong><small>{run.network_call_performed ? "Upstream called" : "Stopped before network"}</small></dd></div>
-      <div className="compact-metric"><dt>HTTP status</dt><dd><strong>{run.upstream_status_code ?? "—"}</strong><small>{run.upstream_status_code ? "Sanitized upstream status" : "No upstream response"}</small></dd></div>
-      <div className="compact-metric"><dt>Response size</dt><dd><strong>{run.response_bytes === undefined ? "—" : `${run.response_bytes} B`}</strong><small>Body value discarded</small></dd></div>
-      <div className="compact-metric"><dt>Duration</dt><dd><strong>{run.duration_ms} ms</strong><small>Server observed</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.phase")}</dt><dd><strong>{run.phase}</strong><small>{run.network_call_performed ? t("tools.upstreamCalled") : t("tools.stoppedBeforeNetwork")}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.httpStatus")}</dt><dd><strong>{run.upstream_status_code ?? "—"}</strong><small>{run.upstream_status_code ? t("tools.sanitizedUpstreamStatus") : t("tools.noUpstreamResponse")}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.responseSize")}</dt><dd><strong>{run.response_bytes === undefined ? "—" : t("tools.b", { response_bytes: String(run.response_bytes) })}</strong><small>{t("tools.bodyValueDiscarded")}</small></dd></div>
+      <div className="compact-metric"><dt>{t("tools.duration")}</dt><dd><strong>{run.duration_ms} ms</strong><small>{t("tools.serverObserved")}</small></dd></div>
     </dl>
-    <div className="private-default-note"><ShieldCheck />Only structural evidence is retained. Raw bodies, headers, field values, and credentials are never returned or displayed.</div>
+    <div className="private-default-note"><ShieldCheck />{t("tools.onlyStructuralEvidenceIsRetainedRawBodiesHeadersField")}</div>
     <div className="tool-test-shapes">
-      <section aria-labelledby={`tool-test-request-${run.id}`}><h3 id={`tool-test-request-${run.id}`}>Request shape</h3><pre>{JSON.stringify(run.request_shape, null, 2)}</pre></section>
-      <section aria-labelledby={`tool-test-response-${run.id}`}><h3 id={`tool-test-response-${run.id}`}>Response shape</h3>{run.response_shape ? <pre>{JSON.stringify(run.response_shape, null, 2)}</pre> : <p>No response shape was retained.</p>}</section>
+      <section aria-labelledby={`tool-test-request-${run.id}`}><h3 id={`tool-test-request-${run.id}`}>{t("tools.requestShape")}</h3><pre>{JSON.stringify(run.request_shape, null, 2)}</pre></section>
+      <section aria-labelledby={`tool-test-response-${run.id}`}><h3 id={`tool-test-response-${run.id}`}>{t("tools.responseShape")}</h3>{run.response_shape ? <pre>{JSON.stringify(run.response_shape, null, 2)}</pre> : <p>{t("tools.noResponseShapeWasRetained")}</p>}</section>
     </div>
-    <section className="tool-test-findings" aria-labelledby={`tool-test-findings-${run.id}`}><h3 id={`tool-test-findings-${run.id}`}>Findings</h3>{run.findings.length > 0 ? run.findings.map((finding, index) => <div className="publish-validation" key={`${finding.phase}:${finding.code}:${index}`}><span>{succeeded ? <ShieldCheck /> : <TriangleAlert />}</span><span><strong>{finding.code}</strong><small>{finding.phase} · {finding.message}{finding.instance_path ? ` · instance ${finding.instance_path}` : ""}{finding.schema_path ? ` · schema ${finding.schema_path}` : ""}</small></span></div>) : <div className="empty-row">No structural or policy findings.</div>}</section>
-    <footer><code>{run.id}</code><span>Created {new Date(run.created_at).toLocaleString()} · evidence expires {new Date(run.expires_at).toLocaleString()}</span></footer>
+    <section className="tool-test-findings" aria-labelledby={`tool-test-findings-${run.id}`}><h3 id={`tool-test-findings-${run.id}`}>{t("tools.findings")}</h3>{run.findings.length > 0 ? run.findings.map((finding, index) => <div className="publish-validation" key={`${finding.phase}:${finding.code}:${index}`}><span>{succeeded ? <ShieldCheck /> : <TriangleAlert />}</span><span><strong>{finding.code}</strong><small>{finding.phase} · {finding.message}{finding.instance_path ? t("tools.instance", { instance_path: String(finding.instance_path) }) : ""}{finding.schema_path ? t("tools.schema", { schema_path: String(finding.schema_path) }) : ""}</small></span></div>) : <div className="empty-row">{t("tools.noStructuralOrPolicyFindings")}</div>}</section>
+    <footer><code>{run.id}</code><span>{t("tools.created")} {t("format.dateTime", { value: new Date(run.created_at) })} {t("tools.evidenceExpires")} {t("format.dateTime", { value: new Date(run.expires_at) })}</span></footer>
   </div>;
 }
 
 function ToolLiveTestAnalysis({ run, tool, onOpenBuilder, onClone, onMessage }: { run: APIToolTestRun; tool: APITool; onOpenBuilder: (proposal: APIToolTestAnalysisProposal) => void; onClone: (proposal: APIToolTestAnalysisProposal) => void; onMessage: (message: string) => void }) {
+  const { t } = useTranslation();
   const [evidenceHash, setEvidenceHash] = useState("");
   const [hashError, setHashError] = useState("");
   const [consentOpen, setConsentOpen] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
   const [consentGranted, setConsentGranted] = useState(false);
-  const [question, setQuestion] = useState("What does this sanitized evidence show, and should the non-secret contract change?");
+  const defaultQuestion = t("tools.defaultAnalysisQuestion");
+  const previousDefaultQuestion = useRef(defaultQuestion);
+  const [question, setQuestion] = useState<string>(defaultQuestion);
   const [transcript, setTranscript] = useState<APIToolTestAnalysisMessage[]>([]);
   const [analysis, setAnalysis] = useState<APIToolTestAnalysis | null>(null);
   const [analysisError, setAnalysisError] = useState("");
@@ -166,13 +154,18 @@ function ToolLiveTestAnalysis({ run, tool, onOpenBuilder, onClone, onMessage }: 
   const [expired] = useState(() => Date.parse(run.expires_at) <= Date.now());
   const preview = toolTestAnalysisEvidencePreview(run);
   const questionBytes = useMemo(() => new TextEncoder().encode(question.trim()).byteLength, [question]);
-  const questionProblem = questionBytes > TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes ? `Keep the question within ${TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes.toLocaleString()} UTF-8 bytes.` : "";
+  const questionProblem = questionBytes > TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes ? t("tools.questionByteLimit", { limit: TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes }) : "";
+
+  useEffect(() => {
+    setQuestion((current) => current === previousDefaultQuestion.current ? defaultQuestion : current);
+    previousDefaultQuestion.current = defaultQuestion;
+  }, [defaultQuestion]);
 
   useEffect(() => {
     let cancelled = false;
-    toolTestAnalysisEvidenceHash(run).then((value) => { if (!cancelled) setEvidenceHash(value); }).catch(() => { if (!cancelled) setHashError("The server evidence binding is missing or invalid."); });
+    toolTestAnalysisEvidenceHash(run).then((value) => { if (!cancelled) setEvidenceHash(value); }).catch(() => { if (!cancelled) setHashError(t("tools.serverEvidenceBindingInvalid")); });
     return () => { cancelled = true; };
-  }, [run]);
+  }, [run, t]);
 
   async function sendAnalysis(explicitConsent = consentGranted) {
     const latestQuestion = question.trim();
@@ -192,14 +185,14 @@ function ToolLiveTestAnalysis({ run, tool, onOpenBuilder, onClone, onMessage }: 
         question: latestQuestion,
         history: transcript,
       });
-      if (result.evidence_hash !== evidenceHash || result.tool_revision !== run.tool_revision || !result.advisory) throw new Error("The Analysis response was not bound to this exact evidence and revision.");
-      if (result.proposal && (result.proposal.base_tool_id !== tool.id || result.proposal.base_revision !== run.tool_revision || result.proposal.requires_clone !== (tool.state === "published"))) throw new Error("The proposed changes were not bound to this exact tool revision and review boundary.");
+      if (result.evidence_hash !== evidenceHash || result.tool_revision !== run.tool_revision || !result.advisory) throw new Error(t("tools.analysisResponseBindingInvalid"));
+      if (result.proposal && (result.proposal.base_tool_id !== tool.id || result.proposal.base_revision !== run.tool_revision || result.proposal.requires_clone !== (tool.state === "published"))) throw new Error(t("tools.proposalBindingInvalid"));
       setAnalysis(result);
       setTranscript((messages) => boundedToolTestAnalysisHistory([...messages, { role: "user", content: latestQuestion }, { role: "assistant", content: result.reply }]));
       setQuestion("");
-      onMessage(result.proposal ? "Analysis returned a locally validated proposal for human review." : "Analysis replied from the consented sanitized evidence.");
+      onMessage(result.proposal ? t("tools.analysisReturnedALocallyValidatedProposalForHumanReview") : t("tools.analysisRepliedFromTheConsentedSanitizedEvidence"));
     } catch (error) {
-      const message = unavailableConsoleCapability(error) ? "Live-test analysis is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "The sanitized evidence could not be analysed.";
+      const message = unavailableConsoleCapability(error) ? t("tools.liveTestAnalysisUnavailable") : error instanceof APIError || error instanceof Error ? error.message : t("tools.sanitizedEvidenceAnalysisFailed");
       setAnalysisError(message);
       onMessage(message);
     } finally { setBusy(false); }
@@ -218,35 +211,47 @@ function ToolLiveTestAnalysis({ run, tool, onOpenBuilder, onClone, onMessage }: 
   const proposal = analysis?.proposal;
 
   return <section className="tool-test-analysis" aria-labelledby={`tool-test-analysis-${run.id}`}>
-    <header><span className="settings-icon"><Sparkles /></span><span><strong id={`tool-test-analysis-${run.id}`}>Ask Analysis about this run</strong><small>Advisory only · exact revision {run.tool_revision} · evidence expires {new Date(run.expires_at).toLocaleString()}</small></span><Badge color="violet">Optional AI</Badge></header>
-    <p className="tool-test-analysis-intro">Nothing is shared until you review this boundary and explicitly consent. The server durably records that consent, binds the call to the current Analysis provider, and never fails this evidence over to a backup provider. The provider can reply or suggest a complete candidate, but it cannot save, publish, clone, bind, or call anything.</p>
+    <header><span className="settings-icon"><Sparkles /></span><span><strong id={`tool-test-analysis-${run.id}`}>{t("tools.askAnalysisAboutThisRun")}</strong><small>{t("tools.advisoryOnlyExactRevision")} {run.tool_revision} {t("tools.evidenceExpires")} {t("format.dateTime", { value: new Date(run.expires_at) })}</small></span><Badge color="violet">{t("tools.optionalAI")}</Badge></header>
+    <p className="tool-test-analysis-intro">{t("tools.nothingIsSharedUntilYouReviewThisBoundaryAnd")}</p>
     <div className="tool-test-analysis-boundary">
-      <section><h3>Sent after consent</h3><ul><li>Shapes containing only schema-declared property names, JSON types, and array lengths; status, timing, byte count, and bounded finding codes</li><li>Structural non-secret contract: schemas without annotations or literal enum/const values; value-free enum cardinality and const-presence markers; mappings, policy, method, timeout, and authentication type</li><li>Your latest question and bounded user/assistant history</li></ul></section>
-      <section><h3>Never sent</h3><ul><li>Raw values or bodies, response content, request arguments, examples, stored descriptions, or schema annotations/literal values</li><li>Unexpected upstream property names, diagnostic paths, headers, credentials, nonces, auth configuration, or credential-presence state</li><li>Destination origin, literal path, query, evidence hash, tool/run/product IDs, actor, or request ID</li></ul></section>
+      <section><h3>{t("tools.sentAfterConsent")}</h3><ul><li>{t("tools.shapesContainingOnlySchemaDeclaredPropertyNamesJSONTypes")}</li><li>{t("tools.structuralNonSecretContractSchemasWithoutAnnotationsOrLiteral")}</li><li>{t("tools.yourLatestQuestionAndBoundedUserAssistantHistory")}</li></ul></section>
+      <section><h3>{t("tools.neverSent")}</h3><ul><li>{t("tools.rawValuesOrBodiesResponseContentRequestArgumentsExamples")}</li><li>{t("tools.unexpectedUpstreamPropertyNamesDiagnosticPathsHeadersCredentialsNonces")}</li><li>{t("tools.destinationOriginLiteralPathQueryEvidenceHashToolRun")}</li></ul></section>
     </div>
-    <div className="tool-test-analysis-hash"><span>Evidence preview hash · browser/server binding only</span>{evidenceHash ? <code>{evidenceHash}</code> : <small>{hashError || "Checking server-computed SHA-256 binding…"}</small>}</div>
-    <details className="tool-test-analysis-preview"><summary>Review the exact sanitized evidence preview</summary><pre>{JSON.stringify(preview, null, 2)}</pre></details>
-    {expired && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Evidence expired</strong><small>Run a new exact-revision live test before requesting provider analysis.</small></span></div>}
-    {transcript.length > 0 && <div className="tool-test-analysis-transcript" aria-live="polite">{transcript.map((message, index) => <article className={message.role} key={`${message.role}:${index}`}><span>{message.role === "assistant" ? <Sparkles /> : <MessageSquareText />}</span><div><strong>{message.role === "assistant" ? "Analysis" : "You"}</strong><p>{message.content}</p></div></article>)}</div>}
-    <label className="auth-field tool-test-analysis-question" htmlFor={`tool-test-analysis-question-${run.id}`}><span>{transcript.length > 0 ? "Follow-up question" : "Question for Analysis"}</span><textarea id={`tool-test-analysis-question-${run.id}`} maxLength={TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes} value={question} aria-invalid={Boolean(questionProblem)} aria-describedby={`tool-test-analysis-question-guidance-${run.id}${questionProblem ? ` tool-test-analysis-question-error-${run.id}` : ""}`} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about the retained shapes, findings, or non-secret contract…" /><small id={`tool-test-analysis-question-guidance-${run.id}`}>{questionBytes}/{TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes} UTF-8 bytes. Do not include secrets, raw values, destination URLs, nonces, or internal IDs.</small>{questionProblem && <small className="error" id={`tool-test-analysis-question-error-${run.id}`} role="alert">{questionProblem}</small>}</label>
-    {consentGranted && <label className="tool-test-analysis-consent"><input type="checkbox" checked={consentGranted} onChange={(event) => setConsentGranted(event.target.checked)} /><span>I continue to consent to sending the provider projection described above and each bounded chat turn to the configured Analysis provider.</span></label>}
-    {analysisError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Analysis unavailable</strong><small>{analysisError}</small></span></div>}
-    <div className="tool-test-analysis-actions"><Button outline disabled={busy || expired || !evidenceHash || !question.trim() || Boolean(questionProblem)} onClick={consentGranted ? () => { void sendAnalysis(); } : reviewConsent}>{busy ? "Analysing…" : consentGranted ? transcript.length > 0 ? "Send follow-up" : "Ask Analysis" : "Review consent & ask"}</Button><small>{consentGranted ? "Consent applies only to this browser-held conversation, exact evidence hash, and exact configured provider; no backup receives it." : "The configured provider is contacted only after the consent dialog is accepted and durably recorded."}</small></div>
+    <div className="tool-test-analysis-hash"><span>{t("tools.evidencePreviewHashBrowserServerBindingOnly")}</span>{evidenceHash ? <code>{evidenceHash}</code> : <small>{hashError || t("tools.checkingServerComputedSHAN256Binding")}</small>}</div>
+    <details className="tool-test-analysis-preview"><summary>{t("tools.reviewTheExactSanitizedEvidencePreview")}</summary><pre>{JSON.stringify(preview, null, 2)}</pre></details>
+    {expired && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>{t("tools.evidenceExpired")}</strong><small>{t("tools.runANewExactRevisionLiveTestBeforeRequesting")}</small></span></div>}
+    {transcript.length > 0 && <div className="tool-test-analysis-transcript" aria-live="polite">{transcript.map((message, index) => <article className={message.role} key={`${message.role}:${index}`}><span>{message.role === "assistant" ? <Sparkles /> : <MessageSquareText />}</span><div><strong>{message.role === "assistant" ? t("tools.analysis") : t("tools.you")}</strong><p>{message.content}</p></div></article>)}</div>}
+    <label className="auth-field tool-test-analysis-question" htmlFor={`tool-test-analysis-question-${run.id}`}><span>{transcript.length > 0 ? t("tools.followUpQuestion") : t("tools.questionForAnalysis")}</span><textarea id={`tool-test-analysis-question-${run.id}`} maxLength={TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes} value={question} aria-invalid={Boolean(questionProblem)} aria-describedby={`tool-test-analysis-question-guidance-${run.id}${questionProblem ? ` tool-test-analysis-question-error-${run.id}` : ""}`} onChange={(event) => setQuestion(event.target.value)} placeholder={t("tools.askAboutTheRetainedShapesFindingsOrNonSecret")} /><small id={`tool-test-analysis-question-guidance-${run.id}`}>{questionBytes}/{TOOL_TEST_ANALYSIS_CHAT_LIMITS.maxMessageBytes} {t("tools.utfN8BytesDoNotIncludeSecretsRawValues")}</small>{questionProblem && <small className="error" id={`tool-test-analysis-question-error-${run.id}`} role="alert">{questionProblem}</small>}</label>
+    {consentGranted && <label className="tool-test-analysis-consent"><input type="checkbox" checked={consentGranted} onChange={(event) => setConsentGranted(event.target.checked)} /><span>{t("tools.iContinueToConsentToSendingTheProviderProjection")}</span></label>}
+    {analysisError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>{t("tools.analysisUnavailable")}</strong><small>{analysisError}</small></span></div>}
+    <div className="tool-test-analysis-actions"><Button outline disabled={busy || expired || !evidenceHash || !question.trim() || Boolean(questionProblem)} onClick={consentGranted ? () => { void sendAnalysis(); } : reviewConsent}>{busy ? t("tools.analysing") : consentGranted ? transcript.length > 0 ? t("tools.sendFollowUp") : t("tools.askAnalysis") : t("tools.reviewConsentAsk")}</Button><small>{consentGranted ? t("tools.consentAppliesOnlyToThisBrowserHeldConversationExact") : t("tools.theConfiguredProviderIsContactedOnlyAfterTheConsent")}</small></div>
     {analysis && <div className="tool-test-analysis-result">
-      <div className="analysis-summary"><span className="settings-icon"><Sparkles /></span><span><strong>Advisory reply</strong><small>{analysis.reply}</small></span><Badge color={analysis.provider_outcome === "succeeded" ? "green" : "amber"}>{analysis.provider_outcome}</Badge></div>
-      {analysis.findings.length > 0 && <section className="tool-test-analysis-findings"><h3>Advisory findings</h3>{analysis.findings.map((finding, index) => <div className="publish-validation" key={`${finding.code}:${index}`}><span><TriangleAlert /></span><span><strong>{finding.code}</strong><small>{finding.message}{finding.suggestion ? ` · ${finding.suggestion}` : ""}</small></span></div>)}</section>}
-      {proposal && <section className="tool-test-analysis-proposal"><div className="tool-test-analysis-proposal-heading"><span><strong>Reviewable contract proposal</strong><small>Bound to tool revision {proposal.base_revision} · {proposal.changes.length} changed top-level field{proposal.changes.length === 1 ? "" : "s"} · never applied automatically</small></span><Badge color={proposal.valid ? "green" : "red"}>{proposal.valid ? "Locally valid" : "Needs review"}</Badge></div>
-        {proposal.changes.length > 0 ? <ul>{proposal.changes.map((change) => <li key={change.field}><span><code>{change.field}</code>{change.security_sensitive && <Badge color="amber">Security-sensitive</Badge>}</span><small>{change.rationale || "Review this proposed field change."}</small></li>)}</ul> : <div className="empty-row">The provider returned the unchanged exact-revision contract.</div>}
+      <div className="analysis-summary"><span className="settings-icon"><Sparkles /></span><span><strong>{t("tools.advisoryReply")}</strong><small>{analysis.reply}</small></span><Badge color={analysis.provider_outcome === "succeeded" ? "green" : "amber"}>{analysis.provider_outcome}</Badge></div>
+      {analysis.findings.length > 0 && <section className="tool-test-analysis-findings"><h3>{t("tools.advisoryFindings")}</h3>{analysis.findings.map((finding, index) => <div className="publish-validation" key={`${finding.code}:${index}`}><span><TriangleAlert /></span><span><strong>{finding.code}</strong><small>{finding.message}{finding.suggestion ? t("tools.copy", { suggestion: String(finding.suggestion) }) : ""}</small></span></div>)}</section>}
+      {proposal && <section className="tool-test-analysis-proposal"><div className="tool-test-analysis-proposal-heading"><span><strong>{t("tools.reviewableContractProposal")}</strong><small>{t("tools.boundToToolRevision")} {proposal.base_revision} · {proposal.changes.length} {t("tools.changedTopLevelField")}{proposal.changes.length === 1 ? "" : t("tools.s")} {t("tools.neverAppliedAutomatically")}</small></span><Badge color={proposal.valid ? "green" : "red"}>{proposal.valid ? t("tools.locallyValid") : t("tools.needsReview")}</Badge></div>
+        {proposal.changes.length > 0 ? <ul>{proposal.changes.map((change) => <li key={change.field}><span><code>{change.field}</code>{change.security_sensitive && <Badge color="amber">{t("tools.securitySensitive")}</Badge>}</span><small>{change.rationale || t("tools.reviewThisProposedFieldChange")}</small></li>)}</ul> : <div className="empty-row">{t("tools.theProviderReturnedTheUnchangedExactRevisionContract")}</div>}
         {proposal.findings.length > 0 && <div className="tool-test-analysis-proposal-findings">{proposal.findings.map((finding, index) => <div className="publish-validation" key={`${finding.code}:${index}`}><span>{finding.level === "error" ? <XCircle /> : <TriangleAlert />}</span><span><strong>{finding.code}</strong><small>{finding.message}</small></span></div>)}</div>}
-        <details className="tool-test-analysis-proposed-draft"><summary>Review the complete locally validated proposal</summary><pre>{JSON.stringify(proposal.draft, null, 2)}</pre></details>
-        <footer>{proposal.requires_clone || tool.state === "published" ? <><div className="private-default-note"><LockKeyhole />Published revisions are immutable. This proposal cannot be applied in place; clone the tool first, then review changes in the new draft without copying credentials.</div><Button outline onClick={() => onClone(proposal)}>Clone & review proposal</Button></> : <><div className="private-default-note"><ShieldCheck />This proposal has not changed the draft. Open the exact base revision in Builder to accept or reject each suggested field before saving.</div><Button outline onClick={() => onOpenBuilder(proposal)}>Open Builder to review</Button></>}</footer>
+        <details className="tool-test-analysis-proposed-draft"><summary>{t("tools.reviewTheCompleteLocallyValidatedProposal")}</summary><pre>{JSON.stringify(proposal.draft, null, 2)}</pre></details>
+        <footer>{proposal.requires_clone || tool.state === "published" ? <><div className="private-default-note"><LockKeyhole />{t("tools.publishedRevisionsAreImmutableThisProposalCannotBeApplied")}</div><Button outline onClick={() => onClone(proposal)}>{t("tools.cloneReviewProposal")}</Button></> : <><div className="private-default-note"><ShieldCheck />{t("tools.thisProposalHasNotChangedTheDraftOpenThe")}</div><Button outline onClick={() => onOpenBuilder(proposal)}>{t("tools.openBuilderToReview")}</Button></>}</footer>
       </section>}
     </div>}
-    <Dialog open={consentOpen} onClose={setConsentOpen} title="Send sanitized evidence to Analysis?" description="Your configured Analysis provider is an external processing boundary. Review exactly what crosses it for this run; this evidence will not fail over to a backup provider." actions={<><Button outline onClick={() => setConsentOpen(false)}>Cancel</Button><Button color="indigo" disabled={!consentChecked || !evidenceHash || !question.trim() || Boolean(questionProblem) || expired || busy} onClick={acceptConsentAndSend}>Consent & ask Analysis</Button></>}><div className="tool-test-analysis-consent-dialog"><div className="private-default-note"><ShieldCheck />The server recomputes <code>{evidenceHash || "the pending SHA-256 hash"}</code>, enforces this tool/run/revision and expiry, durably records the consented provider call, and rejects stale or changed provider bindings.</div><p>Only schema-declared property names, JSON types, array lengths, value-free literal-constraint markers, bounded metrics/finding codes, the structural non-secret contract, latest question, and bounded transcript are sent. Unexpected upstream property names, diagnostic paths, raw or literal values/bodies, headers, credentials, destinations, examples, actors, and internal IDs remain excluded.</p><label><input type="checkbox" checked={consentChecked} onChange={(event) => setConsentChecked(event.target.checked)} /><span>I explicitly consent to send this sanitized evidence and bounded conversation to the current configured Analysis provider only, with no backup-provider fallback.</span></label></div></Dialog>
+    <Dialog open={consentOpen} onClose={setConsentOpen} title={t("tools.sendSanitizedEvidenceToAnalysis")} description={t("tools.yourConfiguredAnalysisProviderIsAnExternalProcessingBoundary")} actions={<><Button outline onClick={() => setConsentOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={!consentChecked || !evidenceHash || !question.trim() || Boolean(questionProblem) || expired || busy} onClick={acceptConsentAndSend}>{t("tools.consentAskAnalysis")}</Button></>}><div className="tool-test-analysis-consent-dialog"><div className="private-default-note"><ShieldCheck />{t("tools.theServerRecomputes")} <code>{evidenceHash || t("tools.pendingSHA256Hash")}</code>{t("tools.enforcesThisToolRunRevisionAndExpiryDurablyRecords")}</div><p>{t("tools.onlySchemaDeclaredPropertyNamesJSONTypesArrayLengths")}</p><label><input type="checkbox" checked={consentChecked} onChange={(event) => setConsentChecked(event.target.checked)} /><span>{t("tools.iExplicitlyConsentToSendThisSanitizedEvidenceAnd")}</span></label></div></Dialog>
   </section>;
 }
 
 export function ToolDetailView({ productID, tool, connections, integrations, auditEvents, onChanged, onReviewProposal, onMessage, onNavigate }: { productID: string; tool: APITool | null; connections: APIMCPConnection[]; integrations: APIIntegration[]; auditEvents: APIAuditEvent[]; onChanged: () => Promise<void>; onReviewProposal: (tool: APITool, proposal: APIToolTestAnalysisProposal) => void; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const { t } = useTranslation();
+  const toolUpstreamAuthCopy: Record<NonNullable<APITool["upstream_auth"]>["type"], { label: string; description: string; credentialRequired: boolean }> = {
+    delegated_oauth: { label: t("tools.delegatedOAuth"), description: t("tools.delegatedOAuthDescription"), credentialRequired: false },
+    none: { label: t("tools.noAuthentication"), description: t("tools.noAuthenticationDescription"), credentialRequired: false },
+    bearer: { label: t("tools.bearerToken"), description: t("tools.bearerTokenDescription"), credentialRequired: true },
+    authorization_scheme: { label: t("tools.authorizationScheme"), description: t("tools.authorizationSchemeDescription"), credentialRequired: true },
+    api_key_header: { label: t("tools.apiKeyHeader"), description: t("tools.apiKeyHeaderDescription"), credentialRequired: true },
+    api_key_query: { label: t("tools.apiKeyQueryParameter"), description: t("tools.apiKeyQueryParameterDescription"), credentialRequired: true },
+    basic: { label: t("tools.httpBasic"), description: t("tools.httpBasicDescription"), credentialRequired: true },
+    oauth_client_credentials: { label: t("tools.oauthClientCredentials"), description: t("tools.oauthClientCredentialsDescription"), credentialRequired: true },
+    custom_header: { label: t("tools.customSecretHeader"), description: t("tools.customSecretHeaderDescription"), credentialRequired: true },
+  };
   const initialPolicy = tool ? toolPolicy(tool) : { requiredGrants: [], confirmationRequired: false, risk: "low", idempotencyRequired: false };
   const initialRisk = initialPolicy.risk === "medium" || initialPolicy.risk === "high" || initialPolicy.risk === "critical" ? initialPolicy.risk : "low";
   const toolID = tool?.id;
@@ -356,8 +361,8 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
     return () => { cancelled = true; };
   }, [activeTool?.owner_integration_id, activeTool?.runtime_service_connection_id]);
 
-  if (!toolID) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>Tool unavailable</h1><p>This tool could not be found in the deployment catalog.</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>;
-  if (!activeTool) return <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon">{detailStatus === "loading" ? <RefreshCw /> : <TriangleAlert />}</span><div><h1>{detailStatus === "loading" ? "Loading tool" : "Tool details unavailable"}</h1><p>{detailStatus === "loading" ? "Loading the complete contract and fixed execution target…" : "The complete tool contract could not be loaded. No editing or lifecycle action is available."}</p></div>{detailStatus === "error" ? <Button outline onClick={() => { setActiveTool(null); setDetailStatus("loading"); setDetailLoadAttempt((value) => value + 1); }}>Retry</Button> : <ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink>}</section>;
+  if (!toolID) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><h1>{t("tools.toolUnavailable")}</h1><p>{t("tools.thisToolCouldNotBeFoundInTheDeployment")}</p></div><ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.returnToTools")}</ConsoleLink></section>;
+  if (!activeTool) return <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon">{detailStatus === "loading" ? <RefreshCw /> : <TriangleAlert />}</span><div><h1>{detailStatus === "loading" ? t("tools.loadingTool") : t("tools.toolDetailsUnavailable")}</h1><p>{detailStatus === "loading" ? t("tools.loadingTheCompleteContractAndFixedExecutionTarget") : t("tools.theCompleteToolContractCouldNotBeLoadedNo")}</p></div>{detailStatus === "error" ? <Button outline onClick={() => { setActiveTool(null); setDetailStatus("loading"); setDetailLoadAttempt((value) => value + 1); }}>{t("common.retry")}</Button> : <ConsoleLink path={sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.returnToTools")}</ConsoleLink>}</section>;
 
   const currentTool = activeTool;
   const backendKind = activeTool.backend_kind ?? "http";
@@ -369,11 +374,11 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
   const connection = activeTool.mcp_connection_id ? connections.find((item) => item.id === activeTool.mcp_connection_id) : null;
   const upstreamAuthType = activeTool.upstream_auth?.type ?? "delegated_oauth";
   const upstreamAuth = toolUpstreamAuthCopy[upstreamAuthType] ?? toolUpstreamAuthCopy.delegated_oauth;
-  const credentialStatus = activeTool.credential_present ? "Stored" : upstreamAuth.credentialRequired ? "Missing" : upstreamAuthType === "delegated_oauth" ? "Caller token; not stored" : "Not required";
-  const cloneCredentialLabel = upstreamAuthType === "basic" ? "Password" : upstreamAuthType === "oauth_client_credentials" ? "Client secret" : upstreamAuthType === "bearer" ? "Bearer token" : "Secret value";
+  const credentialStatus = activeTool.credential_present ? t("tools.stored") : upstreamAuth.credentialRequired ? t("tools.missing") : upstreamAuthType === "delegated_oauth" ? t("tools.callerTokenNotStored") : t("tools.notRequired");
+  const cloneCredentialLabel = upstreamAuthType === "basic" ? t("tools.password") : upstreamAuthType === "oauth_client_credentials" ? t("tools.clientSecret") : upstreamAuthType === "bearer" ? t("tools.bearerToken") : t("tools.secretValue");
   const requestMappingEntries = Object.entries(activeTool.request_mapping?.parameter_locations ?? {});
-  const requestMappingSummary = requestMappingEntries.length > 0 ? `${requestMappingEntries.length} explicit parameter mapping${requestMappingEntries.length === 1 ? "" : "s"}` : `Default ${method.toUpperCase() === "GET" ? "query" : "body"} mapping`;
-  const responseMappingSummary = activeTool.response_mapping?.result_path ? `Result at ${activeTool.response_mapping.result_path}` : "Entire response document";
+  const requestMappingSummary = requestMappingEntries.length > 0 ? t("tools.explicitParameterMappings", { count: requestMappingEntries.length }) : t("tools.defaultRequestMapping", { location: method.toUpperCase() === "GET" ? t("tools.query") : t("tools.body") });
+  const responseMappingSummary = activeTool.response_mapping?.result_path ? t("tools.resultAt", { path: activeTool.response_mapping.result_path }) : t("tools.entireResponseDocument");
   const currentPolicy = toolPolicy(activeTool);
   const fullToolName = `${activeTool.namespace}.${activeTool.name}`;
   const normalizedTestMethod = method.toUpperCase();
@@ -387,17 +392,17 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
   const testIdempotencyRequired = mutationTest && currentPolicy.idempotencyRequired;
   const testIdempotencyValid = !testIdempotencyRequired || validToolTestIdempotencyKey(testIdempotencyKey);
   const liveTestLimitation = backendKind === "mcp"
-      ? "Imported MCP tools must be exercised through their reviewed MCP connection and a private MCP test client."
+      ? t("tools.importedMcpToolsLiveTestLimitation")
       : backendKind === "native"
-        ? "Native tools are source-managed and must be exercised through an authorized Private MCP client."
+        ? t("tools.nativeToolsLiveTestLimitation")
       : delegatedOAuthLiveTest
-        ? "Administrator live tests cannot accept an end-user delegated OAuth token. Stage 2 is disabled here and no upstream request will be made; exercise this tool through an authenticated end-user flow."
+        ? t("tools.delegatedOAuthLiveTestLimitation")
       : mutationTest && !currentPolicy.idempotencyRequired
-        ? "Mutation live tests require idempotency metadata in the stored policy. Clone or edit this contract in Builder and enable idempotency before making a real upstream call."
+        ? t("tools.mutationLiveTestLimitation")
       : !activeTool.runtime_service_connection_id && upstreamAuth.credentialRequired && !activeTool.credential_present
-          ? "Add the required encrypted upstream credential in the tool builder before making a live call."
+          ? t("tools.missingCredentialLiveTestLimitation")
           : !contractCheckPassed
-            ? "Run a successful Contract check for these exact arguments and revision first."
+            ? t("tools.contractCheckLiveTestLimitation")
             : "";
   const toolEvents = auditEvents.filter((event) => event.target_type === "tool" && event.target_id === activeTool.id).sort((left, right) => right.created_at.localeCompare(left.created_at));
   const riskColor = risk === "critical" ? "red" : risk === "high" ? "amber" : risk === "medium" ? "violet" : "zinc";
@@ -410,8 +415,8 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       const published = await api.publishTool(productID, currentTool.id, currentTool.revision);
       setActiveTool(published);
       const refreshed = await refreshAfterMutation();
-      onMessage(`${published.namespace}.${published.name} published and available for API binding.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
-    } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : "Tool could not be published."); } finally { setBusy(false); }
+      onMessage(t(refreshed ? "tools.publishedAndAvailableForAPIBinding" : "tools.publishedAndAvailableForAPIBindingReload", { namespace: published.namespace, name: published.name }));
+    } catch (error) { onMessage(error instanceof APIError || error instanceof Error ? error.message : t("tools.toolCouldNotBePublished")); } finally { setBusy(false); }
   }
 
   async function dryRunTool() {
@@ -427,23 +432,23 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       const argumentsObject = parseToolTestArguments(inputSnapshot);
       const result = await api.dryRunTool(productID, currentTool.id, argumentsObject);
       if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
-        onMessage("Contract-check result discarded because the visible test inputs changed while it was running.");
+        onMessage(t("tools.contractCheckResultDiscardedBecauseTheVisibleTestInputs"));
         return;
       }
       setTestResult(result);
       if (result.valid && !result.network_call_performed && result.revision === currentTool.revision) {
         setValidatedTestInput(inputSnapshot);
-        onMessage("Contract check passed without a network call.");
+        onMessage(t("tools.contractCheckPassedWithoutANetworkCall"));
         return;
       }
-      setContractCheckError("The persisted contract did not pass exact-revision validation.");
-      onMessage("Contract check returned a controlled failure without calling the upstream API.");
+      setContractCheckError(t("tools.persistedContractValidationFailed"));
+      onMessage(t("tools.contractCheckReturnedAControlledFailureWithoutCallingThe"));
     } catch (error) {
       if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
-        onMessage("Contract-check result discarded because the visible test inputs changed while it was running.");
+        onMessage(t("tools.contractCheckResultDiscardedBecauseTheVisibleTestInputs"));
         return;
       }
-      const message = unavailableConsoleCapability(error) ? "Contract checking is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Contract check could not run.";
+      const message = unavailableConsoleCapability(error) ? t("tools.contractCheckingUnavailable") : error instanceof APIError || error instanceof Error ? error.message : t("tools.contractCheckFailed");
       setContractCheckError(message);
       onMessage(message);
     } finally { setContractCheckBusy(false); }
@@ -457,11 +462,11 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       ...(testIdempotencyRequired ? { idempotency_key: idempotencyKey } : {}),
     });
     if (!versionedResponseIsCurrent(requestVersion, testFormVersionRef.current)) {
-      onMessage("Live-test result retained by the server but hidden here because the visible test inputs changed while it was running.");
+      onMessage(t("tools.liveTestResultRetainedByTheServerButHidden"));
       return false;
     }
     setLiveTestResult(result);
-    onMessage(result.outcome === "success" ? "Live upstream test completed with sanitized evidence." : `Live upstream test stopped safely during ${result.phase}.`);
+    onMessage(result.outcome === "success" ? t("tools.liveUpstreamTestCompletedWithSanitizedEvidence") : t("tools.liveUpstreamTestStoppedSafelyDuring", { phase: String(result.phase) }));
     return true;
   }
 
@@ -473,12 +478,12 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       return;
     }
     if (!testIdempotencyValid) {
-      setLiveTestError("Enter an idempotency key containing 16–200 visible ASCII characters.");
+      setLiveTestError(t("tools.invalidIdempotencyKey"));
       return;
     }
     let argumentsObject: Record<string, unknown>;
     try { argumentsObject = parseToolTestArguments(testInput); }
-    catch (error) { setLiveTestError(error instanceof Error ? error.message : "JSON arguments are invalid."); return; }
+    catch { setLiveTestError(t("tools.jsonArgumentsInvalid")); return; }
     const requestVersion = testFormVersionRef.current;
     const idempotencyKey = testIdempotencyKey;
     if (testConfirmationRequired) {
@@ -493,7 +498,7 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
     setLiveTestBusy(true);
     try { await executeLiveToolTest(argumentsObject, requestVersion, idempotencyKey); }
     catch (error) {
-      const message = unavailableConsoleCapability(error) ? "Live upstream testing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Live upstream test could not run.";
+      const message = unavailableConsoleCapability(error) ? t("tools.liveUpstreamTestingUnavailable") : error instanceof APIError || error instanceof Error ? error.message : t("tools.liveUpstreamTestFailed");
       setLiveTestError(message);
       onMessage(message);
     } finally { setLiveTestBusy(false); }
@@ -508,7 +513,7 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       setPendingTestArguments(null);
       pendingTestVersionRef.current = 0;
       pendingTestIdempotencyKeyRef.current = "";
-      setLiveTestError("The visible test inputs changed. Run a new Contract check before requesting confirmation again.");
+      setLiveTestError(t("tools.visibleTestInputsChanged"));
       return;
     }
     setLiveTestBusy(true);
@@ -521,14 +526,14 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
         typed_tool_name: testConfirmationName,
         acknowledge_side_effects: testSideEffectsAcknowledged,
       });
-      if (confirmation.tool_id !== currentTool.id || confirmation.tool_revision !== currentTool.revision) throw new Error("The server did not bind confirmation to this exact tool revision.");
+      if (confirmation.tool_id !== currentTool.id || confirmation.tool_revision !== currentTool.revision) throw new Error(t("tools.confirmationBindingInvalid"));
       await executeLiveToolTest(pendingTestArguments, requestVersion, idempotencyKey, confirmation.confirmation_nonce);
       setTestConfirmationOpen(false);
       setPendingTestArguments(null);
       pendingTestVersionRef.current = 0;
       pendingTestIdempotencyKeyRef.current = "";
     } catch (error) {
-      const message = unavailableConsoleCapability(error) ? "Live upstream testing is not enabled by this service version yet." : error instanceof APIError || error instanceof Error ? error.message : "Live upstream test could not run.";
+      const message = unavailableConsoleCapability(error) ? t("tools.liveUpstreamTestingUnavailable") : error instanceof APIError || error instanceof Error ? error.message : t("tools.liveUpstreamTestFailed");
       setLiveTestError(message);
       setTestConfirmationOpen(false);
       setPendingTestArguments(null);
@@ -540,18 +545,18 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
 
   function handleToolTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    const currentIndex = TOOL_DETAIL_TABS.findIndex((tab) => `tool-tab-${tab.id}` === document.activeElement?.id);
+    const currentIndex = TOOL_DETAIL_TABS.findIndex((tab) => `tool-tab-${tab}` === document.activeElement?.id);
     if (currentIndex < 0) return;
     event.preventDefault();
     const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? TOOL_DETAIL_TABS.length - 1 : event.key === "ArrowRight" ? (currentIndex + 1) % TOOL_DETAIL_TABS.length : (currentIndex - 1 + TOOL_DETAIL_TABS.length) % TOOL_DETAIL_TABS.length;
     const nextTab = TOOL_DETAIL_TABS[nextIndex];
-    setActiveTab(nextTab.id);
-    requestAnimationFrame(() => document.getElementById(`tool-tab-${nextTab.id}`)?.focus());
+    setActiveTab(nextTab);
+    requestAnimationFrame(() => document.getElementById(`tool-tab-${nextTab}`)?.focus());
   }
 
   function openCloneTool(proposal: APIToolTestAnalysisProposal | null = null) {
 	if ((currentTool.backend_kind ?? "http") !== "http") {
-	  onMessage("Source-managed and imported tools cannot be cloned.");
+	  onMessage(t("tools.sourceManagedAndImportedToolsCannotBeCloned"));
 	  return;
 	}
     const suffix = "_next";
@@ -571,10 +576,13 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       setCloneOpen(false);
       setCloneCredential("");
       setPendingCloneProposal(null);
-      onMessage(`${cloned.namespace}.${cloned.name} created as an independent draft.${proposalToReview ? " The live-test proposal is ready for per-field review in Builder." : ""}${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
+      const messageKey = proposalToReview
+        ? refreshed ? "tools.createdDraftWithProposal" : "tools.createdDraftWithProposalReload"
+        : refreshed ? "tools.createdAsAnIndependentDraft" : "tools.createdAsAnIndependentDraftReload";
+      onMessage(t(messageKey, { namespace: cloned.namespace, name: cloned.name }));
       if (proposalToReview) onReviewProposal(cloned, proposalToReview);
       else onNavigate(entityPath("tool", cloned.id));
-    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool cloning is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be cloned."); } finally { setBusy(false); }
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? t("tools.toolCloningIsNotEnabledByThisServiceVersion") : error instanceof APIError ? error.message : t("tools.toolCouldNotBeCloned")); } finally { setBusy(false); }
   }
 
   async function retireTool() {
@@ -584,107 +592,122 @@ export function ToolDetailView({ productID, tool, connections, integrations, aud
       setActiveTool(retired);
       const refreshed = await refreshAfterMutation();
       setRetireOpen(false);
-      onMessage(`Tool retired. Existing exact API bindings are now unresolved and must be removed before publication.${refreshed ? "" : " Reload to refresh the surrounding catalog."}`);
-    } catch (error) { onMessage(unavailableConsoleCapability(error) ? "Tool retirement is not enabled by this service version yet." : error instanceof APIError ? error.message : "Tool could not be retired."); } finally { setBusy(false); }
+      onMessage(t(refreshed ? "tools.toolRetiredExistingExactAPIBindingsAreNowUnresolved" : "tools.toolRetiredExistingExactAPIBindingsAreNowUnresolvedReload"));
+    } catch (error) { onMessage(unavailableConsoleCapability(error) ? t("tools.toolRetirementIsNotEnabledByThisServiceVersion") : error instanceof APIError ? error.message : t("tools.toolCouldNotBeRetired")); } finally { setBusy(false); }
   }
 
   const readiness = [
-    { label: "Agent contract", ready: Boolean(activeTool.description && Object.keys(activeTool.input_schema).length && Object.keys(activeTool.output_schema).length) },
-    { label: backendKind === "native" ? "Pinned plugin source" : activeTool.runtime_service_connection_id ? "API service connection" : "Fixed execution target", ready: backendKind === "native" ? Boolean(activeTool.native_plugin_id && activeTool.native_contract_hash) : backendKind === "mcp" ? Boolean(connection && activeTool.upstream_tool_name) : activeTool.runtime_service_connection_id ? Boolean(activeTool.http_path && runtimeConnection) : Boolean(activeTool.endpoint) },
-    { label: "Safety policy", ready: ["low", "medium", "high", "critical"].includes(currentPolicy.risk ?? "low") },
-    { label: "Published for managed binding", ready: activeTool.state === "published" && !activeTool.upstream_drifted },
+    { label: t("tools.agentContract"), ready: Boolean(activeTool.description && Object.keys(activeTool.input_schema).length && Object.keys(activeTool.output_schema).length) },
+    { label: backendKind === "native" ? t("tools.pinnedPluginSource") : activeTool.runtime_service_connection_id ? t("tools.apiServiceConnection") : t("tools.fixedExecutionTarget"), ready: backendKind === "native" ? Boolean(activeTool.native_plugin_id && activeTool.native_contract_hash) : backendKind === "mcp" ? Boolean(connection && activeTool.upstream_tool_name) : activeTool.runtime_service_connection_id ? Boolean(activeTool.http_path && runtimeConnection) : Boolean(activeTool.endpoint) },
+    { label: t("tools.safetyPolicy"), ready: ["low", "medium", "high", "critical"].includes(currentPolicy.risk ?? "low") },
+    { label: t("tools.publishedForManagedBinding"), ready: activeTool.state === "published" && !activeTool.upstream_drifted },
   ];
+  const liveTestStageDescription = testConfirmationRequired
+    ? mutationTest
+      ? t(tokenExchangeTest ? "tools.liveTestStageReviewMutationWithTokenExchange" : "tools.liveTestStageReviewMutation")
+      : t(tokenExchangeTest ? "tools.liveTestStageReviewReadWithTokenExchange" : "tools.liveTestStageReviewRead")
+    : t(tokenExchangeTest ? "tools.liveTestStageCallWithTokenExchange" : "tools.liveTestStageCall");
+  const liveTestConfirmationDescription = mutationTest
+    ? t(tokenExchangeTest ? "tools.confirmMutationLiveTestWithTokenExchange" : "tools.confirmMutationLiveTest", { method: normalizedTestMethod, name: fullToolName, revision: currentTool.revision })
+    : t(tokenExchangeTest ? "tools.confirmReadLiveTestWithTokenExchange" : "tools.confirmReadLiveTest", { method: normalizedTestMethod, name: fullToolName, revision: currentTool.revision });
+  const liveTestRequestDescription = mutationTest
+    ? t(tokenExchangeTest ? "tools.mutationRequestWithTokenExchange" : "tools.mutationRequest")
+    : t(tokenExchangeTest ? "tools.readRequestWithTokenExchange" : "tools.readRequest");
+  const liveTestAcknowledgement = mutationTest
+    ? t(tokenExchangeTest ? "tools.acknowledgeMutationWithTokenExchange" : "tools.acknowledgeMutation")
+    : t(tokenExchangeTest ? "tools.acknowledgeReadWithTokenExchange" : "tools.acknowledgeRead");
 
   return <>
-    <div className="entity-breadcrumb"><ConsoleLink path={owningIntegration ? integrationPath(owningIntegration.id, "tools") : sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{owningIntegration ? `${owningIntegration.display_name} tools` : "Common tools"}</ConsoleLink><Badge color={apiOwned || activeTool.backend_kind !== "http" ? "violet" : "zinc"}>{apiOwned ? "API scoped" : activeTool.backend_kind === "native" ? "Native plugin" : activeTool.backend_kind === "mcp" ? "MCP" : "Common HTTP"}</Badge></div>
-    <PageHeading eyebrow={owningIntegration ? `${owningIntegration.display_name} API tool` : "Common deployment tool"} title={`${activeTool.namespace}.${activeTool.name}`} action={<span className="heading-actions">{activeTool.state === "draft" && <>{activeTool.backend_kind === "http" ? <Button outline disabled={busy} onClick={() => onNavigate(toolBuilderPath(activeTool.id))}><Wrench data-slot="icon" />Edit in builder</Button> : activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">Review connection</ConsoleLink>}<Button color="indigo" disabled={busy || activeTool.upstream_drifted} onClick={publishToolRevision}>Publish tool</Button></>}{activeTool.state === "published" && <>{activeTool.backend_kind === "http" && (owningIntegration ? <Button outline disabled={busy} onClick={() => onNavigate(integrationToolBuilderPath(owningIntegration.id))}><Plus data-slot="icon" />Create another API tool</Button> : <Button outline disabled={busy} onClick={() => openCloneTool()}><Copy data-slot="icon" />Clone as new tool</Button>)}{activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">Review connection</ConsoleLink>}<Button outline disabled={busy} onClick={() => setRetireOpen(true)}>Retire</Button></>}{activeTool.state === "retired" && <Badge color="zinc">Retired</Badge>}</span>} />
-    <div className="page-tabs" role="tablist" aria-label="Tool sections">{TOOL_DETAIL_TABS.map((tab) => <button type="button" role="tab" id={`tool-tab-${tab.id}`} aria-controls={`tool-panel-${tab.id}`} aria-selected={activeTab === tab.id} tabIndex={activeTab === tab.id ? 0 : -1} key={tab.id} className={`page-tab ${activeTab === tab.id ? "active" : ""}`} onKeyDown={handleToolTabKeyDown} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>)}</div>
+    <div className="entity-breadcrumb"><ConsoleLink path={owningIntegration ? integrationPath(owningIntegration.id, "tools") : sectionPath("tools")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{owningIntegration ? t("tools.tools", { display_name: String(owningIntegration.display_name) }) : t("tools.commonTools")}</ConsoleLink><Badge color={apiOwned || activeTool.backend_kind !== "http" ? "violet" : "zinc"}>{apiOwned ? t("tools.apiScoped") : activeTool.backend_kind === "native" ? t("tools.nativePlugin") : activeTool.backend_kind === "mcp" ? "MCP" : t("tools.commonHTTP")}</Badge></div>
+    <PageHeading eyebrow={owningIntegration ? t("tools.apiTool", { display_name: String(owningIntegration.display_name) }) : t("tools.commonDeploymentTool")} title={t("tools.copy2", { namespace: String(activeTool.namespace), name: String(activeTool.name) })} action={<span className="heading-actions">{activeTool.state === "draft" && <>{activeTool.backend_kind === "http" ? <Button outline disabled={busy} onClick={() => onNavigate(toolBuilderPath(activeTool.id))}><Wrench data-slot="icon" />{t("tools.editInBuilder")}</Button> : activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">{t("tools.reviewConnection")}</ConsoleLink>}<Button color="indigo" disabled={busy || activeTool.upstream_drifted} onClick={publishToolRevision}>{t("tools.publishTool")}</Button></>}{activeTool.state === "published" && <>{activeTool.backend_kind === "http" && (owningIntegration ? <Button outline disabled={busy} onClick={() => onNavigate(integrationToolBuilderPath(owningIntegration.id))}><Plus data-slot="icon" />{t("tools.createAnotherAPITool")}</Button> : <Button outline disabled={busy} onClick={() => openCloneTool()}><Copy data-slot="icon" />{t("tools.cloneAsNewTool")}</Button>)}{activeTool.backend_kind === "mcp" && connection && <ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-back-link">{t("tools.reviewConnection")}</ConsoleLink>}<Button outline disabled={busy} onClick={() => setRetireOpen(true)}>{t("tools.retire")}</Button></>}{activeTool.state === "retired" && <Badge color="zinc">{t("tools.retired")}</Badge>}</span>} />
+    <div className="page-tabs" role="tablist" aria-label={t("tools.toolSections")}>{TOOL_DETAIL_TABS.map((tab) => <button type="button" role="tab" id={`tool-tab-${tab}`} aria-controls={`tool-panel-${tab}`} aria-selected={activeTab === tab} tabIndex={activeTab === tab ? 0 : -1} key={tab} className={`page-tab ${activeTab === tab ? "active" : ""}`} onKeyDown={handleToolTabKeyDown} onClick={() => setActiveTab(tab)}>{tab === "overview" ? t("routes.overview") : tab === "contract" ? t("common.contract") : tab === "execution" ? t("common.execution") : tab === "authorization" ? t("common.authorization") : tab === "tests" ? t("common.tests") : tab === "usage" ? t("common.usage") : t("routes.history")}</button>)}</div>
 
     {activeTab === "overview" && <div className="tool-detail-section" role="tabpanel" id="tool-panel-overview" aria-labelledby="tool-tab-overview" tabIndex={0}>
-      <dl className="compact-metrics tool-detail-metrics"><div className="compact-metric"><dt>State</dt><dd><strong>{activeTool.state}</strong><small>revision {activeTool.revision}</small></dd></div><div className="compact-metric"><dt>Backend</dt><dd><strong>{activeTool.backend_kind === "native" ? "Native" : activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"}</strong><small>{activeTool.backend_kind === "native" ? `${activeTool.native_plugin_id}@${activeTool.native_plugin_version}` : activeTool.backend_kind === "mcp" ? activeTool.upstream_tool_name || "Upstream tool" : `${activeTool.http_method} request`}</small></dd></div><div className="compact-metric"><dt>Risk</dt><dd><strong>{currentPolicy.risk ?? "low"}</strong><small>{currentPolicy.confirmationRequired ? "Confirmation required" : "No confirmation"}</small></dd></div><div className="compact-metric"><dt>Current config</dt><dd><strong>{usageStatus === "loading" ? "…" : usages.length}</strong><small>API binding{usages.length === 1 ? "" : "s"}</small></dd></div></dl>
-      <div className="entity-workspace-grid"><section className="panel"><PanelHeader title="Readiness" description={apiOwned ? "This definition remains owned by one API and inherits its environment-specific execution boundary." : "A published common tool becomes eligible for a managed API to attach; publication alone does not select it for that API."} />{readiness.map((item) => <div className="integration-health-check" key={item.label}><span className={`health-icon ${item.ready ? "ready" : ""}`}>{item.ready ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{item.label}</strong><small>{item.ready ? "Ready" : "Action required"}</small></span><Badge color={item.ready ? "green" : "amber"}>{item.ready ? "Ready" : "Review"}</Badge></div>)}</section><aside className="entity-workspace-rail"><section className="panel entity-policy-panel"><PanelHeader title="Delivery boundary" /><div className="entity-policy-check"><span className="ready"><ShieldCheck /></span><span><strong>Private MCP</strong><small>{activeTool.state === "published" ? "Managed API discovery requires an exact tool and authorization binding." : "Publish before managed APIs can bind this tool."}</small></span></div></section><section className="panel entity-detail-panel"><PanelHeader title="Identity" /><dl className="entity-detail-grid compact-detail-grid"><div><dt>Tool ID</dt><dd>{activeTool.id}</dd></div><div><dt>Scope</dt><dd>{owningIntegration?.display_name ?? "Common"}</dd></div><div><dt>Revision</dt><dd>{activeTool.revision}</dd></div><div><dt>Drift</dt><dd>{activeTool.upstream_drifted ? "Detected" : "None"}</dd></div><div><dt>Lifecycle</dt><dd>{activeTool.state}</dd></div></dl></section></aside></div>
+      <dl className="compact-metrics tool-detail-metrics"><div className="compact-metric"><dt>{t("tools.state")}</dt><dd><strong>{activeTool.state}</strong><small>{t("tools.revisionNumber", { revision: activeTool.revision })}</small></dd></div><div className="compact-metric"><dt>{t("tools.backend")}</dt><dd><strong>{activeTool.backend_kind === "native" ? t("tools.native") : activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"}</strong><small>{activeTool.backend_kind === "native" ? t("tools.copy3", { native_plugin_id: String(activeTool.native_plugin_id), native_plugin_version: String(activeTool.native_plugin_version) }) : activeTool.backend_kind === "mcp" ? activeTool.upstream_tool_name || t("tools.upstreamTool") : t("tools.request", { http_method: String(activeTool.http_method) })}</small></dd></div><div className="compact-metric"><dt>{t("tools.risk")}</dt><dd><strong>{currentPolicy.risk ?? t("tools.low")}</strong><small>{currentPolicy.confirmationRequired ? t("tools.confirmationRequired") : t("tools.noConfirmation")}</small></dd></div><div className="compact-metric"><dt>{t("tools.currentConfig")}</dt><dd><strong>{usageStatus === "loading" ? "…" : usages.length}</strong><small>{t("tools.apiBindings", { count: usages.length })}</small></dd></div></dl>
+      <div className="entity-workspace-grid"><section className="panel"><PanelHeader title={t("tools.readiness")} description={apiOwned ? t("tools.thisDefinitionRemainsOwnedByOneAPIAndInherits") : t("tools.aPublishedCommonToolBecomesEligibleForAManaged")} />{readiness.map((item) => <div className="integration-health-check" key={item.label}><span className={`health-icon ${item.ready ? "ready" : ""}`}>{item.ready ? <CheckCircle2 /> : <XCircle />}</span><span><strong>{item.label}</strong><small>{item.ready ? t("tools.ready") : t("tools.actionRequired")}</small></span><Badge color={item.ready ? "green" : "amber"}>{item.ready ? t("tools.ready") : t("tools.review")}</Badge></div>)}</section><aside className="entity-workspace-rail"><section className="panel entity-policy-panel"><PanelHeader title={t("tools.deliveryBoundary")} /><div className="entity-policy-check"><span className="ready"><ShieldCheck /></span><span><strong>{t("tools.privateMCP")}</strong><small>{activeTool.state === "published" ? t("tools.managedAPIDiscoveryRequiresAnExactToolAndAuthorization") : t("tools.publishBeforeManagedAPIsCanBindThisTool")}</small></span></div></section><section className="panel entity-detail-panel"><PanelHeader title={t("tools.identity")} /><dl className="entity-detail-grid compact-detail-grid"><div><dt>{t("tools.toolID")}</dt><dd>{activeTool.id}</dd></div><div><dt>{t("tools.scope")}</dt><dd>{owningIntegration?.display_name ?? t("tools.common")}</dd></div><div><dt>{t("tools.revision")}</dt><dd>{activeTool.revision}</dd></div><div><dt>{t("tools.drift")}</dt><dd>{activeTool.upstream_drifted ? t("tools.detected") : t("tools.none")}</dd></div><div><dt>{t("tools.lifecycle")}</dt><dd>{activeTool.state}</dd></div></dl></section></aside></div>
     </div>}
 
-    {activeTab === "contract" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-contract" aria-labelledby="tool-tab-contract" tabIndex={0}><PanelHeader title="Agent contract" description="Read-only exact revision. Use the Tool Builder to change an HTTP draft; published tools remain immutable." /><label className="auth-field"><span>Purpose</span><textarea readOnly value={description} /></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>Input JSON Schema</span><textarea spellCheck={false} readOnly value={inputSchema} /></label><label className="auth-field"><span>Output JSON Schema</span><textarea spellCheck={false} readOnly value={outputSchema} /></label></div></section>}
+    {activeTab === "contract" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-contract" aria-labelledby="tool-tab-contract" tabIndex={0}><PanelHeader title={t("tools.agentContract")} description={t("tools.readOnlyExactRevisionUseTheToolBuilderTo")} /><label className="auth-field"><span>{t("tools.purpose")}</span><textarea readOnly value={description} /></label><div className="two-fields tool-schema-fields"><label className="auth-field"><span>{t("tools.inputJSONSchema")}</span><textarea spellCheck={false} readOnly value={inputSchema} /></label><label className="auth-field"><span>{t("tools.outputJSONSchema")}</span><textarea spellCheck={false} readOnly value={outputSchema} /></label></div></section>}
 
     {activeTab === "execution" && <div className="entity-workspace-grid" role="tabpanel" id="tool-panel-execution" aria-labelledby="tool-tab-execution" tabIndex={0}>
       <section className="panel tool-editor-page">
-        <PanelHeader title="Execution" description="The destination, authentication mode, and request mappings are fixed before publication and cannot be supplied by an agent." />
-        <div className="two-fields"><label className="auth-field"><span>Backend</span><input value={activeTool.backend_kind === "native" ? "Native plugin" : activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"} readOnly /></label><label className="auth-field"><span>Timeout (ms)</span><input readOnly type="number" value={timeout} /></label></div>
+        <PanelHeader title={t("tools.execution")} description={t("tools.theDestinationAuthenticationModeAndRequestMappingsAreFixed")} />
+        <div className="two-fields"><label className="auth-field"><span>{t("tools.backend")}</span><input value={activeTool.backend_kind === "native" ? t("tools.nativePlugin") : activeTool.backend_kind === "mcp" ? "MCP" : "HTTP"} readOnly /></label><label className="auth-field"><span>{t("tools.timeoutMs")}</span><input readOnly type="number" value={timeout} /></label></div>
         {activeTool.backend_kind === "http" ? activeTool.runtime_service_connection_id ? <>
-          <div className="two-fields"><label className="auth-field"><span>Method</span><input value={method} readOnly /></label><label className="auth-field"><span>Relative path</span><input readOnly value={activeTool.http_path ?? ""} /></label></div>
-          <div className="private-default-note"><LockKeyhole />The service host, authentication, and encrypted credential are inherited from this API&apos;s Access configuration. This tool stores no independent destination or secret.</div>
+          <div className="two-fields"><label className="auth-field"><span>{t("tools.method")}</span><input value={method} readOnly /></label><label className="auth-field"><span>{t("tools.relativePath")}</span><input readOnly value={activeTool.http_path ?? ""} /></label></div>
+          <div className="private-default-note"><LockKeyhole />{t("tools.theServiceHostAuthenticationAndEncryptedCredentialAreInherited")}</div>
           <dl className="entity-detail-grid compact-detail-grid">
-            <div><dt>Service connection</dt><dd>{runtimeConnection?.name ?? "Loading saved connection…"}</dd></div>
-            <div><dt>Connection ID</dt><dd>{activeTool.runtime_service_connection_id}</dd></div>
-            <div><dt>Authentication</dt><dd>{runtimeAuthentication?.label ?? "Inherited from API"}</dd></div>
-            <div><dt>Request mapping</dt><dd>{requestMappingSummary}</dd></div>
-            <div><dt>Response mapping</dt><dd>{responseMappingSummary}</dd></div>
+            <div><dt>{t("tools.serviceConnection")}</dt><dd>{runtimeConnection?.name ?? t("tools.loadingSavedConnection")}</dd></div>
+            <div><dt>{t("tools.connectionID")}</dt><dd>{activeTool.runtime_service_connection_id}</dd></div>
+            <div><dt>{t("tools.authentication")}</dt><dd>{runtimeAuthentication?.label ?? t("tools.inheritedFromAPI")}</dd></div>
+            <div><dt>{t("tools.requestMapping")}</dt><dd>{requestMappingSummary}</dd></div>
+            <div><dt>{t("tools.responseMapping")}</dt><dd>{responseMappingSummary}</dd></div>
           </dl>
-          <details className="advanced-details inline-advanced"><summary>Mappings and examples</summary><div className="two-fields tool-schema-fields">
-            <label className="auth-field"><span>Request mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_mapping ?? { parameter_locations: {} }, "Not configured")} spellCheck={false} /></label>
-            <label className="auth-field"><span>Response mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_mapping ?? {}, "Not configured")} spellCheck={false} /></label>
-            <label className="auth-field"><span>Request example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_example, "Not configured")} spellCheck={false} /></label>
-            <label className="auth-field"><span>Response example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_example, "Not configured")} spellCheck={false} /></label>
+          <details className="advanced-details inline-advanced"><summary>{t("tools.mappingsAndExamples")}</summary><div className="two-fields tool-schema-fields">
+            <label className="auth-field"><span>{t("tools.requestMapping")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_mapping ?? { parameter_locations: {} }, t("tools.notConfigured"))} spellCheck={false} /></label>
+            <label className="auth-field"><span>{t("tools.responseMapping")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_mapping ?? {}, t("tools.notConfigured"))} spellCheck={false} /></label>
+            <label className="auth-field"><span>{t("tools.requestExample")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_example, t("tools.notConfigured"))} spellCheck={false} /></label>
+            <label className="auth-field"><span>{t("tools.responseExample")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_example, t("tools.notConfigured"))} spellCheck={false} /></label>
           </div></details>
         </> : <>
-          <div className="two-fields"><label className="auth-field"><span>Method</span><input value={method} readOnly /></label><label className="auth-field"><span>Fixed endpoint</span><input readOnly type="url" value={endpoint} /></label></div>
-          <div className="private-default-note"><LockKeyhole />{upstreamAuth.description} Agents cannot read stored credentials or change the configured destination.</div>
+          <div className="two-fields"><label className="auth-field"><span>{t("tools.method")}</span><input value={method} readOnly /></label><label className="auth-field"><span>{t("tools.fixedEndpoint")}</span><input readOnly type="url" value={endpoint} /></label></div>
+          <div className="private-default-note"><LockKeyhole />{upstreamAuth.description} {t("tools.agentsCannotReadStoredCredentialsOrChangeTheConfigured")}</div>
           <dl className="entity-detail-grid compact-detail-grid">
-            <div><dt>Upstream authentication</dt><dd>{upstreamAuth.label}</dd></div>
-            <div><dt>Credential</dt><dd>{credentialStatus}</dd></div>
-            <div><dt>Request mapping</dt><dd>{requestMappingSummary}</dd></div>
-            <div><dt>Response mapping</dt><dd>{responseMappingSummary}</dd></div>
+            <div><dt>{t("tools.upstreamAuthentication")}</dt><dd>{upstreamAuth.label}</dd></div>
+            <div><dt>{t("tools.credential")}</dt><dd>{credentialStatus}</dd></div>
+            <div><dt>{t("tools.requestMapping")}</dt><dd>{requestMappingSummary}</dd></div>
+            <div><dt>{t("tools.responseMapping")}</dt><dd>{responseMappingSummary}</dd></div>
           </dl>
-          <details className="advanced-details inline-advanced"><summary>Authentication, mappings, and examples</summary><div className="two-fields tool-schema-fields">
-            <label className="auth-field"><span>Upstream authentication</span><textarea className="code-input" readOnly value={toolJSON(activeTool.upstream_auth ?? { type: upstreamAuthType }, "Not configured")} spellCheck={false} /><small>Non-secret configuration only. Stored credential material is never returned.</small></label>
-            <label className="auth-field"><span>Request mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_mapping ?? { parameter_locations: {} }, "Not configured")} spellCheck={false} /></label>
-            <label className="auth-field"><span>Response mapping</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_mapping ?? {}, "Not configured")} spellCheck={false} /></label>
-            <label className="auth-field"><span>Request example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_example, "Not configured")} spellCheck={false} /></label>
-            <label className="auth-field"><span>Response example</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_example, "Not configured")} spellCheck={false} /></label>
+          <details className="advanced-details inline-advanced"><summary>{t("tools.authenticationMappingsAndExamples")}</summary><div className="two-fields tool-schema-fields">
+            <label className="auth-field"><span>{t("tools.upstreamAuthentication")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.upstream_auth ?? { type: upstreamAuthType }, t("tools.notConfigured"))} spellCheck={false} /><small>{t("tools.nonSecretConfigurationOnlyStoredCredentialMaterialIsNever")}</small></label>
+            <label className="auth-field"><span>{t("tools.requestMapping")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_mapping ?? { parameter_locations: {} }, t("tools.notConfigured"))} spellCheck={false} /></label>
+            <label className="auth-field"><span>{t("tools.responseMapping")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_mapping ?? {}, t("tools.notConfigured"))} spellCheck={false} /></label>
+            <label className="auth-field"><span>{t("tools.requestExample")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.request_example, t("tools.notConfigured"))} spellCheck={false} /></label>
+            <label className="auth-field"><span>{t("tools.responseExample")}</span><textarea className="code-input" readOnly value={toolJSON(activeTool.response_example, t("tools.notConfigured"))} spellCheck={false} /></label>
           </div></details>
-        </> : activeTool.backend_kind === "native" ? <><dl className="entity-detail-grid"><div><dt>Plugin</dt><dd>{activeTool.native_plugin_id}</dd></div><div><dt>Plugin version</dt><dd>{activeTool.native_plugin_version}</dd></div><div><dt>SDK version</dt><dd>{activeTool.native_sdk_version}</dd></div><div><dt>Tool ID</dt><dd>{activeTool.native_tool_id}</dd></div><div><dt>Identity</dt><dd>{activeTool.identity_requirement}</dd></div><div><dt>State scope</dt><dd>{activeTool.state_scope}</dd></div><div><dt>Effect</dt><dd>{activeTool.effect}</dd></div><div><dt>Idempotency</dt><dd>{activeTool.idempotency_mode}</dd></div></dl><div className="private-default-note"><ShieldCheck />This contract is source-managed. Execution requires the active plugin instance and exact manifest and tool hashes pinned by this revision.</div></> : <dl className="entity-detail-grid"><div><dt>Upstream tool</dt><dd>{activeTool.upstream_tool_name}</dd></div><div><dt>Schema hash</dt><dd>{activeTool.upstream_schema_hash}</dd></div></dl>}
+        </> : activeTool.backend_kind === "native" ? <><dl className="entity-detail-grid"><div><dt>{t("tools.plugin")}</dt><dd>{activeTool.native_plugin_id}</dd></div><div><dt>{t("tools.pluginVersion")}</dt><dd>{activeTool.native_plugin_version}</dd></div><div><dt>{t("tools.sdkVersion")}</dt><dd>{activeTool.native_sdk_version}</dd></div><div><dt>{t("tools.toolID")}</dt><dd>{activeTool.native_tool_id}</dd></div><div><dt>{t("tools.identity")}</dt><dd>{activeTool.identity_requirement}</dd></div><div><dt>{t("tools.stateScope")}</dt><dd>{activeTool.state_scope}</dd></div><div><dt>{t("tools.effect")}</dt><dd>{activeTool.effect}</dd></div><div><dt>{t("tools.idempotency")}</dt><dd>{activeTool.idempotency_mode}</dd></div></dl><div className="private-default-note"><ShieldCheck />{t("tools.thisContractIsSourceManagedExecutionRequiresTheActive")}</div></> : <dl className="entity-detail-grid"><div><dt>{t("tools.upstreamTool")}</dt><dd>{activeTool.upstream_tool_name}</dd></div><div><dt>{t("tools.schemaHash")}</dt><dd>{activeTool.upstream_schema_hash}</dd></div></dl>}
       </section>
-      <aside className="entity-workspace-rail">{connection ? <section className="panel entity-related-panel"><PanelHeader title="Connection" /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section> : activeTool.runtime_service_connection_id && owningIntegration ? <section className="panel entity-related-panel"><PanelHeader title="API service access" /><ConsoleLink path={integrationPath(owningIntegration.id, "access")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><KeyRound /></span><span><strong>{runtimeConnection?.name ?? "Service connection"}</strong><small>Endpoint and credential managed in Access</small></span><ChevronRight /></ConsoleLink></section> : <section className="panel entity-detail-panel"><PanelHeader title={activeTool.backend_kind === "native" ? "Trusted source boundary" : activeTool.backend_kind === "mcp" ? "Connection model" : "HTTP security boundary"} /><p className="entity-panel-copy">{activeTool.backend_kind === "native" ? "This tool executes trusted source compiled into DokoSoko and receives only its declared host services." : activeTool.backend_kind === "mcp" ? "This imported tool uses its reviewed MCP connection." : `${upstreamAuth.label} is applied server-side at execution time. Tool responses expose only whether a required encrypted credential is present.`}</p></section>}</aside>
+      <aside className="entity-workspace-rail">{connection ? <section className="panel entity-related-panel"><PanelHeader title={t("tools.connection")} /><ConsoleLink path={entityPath("connection", connection.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><Share2 /></span><span><strong>{connection.name}</strong><small>{connection.protocol_version} · {connection.auth_mode}</small></span><Badge color={connection.state === "active" ? "green" : "zinc"}>{connection.state}</Badge><ChevronRight /></ConsoleLink></section> : activeTool.runtime_service_connection_id && owningIntegration ? <section className="panel entity-related-panel"><PanelHeader title={t("tools.apiServiceAccess")} /><ConsoleLink path={integrationPath(owningIntegration.id, "access")} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><KeyRound /></span><span><strong>{runtimeConnection?.name ?? t("tools.serviceConnection")}</strong><small>{t("tools.endpointAndCredentialManagedInAccess")}</small></span><ChevronRight /></ConsoleLink></section> : <section className="panel entity-detail-panel"><PanelHeader title={activeTool.backend_kind === "native" ? t("tools.trustedSourceBoundary") : activeTool.backend_kind === "mcp" ? t("tools.connectionModel") : t("tools.httpSecurityBoundary")} /><p className="entity-panel-copy">{activeTool.backend_kind === "native" ? t("tools.thisToolExecutesTrustedSourceCompiledIntoDokoSokoAnd") : activeTool.backend_kind === "mcp" ? t("tools.thisImportedToolUsesItsReviewedMCPConnection") : t("tools.isAppliedServerSideAtExecutionTimeToolResponses", { label: String(upstreamAuth.label) })}</p></section>}</aside>
     </div>}
 
-    {activeTab === "authorization" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-authorization" aria-labelledby="tool-tab-authorization" tabIndex={0}><PanelHeader title="Baseline authorization" description="Read-only exact revision. An API authorization point may add stricter requirements but cannot weaken this policy." action={<Badge color={riskColor}>{risk} risk</Badge>} /><label className="auth-field"><span>Required registered grants</span><input readOnly value={grants} placeholder="No registered grants" /></label><div className="two-fields"><label className="auth-field"><span>Risk</span><input value={risk} readOnly /></label></div><dl className="entity-detail-grid compact-detail-grid readonly-policy"><div><dt>Explicit confirmation</dt><dd>{confirmationRequired || risk === "critical" ? "Required" : "Not required"}</dd></div><div><dt>Idempotency metadata</dt><dd>{idempotencyRequired ? "Required" : "Not required"}</dd></div></dl>{currentPolicy.requiredGrants.length > 0 && <div className="entity-grant-list">{currentPolicy.requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div>}</section>}
+    {activeTab === "authorization" && <section className="panel tool-editor-page" role="tabpanel" id="tool-panel-authorization" aria-labelledby="tool-tab-authorization" tabIndex={0}><PanelHeader title={t("tools.baselineAuthorization")} description={t("tools.readOnlyExactRevisionAnAPIAuthorizationPointMay")} action={<Badge color={riskColor}>{t("tools.riskValue", { risk })}</Badge>} /><label className="auth-field"><span>{t("tools.requiredRegisteredGrants")}</span><input readOnly value={grants} placeholder={t("tools.noRegisteredGrants")} /></label><div className="two-fields"><label className="auth-field"><span>{t("tools.risk")}</span><input value={risk} readOnly /></label></div><dl className="entity-detail-grid compact-detail-grid readonly-policy"><div><dt>{t("tools.explicitConfirmation")}</dt><dd>{confirmationRequired || risk === "critical" ? t("tools.required") : t("tools.notRequired")}</dd></div><div><dt>{t("tools.idempotencyMetadata")}</dt><dd>{idempotencyRequired ? t("tools.required") : t("tools.notRequired")}</dd></div></dl>{currentPolicy.requiredGrants.length > 0 && <div className="entity-grant-list">{currentPolicy.requiredGrants.map((grant) => <code key={grant}>{grant}</code>)}</div>}</section>}
 
     {activeTab === "tests" && <div className="tool-tests-workspace" role="tabpanel" id="tool-panel-tests" aria-labelledby="tool-tab-tests" tabIndex={0}>
       <section className="panel tool-editor-page tool-test-stage">
-        <PanelHeader title="Contract check" description="Stage 1 · Validate the arguments, schema, fixed destination, and policy for this exact persisted revision. No network call is made." action={<Button outline disabled={busy || contractCheckBusy || liveTestBusy} onClick={dryRunTool}>{contractCheckBusy ? "Checking…" : "Run Contract check"}</Button>} />
-        <label className="auth-field" htmlFor="tool-test-arguments"><span>JSON arguments</span><textarea id="tool-test-arguments" className="code-input" spellCheck={false} value={testInput} disabled={contractCheckBusy || liveTestBusy || testConfirmationOpen} onChange={(event) => { testFormVersionRef.current += 1; setTestInput(event.target.value); setTestResult(null); setValidatedTestInput(null); setContractCheckError(""); setLiveTestResult(null); setLiveTestError(""); }} /><small>Changing these arguments invalidates the Contract check and any prior live-test evidence.</small></label>
-        {contractCheckError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Contract check did not pass</strong><small>{contractCheckError}</small></span></div>}
+        <PanelHeader title={t("tools.contractCheck")} description={t("tools.stageN1ValidateTheArgumentsSchemaFixedDestinationAnd")} action={<Button outline disabled={busy || contractCheckBusy || liveTestBusy} onClick={dryRunTool}>{contractCheckBusy ? t("tools.checking") : t("tools.runContractCheck")}</Button>} />
+        <label className="auth-field" htmlFor="tool-test-arguments"><span>{t("tools.jsonArguments")}</span><textarea id="tool-test-arguments" className="code-input" spellCheck={false} value={testInput} disabled={contractCheckBusy || liveTestBusy || testConfirmationOpen} onChange={(event) => { testFormVersionRef.current += 1; setTestInput(event.target.value); setTestResult(null); setValidatedTestInput(null); setContractCheckError(""); setLiveTestResult(null); setLiveTestError(""); }} /><small>{t("tools.changingTheseArgumentsInvalidatesTheContractCheckAndAny")}</small></label>
+        {contractCheckError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>{t("tools.contractCheckDidNotPass")}</strong><small>{contractCheckError}</small></span></div>}
         {testResult && <pre role="status" aria-live="polite" className={`tool-test-result ${contractCheckPassed ? "passed" : "failed"}`}>{JSON.stringify(testResult, null, 2)}</pre>}
       </section>
 
       <section className="panel tool-editor-page tool-test-stage" aria-busy={liveTestBusy}>
-        <PanelHeader title="Live upstream test" description={delegatedOAuthLiveTest ? "Stage 2 · Unavailable for Delegated OAuth. Administrator live tests do not accept an end-user token, and no upstream request will be made." : `Stage 2 · ${testConfirmationRequired ? mutationTest ? "Review side effects, confirm the exact revision, then call" : "Review the explicit policy confirmation, then call" : "Call"} the fixed upstream endpoint only after the Contract check passes${tokenExchangeTest ? "; client-credentials authentication may first call its fixed token endpoint" : ""}.`} action={!liveTestUnsupported && <Button color="indigo" disabled={busy || contractCheckBusy || liveTestBusy || Boolean(liveTestLimitation) || !testIdempotencyValid} onClick={beginLiveToolTest}>{liveTestBusy ? "Running live test…" : delegatedOAuthLiveTest ? "Live test unavailable" : testConfirmationRequired ? "Review & run live test" : "Run live upstream test"}</Button>} />
-        {liveTestLimitation && <div className="capability-unavailable"><TriangleAlert /><span><strong>Live test unavailable</strong><small>{liveTestLimitation}</small></span></div>}
-        {testIdempotencyRequired && !liveTestUnsupported && !delegatedOAuthLiveTest && <label className="auth-field" htmlFor="tool-test-idempotency-key"><span>Idempotency key</span><input id="tool-test-idempotency-key" autoComplete="off" minLength={16} maxLength={200} disabled={liveTestBusy || testConfirmationOpen} aria-invalid={Boolean(testIdempotencyKey) && !testIdempotencyValid} aria-describedby="tool-test-idempotency-guidance" value={testIdempotencyKey} onChange={(event) => { testFormVersionRef.current += 1; setTestIdempotencyKey(event.target.value); setLiveTestResult(null); setLiveTestError(""); }} /><small id="tool-test-idempotency-guidance">Required for every mutation live test. Use 16–200 visible ASCII characters; the value is forwarded through the server&apos;s idempotency boundary and is not included in retained evidence.</small></label>}
-        {liveTestError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>Live upstream test could not complete</strong><small>{liveTestError}</small></span></div>}
-        {!liveTestResult && !liveTestError && !liveTestLimitation && <div className="private-default-note"><ShieldCheck />The server retains only status, timing, byte count, structural shapes, and sanitized findings. It discards raw request and response bodies, headers, scalar values, and credentials.</div>}
+        <PanelHeader title={t("tools.liveUpstreamTest")} description={delegatedOAuthLiveTest ? t("tools.stageN2UnavailableForDelegatedOAuthAdministratorLiveTests") : liveTestStageDescription} action={!liveTestUnsupported && <Button color="indigo" disabled={busy || contractCheckBusy || liveTestBusy || Boolean(liveTestLimitation) || !testIdempotencyValid} onClick={beginLiveToolTest}>{liveTestBusy ? t("tools.runningLiveTest") : delegatedOAuthLiveTest ? t("tools.liveTestUnavailable") : testConfirmationRequired ? t("tools.reviewRunLiveTest") : t("tools.runLiveUpstreamTest")}</Button>} />
+        {liveTestLimitation && <div className="capability-unavailable"><TriangleAlert /><span><strong>{t("tools.liveTestUnavailable")}</strong><small>{liveTestLimitation}</small></span></div>}
+        {testIdempotencyRequired && !liveTestUnsupported && !delegatedOAuthLiveTest && <label className="auth-field" htmlFor="tool-test-idempotency-key"><span>{t("tools.idempotencyKey")}</span><input id="tool-test-idempotency-key" autoComplete="off" minLength={16} maxLength={200} disabled={liveTestBusy || testConfirmationOpen} aria-invalid={Boolean(testIdempotencyKey) && !testIdempotencyValid} aria-describedby="tool-test-idempotency-guidance" value={testIdempotencyKey} onChange={(event) => { testFormVersionRef.current += 1; setTestIdempotencyKey(event.target.value); setLiveTestResult(null); setLiveTestError(""); }} /><small id="tool-test-idempotency-guidance">{t("tools.requiredForEveryMutationLiveTestUseN16N200")}</small></label>}
+        {liveTestError && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>{t("tools.liveUpstreamTestCouldNotComplete")}</strong><small>{liveTestError}</small></span></div>}
+        {!liveTestResult && !liveTestError && !liveTestLimitation && <div className="private-default-note"><ShieldCheck />{t("tools.theServerRetainsOnlyStatusTimingByteCountStructural")}</div>}
         {liveTestResult && <><ToolLiveTestEvidence run={liveTestResult} /><ToolLiveTestAnalysis key={liveTestResult.id} run={liveTestResult} tool={activeTool} onOpenBuilder={(proposal) => onReviewProposal(activeTool, proposal)} onClone={(proposal) => openCloneTool(proposal)} onMessage={onMessage} /></>}
       </section>
     </div>}
 
-    {activeTab === "usage" && <section className="panel" role="tabpanel" id="tool-panel-usage" aria-labelledby="tool-tab-usage" tabIndex={0}><PanelHeader title="Current API configuration" description="Each current API draft pins an exact published tool revision and one exact authorization-point revision. Published snapshots are not counted here." action={<Badge color="violet">{usageStatus === "loading" ? "…" : usages.length}</Badge>} />{usageStatus === "partial" && <div className="capability-unavailable"><TriangleAlert /><span><strong>Some API bindings could not be loaded.</strong><small>The list below may be incomplete.</small></span></div>}{usages.map(({ integration, binding }) => { const point = binding.authorization_point; const current = binding.tool_revision === activeTool.revision && activeTool.state === "published" && !activeTool.upstream_drifted && Boolean(point && point.state === "active" && point.revision === binding.authorization_point_revision); return <ConsoleLink key={`${integration.id}:${binding.tool_revision}`} path={integrationPath(integration.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key} · tool r{binding.tool_revision} · authorization r{binding.authorization_point_revision}</small></span><Badge color={current ? "green" : "red"}>{current ? "Current" : "Stale / unresolved"}</Badge><ChevronRight /></ConsoleLink>; })}{usageStatus === "loading" && <div className="empty-row">Loading current API bindings…</div>}{usageStatus === "ready" && usages.length === 0 && <div className="empty-row">No current API configuration binds this tool.</div>}</section>}
+    {activeTab === "usage" && <section className="panel" role="tabpanel" id="tool-panel-usage" aria-labelledby="tool-tab-usage" tabIndex={0}><PanelHeader title={t("tools.currentAPIConfiguration")} description={t("tools.eachCurrentAPIDraftPinsAnExactPublishedTool")} action={<Badge color="violet">{usageStatus === "loading" ? "…" : usages.length}</Badge>} />{usageStatus === "partial" && <div className="capability-unavailable"><TriangleAlert /><span><strong>{t("tools.someAPIBindingsCouldNotBeLoaded")}</strong><small>{t("tools.theListBelowMayBeIncomplete")}</small></span></div>}{usages.map(({ integration, binding }) => { const point = binding.authorization_point; const current = binding.tool_revision === activeTool.revision && activeTool.state === "published" && !activeTool.upstream_drifted && Boolean(point && point.state === "active" && point.revision === binding.authorization_point_revision); return <ConsoleLink key={`${integration.id}:${binding.tool_revision}`} path={integrationPath(integration.id)} onNavigate={onNavigate} className="entity-related-row"><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.family_key} · {integration.version_key} {t("tools.toolR")}{binding.tool_revision} {t("tools.authorizationR")}{binding.authorization_point_revision}</small></span><Badge color={current ? "green" : "red"}>{current ? t("tools.current") : t("tools.staleUnresolved")}</Badge><ChevronRight /></ConsoleLink>; })}{usageStatus === "loading" && <div className="empty-row">{t("tools.loadingCurrentAPIBindings")}</div>}{usageStatus === "ready" && usages.length === 0 && <div className="empty-row">{t("tools.noCurrentAPIConfigurationBindsThisTool")}</div>}</section>}
 
-    {activeTab === "history" && <section className="panel" role="tabpanel" id="tool-panel-history" aria-labelledby="tool-tab-history" tabIndex={0}><PanelHeader title="Tool activity" description="Append-only administrative and execution events loaded for this tool." action={<ConsoleLink path={sectionPath("reporting")} onNavigate={onNavigate} className="entity-back-link">Open audit</ConsoleLink>} />{toolEvents.map((event) => <div className="lease-row" key={event.id}><span><strong>{event.action}</strong><small>{event.actor_id || "system"} · {event.request_id || "no request ID"}</small></span><time>{new Date(event.created_at).toLocaleString()}</time></div>)}{toolEvents.length === 0 && <div className="empty-row">No loaded activity for this tool.</div>}</section>}
+    {activeTab === "history" && <section className="panel" role="tabpanel" id="tool-panel-history" aria-labelledby="tool-tab-history" tabIndex={0}><PanelHeader title={t("tools.toolActivity")} description={t("tools.appendOnlyAdministrativeAndExecutionEventsLoadedForThis")} action={<ConsoleLink path={sectionPath("reporting")} onNavigate={onNavigate} className="entity-back-link">{t("tools.openAudit")}</ConsoleLink>} />{toolEvents.map((event) => <div className="lease-row" key={event.id}><span><strong>{event.action}</strong><small>{event.actor_id || t("tools.system")} · {event.request_id || t("tools.noRequestID")}</small></span><time>{t("format.dateTime", { value: new Date(event.created_at) })}</time></div>)}{toolEvents.length === 0 && <div className="empty-row">{t("tools.noLoadedActivityForThisTool")}</div>}</section>}
 
-    {testConfirmationRequired && !liveTestUnsupported && !delegatedOAuthLiveTest && <Dialog open={testConfirmationOpen} onClose={(open) => { if (liveTestBusy) return; setTestConfirmationOpen(open); if (!open) { setPendingTestArguments(null); pendingTestVersionRef.current = 0; pendingTestIdempotencyKeyRef.current = ""; setTestConfirmationName(""); setTestSideEffectsAcknowledged(false); } }} title={`Confirm live ${normalizedTestMethod} test`} description={mutationTest ? `This will make a real ${normalizedTestMethod} request for ${fullToolName} revision ${currentTool.revision}${tokenExchangeTest ? " after a client-credentials token exchange when no cached token is available" : ""}. It may create, change, or delete upstream data.` : `This will make a real ${normalizedTestMethod} request for ${fullToolName} revision ${currentTool.revision}${tokenExchangeTest ? " after a client-credentials token exchange when no cached token is available" : ""}. Its stored policy requires explicit confirmation even for this read.`} actions={<><Button outline disabled={liveTestBusy} onClick={() => { setTestConfirmationOpen(false); setPendingTestArguments(null); pendingTestVersionRef.current = 0; pendingTestIdempotencyKeyRef.current = ""; setTestConfirmationName(""); setTestSideEffectsAcknowledged(false); }}>Cancel</Button><Button color="red" disabled={liveTestBusy || !pendingTestArguments || testConfirmationName !== fullToolName || !testSideEffectsAcknowledged || !testIdempotencyValid} onClick={confirmAndRunLiveToolTest}>{liveTestBusy ? "Confirming & running…" : "Confirm & run now"}</Button></>}>
+    {testConfirmationRequired && !liveTestUnsupported && !delegatedOAuthLiveTest && <Dialog open={testConfirmationOpen} onClose={(open) => { if (liveTestBusy) return; setTestConfirmationOpen(open); if (!open) { setPendingTestArguments(null); pendingTestVersionRef.current = 0; pendingTestIdempotencyKeyRef.current = ""; setTestConfirmationName(""); setTestSideEffectsAcknowledged(false); } }} title={t("tools.confirmLiveTest", { normalizedTestMethod: String(normalizedTestMethod) })} description={liveTestConfirmationDescription} actions={<><Button outline disabled={liveTestBusy} onClick={() => { setTestConfirmationOpen(false); setPendingTestArguments(null); pendingTestVersionRef.current = 0; pendingTestIdempotencyKeyRef.current = ""; setTestConfirmationName(""); setTestSideEffectsAcknowledged(false); }}>{t("common.cancel")}</Button><Button color="red" disabled={liveTestBusy || !pendingTestArguments || testConfirmationName !== fullToolName || !testSideEffectsAcknowledged || !testIdempotencyValid} onClick={confirmAndRunLiveToolTest}>{liveTestBusy ? t("tools.confirmingRunning") : t("tools.confirmRunNow")}</Button></>}>
       <div className="auth-form compact-form">
-        <div className="capability-unavailable"><TriangleAlert /><span><strong>This is not a simulation.</strong><small>{mutationTest ? `The fixed action endpoint will receive one real request using its configured server-side authentication${tokenExchangeTest ? "; the fixed token endpoint may also receive one client-credentials exchange" : ""}.` : `The policy requires you to confirm this real read request to the fixed upstream endpoint${tokenExchangeTest ? "; the fixed token endpoint may also receive one client-credentials exchange" : ""}.`}</small></span></div>
-        <label className="auth-field" htmlFor="tool-test-confirm-name"><span>Type the full tool name</span><input id="tool-test-confirm-name" autoComplete="off" aria-invalid={Boolean(testConfirmationName) && testConfirmationName !== fullToolName} aria-describedby="tool-test-confirm-name-guidance" value={testConfirmationName} onChange={(event) => setTestConfirmationName(event.target.value)} /><small id="tool-test-confirm-name-guidance">Type <code>{fullToolName}</code> exactly to confirm revision {currentTool.revision}.</small></label>
-        <label className="compact-check"><input type="checkbox" checked={testSideEffectsAcknowledged} onChange={(event) => setTestSideEffectsAcknowledged(event.target.checked)} /><span>{mutationTest ? `I understand this test can cause real upstream side effects${tokenExchangeTest ? " and may perform a real token exchange" : ""}.` : `I understand this test sends a real upstream request under the stored confirmation policy${tokenExchangeTest ? " and may perform a real token exchange" : ""}.`}</span></label>
-        <div className="private-default-note"><LockKeyhole />Confirmation creates a short-lived, single-use nonce bound to this exact revision and arguments. DokoSoko uses it immediately and never exposes it in the evidence.</div>
+        <div className="capability-unavailable"><TriangleAlert /><span><strong>{t("tools.thisIsNotASimulation")}</strong><small>{liveTestRequestDescription}</small></span></div>
+        <label className="auth-field" htmlFor="tool-test-confirm-name"><span>{t("tools.typeTheFullToolName")}</span><input id="tool-test-confirm-name" autoComplete="off" aria-invalid={Boolean(testConfirmationName) && testConfirmationName !== fullToolName} aria-describedby="tool-test-confirm-name-guidance" value={testConfirmationName} onChange={(event) => setTestConfirmationName(event.target.value)} /><small id="tool-test-confirm-name-guidance">{t("tools.type")} <code>{fullToolName}</code> {t("tools.exactlyToConfirmRevision")} {currentTool.revision}.</small></label>
+        <label className="compact-check"><input type="checkbox" checked={testSideEffectsAcknowledged} onChange={(event) => setTestSideEffectsAcknowledged(event.target.checked)} /><span>{liveTestAcknowledgement}</span></label>
+        <div className="private-default-note"><LockKeyhole />{t("tools.confirmationCreatesAShortLivedSingleUseNonceBound")}</div>
       </div>
     </Dialog>}
-    {backendKind === "http" && !apiOwned && <Dialog open={cloneOpen} onClose={(open) => { setCloneOpen(open); if (!open) { setCloneCredential(""); setPendingCloneProposal(null); } }} title="Clone as a new tool" description={pendingCloneProposal ? "Choose a distinct lower-case identity. The independent draft will open in Builder with the live-test proposal ready for per-field review; nothing is applied automatically." : "Choose a distinct lower-case identity. Stored credentials are never copied into the independent draft."} actions={<><Button outline onClick={() => { setCloneOpen(false); setCloneCredential(""); setPendingCloneProposal(null); }}>Cancel</Button><Button color="indigo" disabled={busy || !cloneIdentityValid || (upstreamAuth.credentialRequired && !cloneCredential)} onClick={cloneTool}>{busy ? "Cloning…" : pendingCloneProposal ? "Create draft & review" : "Create draft"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Namespace</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneNamespace) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>Name</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneName) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div><small id="clone-tool-identity-guidance">Use 1–64 lower-case letters, numbers or underscores, starting with a letter.</small>{upstreamAuth.credentialRequired && <label className="auth-field"><span>{cloneCredentialLabel}</span><input type="password" autoComplete="new-password" value={cloneCredential} onChange={(event) => setCloneCredential(event.target.value)} /><small>Required for {upstreamAuth.label}. Enter a new value because the source credential is never copied.</small></label>}<div className="private-default-note"><KeyRound />The clone receives the non-secret contract only. Delegated OAuth and unauthenticated tools do not require a stored credential. {pendingCloneProposal ? "The proposal remains an in-memory review seed and is not saved with the clone." : ""}</div></div></Dialog>}
-    <Dialog open={retireOpen} onClose={setRetireOpen} title={`Retire ${activeTool.namespace}.${activeTool.name}?`} description="Retirement removes the tool from discovery and prevents new bindings. API drafts using it must remove their binding before publication." actions={<><Button outline onClick={() => setRetireOpen(false)}>Cancel</Button><Button color="red" disabled={busy} onClick={retireTool}>{busy ? "Retiring…" : "Retire tool"}</Button></>}><div className="private-default-note"><TriangleAlert />This changes the deployment catalogue immediately. Existing published API snapshots remain audit evidence.</div></Dialog>
+    {backendKind === "http" && !apiOwned && <Dialog open={cloneOpen} onClose={(open) => { setCloneOpen(open); if (!open) { setCloneCredential(""); setPendingCloneProposal(null); } }} title={t("tools.cloneAsANewTool")} description={pendingCloneProposal ? t("tools.chooseADistinctLowerCaseIdentityTheIndependentDraft") : t("tools.chooseADistinctLowerCaseIdentityStoredCredentialsAre")} actions={<><Button outline onClick={() => { setCloneOpen(false); setCloneCredential(""); setPendingCloneProposal(null); }}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !cloneIdentityValid || (upstreamAuth.credentialRequired && !cloneCredential)} onClick={cloneTool}>{busy ? t("tools.cloning") : pendingCloneProposal ? t("tools.createDraftReview") : t("tools.createDraft")}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>{t("tools.namespace")}</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneNamespace) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneNamespace.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneNamespace} onChange={(event) => setCloneNamespace(event.target.value)} /></label><label className="auth-field"><span>{t("tools.name")}</span><input maxLength={64} pattern="[a-z][a-z0-9_]{0,63}" aria-invalid={Boolean(cloneName) && !/^[a-z][a-z0-9_]{0,63}$/.test(cloneName.trim())} aria-describedby="clone-tool-identity-guidance" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label></div><small id="clone-tool-identity-guidance">{t("tools.useN1N64LowerCaseLettersNumbersOrUnderscores")}</small>{upstreamAuth.credentialRequired && <label className="auth-field"><span>{cloneCredentialLabel}</span><input type="password" autoComplete="new-password" value={cloneCredential} onChange={(event) => setCloneCredential(event.target.value)} /><small>{t("tools.requiredFor")} {upstreamAuth.label}{t("tools.enterANewValueBecauseTheSourceCredentialIs")}</small></label>}<div className="private-default-note"><KeyRound />{t("tools.theCloneReceivesTheNonSecretContractOnlyDelegated")} {pendingCloneProposal ? t("tools.theProposalRemainsAnInMemoryReviewSeedAnd") : ""}</div></div></Dialog>}
+    <Dialog open={retireOpen} onClose={setRetireOpen} title={t("tools.retire2", { namespace: String(activeTool.namespace), name: String(activeTool.name) })} description={t("tools.retirementRemovesTheToolFromDiscoveryAndPreventsNew")} actions={<><Button outline onClick={() => setRetireOpen(false)}>{t("common.cancel")}</Button><Button color="red" disabled={busy} onClick={retireTool}>{busy ? t("tools.retiring") : t("tools.retireTool")}</Button></>}><div className="private-default-note"><TriangleAlert />{t("tools.thisChangesTheDeploymentCatalogueImmediatelyExistingPublishedAPI")}</div></Dialog>
   </>;
 }
 
 export function ConsoleNotFoundView({ path, onNavigate }: { path: string; onNavigate: (path: string) => void }) {
-  return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">Navigation</p><h1>Page not found</h1><p><code>{path}</code> is not a recognised console URL.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
+  const { t } = useTranslation();
+  return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">{t("tools.navigation")}</p><h1>{t("tools.pageNotFound")}</h1><p><code>{path}</code> {t("tools.isNotARecognisedConsoleURL")}</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />{t("tools.returnToAPIs")}</ConsoleLink></section>;
 }

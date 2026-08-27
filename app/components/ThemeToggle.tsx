@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { Moon, Sun } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 type Theme = "light" | "dark";
 
@@ -26,6 +27,7 @@ function subscribeToTheme(onChange: () => void) {
 }
 
 export function ThemeToggle() {
+  const { t } = useTranslation();
   const theme = useSyncExternalStore(subscribeToTheme, currentTheme, serverTheme);
 
   function toggleTheme() {
@@ -43,8 +45,8 @@ export function ThemeToggle() {
       className="theme-toggle"
       role="switch"
       aria-checked={dark}
-      aria-label="Dark mode"
-      title={dark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={t("theme.darkMode")}
+      title={dark ? t("theme.switchToLight") : t("theme.switchToDark")}
       onClick={toggleTheme}
     >
       {dark ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}

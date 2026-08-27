@@ -8,19 +8,22 @@ import (
 const (
 	RecipeContractLegacyMCPV1          = "legacy-mcp-v1"
 	RecipeContractProductIntegrationV2 = "product-integration-v2"
+	RecipeContractDeploymentV3         = "deployment-recipe-v3"
 	RecipeSpecVersion2                 = 2
+	RecipeSpecVersion3                 = 3
 )
 
 type IntegrationEvidence struct {
-	Kind        string            `json:"kind"`
-	ResourceID  string            `json:"resource_id"`
-	Label       string            `json:"label"`
-	Location    string            `json:"location,omitempty"`
-	Excerpt     string            `json:"excerpt,omitempty"`
-	References  []RecipeReference `json:"references,omitempty"`
-	Version     string            `json:"version,omitempty"`
-	Visibility  Visibility        `json:"visibility"`
-	Fingerprint string            `json:"fingerprint"`
+	Kind           string            `json:"kind"`
+	ResourceID     string            `json:"resource_id"`
+	IntegrationIDs []string          `json:"integration_ids,omitempty"`
+	Label          string            `json:"label"`
+	Location       string            `json:"location,omitempty"`
+	Excerpt        string            `json:"excerpt,omitempty"`
+	References     []RecipeReference `json:"references,omitempty"`
+	Version        string            `json:"version,omitempty"`
+	Visibility     Visibility        `json:"visibility"`
+	Fingerprint    string            `json:"fingerprint"`
 }
 
 type IntegrationUnknown struct {
@@ -81,16 +84,35 @@ type RecipeInstruction struct {
 // publication format; approval and drift decisions are made against this
 // structured, evidence-bound spec.
 type RecipeSpec struct {
-	SchemaVersion int                 `json:"schema_version"`
-	IntegrationID string              `json:"integration_id"`
-	Title         string              `json:"title"`
-	Outcome       string              `json:"outcome"`
-	SDKID         string              `json:"sdk_id,omitempty"`
-	CapabilityIDs []string            `json:"capability_ids"`
-	Prerequisites []RecipeInstruction `json:"prerequisites"`
-	Steps         []RecipeInstruction `json:"steps"`
-	Checks        []RecipeInstruction `json:"checks"`
-	ReferenceIDs  []string            `json:"reference_ids,omitempty"`
+	SchemaVersion int `json:"schema_version"`
+	// IntegrationID is retained only for immutable product-integration-v2
+	// revisions. Deployment recipe v3 records use APIAttachments instead.
+	IntegrationID  string                `json:"integration_id,omitempty"`
+	APIAttachments []RecipeAPIAttachment `json:"api_attachments,omitempty"`
+	Title          string                `json:"title"`
+	Outcome        string                `json:"outcome"`
+	SDKID          string                `json:"sdk_id,omitempty"`
+	CapabilityIDs  []string              `json:"capability_ids"`
+	Prerequisites  []RecipeInstruction   `json:"prerequisites"`
+	Steps          []RecipeInstruction   `json:"steps"`
+	Checks         []RecipeInstruction   `json:"checks"`
+	ReferenceIDs   []string              `json:"reference_ids,omitempty"`
+}
+
+// RecipeAPIAttachment is the mutable applicability edge from a deployment-
+// owned recipe to an API. Historical recipe revisions never depend on this
+// edge remaining present; they carry exact RecipeAPIBindings instead.
+type RecipeAPIAttachment struct {
+	IntegrationID string `json:"integration_id"`
+}
+
+// RecipeAPIBinding freezes one attached API publication into an immutable
+// recipe revision. The manifest hash prevents the referenced revision from
+// being substituted without invalidating the recipe.
+type RecipeAPIBinding struct {
+	IntegrationID           string `json:"integration_id"`
+	IntegrationRevisionID   string `json:"integration_revision_id"`
+	IntegrationManifestHash string `json:"integration_manifest_hash"`
 }
 
 type IntegrationPlan struct {
@@ -151,6 +173,7 @@ type RecipeRevision struct {
 	Model                   string                    `json:"model,omitempty"`
 	IntegrationRevisionID   string                    `json:"integration_revision_id,omitempty"`
 	IntegrationManifestHash string                    `json:"integration_manifest_hash,omitempty"`
+	APIBindings             []RecipeAPIBinding        `json:"api_bindings,omitempty"`
 	PromptVersion           string                    `json:"prompt_version,omitempty"`
 	PromptHash              string                    `json:"prompt_hash,omitempty"`
 	CreatedBy               string                    `json:"created_by"`
@@ -158,28 +181,29 @@ type RecipeRevision struct {
 }
 
 type Recipe struct {
-	ID                string             `json:"id"`
-	OrganisationID    string             `json:"organisation_id"`
-	ProductID         string             `json:"product_id"`
-	IntegrationID     string             `json:"integration_id,omitempty"`
-	AnalysisID        string             `json:"analysis_id,omitempty"`
-	ContractVersion   string             `json:"contract_version"`
-	Slug              string             `json:"slug"`
-	Title             string             `json:"title"`
-	Outcome           string             `json:"outcome"`
-	Audience          string             `json:"audience"`
-	State             string             `json:"state"`
-	Generated         bool               `json:"generated"`
-	NeedsAttention    bool               `json:"needs_attention"`
-	Visibility        Visibility         `json:"visibility"`
-	Dependencies      []RecipeDependency `json:"dependencies"`
-	CurrentRevisionID string             `json:"current_revision_id"`
-	CurrentRevision   *RecipeRevision    `json:"current_revision,omitempty"`
-	StableURI         string             `json:"stable_uri"`
-	ApprovedBy        string             `json:"approved_by,omitempty"`
-	ApprovedAt        *time.Time         `json:"approved_at,omitempty"`
-	PublishedAt       *time.Time         `json:"published_at,omitempty"`
-	Revision          int64              `json:"revision"`
-	CreatedAt         time.Time          `json:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at"`
+	ID                string                `json:"id"`
+	OrganisationID    string                `json:"organisation_id"`
+	ProductID         string                `json:"product_id"`
+	IntegrationID     string                `json:"integration_id,omitempty"`
+	APIAttachments    []RecipeAPIAttachment `json:"api_attachments,omitempty"`
+	AnalysisID        string                `json:"analysis_id,omitempty"`
+	ContractVersion   string                `json:"contract_version"`
+	Slug              string                `json:"slug"`
+	Title             string                `json:"title"`
+	Outcome           string                `json:"outcome"`
+	Audience          string                `json:"audience"`
+	State             string                `json:"state"`
+	Generated         bool                  `json:"generated"`
+	NeedsAttention    bool                  `json:"needs_attention"`
+	Visibility        Visibility            `json:"visibility"`
+	Dependencies      []RecipeDependency    `json:"dependencies"`
+	CurrentRevisionID string                `json:"current_revision_id"`
+	CurrentRevision   *RecipeRevision       `json:"current_revision,omitempty"`
+	StableURI         string                `json:"stable_uri"`
+	ApprovedBy        string                `json:"approved_by,omitempty"`
+	ApprovedAt        *time.Time            `json:"approved_at,omitempty"`
+	PublishedAt       *time.Time            `json:"published_at,omitempty"`
+	Revision          int64                 `json:"revision"`
+	CreatedAt         time.Time             `json:"created_at"`
+	UpdatedAt         time.Time             `json:"updated_at"`
 }

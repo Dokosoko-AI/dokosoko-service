@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import {
@@ -23,9 +25,9 @@ const sourceUploadMaxBytes = 5_000_000;
 const sourceUploadExtensions = new Set([".md", ".mdx", ".txt", ".html", ".htm", ".json", ".yaml", ".yml"]);
 function sourceUploadValidationError(file: File) {
   const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-  if (!sourceUploadExtensions.has(extension)) return "Choose a Markdown, text, HTML, JSON, or YAML file.";
-  if (file.size > sourceUploadMaxBytes) return "The selected file is larger than the 5 MB limit for this setup.";
-  if (file.size === 0) return "The selected file is empty.";
+  if (!sourceUploadExtensions.has(extension)) return "extension";
+  if (file.size > sourceUploadMaxBytes) return "too-large";
+  if (file.size === 0) return "empty";
   return "";
 }
 
@@ -37,6 +39,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   refreshCatalog: () => Promise<void>;
   showToast: (message: string) => void;
 }) {
+  const { t } = useTranslation();
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [sourceName, setSourceName] = useState("");
   const [sourceKind, setSourceKind] = useState<SourceKind>("website");
@@ -50,6 +53,13 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   const [sourceReviewAcknowledged, setSourceReviewAcknowledged] = useState(false);
   const [sourceReviewBusy, setSourceReviewBusy] = useState(false);
   const [sourceReviewAttachIntegrationID, setSourceReviewAttachIntegrationID] = useState("");
+  const uploadValidationMessage = (file: File) => {
+    const code = sourceUploadValidationError(file);
+    return code === "extension" ? t("sourceWorkflow.invalidUploadExtension")
+      : code === "too-large" ? t("sourceWorkflow.uploadTooLarge")
+        : code === "empty" ? t("sourceWorkflow.uploadEmpty")
+          : "";
+  };
 
   function resetSourceForm() {
     setSourceName("");
@@ -77,19 +87,19 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 
   function selectSourceFile(file: File | null) {
     setSourceFile(file);
-    setSourceFileError(file ? sourceUploadValidationError(file) : "Choose a file to upload.");
+    setSourceFileError(file ? uploadValidationMessage(file) : t("sourceWorkflow.chooseAFileToUpload"));
     if (file && !sourceName.trim()) setSourceName(file.name.replace(/\.[^.]+$/, ""));
   }
 
   async function createSource() {
     if (sourceKind === "upload" && !sourceFile) {
-      setSourceFileError("Choose a file to upload.");
+      setSourceFileError(t("sourceWorkflow.chooseAFileToUpload"));
       return;
     }
     setSourceBusy(true);
     try {
       if (sourceKind === "upload" && sourceFile) {
-        const validationError = sourceUploadValidationError(sourceFile);
+        const validationError = uploadValidationMessage(sourceFile);
         if (validationError) {
           setSourceFileError(validationError);
           return;
@@ -97,7 +107,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
         try {
           new TextDecoder("utf-8", { fatal: true }).decode(await sourceFile.arrayBuffer());
         } catch {
-          setSourceFileError("The selected file is not valid UTF-8 text.");
+          setSourceFileError(t("sourceWorkflow.theSelectedFileIsNotValidUTFN8Text"));
           return;
         }
       }
@@ -105,13 +115,13 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
         ? sourceKind === "upload" && sourceFile
           ? await api.uploadSource(product.id, product.organisation_id, sourceName.trim(), sourceFile)
           : await api.createSource(product.id, product.organisation_id, sourceName.trim(), sourceKind, sourceLocation.trim())
-        : { id: `src_${Date.now()}`, name: sourceName.trim(), kind: sourceKind, location: sourceKind === "upload" ? sourceFile?.name ?? "uploaded file" : sourceLocation.trim(), visibility: "private" as const, published: false, quarantined: false, revision: 1 };
-      setSources((items) => [...items, { id: created.id, name: created.name, kind: created.kind, location: created.location, visibility: created.visibility, published: created.published, quarantined: created.quarantined, crawlState: "draft", pages: 0, lastCrawl: "Not crawled", revision: created.revision }]);
+        : { id: `src_${Date.now()}`, name: sourceName.trim(), kind: sourceKind, location: sourceKind === "upload" ? sourceFile?.name ?? t("sourceWorkflow.uploadedFile") : sourceLocation.trim(), visibility: "private" as const, published: false, quarantined: false, revision: 1 };
+      setSources((items) => [...items, { id: created.id, name: created.name, kind: created.kind, location: created.location, visibility: created.visibility, published: created.published, quarantined: created.quarantined, crawlState: "draft", pages: 0, lastCrawl: "not-crawled", revision: created.revision }]);
       setAddSourceOpen(false);
       resetSourceForm();
-      showToast(`${created.name} was added privately.`);
+      showToast(t("sourceWorkflow.wasAddedPrivately", { name: String(created.name) }));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not add source.");
+      showToast(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotAddSource"));
     } finally {
       setSourceBusy(false);
     }
@@ -123,10 +133,10 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 		await api.queueCrawl(product.id, id);
 		window.setTimeout(() => pollCrawl(id), 1500);
 	  }
-      setSources((items) => items.map((item) => item.id === id ? { ...item, crawlState: "queued", lastCrawl: "Queued now" } : item));
-      showToast("Crawl queued. The isolated worker will update review state.");
+      setSources((items) => items.map((item) => item.id === id ? { ...item, crawlState: "queued", lastCrawl: "queued-now" } : item));
+      showToast(t("sourceWorkflow.crawlQueuedTheIsolatedWorkerWillUpdateReviewState"));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not queue crawl.");
+      showToast(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotQueueCrawl"));
     }
   }
 
@@ -136,7 +146,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 	  const latest = jobs[0];
 	  if (!latest) return;
 	  const crawlState: Source["crawlState"] = latest.state === "failed" ? "failed" : latest.state === "cancelled" ? "cancelled" : latest.state === "review" || latest.state === "succeeded" ? "review" : latest.state === "running" ? "running" : "queued";
-	  setSources((items) => items.map((item) => item.id === id ? { ...item, crawlState, pages: latest.fetched_count, lastCrawl: latest.finished_at ? new Date(latest.finished_at).toLocaleString() : latest.state } : item));
+	  setSources((items) => items.map((item) => item.id === id ? { ...item, crawlState, pages: latest.fetched_count, lastCrawl: latest.finished_at ? t("format.dateTime", { value: new Date(latest.finished_at) }) : latest.state } : item));
 	  if ((latest.state === "queued" || latest.state === "running") && attempt < 40) {
 		window.setTimeout(() => pollCrawl(id, attempt + 1), 3000);
 		return;
@@ -164,12 +174,12 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 	  resource = await api.createResourceSet({
 		kind: "documentation",
 		name: `${integration.display_name} · ${source.name}`.slice(0, 120),
-		description: `Reviewed ${source.name} documentation for ${integration.display_name}.`,
+		description: t("sourceWorkflow.reviewedDocumentationDescription", { source: source.name, integration: integration.display_name }),
 		manifest: [sourcePublicationManifestEntry(source, publication)],
 	  });
 	}
 	const revisionID = resource.latest_revision?.id;
-	if (!revisionID) throw new Error("The reviewed documentation set has no immutable revision to pin.");
+	if (!revisionID) throw new Error(t("sourceWorkflow.theReviewedDocumentationSetHasNoImmutableRevisionTo"));
 	await api.attachResourceSet(integration.id, resource.id, revisionID);
 	await refreshCatalog();
 	return { attached: true, resourceSetName: resource.name, revision: resource.latest_revision?.revision ?? publication.revision };
@@ -184,7 +194,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 
   async function publishSource(source: Source, attachIntegrationID = "") {
 	if (!apiConnected) {
-	  showToast("Generation review is available in the live console.");
+	  showToast(t("sourceWorkflow.generationReviewIsAvailableInTheLiveConsole"));
 	  return;
 	}
 	setSourceReviewBusy(true);
@@ -197,7 +207,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 	  setSourceReviewAttachIntegrationID(attachIntegrationID);
 	} catch (error) {
 	  setSourceReviewAttachIntegrationID("");
-	  showToast(error instanceof APIError ? error.message : "Could not load this crawl generation for review.");
+	  showToast(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotLoadThisCrawlGenerationForReview"));
 	} finally {
 	  setSourceReviewBusy(false);
 	}
@@ -222,21 +232,21 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 		revision: result.source.revision,
 	  };
 	  setSources((items) => items.map((item) => item.id === result.source.id ? { ...item, published: result.source.published, quarantined: result.source.quarantined, revision: result.source.revision, crawlState: "synced", latestPublication: result.publication } : item));
-	  let message = `${result.source.name} generation r${result.publication.revision} was atomically published.`;
+	  let message: string = t("sourceWorkflow.generationPublished", { name: result.source.name, revision: result.publication.revision });
 	  if (sourceReviewAttachIntegrationID) {
 		try {
 		  const attachment = await attachReviewedSourcePublication(sourceReviewAttachIntegrationID, source, result.publication);
 		  message = attachment.attached
-			? `${message} Revision ${attachment.revision} was pinned to the API.`
-			: `${message} That exact revision was already attached.`;
+			? t("sourceWorkflow.generationPublishedAndPinned", { name: result.source.name, publicationRevision: result.publication.revision, attachmentRevision: attachment.revision })
+			: t("sourceWorkflow.generationPublishedAlreadyAttached", { name: result.source.name, revision: result.publication.revision });
 		} catch (error) {
-		  message = `${message} Attachment still needs attention: ${error instanceof APIError || error instanceof Error ? error.message : "the reviewed set could not be attached"}`;
+		  message = t("sourceWorkflow.generationPublishedAttachmentNeedsAttention", { name: result.source.name, revision: result.publication.revision, error: error instanceof APIError || error instanceof Error ? error.message : t("sourceWorkflow.reviewedSetCouldNotBeAttached") });
 		}
 	  }
 	  closeSourceReview();
 	  showToast(message);
 	} catch (error) {
-	  showToast(error instanceof APIError ? error.message : "Could not publish this reviewed generation.");
+	  showToast(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotPublishThisReviewedGeneration"));
 	} finally {
 	  setSourceReviewBusy(false);
 	}

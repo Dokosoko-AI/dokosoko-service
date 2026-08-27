@@ -1,4 +1,5 @@
 import { Check, Copy, Sparkles, TriangleAlert } from "lucide-react";
+import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 
 import type {
@@ -27,12 +28,18 @@ export type DocumentationAttachmentResult = {
 
 export const aiWorkloads: Array<{
   role: AIWorkload;
-  name: string;
-  description: string;
   icon: typeof Sparkles;
 }> = [
-  { role: "analysis", name: "Analysis", description: "Analyses evidence, writes recipes, and reviews every generated claim.", icon: Sparkles },
+  { role: "analysis", icon: Sparkles },
 ];
+
+export function aiWorkloadName(role: AIWorkload, t: TFunction) {
+  return role === "analysis" ? t("settings.analysis") : role;
+}
+
+export function aiWorkloadDescription(role: AIWorkload, t: TFunction) {
+  return role === "analysis" ? t("settings.analysisWorkloadDescription") : role;
+}
 
 export const aiModelDefaults: Record<APIAIProviderConnection["provider"], Record<AIWorkload, string>> = {
   openai: { analysis: "gpt-5.6-terra" },
@@ -54,18 +61,28 @@ export const aiModelOptions: Record<APIAIProviderConnection["provider"], string[
   "openai-compatible": [],
 };
 
-export const aiProviders: Array<{ id: APIAIProviderConnection["provider"]; name: string; description: string }> = [
-  { id: "openai", name: "OpenAI", description: "Responses API with structured outputs." },
-  { id: "google", name: "Google", description: "Gemini API with JSON-schema output." },
-  { id: "anthropic", name: "Anthropic", description: "Claude Messages API with structured output." },
-  { id: "digitalocean", name: "DigitalOcean", description: "Gradient serverless inference with one scoped model key." },
-  { id: "xai", name: "xAI", description: "xAI Responses API with structured outputs." },
-  { id: "deepseek", name: "DeepSeek", description: "DeepSeek chat API with JSON output." },
-  { id: "openai-compatible", name: "Other OpenAPI compatible providers", description: "A fixed HTTPS OpenAI-compatible endpoint." },
+export const aiProviders: Array<{ id: APIAIProviderConnection["provider"] }> = [
+  { id: "openai" },
+  { id: "google" },
+  { id: "anthropic" },
+  { id: "digitalocean" },
+  { id: "xai" },
+  { id: "deepseek" },
+  { id: "openai-compatible" },
 ];
 
-export function aiProviderLabel(provider: string) {
-  return provider === "openai" ? "OpenAI" : provider === "google" ? "Google" : provider === "anthropic" ? "Anthropic" : provider === "digitalocean" ? "DigitalOcean" : provider === "xai" ? "xAI" : provider === "deepseek" ? "DeepSeek" : provider === "openai-compatible" ? "Other OpenAPI compatible providers" : provider;
+export function aiProviderLabel(provider: string, t?: TFunction) {
+  return provider === "openai" ? "OpenAI" : provider === "google" ? "Google" : provider === "anthropic" ? "Anthropic" : provider === "digitalocean" ? "DigitalOcean" : provider === "xai" ? "xAI" : provider === "deepseek" ? "DeepSeek" : provider === "openai-compatible" ? (t?.("settings.otherOpenAPICompatibleProviders") ?? provider) : provider;
+}
+
+export function aiProviderDescription(provider: APIAIProviderConnection["provider"], t: TFunction) {
+  return provider === "openai" ? t("settings.openAIProviderDescription")
+    : provider === "google" ? t("settings.googleProviderDescription")
+      : provider === "anthropic" ? t("settings.anthropicProviderDescription")
+        : provider === "digitalocean" ? t("settings.digitalOceanProviderDescription")
+          : provider === "xai" ? t("settings.xAIProviderDescription")
+            : provider === "deepseek" ? t("settings.deepSeekProviderDescription")
+              : t("settings.openAICompatibleProviderDescription");
 }
 
 export function aiProviderOrigin(provider: APIAIProviderConnection["provider"]) {
@@ -97,7 +114,6 @@ export function WarningContent({ children }: { children: ReactNode }) { return <
 export function Confirmation({ checked, onChange, children }: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) { return <label className="confirmation"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span className="check-box">{checked && <Check />}</span><span>{children}</span></label>; }
 export function SummaryItem({ label, value, icon }: { label: string; value: string; icon: ReactNode }) { return <div className="summary-item"><span>{icon}</span><div><small>{label}</small><strong>{value}</strong></div></div>; }
 export function Metric({ label, value, detail, positive }: { label: string; value: string; detail: string; positive?: boolean }) { return <article className="metric"><span>{label}</span><strong>{value}</strong><small className={positive ? "positive" : ""}>{detail}</small></article>; }
-export function SettingsCard({ icon, title, detail, status }: { icon: ReactNode; title: string; detail: string; status: string }) {
-  const statusColor: "amber" | "zinc" | "green" = status === "Required" ? "amber" : status === "Manage" ? "zinc" : "green";
+export function SettingsCard({ icon, title, detail, status, statusColor = "green" }: { icon: ReactNode; title: string; detail: string; status: string; statusColor?: "amber" | "zinc" | "green" }) {
   return <span className="panel settings-card"><span className="settings-icon">{icon}</span><span className="settings-card-copy"><span className="settings-card-title">{title}</span><span className="settings-card-detail">{detail}</span></span><Badge color={statusColor}>{status}</Badge></span>;
 }

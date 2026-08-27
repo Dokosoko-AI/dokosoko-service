@@ -1,5 +1,8 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { RefreshCw, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -32,22 +35,62 @@ export function PrettyJSON({ value, label }: { value: unknown; label?: string })
 }
 
 export function MarkdownEvidence({ children, label }: { children: string; label: string }) {
-  return <pre className="developer-asset-markdown" aria-label={label}><code>{children || "No generated navigation markdown is available for this exact revision."}</code></pre>;
+  const { t } = useTranslation();
+  return <pre className="developer-asset-markdown" aria-label={label}><code>{children || t("developerAssets.noGeneratedNavigationMarkdown")}</code></pre>;
 }
 
 export function LoadingPanel({ label }: { label: string }) {
-  return <section className="panel developer-asset-state" role="status"><RefreshCw className="spin" /><span><strong>{label}</strong><small>Reading deployment-owned records…</small></span></section>;
+  const { t } = useTranslation();
+  return <section className="panel developer-asset-state" role="status"><RefreshCw className="spin" /><span><strong>{label}</strong><small>{t("developerAssets.readingDeploymentOwnedRecords")}</small></span></section>;
 }
 
 export function ProblemPanel({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return <section className="panel developer-asset-state problem" role="alert"><TriangleAlert /><span><strong>Developer assets unavailable</strong><small>{message}</small></span>{onRetry && <Button outline onClick={onRetry}>Retry</Button>}</section>;
+  const { t } = useTranslation();
+  return <section className="panel developer-asset-state problem" role="alert"><TriangleAlert /><span><strong>{t("developerAssets.developerAssetsUnavailable")}</strong><small>{message}</small></span>{onRetry && <Button outline onClick={onRetry}>{t("common.retry")}</Button>}</section>;
 }
 
 export function EmptyPanel({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
   return <section className="panel developer-asset-empty"><span><strong>{title}</strong><small>{detail}</small></span>{action}</section>;
 }
 
+const enumTranslationKeys = {
+  active: "enumLabels.active",
+  archived: "enumLabels.archived",
+  attached: "enumLabels.attached",
+  cancelled: "enumLabels.cancelled",
+  deprecated: "enumLabels.deprecated",
+  detached: "enumLabels.detached",
+  draft: "enumLabels.draft",
+  excluded: "enumLabels.excluded",
+  failed: "enumLabels.failed",
+  included: "enumLabels.included",
+  needs_review: "enumLabels.needsReview",
+  partial: "enumLabels.partial",
+  published: "enumLabels.published",
+  quarantined: "enumLabels.quarantined",
+  queued: "enumLabels.queued",
+  ready: "enumLabels.ready",
+  review: "enumLabels.review",
+  review_ready: "enumLabels.reviewReady",
+  running: "enumLabels.running",
+  suspended: "enumLabels.suspended",
+  valid: "enumLabels.valid",
+  validated: "enumLabels.validated",
+  yanked: "enumLabels.yanked",
+  metadata_only: "enumLabels.metadataOnly",
+  resolved_source: "enumLabels.resolvedSource",
+  source_publication: "enumLabels.sourcePublication",
+  document: "enumLabels.document",
+  section: "enumLabels.section",
+} as const;
+
+export function enumLabel(t: TFunction, value: string) {
+  const key = enumTranslationKeys[value.toLowerCase() as keyof typeof enumTranslationKeys];
+  return key ? t(key) : t("enumLabels.unknown", { value });
+}
+
 export function ReviewStateBadge({ state }: { state: string }) {
+  const { t } = useTranslation();
   const normalized = state.toLowerCase();
   const color = normalized === "published" || normalized === "ready" || normalized === "review_ready" || normalized === "active"
     ? "green"
@@ -58,5 +101,5 @@ export function ReviewStateBadge({ state }: { state: string }) {
         : normalized === "draft" || normalized === "deprecated"
           ? "amber"
           : "zinc";
-  return <Badge color={color}>{state.replaceAll("_", " ")}</Badge>;
+  return <Badge color={color}>{enumLabel(t, state)}</Badge>;
 }

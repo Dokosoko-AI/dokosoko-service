@@ -28,13 +28,15 @@
     "@headlessui/react": "^2.2.9",
     "clsx": "^2.1.1",
     "crawlee": "3.18.1",
+    "i18next": "^26.4.0",
     "lucide-react": "1.30.0",
     "motion": "^12.38.0",
     "pg": "8.23.0",
     "playwright": "1.62.1",
     "qrcode.react": "4.2.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "react-i18next": "^17.0.12"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",

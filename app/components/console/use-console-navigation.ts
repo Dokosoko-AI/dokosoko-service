@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -26,6 +27,7 @@ export function useConsoleNavigation({
 }: {
   onLeaveToolBuilder: () => void;
 }) {
+  const { t } = useTranslation();
   const [consoleRoute, setConsoleRoute] = useState<ConsoleRoute>(() => routeForSection("product"));
   const consoleRouteRef = useRef(consoleRoute);
   const toolBuilderDirtyRef = useRef(false);
@@ -39,8 +41,8 @@ export function useConsoleNavigation({
     if (!toolBuilderDirtyRef.current || current.kind !== "tool-builder" || current.path === nextPath) {
       return true;
     }
-    return window.confirm("Discard your unsaved tool changes?");
-  }, []);
+    return window.confirm(t("console.discardUnsavedToolChanges"));
+  }, [t]);
 
   const navigateToPath = useCallback((path: string, replace = false) => {
     const next = parseConsolePath(path);

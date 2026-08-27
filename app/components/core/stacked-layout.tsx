@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslation } from "react-i18next";
 import * as Headless from '@headlessui/react'
 import React, { useState } from 'react'
 import { NavbarItem } from './navbar'
@@ -21,6 +22,7 @@ function CloseMenuIcon() {
 }
 
 function MobileSidebar({ open, close, children }: React.PropsWithChildren<{ open: boolean; close: () => void }>) {
+  const { t } = useTranslation();
   return (
     <Headless.Dialog open={open} onClose={close} className="lg:hidden">
       <Headless.DialogBackdrop
@@ -33,7 +35,7 @@ function MobileSidebar({ open, close, children }: React.PropsWithChildren<{ open
       >
         <div className="flex h-full flex-col rounded-lg bg-white shadow-xs ring-1 ring-zinc-950/5 dark:bg-zinc-900 dark:ring-white/10">
           <div className="-mb-3 px-4 pt-3">
-            <Headless.CloseButton as={NavbarItem} aria-label="Close navigation">
+            <Headless.CloseButton as={NavbarItem} aria-label={t("sidebar.closeNavigation")}>
               <CloseMenuIcon />
             </Headless.CloseButton>
           </div>
@@ -49,6 +51,7 @@ export function StackedLayout({
   sidebar,
   children,
 }: React.PropsWithChildren<{ navbar: React.ReactNode; sidebar: React.ReactNode }>) {
+  const { t } = useTranslation();
   const [showSidebar, setShowSidebar] = useState(false)
 
   return (
@@ -61,7 +64,7 @@ export function StackedLayout({
       {/* Navbar */}
       <header className="flex items-center px-4">
         <div className="py-2.5 lg:hidden">
-          <NavbarItem onClick={() => setShowSidebar(true)} aria-label="Open navigation">
+          <NavbarItem onClick={() => setShowSidebar(true)} aria-label={t("sidebar.openNavigation")}>
             <OpenMenuIcon />
           </NavbarItem>
         </div>

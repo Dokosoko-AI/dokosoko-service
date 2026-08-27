@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 
 import { APIError, api } from "../../lib/api";
@@ -16,8 +18,8 @@ import {
   type AIWorkload,
   aiModelDefaults,
   aiProviderLabel,
+  aiWorkloadName,
   aiProviderOrigin,
-  aiWorkloads,
   analysisMatchesIntegration,
   recipeAnalysisIsFreshlyRunning,
 } from "./shared";
@@ -35,6 +37,7 @@ export function useAIWorkspaceState({
   onLoadProblem: LoadProblemReporter;
   showToast: (message: string) => void;
 }) {
+  const { t } = useTranslation();
   const productID = product.id;
   const [aiConnections, setAIConnections] = useState<APIAIProviderConnection[]>([]);
   const [aiProfiles, setAIProfiles] = useState<APIAIWorkloadProfile[]>([]);
@@ -77,13 +80,13 @@ export function useAIWorkspaceState({
           setAIProfiles(profiles);
         }
       })
-      .catch((error) => onLoadProblem("AI configuration", error));
+      .catch((error) => onLoadProblem(t("aiWorkflow.aiConfiguration"), error));
 
     api.aiPrompts(productID)
       .then((prompts) => {
         if (!cancelled) setAIPrompts(prompts);
       })
-      .catch((error) => onLoadProblem("AI workflow prompts", error));
+      .catch((error) => onLoadProblem(t("aiWorkflow.aiWorkflowPrompts"), error));
 
     Promise.all([api.analyses(productID), api.recipes(productID), api.aiUsage(productID)])
       .then(([analysisValues, recipeValues, usageValues]) => {
@@ -93,10 +96,10 @@ export function useAIWorkspaceState({
           setAIProviderUsage(usageValues.providers);
         }
       })
-      .catch((error) => onLoadProblem("AI content", error));
+      .catch((error) => onLoadProblem(t("aiWorkflow.aiContent"), error));
 
     return () => { cancelled = true; };
-  }, [fixturePreview, onLoadProblem, productID]);
+  }, [fixturePreview, onLoadProblem, productID, t]);
 
 	  function openAIConnection(provider: APIAIProviderConnection["provider"]) {
 	    const connection = aiConnections.find((item) => item.provider === provider);
@@ -137,9 +140,9 @@ export function useAIWorkspaceState({
 	      setAIConnections((items) => [...items.filter((item) => item.id !== value.id && item.provider !== value.provider), value]);
 	      setProviderCredential("");
 	      setProviderOpen(false);
-	      showToast(`${aiProviderLabel(value.provider)} connected.`);
+	      showToast(t("aiWorkflow.connected", { value1: String(aiProviderLabel(value.provider, t)) }));
 	    } catch (error) {
-	      showToast(error instanceof APIError ? error.message : "Could not connect AI provider.");
+	      showToast(error instanceof APIError ? error.message : t("aiWorkflow.couldNotConnectAIProvider"));
 	    } finally {
 	      setProviderBusy(false);
 	    }
@@ -149,11 +152,11 @@ export function useAIWorkspaceState({
 	    try {
 	      const value = await api.testAIConnection(connection.id);
 	      setAIConnections((items) => items.map((item) => item.id === value.id ? value : item));
-	      showToast(`${aiProviderLabel(value.provider)} connection works.`);
+	      showToast(t("aiWorkflow.connectionWorks", { value1: String(aiProviderLabel(value.provider, t)) }));
 	    } catch (error) {
 	      const updated = await api.aiConnections().catch(() => aiConnections);
 	      setAIConnections(updated);
-	      showToast(error instanceof APIError ? error.message : "Connection test failed.");
+	      showToast(error instanceof APIError ? error.message : t("aiWorkflow.connectionTestFailed"));
 	    }
 	  }
 
@@ -164,9 +167,9 @@ export function useAIWorkspaceState({
 	      const value = await api.saveAIProfile(product.id, workloadRole, { organisation_id: product.organisation_id, provider_connection_id: workloadConnectionID, model: workloadModel, max_input_tokens: Number(workloadInputTokens), max_output_tokens: Number(workloadOutputTokens), daily_token_budget: Number(workloadDailyBudget), enabled: workloadEnabled, revision: current?.revision ?? 0 });
 	      setAIProfiles((items) => [...items.filter((item) => item.workload !== value.workload), value].sort((a, b) => a.workload.localeCompare(b.workload)));
 	      setWorkloadOpen(false);
-	      showToast(`${aiWorkloads.find((workload) => workload.role === value.workload)?.name ?? value.workload} workload saved.`);
+	      showToast(t("aiWorkflow.workloadSaved", { workload: aiWorkloadName(value.workload, t) }));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not save AI model.");
+      showToast(error instanceof APIError ? error.message : t("aiWorkflow.couldNotSaveAIModel"));
     } finally {
       setWorkloadBusy(false);
     }
@@ -178,9 +181,9 @@ export function useAIWorkspaceState({
 	      const current = aiProfiles.find((item) => item.workload === role);
 	      const value = await api.saveAIProfile(product.id, role, { organisation_id: product.organisation_id, provider_connection_id: connectionID, model: modelID, max_input_tokens: current?.max_input_tokens ?? 128000, max_output_tokens: current?.max_output_tokens ?? 8192, daily_token_budget: current?.daily_token_budget ?? 0, enabled: true, revision: current?.revision ?? 0 });
 	      setAIProfiles((items) => [...items.filter((item) => item.workload !== value.workload), value].sort((a, b) => a.workload.localeCompare(b.workload)));
-	      showToast(`${aiWorkloads.find((workload) => workload.role === value.workload)?.name ?? value.workload} workload saved.`);
+	      showToast(t("aiWorkflow.workloadSaved", { workload: aiWorkloadName(value.workload, t) }));
 	    } catch (error) {
-	      showToast(error instanceof APIError ? error.message : "Could not save AI model.");
+	      showToast(error instanceof APIError ? error.message : t("aiWorkflow.couldNotSaveAIModel"));
 	    } finally {
 	      setWorkloadBusy(false);
 	    }
@@ -205,10 +208,10 @@ export function useAIWorkspaceState({
         setAIPrompts(latest);
         const current = latest.find((item) => item.key === promptKey);
         if (current) setPromptInstructions(current.instructions);
-        showToast("This workflow changed elsewhere. The latest instructions are loaded; review them before saving again.");
+        showToast(t("aiWorkflow.thisWorkflowChangedElsewhereTheLatestInstructionsAreLoaded"));
         return;
       } catch {
-        showToast("This workflow changed elsewhere. Reload AI configuration before trying again.");
+        showToast(t("aiWorkflow.thisWorkflowChangedElsewhereReloadAIConfigurationBeforeTrying"));
         return;
       }
     }
@@ -223,9 +226,9 @@ export function useAIWorkspaceState({
       const value = await api.saveAIPrompt(product.id, current.key, promptInstructions, current.revision);
       replaceAIPrompt(value);
       setPromptOpen(false);
-      showToast(`${value.label} instructions saved as ${value.effective_version}.`);
+      showToast(t("aiWorkflow.instructionsSavedAs", { label: String(value.label), effective_version: String(value.effective_version) }));
     } catch (error) {
-      await handleAIPromptMutationError(error, "Could not save workflow instructions.");
+      await handleAIPromptMutationError(error, t("aiWorkflow.couldNotSaveWorkflowInstructions"));
     } finally {
       setPromptBusy(false);
     }
@@ -234,31 +237,31 @@ export function useAIWorkspaceState({
   async function resetAIPromptOverride() {
     const current = aiPrompts.find((item) => item.key === promptKey);
     if (!current || current.source === "default") return;
-    if (!window.confirm(`Restore ${current.label} to its built-in default? The current custom instructions cannot be restored from the console.`)) return;
+    if (!window.confirm(t("aiWorkflow.confirmRestoreDefaultInstructions", { label: current.label }))) return;
     setPromptBusy(true);
     try {
       const value = await api.resetAIPrompt(product.id, current.key, current.revision);
       replaceAIPrompt(value);
       setPromptInstructions(value.instructions);
       setPromptOpen(false);
-      showToast(`${value.label} restored to ${value.default_version}.`);
+      showToast(t("aiWorkflow.restoredTo", { label: String(value.label), default_version: String(value.default_version) }));
     } catch (error) {
-      await handleAIPromptMutationError(error, "Could not restore the default workflow instructions.");
+      await handleAIPromptMutationError(error, t("aiWorkflow.couldNotRestoreDefaultInstructions"));
     } finally {
       setPromptBusy(false);
     }
   }
 
-  async function createRecipe(prompt: string, integrationID: string): Promise<APIRecipe | null> {
+  async function createRecipe(prompt: string, integrationIDs: string[] = []): Promise<APIRecipe | null> {
     setRecipeBusy(true);
     try {
-      const value = await api.createRecipe(product.id, prompt, integrationID);
+      const value = await api.createRecipe(product.id, prompt, integrationIDs);
       setRecipes((items) => [value, ...items.filter((item) => item.id !== value.id)]);
       api.analyses(product.id).then(setAnalyses).catch(() => {});
-      showToast("Recipe draft created from current product evidence.");
+      showToast(t("aiWorkflow.recipeDraftCreatedFromCurrentProductEvidence"));
       return value;
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not create this recipe.");
+      showToast(error instanceof APIError ? error.message : t("aiWorkflow.couldNotCreateThisRecipe"));
       return null;
     } finally {
       setRecipeBusy(false);
@@ -271,7 +274,7 @@ export function useAIWorkspaceState({
       const scopedAnalyses = analyses.filter((candidate) => analysisMatchesIntegration(candidate, integrationID));
       const latestAnalysis = [...scopedAnalyses].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
       if (recipeAnalysisIsFreshlyRunning(latestAnalysis)) {
-        showToast("Evidence analysis is still running. Try again when it is ready for review.");
+        showToast(t("aiWorkflow.evidenceAnalysisIsStillRunningTryAgainWhenIt"));
         return;
       }
       const analysis = await api.analyseIntegration(product.id, integrationID);
@@ -279,17 +282,17 @@ export function useAIWorkspaceState({
       const unansweredBlocker = analysis.unknowns.find((unknown) => unknown.blocking);
       if (analysis.state !== "review" || unansweredBlocker) {
         showToast(unansweredBlocker
-          ? `Resolve “${unansweredBlocker.question}” by attaching or configuring the required evidence, then rerun analysis.`
+          ? t("aiWorkflow.resolveByAttachingOrConfiguringTheRequiredEvidenceThen", { question: String(unansweredBlocker.question) })
           : analysis.state === "failed"
-            ? "Evidence analysis failed. Review the API evidence and try again."
-            : "Evidence analysis is still running. Try again when it is ready for review.");
+            ? t("aiWorkflow.evidenceAnalysisFailedReviewTheAPIEvidenceAndTry")
+            : t("aiWorkflow.evidenceAnalysisIsStillRunningTryAgainWhenIt"));
         return;
       }
       const generated = await api.generateRecipes(product.id, analysis.id, integrationID);
       setRecipes((items) => [...generated, ...items.filter((item) => !generated.some((candidate) => candidate.id === item.id))]);
-      showToast(`${generated.length} grounded recipe${generated.length === 1 ? "" : "s"} generated for review.`);
+      showToast(t("aiWorkflow.groundedRecipesGenerated", { count: generated.length }));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Recipes could not be generated from the current evidence.");
+      showToast(error instanceof APIError ? error.message : t("aiWorkflow.recipesCouldNotBeGeneratedFromTheCurrentEvidence"));
     } finally {
       setRecipeBusy(false);
     }
@@ -301,17 +304,19 @@ export function useAIWorkspaceState({
     return analysis;
   }
 
-  async function handleRecipeMutationError(error: unknown, fallback: string) {
+  async function handleRecipeMutationError(error: unknown, fallback: string): Promise<boolean> {
     if (error instanceof APIError && error.status === 409) {
       try {
         setRecipes(await api.recipes(product.id));
-        showToast("This recipe changed. The latest revision is loaded; review it before retrying.");
+        showToast(t("aiWorkflow.thisRecipeChangedTheLatestRevisionIsLoadedReview"));
+        return true;
       } catch {
-        showToast("This recipe changed, but the latest revision could not be loaded. Refresh before retrying.");
+        showToast(t("aiWorkflow.thisRecipeChangedButTheLatestRevisionCouldNot"));
+        return false;
       }
-      return;
     }
     showToast(error instanceof APIError ? error.message : fallback);
+    return false;
   }
 
   async function reworkRecipe(recipe: APIRecipe, instruction: string): Promise<APIRecipe | null> {
@@ -319,10 +324,10 @@ export function useAIWorkspaceState({
     try {
       const value = await api.reworkRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, instruction);
       setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-      showToast("A new recipe revision is ready for review.");
+      showToast(t("aiWorkflow.aNewRecipeRevisionIsReadyForReview"));
       return value;
     } catch (error) {
-      await handleRecipeMutationError(error, "Could not rework this recipe.");
+      await handleRecipeMutationError(error, t("aiWorkflow.couldNotReworkRecipe"));
       return null;
     } finally {
       setRecipeBusy(false);
@@ -334,11 +339,25 @@ export function useAIWorkspaceState({
     try {
       const value = await api.updateRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, referenceIDs, visibility);
       setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-      showToast("Recipe references and visibility saved for review.");
+      showToast(t("aiWorkflow.recipeReferencesAndVisibilitySavedForReview"));
       return value;
     } catch (error) {
-      await handleRecipeMutationError(error, "Could not save this recipe revision.");
+      await handleRecipeMutationError(error, t("aiWorkflow.couldNotSaveRecipeRevision"));
       return null;
+    } finally {
+      setRecipeBusy(false);
+    }
+  }
+
+  async function deleteRecipe(recipe: APIRecipe): Promise<boolean> {
+    setRecipeBusy(true);
+    try {
+      await api.deleteRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id);
+      setRecipes((items) => items.filter((item) => item.id !== recipe.id));
+      showToast(t("aiWorkflow.recipeAndImmutableRevisionHistoryDeleted"));
+      return true;
+    } catch (error) {
+      return await handleRecipeMutationError(error, t("aiWorkflow.couldNotDeleteRecipe"));
     } finally {
       setRecipeBusy(false);
     }
@@ -349,9 +368,9 @@ export function useAIWorkspaceState({
     try {
       const value = await api.approveRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id);
       setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-      showToast("Current recipe revision approved.");
+      showToast(t("aiWorkflow.currentRecipeRevisionApproved"));
     } catch (error) {
-      await handleRecipeMutationError(error, "Could not approve this recipe.");
+      await handleRecipeMutationError(error, t("aiWorkflow.couldNotApproveRecipe"));
     } finally {
       setRecipeBusy(false);
     }
@@ -362,9 +381,9 @@ export function useAIWorkspaceState({
     try {
       const value = await api.publishRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id);
       setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
-      showToast("Recipe published to MCP resources.");
+      showToast(t("aiWorkflow.recipePublishedToMCPResources"));
     } catch (error) {
-      await handleRecipeMutationError(error, "Could not publish this recipe.");
+      await handleRecipeMutationError(error, t("aiWorkflow.couldNotPublishRecipe"));
     } finally {
       setRecipeBusy(false);
     }
@@ -374,9 +393,9 @@ export function useAIWorkspaceState({
     try {
       const value = await api.systemDoctor();
       const passing = value.checks.filter((check) => check.status === "ok").length;
-      showToast(value.status === "ok" ? `System Doctor passed all ${passing} checks.` : `System Doctor found ${value.checks.length - passing} check(s) requiring attention.`);
+      showToast(value.status === "ok" ? t("aiWorkflow.systemDoctorPassedAllChecks", { passing: String(passing) }) : t("aiWorkflow.systemDoctorFoundCheckSRequiringAttention", { passing: String(value.checks.length - passing) }));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "System Doctor could not run.");
+      showToast(error instanceof APIError ? error.message : t("aiWorkflow.systemDoctorCouldNotRun"));
     }
   }
 
@@ -425,6 +444,7 @@ export function useAIWorkspaceState({
     generateIntegrationSetupGuide,
     reworkRecipe,
     editRecipe,
+    deleteRecipe,
     approveRecipe,
     publishRecipe,
     runSystemDoctor,

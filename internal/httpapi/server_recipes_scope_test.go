@@ -100,7 +100,7 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 	}
 
 	w = request(t, handler, http.MethodPost, "/api/v1/products/prod_acme/analyses/"+analysis.ID+"/recipes", "doko_admin_demo", `{"integration_id":"`+selected.ID+`"}`)
-	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) || !strings.Contains(w.Body.String(), `"integration_id":"`+selected.ID+`"`) || strings.Contains(strings.ToLower(w.Body.String()), "connect-acme") {
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"api_attachments":[{"integration_id":"`+selected.ID+`"}]`) || strings.Contains(strings.ToLower(w.Body.String()), "connect-acme") {
 		t.Fatalf("scoped generation status=%d body=%s", w.Code, w.Body.String())
 	}
 	var generated struct {
@@ -110,18 +110,18 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 		t.Fatalf("decode generated recipe: values=%#v err=%v", generated.Items, err)
 	}
 	recipe := generated.Items[0]
-	if recipe.IntegrationID != selected.ID || recipe.ContractVersion != model.RecipeContractProductIntegrationV2 || recipe.CurrentRevision == nil {
-		t.Fatalf("generated recipe v2 binding = %#v", recipe)
+	if recipe.IntegrationID != "" || recipe.ContractVersion != model.RecipeContractDeploymentV3 || len(recipe.APIAttachments) != 1 || recipe.APIAttachments[0].IntegrationID != selected.ID || recipe.CurrentRevision == nil {
+		t.Fatalf("generated deployment recipe binding = %#v", recipe)
 	}
 	initialRevision := recipe.CurrentRevision
-	if initialRevision.SpecVersion != model.RecipeSpecVersion2 || initialRevision.IntegrationRevisionID == "" || initialRevision.IntegrationManifestHash == "" {
+	if initialRevision.SpecVersion != model.RecipeSpecVersion3 || initialRevision.IntegrationRevisionID != "" || initialRevision.IntegrationManifestHash != "" || len(initialRevision.APIBindings) != 1 || initialRevision.APIBindings[0].IntegrationID != selected.ID || initialRevision.APIBindings[0].IntegrationRevisionID == "" || initialRevision.APIBindings[0].IntegrationManifestHash == "" {
 		t.Fatalf("generated recipe revision provenance = %#v", initialRevision)
 	}
 	var spec model.RecipeSpec
 	if err := json.Unmarshal(initialRevision.Spec, &spec); err != nil {
 		t.Fatalf("decode generated recipe spec: %v", err)
 	}
-	if spec.IntegrationID != selected.ID || spec.SchemaVersion != model.RecipeSpecVersion2 || len(spec.CapabilityIDs) != 1 || len(spec.Steps) < 2 || len(spec.Checks) < 1 {
+	if spec.IntegrationID != "" || spec.SchemaVersion != model.RecipeSpecVersion3 || len(spec.APIAttachments) != 1 || spec.APIAttachments[0].IntegrationID != selected.ID || len(spec.CapabilityIDs) != 1 || len(spec.Steps) < 2 || len(spec.Checks) < 1 {
 		t.Fatalf("generated recipe spec = %#v", spec)
 	}
 	for _, missing := range []struct {
@@ -130,6 +130,7 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 		body   string
 	}{
 		{method: http.MethodPatch, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID, body: `{"reference_ids":[],"visibility":"private"}`},
+		{method: http.MethodDelete, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID, body: `{}`},
 		{method: http.MethodPost, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/rework", body: `{"instruction":"Clarify the result."}`},
 		{method: http.MethodPost, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/approve", body: `{}`},
 		{method: http.MethodPost, path: "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/publish", body: `{}`},
@@ -138,6 +139,14 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "revision and current_revision_id are required") {
 			t.Fatalf("missing recipe expectation path=%s status=%d body=%s", missing.path, w.Code, w.Body.String())
 		}
+	}
+	deleteCurrentBody, err := json.Marshal(map[string]any{"revision": recipe.Revision, "current_revision_id": recipe.CurrentRevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = request(t, handler, http.MethodDelete, "/api/v1/products/prod_acme/recipes/"+recipe.ID, "doko_admin_demo", string(deleteCurrentBody))
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "recipe_delete_not_allowed") {
+		t.Fatalf("current recipe deletion status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/recipes/"+recipe.ID, "doko_admin_demo", `{"markdown":"# Unstructured override","references":[],"visibility":"private"}`)
@@ -164,14 +173,14 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.CurrentRevision == nil || updated.CurrentRevisionID == initialRevision.ID || updated.CurrentRevision.GeneratedBy != "human" || updated.CurrentRevision.SpecVersion != model.RecipeSpecVersion2 {
+	if updated.CurrentRevision == nil || updated.CurrentRevisionID == initialRevision.ID || updated.CurrentRevision.GeneratedBy != "human" || updated.CurrentRevision.SpecVersion != model.RecipeSpecVersion3 {
 		t.Fatalf("updated structured revision = %#v", updated.CurrentRevision)
 	}
-	if updated.CurrentRevision.IntegrationRevisionID != initialRevision.IntegrationRevisionID || updated.CurrentRevision.IntegrationManifestHash != initialRevision.IntegrationManifestHash {
+	if len(updated.CurrentRevision.APIBindings) != 1 || updated.CurrentRevision.APIBindings[0] != initialRevision.APIBindings[0] || updated.CurrentRevision.IntegrationRevisionID != "" || updated.CurrentRevision.IntegrationManifestHash != "" {
 		t.Fatalf("updated recipe lost integration provenance: before=%#v after=%#v", initialRevision, updated.CurrentRevision)
 	}
 	var updatedSpec model.RecipeSpec
-	if err := json.Unmarshal(updated.CurrentRevision.Spec, &updatedSpec); err != nil || updatedSpec.SchemaVersion != model.RecipeSpecVersion2 {
+	if err := json.Unmarshal(updated.CurrentRevision.Spec, &updatedSpec); err != nil || updatedSpec.SchemaVersion != model.RecipeSpecVersion3 {
 		t.Fatalf("updated recipe spec=%#v err=%v", updatedSpec, err)
 	}
 	w = request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/recipes/"+recipe.ID, "doko_admin_demo", string(patchBody))

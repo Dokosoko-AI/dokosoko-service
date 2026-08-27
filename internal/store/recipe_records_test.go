@@ -33,6 +33,72 @@ func TestMemoryUpdateProductKeepsDeploymentCatalogCASMirrored(t *testing.T) {
 	}
 }
 
+func TestMemoryDeleteLegacyRecipeCascadesRevisionsAndRetainsAudit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := NewMemory()
+	recipeInput := model.Recipe{
+		ID:              "recipe_legacy_delete",
+		OrganisationID:  "org_acme",
+		ProductID:       "prod_acme",
+		ContractVersion: model.RecipeContractLegacyMCPV1,
+		Slug:            "legacy-delete",
+		Title:           "Legacy recipe to delete",
+		Outcome:         "Retain only the deletion audit.",
+		Audience:        "operator",
+		State:           "outdated",
+		Generated:       true,
+		NeedsAttention:  true,
+		Visibility:      model.VisibilityPrivate,
+		StableURI:       "dokosoko://products/acme/recipes/legacy-delete",
+	}
+	product, err := memory.Product(ctx, recipeInput.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAudit := recipeTestAudit(recipeInput, "audit_recipe_legacy_delete_created", "recipe.created")
+	recipe, err := memory.CreateRecipeWithRevision(ctx, recipeInput, model.RecipeRevision{
+		ID:          "recipe_legacy_delete_revision",
+		RecipeID:    recipeInput.ID,
+		SpecVersion: 1,
+		Spec:        json.RawMessage(`{}`),
+		Markdown:    "# Legacy recipe\n",
+		GeneratedBy: "human",
+		CreatedBy:   "root",
+	}, RecipeMutation{ExpectedCatalogRevision: product.CatalogRevision, Audit: &createAudit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteAudit := recipeTestAudit(recipe, "audit_recipe_legacy_deleted", "recipe.deleted")
+	deleteAudit.Prior = map[string]any{"state": recipe.State, "current_revision_id": recipe.CurrentRevisionID}
+	deleteAudit.Current = map[string]any{"deleted": true}
+	memory.mu.Lock()
+	driftedProduct := memory.products[recipe.ProductID]
+	driftedProduct.CatalogRevision += 5
+	memory.products[recipe.ProductID] = driftedProduct
+	memory.mu.Unlock()
+	if err := memory.DeleteRecipe(ctx, recipe.ProductID, recipe.ID, RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &deleteAudit}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.Recipe(ctx, recipe.ProductID, recipe.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted recipe lookup error = %v, want not found", err)
+	}
+	if _, err := memory.RecipeRevisions(ctx, recipe.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted revision lookup error = %v, want not found", err)
+	}
+	events, err := memory.AuditEvents(ctx, recipe.OrganisationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundDelete := false
+	for _, event := range events {
+		foundDelete = foundDelete || event.ID == deleteAudit.ID && event.Action == "recipe.deleted" && event.TargetID == recipe.ID
+	}
+	if !foundDelete {
+		t.Fatalf("deletion audit was not retained: %#v", events)
+	}
+}
+
 func TestMemoryCreateRecipeWithRevisionPersistsProductIntegrationContractAtomically(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -167,6 +233,93 @@ func TestMemoryCreateRecipeWithRevisionPersistsProductIntegrationContractAtomica
 	}
 	if _, err := memory.RecipeRevisions(ctx, invalidAuditRecipe.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("invalid audit left a revision behind: %v", err)
+	}
+}
+
+func TestMemoryCreateDeploymentRecipePersistsExactMultiAPIBindings(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := NewMemory()
+	type publishedAPI struct {
+		integration model.Integration
+		revision    model.IntegrationRevision
+	}
+	apis := make([]publishedAPI, 0, 2)
+	for index, id := range []string{"integration_customers", "integration_billing"} {
+		integration, err := memory.CreateIntegration(ctx, model.Integration{ID: id, DeploymentID: "prod_acme", OrganisationID: "org_acme", FamilyKey: id, VersionKey: "v1", DisplayName: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := "sha256:" + strings.Repeat(string(rune('a'+index)), 64)
+		publishedAt := time.Now().UTC()
+		revision, err := memory.CreateIntegrationRevision(ctx, model.IntegrationRevision{ID: id + "_revision", IntegrationID: id, Revision: 1, State: "published", Snapshot: json.RawMessage(`{}`), ManifestHash: hash, PublishedAt: &publishedAt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		apis = append(apis, publishedAPI{integration: integration, revision: revision})
+	}
+	recipe := model.Recipe{
+		ID: "recipe_multi_api", OrganisationID: "org_acme", ProductID: "prod_acme",
+		ContractVersion: model.RecipeContractDeploymentV3,
+		APIAttachments: []model.RecipeAPIAttachment{
+			{IntegrationID: apis[0].integration.ID}, {IntegrationID: apis[1].integration.ID},
+		},
+		Slug: "provision-customer", Title: "Provision a customer", Outcome: "The application provisions a customer and billing account.",
+		Audience: "coding_agent", State: "review", NeedsAttention: true, Visibility: model.VisibilityPrivate,
+		StableURI: "dokosoko://products/acme/recipes/provision-customer",
+	}
+	spec, err := json.Marshal(model.RecipeSpec{
+		SchemaVersion: model.RecipeSpecVersion3, APIAttachments: append([]model.RecipeAPIAttachment(nil), recipe.APIAttachments...),
+		Title: recipe.Title, Outcome: recipe.Outcome, CapabilityIDs: []string{"customers.create", "billing.create"},
+		Steps:  []model.RecipeInstruction{{Action: "Create the customer.", Evidence: []model.RecipeEvidenceRef{}}, {Action: "Create the billing account.", Evidence: []model.RecipeEvidenceRef{}}},
+		Checks: []model.RecipeInstruction{{Action: "Verify both records.", Evidence: []model.RecipeEvidenceRef{}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.RecipeRevision{
+		ID: "recipe_multi_api_revision", RecipeID: recipe.ID, SpecVersion: model.RecipeSpecVersion3, Spec: spec,
+		Markdown: "# Provision a customer\n", GeneratedBy: "human", CreatedBy: "root",
+		APIBindings: []model.RecipeAPIBinding{
+			{IntegrationID: apis[1].integration.ID, IntegrationRevisionID: apis[1].revision.ID, IntegrationManifestHash: apis[1].revision.ManifestHash},
+			{IntegrationID: apis[0].integration.ID, IntegrationRevisionID: apis[0].revision.ID, IntegrationManifestHash: apis[0].revision.ManifestHash},
+		},
+	}
+	product, err := memory.Product(ctx, recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := recipeTestAudit(recipe, "audit_recipe_multi_api_created", "recipe.created")
+	saved, err := memory.CreateRecipeWithRevision(ctx, recipe, revision, RecipeMutation{ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.IntegrationID != "" || saved.ContractVersion != model.RecipeContractDeploymentV3 || saved.CurrentRevision == nil || len(saved.APIAttachments) != 2 || len(saved.CurrentRevision.APIBindings) != 2 {
+		t.Fatalf("saved deployment recipe = %#v", saved)
+	}
+	if saved.APIAttachments[0].IntegrationID != "integration_billing" || saved.APIAttachments[1].IntegrationID != "integration_customers" || saved.CurrentRevision.APIBindings[0].IntegrationID != "integration_billing" || saved.CurrentRevision.APIBindings[1].IntegrationID != "integration_customers" {
+		t.Fatalf("multi-API projections were not normalized deterministically: %#v", saved)
+	}
+
+	invalid := recipe
+	invalid.ID = "recipe_multi_api_invalid"
+	invalid.Slug = "provision-customer-invalid"
+	invalid.StableURI = "dokosoko://products/acme/recipes/provision-customer-invalid"
+	invalidRevision := revision
+	invalidRevision.ID = "recipe_multi_api_invalid_revision"
+	invalidRevision.RecipeID = invalid.ID
+	invalidRevision.APIBindings = append([]model.RecipeAPIBinding(nil), revision.APIBindings...)
+	invalidRevision.APIBindings[0].IntegrationManifestHash = "sha256:" + strings.Repeat("f", 64)
+	invalidAudit := recipeTestAudit(invalid, "audit_recipe_multi_api_invalid", "recipe.created")
+	currentProduct, err := memory.Product(ctx, recipe.ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.CreateRecipeWithRevision(ctx, invalid, invalidRevision, RecipeMutation{ExpectedCatalogRevision: currentProduct.CatalogRevision, Audit: &invalidAudit}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mismatched immutable API hash error = %v, want conflict", err)
+	}
+	if _, err := memory.Recipe(ctx, invalid.ProductID, invalid.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid multi-API aggregate remained after rejected write: %v", err)
 	}
 }
 

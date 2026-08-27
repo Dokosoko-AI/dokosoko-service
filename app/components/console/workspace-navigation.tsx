@@ -11,55 +11,77 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type { APIUser } from "../../lib/api";
 import { type Section, sectionPath } from "../../lib/console-routes";
+import { LanguageSwitcher } from "../LanguageSwitcher";
 import { ThemeToggle } from "../ThemeToggle";
 import { ConsoleLink } from "./console-link";
 
 export type NavigationGroup = "apis" | "docs" | "sdk-packages" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
 
+type NavigationLabelKey =
+  | "navigation.apis"
+  | "navigation.docs"
+  | "navigation.sdksAndPackages"
+  | "navigation.identity"
+  | "navigation.tools"
+  | "navigation.recipes"
+  | "navigation.agentAccess"
+  | "navigation.supportOutbox"
+  | "navigation.sources"
+  | "navigation.allFiles"
+  | "navigation.collections"
+  | "navigation.apiContracts"
+  | "navigation.queryLab"
+  | "navigation.packages"
+  | "navigation.customerSignIn"
+  | "navigation.catalog"
+  | "navigation.connections"
+  | "navigation.mcpPreview";
+
 export const navigation: Array<{
   id: NavigationGroup;
-  label: string;
+  labelKey: NavigationLabelKey;
   icon: typeof LayoutDashboard;
   defaultSection: Section;
-  sections: Array<{ id: Section; label: string; group?: string }>;
+  sections: Array<{ id: Section; labelKey: NavigationLabelKey; groupKey?: NavigationLabelKey }>;
   showSubsections?: boolean;
 }> = [
   {
     id: "apis",
-    label: "APIs",
+    labelKey: "navigation.apis",
     icon: GitBranch,
     defaultSection: "product",
-    sections: [{ id: "product", label: "APIs" }],
+    sections: [{ id: "product", labelKey: "navigation.apis" }],
   },
   {
     id: "docs",
-    label: "Docs",
+    labelKey: "navigation.docs",
     icon: BookOpen,
     defaultSection: "sources",
     sections: [
-      { id: "sources", label: "Sources" },
-      { id: "documents", label: "All files" },
-      { id: "collections", label: "Collections" },
-      { id: "contracts", label: "API contracts" },
-      { id: "query-lab", label: "Query Lab" },
+      { id: "sources", labelKey: "navigation.sources" },
+      { id: "documents", labelKey: "navigation.allFiles" },
+      { id: "collections", labelKey: "navigation.collections" },
+      { id: "contracts", labelKey: "navigation.apiContracts" },
+      { id: "query-lab", labelKey: "navigation.queryLab" },
     ],
     showSubsections: false,
   },
   {
     id: "sdk-packages",
-    label: "SDKs and packages",
+    labelKey: "navigation.sdksAndPackages",
     icon: Package,
     defaultSection: "sdks",
-    sections: [{ id: "sdks", label: "Packages" }],
+    sections: [{ id: "sdks", labelKey: "navigation.packages" }],
   },
-  { id: "identity", label: "Identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", label: "Customer sign-in" }] },
-  { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }, { id: "mcp-preview", label: "MCP preview" }] },
-  { id: "recipes", label: "Recipes", icon: BookOpen, defaultSection: "recipes", sections: [{ id: "recipes", label: "Recipes" }] },
-  { id: "agent-access", label: "Agent access", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", label: "Agent access" }] },
-  { id: "outbox", label: "Support outbox", icon: LayoutDashboard, defaultSection: "reporting", sections: [{ id: "reporting", label: "Support outbox" }] },
+  { id: "identity", labelKey: "navigation.identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", labelKey: "navigation.customerSignIn" }] },
+  { id: "tools", labelKey: "navigation.tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", labelKey: "navigation.catalog" }, { id: "connections", labelKey: "navigation.connections" }, { id: "mcp-preview", labelKey: "navigation.mcpPreview" }] },
+  { id: "recipes", labelKey: "navigation.recipes", icon: BookOpen, defaultSection: "recipes", sections: [{ id: "recipes", labelKey: "navigation.recipes" }] },
+  { id: "agent-access", labelKey: "navigation.agentAccess", icon: Radio, defaultSection: "distribution", sections: [{ id: "distribution", labelKey: "navigation.agentAccess" }] },
+  { id: "outbox", labelKey: "navigation.supportOutbox", icon: LayoutDashboard, defaultSection: "reporting", sections: [{ id: "reporting", labelKey: "navigation.supportOutbox" }] },
 ];
 
 export function ConsoleSidebar({
@@ -75,8 +97,9 @@ export function ConsoleSidebar({
   onLogout?: () => void | Promise<void>;
   onNavigate: (path: string) => void;
 }) {
-  const displayName = currentUser?.display_name ?? "Yuriy";
-  const initials = (currentUser?.display_name ?? "Yuriy Admin")
+  const { t } = useTranslation();
+  const displayName = currentUser?.display_name ?? t("account.defaultName");
+  const initials = (currentUser?.display_name ?? t("account.defaultAdminName"))
     .split(/\s+/)
     .map((part) => part[0])
     .join("")
@@ -89,7 +112,7 @@ export function ConsoleSidebar({
         <span className="brand-mark" aria-hidden="true">D</span>
         <span className="brand-copy"><strong>DokoSoko</strong></span>
       </div>
-      <nav aria-label="Main navigation">
+      <nav aria-label={t("navigation.main")}>
         {navigation.map((item) => {
           const Icon = item.icon;
           const active = activeNavigationID === item.id;
@@ -102,12 +125,12 @@ export function ConsoleSidebar({
                 ariaCurrent={active && item.sections.some((candidate) => candidate.id === section && candidate.id === item.defaultSection) ? "page" : undefined}
               >
                 <Icon />
-                <span>{item.label}</span>
+                <span>{t(item.labelKey)}</span>
               </ConsoleLink>
-              {active && item.showSubsections !== false && item.sections.length > 1 && <div className="nav-subsections" aria-label={`${item.label} sections`}>
+              {active && item.showSubsections !== false && item.sections.length > 1 && <div className="nav-subsections" aria-label={t("navigation.sectionLabel", { name: t(item.labelKey) })}>
                 {item.sections.map((candidate, index) => <span className="nav-subsection-entry" key={candidate.id}>
-                  {candidate.group && candidate.group !== item.sections[index - 1]?.group && <span className="nav-subsection-label">{candidate.group}</span>}
-                  <ConsoleLink path={sectionPath(candidate.id)} onNavigate={onNavigate} className={`nav-subsection ${section === candidate.id ? "active" : ""}`} ariaCurrent={section === candidate.id ? "page" : undefined}>{candidate.label}</ConsoleLink>
+                  {candidate.groupKey && candidate.groupKey !== item.sections[index - 1]?.groupKey && <span className="nav-subsection-label">{t(candidate.groupKey)}</span>}
+                  <ConsoleLink path={sectionPath(candidate.id)} onNavigate={onNavigate} className={`nav-subsection ${section === candidate.id ? "active" : ""}`} ariaCurrent={section === candidate.id ? "page" : undefined}>{t(candidate.labelKey)}</ConsoleLink>
                 </span>)}
               </div>}
             </div>
@@ -115,7 +138,10 @@ export function ConsoleSidebar({
         })}
       </nav>
       <div className="sidebar-bottom">
-        <ThemeToggle />
+        <div className="preference-controls">
+          <ThemeToggle />
+          <LanguageSwitcher />
+        </div>
         <ConsoleLink
           path={sectionPath("settings")}
           onNavigate={onNavigate}
@@ -123,16 +149,16 @@ export function ConsoleSidebar({
           ariaCurrent={section === "settings" ? "page" : undefined}
         >
           <Settings />
-          <span>Settings</span>
+          <span>{t("navigation.settings")}</span>
         </ConsoleLink>
         <div className="account">
           <span className="avatar">{initials}</span>
           <span>
             <strong>{displayName}</strong>
-            <small>{currentUser ? "Root administrator" : "Platform admin"}</small>
+            <small>{currentUser ? t("account.rootAdministrator") : t("account.platformAdmin")}</small>
           </span>
           {onLogout && (
-            <button type="button" className="logout-button" aria-label="Sign out" title="Sign out" onClick={onLogout}>
+            <button type="button" className="logout-button" aria-label={t("account.signOut")} title={t("account.signOut")} onClick={onLogout}>
               <LogOut />
             </button>
           )}
@@ -153,24 +179,25 @@ export function ConsoleTopbar({
   activeNavigationID?: NavigationGroup;
   onGroupChange: (group: NavigationGroup | "settings") => void;
 }) {
+  const { t } = useTranslation();
   return (
     <header className="topbar">
       <div className="topbar-inner">
         <div className="product-switcher">
           <span className="product-logo">{productName.slice(0, 1).toUpperCase()}</span>
-          <span><small>Deployment</small><strong>{productName}</strong></span>
+          <span><small>{t("navigation.deployment")}</small><strong>{productName}</strong></span>
         </div>
         <select
           className="mobile-navigation"
-          aria-label="Console section"
+          aria-label={t("navigation.consoleSection")}
           value={section === "settings" ? "settings" : activeNavigationID ?? "apis"}
           onChange={(event) => onGroupChange(event.target.value as NavigationGroup | "settings")}
         >
-          {navigation.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          <option value="settings">Settings</option>
+          {navigation.map((item) => <option key={item.id} value={item.id}>{t(item.labelKey)}</option>)}
+          <option value="settings">{t("navigation.settings")}</option>
         </select>
         <div className="topbar-actions">
-          <div className="mobile-theme-toggle"><ThemeToggle /></div>
+          <div className="mobile-preference-controls"><LanguageSwitcher mobile /><ThemeToggle /></div>
         </div>
       </div>
     </header>

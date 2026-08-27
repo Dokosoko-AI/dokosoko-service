@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/dokosoko/dokosoko-service/internal/platform"
@@ -39,5 +40,17 @@ func TestRecipeCatalogConflictIsDeterministicConflict(t *testing.T) {
 		if recorder.Code != http.StatusConflict {
 			t.Fatalf("error %v: status = %d, body = %s", err, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+func TestRecipeDeletionRestrictionIsDeterministicClientError(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	new(Server).recipeUpdateError(recorder, platform.ErrRecipeDeletionNotAllowed)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"recipe_delete_not_allowed"`) {
+		t.Fatalf("body = %s", recorder.Body.String())
 	}
 }

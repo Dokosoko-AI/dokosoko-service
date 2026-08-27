@@ -126,6 +126,30 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 		t.Fatalf("legacy revision changed: count=%d markdown=%q review=%q model=%q author=%q spec_version=%d spec=%s manifest=%q integration_revision=%v", historicalCount, storedMarkdown, storedReview, storedModel, storedAuthor, storedSpecVersion, storedSpec, storedManifestHash, storedIntegrationRevisionID)
 	}
 
+	backfillRecipeID, backfillRevisionID := storeTestUUID(t), storeTestUUID(t)
+	if _, err := pool.Exec(ctx, `INSERT INTO recipes(id,organisation_id,product_id,integration_id,contract_version,slug,title,outcome,audience,state,generated,needs_attention,visibility,stable_uri) VALUES($1,$2,$3,$4,'product-integration-v2','backfill-payment','Backfill a payment','The application backfills one payment.','coding_agent','review',true,true,'private','dokosoko://products/recipe-v2/recipes/backfill-payment')`, backfillRecipeID, organisationID, productID, integrationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO recipe_revisions(id,recipe_id,revision,spec_version,spec,markdown,reference_items,validation,generated_by,integration_revision_id,integration_manifest_hash,created_by) VALUES($1,$2,1,2,$3::jsonb,'# Backfill a payment','[]'::jsonb,'[]'::jsonb,'deterministic',$4,$5,'migration-fixture')`, backfillRevisionID, backfillRecipeID, `{"schema_version":2,"integration_id":"`+integrationID+`","title":"Backfill a payment","outcome":"The application backfills one payment.","capability_ids":["payments.backfill"],"prerequisites":[],"steps":[],"checks":[]}`, integrationRevisionID, manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE recipes SET current_revision_id=$2 WHERE id=$1`, backfillRecipeID, backfillRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool, copyMigrationsThrough(t, 65)); err != nil {
+		t.Fatalf("migrate through 0065: %v", err)
+	}
+	var backfilledAttachmentCount, backfilledBindingCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM recipe_api_attachments WHERE recipe_id=$1 AND deployment_id=$2 AND integration_id=$3`, backfillRecipeID, productID, integrationID).Scan(&backfilledAttachmentCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM recipe_revision_api_bindings WHERE recipe_revision_id=$1 AND recipe_id=$2 AND deployment_id=$3 AND integration_id=$4 AND integration_revision_id=$5 AND integration_manifest_hash=$6`, backfillRevisionID, backfillRecipeID, productID, integrationID, integrationRevisionID, manifestHash).Scan(&backfilledBindingCount); err != nil {
+		t.Fatal(err)
+	}
+	if backfilledAttachmentCount != 1 || backfilledBindingCount != 1 {
+		t.Fatalf("v2 recipe projection backfill = attachments %d bindings %d", backfilledAttachmentCount, backfilledBindingCount)
+	}
+
 	postgres := NewPostgres(pool, "https://dokosoko.example")
 	v2RecipeID, v2RevisionID := storeTestUUID(t), storeTestUUID(t)
 	v2ApprovedAt := time.Now().UTC()
@@ -183,6 +207,73 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	if roundTrip.CurrentRevision == nil || roundTrip.CurrentRevision.ID != v2RevisionID {
 		t.Fatalf("created recipe was not hydrated: %#v", roundTrip)
 	}
+	secondIntegrationID, secondIntegrationRevisionID := storeTestUUID(t), storeTestUUID(t)
+	secondManifestHash := "sha256:" + strings.Repeat("c", 64)
+	if _, err := pool.Exec(ctx, `INSERT INTO integrations(id,deployment_id,organisation_id,family_key,version_key,display_name,lifecycle) VALUES($1,$2,$3,'customers','v1','Customers','active')`, secondIntegrationID, productID, organisationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO integration_revisions(id,integration_id,revision,state,snapshot,manifest_hash,published_at) VALUES($1,$2,1,'published','{"family_key":"customers"}'::jsonb,$3,now())`, secondIntegrationRevisionID, secondIntegrationID, secondManifestHash); err != nil {
+		t.Fatal(err)
+	}
+	v3Recipe := model.Recipe{
+		ID:              storeTestUUID(t),
+		OrganisationID:  organisationID,
+		ProductID:       productID,
+		ContractVersion: model.RecipeContractDeploymentV3,
+		APIAttachments: []model.RecipeAPIAttachment{
+			{IntegrationID: secondIntegrationID},
+			{IntegrationID: integrationID},
+		},
+		Slug:           "create-customer-payment",
+		Title:          "Create a customer payment",
+		Outcome:        "The application creates a customer and payment.",
+		Audience:       "coding_agent",
+		State:          "review",
+		Generated:      true,
+		NeedsAttention: true,
+		Visibility:     model.VisibilityPrivate,
+		StableURI:      "dokosoko://products/recipe-v2/recipes/create-customer-payment",
+	}
+	v3Spec, err := json.Marshal(model.RecipeSpec{
+		SchemaVersion:  model.RecipeSpecVersion3,
+		APIAttachments: append([]model.RecipeAPIAttachment(nil), v3Recipe.APIAttachments...),
+		Title:          v3Recipe.Title,
+		Outcome:        v3Recipe.Outcome,
+		CapabilityIDs:  []string{"customers.create", "payments.create"},
+		Steps:          []model.RecipeInstruction{{Action: "Create the customer."}, {Action: "Create the payment."}},
+		Checks:         []model.RecipeInstruction{{Action: "Verify both resources."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3Revision := model.RecipeRevision{
+		ID:          storeTestUUID(t),
+		RecipeID:    v3Recipe.ID,
+		SpecVersion: model.RecipeSpecVersion3,
+		Spec:        v3Spec,
+		Markdown:    "# Create a customer payment\n",
+		GeneratedBy: "human",
+		CreatedBy:   "recipe-author",
+		APIBindings: []model.RecipeAPIBinding{
+			{IntegrationID: secondIntegrationID, IntegrationRevisionID: secondIntegrationRevisionID, IntegrationManifestHash: secondManifestHash},
+			{IntegrationID: integrationID, IntegrationRevisionID: integrationRevisionID, IntegrationManifestHash: manifestHash},
+		},
+	}
+	v3Audit := recipeTestAudit(v3Recipe, "audit:"+storeTestUUID(t), "recipe.created")
+	v3Saved, err := postgres.CreateRecipeWithRevision(ctx, v3Recipe, v3Revision, RecipeMutation{ExpectedCatalogRevision: catalogAtCreate, Audit: &v3Audit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v3Saved.IntegrationID != "" || len(v3Saved.APIAttachments) != 2 || v3Saved.CurrentRevision == nil || len(v3Saved.CurrentRevision.APIBindings) != 2 {
+		t.Fatalf("v3 recipe did not return its multi-API projections: %#v", v3Saved)
+	}
+	v3RoundTrip, err := postgres.Recipe(ctx, productID, v3Recipe.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v3RoundTrip.APIAttachments) != 2 || v3RoundTrip.CurrentRevision == nil || len(v3RoundTrip.CurrentRevision.APIBindings) != 2 {
+		t.Fatalf("v3 recipe projections did not round-trip: %#v", v3RoundTrip)
+	}
 	product, err := postgres.Product(ctx, productID)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +299,7 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	rolledBackRevision := v2RevisionInput
 	rolledBackRevision.RecipeID = rolledBackRecipe.ID
 	rolledBackAudit := recipeTestAudit(rolledBackRecipe, "audit:"+storeTestUUID(t), "recipe.created")
-	if _, err := postgres.CreateRecipeWithRevision(ctx, rolledBackRecipe, rolledBackRevision, RecipeMutation{ExpectedCatalogRevision: catalogAtCreate, Audit: &rolledBackAudit}); !errors.Is(err, ErrConflict) {
+	if _, err := postgres.CreateRecipeWithRevision(ctx, rolledBackRecipe, rolledBackRevision, RecipeMutation{ExpectedCatalogRevision: product.CatalogRevision, Audit: &rolledBackAudit}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate immutable revision ID error = %v, want conflict", err)
 	}
 	if _, err := postgres.Recipe(ctx, productID, rolledBackRecipe.ID); !errors.Is(err, ErrNotFound) {
@@ -341,5 +432,135 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 	}
 	if deploymentCatalogAfterFailedRevision != deploymentCatalogAfterRevision {
 		t.Fatalf("failed revision bumped catalog to %d, want %d", deploymentCatalogAfterFailedRevision, deploymentCatalogAfterRevision)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE products SET catalog_revision=catalog_revision+5 WHERE id=$1`, productID); err != nil {
+		t.Fatal(err)
+	}
+	productAtDelete, err := postgres.Product(ctx, productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := postgres.Recipe(ctx, productID, legacyRecipeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteAudit := recipeTestAudit(legacy, "audit:"+storeTestUUID(t), "recipe.deleted")
+	deleteAudit.Prior = map[string]any{"state": legacy.State, "current_revision_id": legacy.CurrentRevisionID}
+	deleteAudit.Current = map[string]any{"deleted": true}
+	if err := postgres.DeleteRecipe(ctx, productID, legacyRecipeID, RecipeMutation{ExpectedRevision: legacy.Revision, ExpectedCatalogRevision: productAtDelete.CatalogRevision, Audit: &deleteAudit}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := postgres.Recipe(ctx, productID, legacyRecipeID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted PostgreSQL recipe lookup error = %v, want not found", err)
+	}
+	if _, err := postgres.RecipeRevisions(ctx, legacyRecipeID); err != nil {
+		t.Fatalf("deleted PostgreSQL revision list error = %v", err)
+	}
+	var deletedRevisionCount, deleteAuditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM recipe_revisions WHERE recipe_id=$1`, legacyRecipeID).Scan(&deletedRevisionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE event_key=$1 AND action='recipe.deleted'`, deleteAudit.ID).Scan(&deleteAuditCount); err != nil {
+		t.Fatal(err)
+	}
+	if deletedRevisionCount != 0 || deleteAuditCount != 1 {
+		t.Fatalf("PostgreSQL deletion cascade/audit = revisions %d audit %d", deletedRevisionCount, deleteAuditCount)
+	}
+}
+
+func TestPostgresDeleteLegacyRecipeIgnoresDeploymentCatalogMirrorDrift(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("DOKOSOKO_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	}
+	if databaseURL == "" {
+		t.Skip("DOKOSOKO_TEST_DATABASE_URL or TEST_DATABASE_URL is not configured")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Skipf("PostgreSQL is unavailable: %v", err)
+	}
+	t.Cleanup(admin.Close)
+
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("recipe_delete_drift_%x", random)
+	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Skipf("cannot create isolated PostgreSQL schema: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = admin.Exec(cleanupCtx, `DROP SCHEMA `+schema+` CASCADE`)
+	})
+
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := Migrate(ctx, pool, copyMigrationsThrough(t, 9999)); err != nil {
+		t.Fatal(err)
+	}
+
+	organisationID, productID := storeTestUUID(t), storeTestUUID(t)
+	if _, err := pool.Exec(ctx, `INSERT INTO organisations(id,name,slug) VALUES ($1,'Recipe delete drift','recipe-delete-drift')`, organisationID); err != nil {
+		t.Fatal(err)
+	}
+	postgres := NewPostgres(pool, "https://dokosoko.example")
+	if _, err := postgres.CreateDeployment(ctx, model.Deployment{ID: productID, OrganisationID: organisationID, Name: "Recipe delete drift", Slug: "recipe-delete-drift"}); err != nil {
+		t.Fatal(err)
+	}
+
+	recipeID, revisionID := storeTestUUID(t), storeTestUUID(t)
+	if _, err := pool.Exec(ctx, `INSERT INTO recipes(id,organisation_id,product_id,contract_version,slug,title,outcome,audience,state,generated,needs_attention,visibility,stable_uri,revision) VALUES($1,$2,$3,'legacy-mcp-v1','legacy-delete-drift','Legacy delete drift','Delete an outdated legacy recipe.','operator','outdated',true,true,'private','dokosoko://products/recipe-delete-drift/recipes/legacy-delete-drift',7)`, recipeID, organisationID, productID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO recipe_revisions(id,recipe_id,revision,spec_version,spec,markdown,reference_items,validation,generated_by,created_by) VALUES($1,$2,1,1,'{}'::jsonb,'# Legacy delete drift','[]'::jsonb,'[]'::jsonb,'human','root')`, revisionID, recipeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE recipes SET current_revision_id=$2 WHERE id=$1`, recipeID, revisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE products SET catalog_revision=catalog_revision+5 WHERE id=$1`, productID); err != nil {
+		t.Fatal(err)
+	}
+
+	product, err := postgres.Product(ctx, productID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe, err := postgres.Recipe(ctx, productID, recipeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := recipeTestAudit(recipe, "audit:"+storeTestUUID(t), "recipe.deleted")
+	audit.Prior = map[string]any{"state": recipe.State, "current_revision_id": recipe.CurrentRevisionID}
+	audit.Current = map[string]any{"deleted": true}
+	if err := postgres.DeleteRecipe(ctx, productID, recipeID, RecipeMutation{ExpectedRevision: recipe.Revision, ExpectedCatalogRevision: product.CatalogRevision, Audit: &audit}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := postgres.Recipe(ctx, productID, recipeID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted recipe lookup error = %v, want not found", err)
+	}
+	var revisionCount, auditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM recipe_revisions WHERE recipe_id=$1`, recipeID).Scan(&revisionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE event_key=$1 AND action='recipe.deleted'`, audit.ID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if revisionCount != 0 || auditCount != 1 {
+		t.Fatalf("PostgreSQL deletion cascade/audit = revisions %d audit %d", revisionCount, auditCount)
 	}
 }

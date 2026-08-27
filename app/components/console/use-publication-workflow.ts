@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { useState, type Dispatch, type SetStateAction } from "react";
 
 import { APIError, api, type APIProduct } from "../../lib/api";
@@ -21,6 +23,7 @@ export function usePublicationWorkflow({ product, setProduct, apiConnected, sour
   setPublicMCPEnabled: Dispatch<SetStateAction<boolean>>;
   showToast: (message: string) => void;
 }) {
+  const { t } = useTranslation();
   const [pendingPublication, setPendingPublication] = useState<PendingPublication | null>(null);
   const [pendingMCPEnable, setPendingMCPEnable] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -37,14 +40,14 @@ export function usePublicationWorkflow({ product, setProduct, apiConnected, sour
         } else {
           setSources((items) => items.map((candidate) => candidate.id === id ? { ...candidate, visibility: "private" } : candidate));
         }
-        showToast(`${item.name} is private. Anonymous access was removed immediately.`);
+        showToast(t("publicationWorkflow.isPrivateAnonymousAccessWasRemovedImmediately", { name: String(item.name) }));
       } catch (error) {
-        showToast(error instanceof APIError ? error.message : "Could not update visibility.");
+        showToast(error instanceof APIError ? error.message : t("publicationWorkflow.couldNotUpdateVisibility"));
       }
       return;
     }
     setAcknowledged(false);
-    setPendingPublication({ kind, id, name: item.name, detail: "Its currently published knowledge will become anonymously searchable." });
+    setPendingPublication({ kind, id, name: item.name, detail: t("publicationWorkflow.publishedKnowledgeBecomesSearchable") });
   }
 
   async function confirmPublication() {
@@ -58,11 +61,11 @@ export function usePublicationWorkflow({ product, setProduct, apiConnected, sour
       } else {
         setSources((items) => items.map((item) => item.id === current.id ? { ...item, visibility: "public" } : item));
       }
-      showToast(`${pendingPublication.name} is now public. The change was added to audit.`);
+      showToast(t("publicationWorkflow.isNowPublicTheChangeWasAddedToAudit", { name: String(pendingPublication.name) }));
       setPendingPublication(null);
       setAcknowledged(false);
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not publish this resource.");
+      showToast(error instanceof APIError ? error.message : t("publicationWorkflow.couldNotPublishThisResource"));
     }
   }
 
@@ -79,9 +82,9 @@ export function usePublicationWorkflow({ product, setProduct, apiConnected, sour
         setProduct(updated);
       }
       setPublicMCPEnabled(false);
-      showToast("Public MCP is off. Anonymous requests are no longer accepted.");
+      showToast(t("publicationWorkflow.publicMCPIsOffAnonymousRequestsAreNoLonger"));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not disable Public MCP.");
+      showToast(error instanceof APIError ? error.message : t("publicationWorkflow.couldNotDisablePublicMCP"));
     }
   }
 
@@ -96,9 +99,9 @@ export function usePublicationWorkflow({ product, setProduct, apiConnected, sour
       setPublicMCPEnabled(true);
       setPendingMCPEnable(false);
       setAcknowledged(false);
-      showToast("Public MCP is enabled and audit logged.");
+      showToast(t("publicationWorkflow.publicMCPIsEnabledAndAuditLogged"));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not enable Public MCP.");
+      showToast(error instanceof APIError ? error.message : t("publicationWorkflow.couldNotEnablePublicMCP"));
     }
   }
 

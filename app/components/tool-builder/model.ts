@@ -49,22 +49,18 @@ export type ProposalDecision = "accepted" | "rejected";
 
 export const HTTP_METHODS: APIToolHTTPMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 export const RISKS: APIToolRisk[] = ["low", "medium", "high", "critical"];
-export const AUTH_TYPES: Array<{ value: APIToolUpstreamAuthType; label: string; description: string }> = [
-  { value: "delegated_oauth", label: "Delegated OAuth", description: "Forward the current user's delegated access token." },
-  { value: "none", label: "No authentication", description: "Call an endpoint that intentionally requires no upstream credential." },
-  { value: "bearer", label: "Bearer token", description: "Store one encrypted bearer token for this tool." },
-  { value: "authorization_scheme", label: "Authorization scheme", description: "Send an encrypted credential with a fixed vendor scheme such as Token, ApiKey, or SSWS." },
-  { value: "api_key_header", label: "API key header", description: "Send one encrypted API key in a fixed header." },
-  { value: "api_key_query", label: "API key query parameter", description: "Send one encrypted API key in a fixed query parameter." },
-  { value: "basic", label: "HTTP Basic", description: "Store an encrypted password for the configured username." },
-  { value: "oauth_client_credentials", label: "OAuth client credentials", description: "Exchange an encrypted client secret at the fixed token URL." },
-  { value: "custom_header", label: "Custom secret header", description: "Send one encrypted value in a fixed custom header." },
+export const AUTH_TYPES: APIToolUpstreamAuthType[] = [
+  "delegated_oauth",
+  "none",
+  "bearer",
+  "authorization_scheme",
+  "api_key_header",
+  "api_key_query",
+  "basic",
+  "oauth_client_credentials",
+  "custom_header",
 ];
-export const IMPORT_KINDS: Array<{ value: APIToolBuilderImportKind; label: string }> = [
-  { value: "openapi_document", label: "OpenAPI document" },
-  { value: "postman", label: "Postman collection" },
-  { value: "curl", label: "cURL command" },
-];
+export const IMPORT_KINDS: APIToolBuilderImportKind[] = ["openapi_document", "postman", "curl"];
 export const CREDENTIAL_AUTH_TYPES = new Set<APIToolUpstreamAuthType>([
   "bearer",
   "authorization_scheme",
@@ -98,22 +94,6 @@ export const REVIEW_FIELDS = [
   "response_example",
 ] as const;
 export type ReviewField = (typeof REVIEW_FIELDS)[number];
-export const REVIEW_FIELD_LABELS: Record<ReviewField, string> = {
-  namespace: "Namespace",
-  name: "Tool name",
-  description: "Purpose",
-  http_method: "HTTP method",
-  endpoint: "Endpoint",
-  timeout_ms: "Timeout",
-  input_schema: "Input schema",
-  output_schema: "Output schema",
-  upstream_auth: "Upstream authentication",
-  request_mapping: "Request mapping",
-  response_mapping: "Response mapping",
-  authorization_policy: "Authorization policy",
-  request_example: "Request example",
-  response_example: "Response example",
-};
 export const SECURITY_SENSITIVE_FIELDS = new Set<ReviewField>([
   "http_method",
   "endpoint",
@@ -143,7 +123,7 @@ export function riskValue(value: unknown, fallback: APIToolRisk = "low"): APIToo
 }
 
 export function authType(value: unknown, fallback: APIToolUpstreamAuthType = "delegated_oauth"): APIToolUpstreamAuthType {
-  return AUTH_TYPES.some((candidate) => candidate.value === value) ? value as APIToolUpstreamAuthType : fallback;
+  return AUTH_TYPES.includes(value as APIToolUpstreamAuthType) ? value as APIToolUpstreamAuthType : fallback;
 }
 
 export function containsCredentialMaterial(value: string) {
@@ -305,99 +285,99 @@ export function draftForAssistance(form: ToolDraftForm): APIToolBuilderDraft {
   });
 }
 
-export function parseObjectJSON(text: string, field: string, label: string, findings: APIToolBuilderFinding[]) {
+export function parseObjectJSON(text: string, field: string, findings: APIToolBuilderFinding[]) {
   try {
     const parsed: unknown = JSON.parse(text);
     if (!isRecord(parsed)) {
-      findings.push({ level: "error", code: "object_required", field, message: `${label} must be a JSON object.` });
+      findings.push({ level: "error", code: "object_required", field, message: field });
       return null;
     }
     return parsed;
   } catch {
-    findings.push({ level: "error", code: "invalid_json", field, message: `${label} is not valid JSON.` });
+    findings.push({ level: "error", code: "invalid_json", field, message: field });
     return null;
   }
 }
 
 export function localValidation(form: ToolDraftForm, grants: APIGrantDefinition[], credential: string): LocalValidation {
   const findings: APIToolBuilderFinding[] = [];
-  if (!IDENTIFIER_PATTERN.test(form.namespace)) findings.push({ level: "error", code: "invalid_namespace", field: "namespace", message: "Use 1–64 lower-case letters, numbers, or underscores, starting with a letter." });
-  if (!IDENTIFIER_PATTERN.test(form.name)) findings.push({ level: "error", code: "invalid_name", field: "name", message: "Use 1–64 lower-case letters, numbers, or underscores, starting with a letter." });
-  if (!form.description.trim()) findings.push({ level: "error", code: "description_required", field: "description", message: "Describe the single action this tool performs." });
-  if (form.description.trim().length > 500) findings.push({ level: "error", code: "description_too_long", field: "description", message: "Purpose must be 500 characters or fewer." });
+  if (!IDENTIFIER_PATTERN.test(form.namespace)) findings.push({ level: "error", code: "invalid_namespace", field: "namespace", message: "invalid_namespace" });
+  if (!IDENTIFIER_PATTERN.test(form.name)) findings.push({ level: "error", code: "invalid_name", field: "name", message: "invalid_name" });
+  if (!form.description.trim()) findings.push({ level: "error", code: "description_required", field: "description", message: "description_required" });
+  if (form.description.trim().length > 500) findings.push({ level: "error", code: "description_too_long", field: "description", message: "description_too_long" });
 
   if (!Number.isInteger(form.timeout_ms) || form.timeout_ms < 100 || form.timeout_ms > 60000) {
-    findings.push({ level: "error", code: "invalid_timeout", field: "timeout_ms", message: "Timeout must be a whole number from 100 to 60,000 milliseconds." });
+    findings.push({ level: "error", code: "invalid_timeout", field: "timeout_ms", message: "invalid_timeout" });
   }
 
   if (!form.endpoint.trim()) {
-    findings.push({ level: "error", code: "endpoint_required", field: "endpoint", message: "Enter the fixed upstream endpoint." });
+    findings.push({ level: "error", code: "endpoint_required", field: "endpoint", message: "endpoint_required" });
   } else {
     try {
       const endpoint = new URL(form.endpoint);
       const localHostname = endpoint.hostname === "localhost" || endpoint.hostname.endsWith(".localhost") || ["127.0.0.1", "::1", "[::1]"].includes(endpoint.hostname);
       const localDevelopment = endpoint.protocol === "http:" && localHostname;
-      if (endpoint.protocol !== "https:" && !localDevelopment) findings.push({ level: "error", code: "https_required", field: "endpoint", message: "Use HTTPS, except for a localhost development endpoint." });
-      if (endpoint.protocol === "https:" && localHostname) findings.push({ level: "error", code: "localhost_http_required", field: "endpoint", message: "Use HTTP for localhost development endpoints." });
-      if (endpoint.protocol === "https:" && endpoint.port) findings.push({ level: "error", code: "default_https_port_required", field: "endpoint", message: "Public HTTPS endpoints must use the default port." });
-      if (endpoint.username || endpoint.password) findings.push({ level: "error", code: "endpoint_credentials", field: "endpoint", message: "Do not put credentials in the endpoint URL." });
-      if (endpoint.search) findings.push({ level: "error", code: "endpoint_query", field: "endpoint", message: "Move fixed query values into request mapping; the endpoint URL cannot contain a query string." });
-      if (endpoint.hash) findings.push({ level: "error", code: "endpoint_fragment", field: "endpoint", message: "Remove the URL fragment from the endpoint." });
+      if (endpoint.protocol !== "https:" && !localDevelopment) findings.push({ level: "error", code: "https_required", field: "endpoint", message: "https_required" });
+      if (endpoint.protocol === "https:" && localHostname) findings.push({ level: "error", code: "localhost_http_required", field: "endpoint", message: "localhost_http_required" });
+      if (endpoint.protocol === "https:" && endpoint.port) findings.push({ level: "error", code: "default_https_port_required", field: "endpoint", message: "default_https_port_required" });
+      if (endpoint.username || endpoint.password) findings.push({ level: "error", code: "endpoint_credentials", field: "endpoint", message: "endpoint_credentials" });
+      if (endpoint.search) findings.push({ level: "error", code: "endpoint_query", field: "endpoint", message: "endpoint_query" });
+      if (endpoint.hash) findings.push({ level: "error", code: "endpoint_fragment", field: "endpoint", message: "endpoint_fragment" });
     } catch {
-      findings.push({ level: "error", code: "invalid_endpoint", field: "endpoint", message: "Enter a valid absolute URL." });
+      findings.push({ level: "error", code: "invalid_endpoint", field: "endpoint", message: "invalid_endpoint" });
     }
   }
 
-  const inputSchema = parseObjectJSON(form.input_schema_text, "input_schema", "Input schema", findings);
-  const outputSchema = parseObjectJSON(form.output_schema_text, "output_schema", "Output schema", findings);
+  const inputSchema = parseObjectJSON(form.input_schema_text, "input_schema", findings);
+  const outputSchema = parseObjectJSON(form.output_schema_text, "output_schema", findings);
   let requestExample: Record<string, unknown> | undefined;
   let responseExample: unknown;
   if (form.request_example_text.trim()) {
-    requestExample = parseObjectJSON(form.request_example_text, "request_example", "Request example", findings) ?? undefined;
+    requestExample = parseObjectJSON(form.request_example_text, "request_example", findings) ?? undefined;
   }
   if (form.response_example_text.trim()) {
     try {
       responseExample = JSON.parse(form.response_example_text);
     } catch {
-      findings.push({ level: "error", code: "invalid_json", field: "response_example", message: "Response example is not valid JSON." });
+      findings.push({ level: "error", code: "invalid_json", field: "response_example", message: "response_example" });
     }
   }
 
   for (const [parameter, location] of Object.entries(form.request_mapping.parameter_locations)) {
-    if (!PARAMETER_PATTERN.test(parameter)) findings.push({ level: "error", code: "mapping_name_invalid", field: "request_mapping", message: `Request parameter “${parameter || "(empty)"}” must start with a letter and use only letters, numbers, dots, dashes, or underscores.` });
-    if (location === "path" && !form.endpoint.includes(`{${parameter}}`)) findings.push({ level: "warning", code: "path_parameter_missing", field: "request_mapping", message: `Path parameter “${parameter}” does not appear as {${parameter}} in the endpoint.` });
-    if (form.http_method === "GET" && location === "body") findings.push({ level: "error", code: "get_body_mapping", field: "request_mapping", message: `GET parameter “${parameter}” cannot be mapped to the request body.` });
+    if (!PARAMETER_PATTERN.test(parameter)) findings.push({ level: "error", code: "mapping_name_invalid", field: "request_mapping", message: parameter });
+    if (location === "path" && !form.endpoint.includes(`{${parameter}}`)) findings.push({ level: "warning", code: "path_parameter_missing", field: "request_mapping", message: parameter });
+    if (form.http_method === "GET" && location === "body") findings.push({ level: "error", code: "get_body_mapping", field: "request_mapping", message: parameter });
   }
 
   const upstreamAuth = form.upstream_auth;
-  if (upstreamAuth.type === "authorization_scheme" && !/^[!#$%&'*+.^_`|~A-Za-z0-9-]{1,64}$/.test(upstreamAuth.scheme?.trim() ?? "")) findings.push({ level: "error", code: "authorization_scheme_required", field: "upstream_auth.scheme", message: "Enter a valid fixed authorization scheme, such as Token, ApiKey, or SSWS." });
-  if (["api_key_header", "custom_header"].includes(upstreamAuth.type) && !upstreamAuth.header_name?.trim()) findings.push({ level: "error", code: "header_name_required", field: "upstream_auth.header_name", message: "Enter the fixed header name." });
-  if (upstreamAuth.type === "api_key_query" && !upstreamAuth.query_name?.trim()) findings.push({ level: "error", code: "query_name_required", field: "upstream_auth.query_name", message: "Enter the fixed query parameter name." });
-  if (upstreamAuth.type === "basic" && !upstreamAuth.username?.trim()) findings.push({ level: "error", code: "username_required", field: "upstream_auth.username", message: "Enter the Basic authentication username." });
+  if (upstreamAuth.type === "authorization_scheme" && !/^[!#$%&'*+.^_`|~A-Za-z0-9-]{1,64}$/.test(upstreamAuth.scheme?.trim() ?? "")) findings.push({ level: "error", code: "authorization_scheme_required", field: "upstream_auth.scheme", message: "authorization_scheme_required" });
+  if (["api_key_header", "custom_header"].includes(upstreamAuth.type) && !upstreamAuth.header_name?.trim()) findings.push({ level: "error", code: "header_name_required", field: "upstream_auth.header_name", message: "header_name_required" });
+  if (upstreamAuth.type === "api_key_query" && !upstreamAuth.query_name?.trim()) findings.push({ level: "error", code: "query_name_required", field: "upstream_auth.query_name", message: "query_name_required" });
+  if (upstreamAuth.type === "basic" && !upstreamAuth.username?.trim()) findings.push({ level: "error", code: "username_required", field: "upstream_auth.username", message: "username_required" });
   if (upstreamAuth.type === "oauth_client_credentials") {
-    if (!upstreamAuth.client_id?.trim()) findings.push({ level: "error", code: "client_id_required", field: "upstream_auth.client_id", message: "Enter the OAuth client ID." });
-    if (!upstreamAuth.token_url?.trim()) findings.push({ level: "error", code: "token_url_required", field: "upstream_auth.token_url", message: "Enter the fixed OAuth token URL." });
+    if (!upstreamAuth.client_id?.trim()) findings.push({ level: "error", code: "client_id_required", field: "upstream_auth.client_id", message: "client_id_required" });
+    if (!upstreamAuth.token_url?.trim()) findings.push({ level: "error", code: "token_url_required", field: "upstream_auth.token_url", message: "token_url_required" });
     else {
       try {
         const tokenURL = new URL(upstreamAuth.token_url);
         const localTokenHost = tokenURL.hostname === "localhost" || tokenURL.hostname.endsWith(".localhost") || ["127.0.0.1", "::1", "[::1]"].includes(tokenURL.hostname);
-        if ((localTokenHost && tokenURL.protocol !== "http:") || (!localTokenHost && (tokenURL.protocol !== "https:" || Boolean(tokenURL.port))) || tokenURL.username || tokenURL.password || tokenURL.search || tokenURL.hash) findings.push({ level: "error", code: "invalid_token_url", field: "upstream_auth.token_url", message: "Use a fixed public HTTPS token URL, or HTTP on localhost for development." });
+        if ((localTokenHost && tokenURL.protocol !== "http:") || (!localTokenHost && (tokenURL.protocol !== "https:" || Boolean(tokenURL.port))) || tokenURL.username || tokenURL.password || tokenURL.search || tokenURL.hash) findings.push({ level: "error", code: "invalid_token_url", field: "upstream_auth.token_url", message: "invalid_token_url" });
       } catch {
-        findings.push({ level: "error", code: "invalid_token_url", field: "upstream_auth.token_url", message: "Enter a valid absolute OAuth token URL." });
+        findings.push({ level: "error", code: "invalid_token_url", field: "upstream_auth.token_url", message: "invalid_token_url" });
       }
     }
   }
   const credentialPresent = CREDENTIAL_AUTH_TYPES.has(upstreamAuth.type) && (form.credential_present || Boolean(credential.trim()));
-  if (CREDENTIAL_AUTH_TYPES.has(upstreamAuth.type) && !credentialPresent) findings.push({ level: "error", code: "credential_required", field: "credential", message: "Enter the upstream credential. It is sent only when you save the draft." });
+  if (CREDENTIAL_AUTH_TYPES.has(upstreamAuth.type) && !credentialPresent) findings.push({ level: "error", code: "credential_required", field: "credential", message: "credential_required" });
 
   const grantMap = new Map(grants.map((grant) => [grant.key, grant]));
   for (const key of form.authorization_policy.required_grants) {
     const grant = grantMap.get(key);
-    if (!grant) findings.push({ level: "error", code: "unknown_grant", field: "authorization_policy.required_grants", message: `Grant “${key}” is not registered.` });
-    else if (grant.state !== "active") findings.push({ level: "warning", code: "deprecated_grant", field: "authorization_policy.required_grants", message: `Grant “${key}” is deprecated.` });
+    if (!grant) findings.push({ level: "error", code: "unknown_grant", field: "authorization_policy.required_grants", message: key });
+    else if (grant.state !== "active") findings.push({ level: "warning", code: "deprecated_grant", field: "authorization_policy.required_grants", message: key });
   }
-  if (form.authorization_policy.risk === "critical" && !form.authorization_policy.confirmation_required) findings.push({ level: "error", code: "critical_confirmation", field: "authorization_policy.confirmation_required", message: "Critical tools must require explicit confirmation." });
-  if (form.http_method !== "GET" && !form.authorization_policy.idempotency_required) findings.push({ level: "error", code: "mutation_without_idempotency", field: "authorization_policy.idempotency_required", message: "Mutation tools require idempotency metadata before they can be saved or published." });
+  if (form.authorization_policy.risk === "critical" && !form.authorization_policy.confirmation_required) findings.push({ level: "error", code: "critical_confirmation", field: "authorization_policy.confirmation_required", message: "critical_confirmation" });
+  if (form.http_method !== "GET" && !form.authorization_policy.idempotency_required) findings.push({ level: "error", code: "mutation_without_idempotency", field: "authorization_policy.idempotency_required", message: "mutation_without_idempotency" });
 
   if (findings.some((finding) => finding.level === "error") || !inputSchema || !outputSchema) return { draft: null, findings };
   return {
@@ -453,7 +433,7 @@ export function reviewChanges(base: APIToolBuilderDraft, proposed: APIToolBuilde
     const serverChange = serverChanges.find((change) => change.field === field || change.field.startsWith(`${field}.`));
     return [{
       field,
-      label: apiScoped && field === "endpoint" ? "Relative path" : REVIEW_FIELD_LABELS[field],
+      label: field,
       before,
       after,
       rationale: serverChange?.rationale ?? serverChange?.summary,
@@ -462,13 +442,13 @@ export function reviewChanges(base: APIToolBuilderDraft, proposed: APIToolBuilde
   });
 }
 
-export function formatReviewValue(value: unknown): string {
-  if (value === undefined || value === "") return "Not set";
+export function formatReviewValue(value: unknown, emptyLabel = "—"): string {
+  if (value === undefined || value === "") return emptyLabel;
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
 }
 
-export function errorMessage(error: unknown) {
+export function errorMessage(error: unknown, fallback: string) {
   if (error instanceof APIError) return error.message;
-  return error instanceof Error ? error.message : "The request could not be completed.";
+  return error instanceof Error ? error.message : fallback;
 }

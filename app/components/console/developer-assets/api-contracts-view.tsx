@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { Archive, Check, FileCode2, GitBranch, Link2, Pencil, Plus, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -33,6 +35,7 @@ function candidateValid(candidate: APIContractCandidate) {
 }
 
 export function APIContractsView({ live, integrations, sources, onMessage, onNavigate }: { live: boolean; integrations: APIIntegration[]; sources: Source[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+  const { t } = useTranslation();
   const [contracts, setContracts] = useState<APIContract[]>([]);
   const [selectedID, setSelectedID] = useState("");
   const [candidates, setCandidates] = useState<APIContractCandidate[]>([]);
@@ -68,11 +71,11 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       setContracts(values);
       setSelectedID((current) => values.some((item) => item.id === current) ? current : values[0]?.id ?? "");
     } catch (error) {
-      setProblem(developerAssetError(error, "API contracts could not be loaded."));
+      setProblem(developerAssetError(error, t("apiContracts.apiContractsCouldNotBeLoaded")));
     } finally {
       setLoading(false);
     }
-  }, [live]);
+  }, [live, t]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void load(); }, 0);
@@ -94,9 +97,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       setSourceBindings(sourceValues.filter((item) => item.lifecycle === "attached"));
       setSelectedCandidateID((current) => candidateValues.some((item) => item.id === current) ? current : candidateValues[0]?.id ?? "");
     } catch (error) {
-      onMessage(developerAssetError(error, "Contract candidates and revisions could not be loaded."));
+      onMessage(developerAssetError(error, t("apiContracts.contractCandidatesAndRevisionsCouldNotBeLoaded")));
     }
-  }, [live, onMessage]);
+  }, [live, onMessage, t]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void loadContractDetail(selectedID); }, 0);
@@ -109,9 +112,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       queueMicrotask(() => { if (!cancelled) setCandidateRecord(null); });
       return () => { cancelled = true; };
     }
-    developerAssetsApi.apiContractCandidate(selectedID, selectedCandidateID).then((value) => { if (!cancelled) setCandidateRecord(value); }).catch((error) => { if (!cancelled) { setCandidateRecord(null); onMessage(developerAssetError(error, "The candidate review record could not be loaded.")); } });
+    developerAssetsApi.apiContractCandidate(selectedID, selectedCandidateID).then((value) => { if (!cancelled) setCandidateRecord(value); }).catch((error) => { if (!cancelled) { setCandidateRecord(null); onMessage(developerAssetError(error, t("apiContracts.theCandidateReviewRecordCouldNotBeLoaded"))); } });
     return () => { cancelled = true; };
-  }, [live, onMessage, selectedCandidateID, selectedID]);
+  }, [live, onMessage, selectedCandidateID, selectedID, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,9 +148,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       setCreateOpen(false);
       await load();
       setSelectedID(saved.id);
-      onMessage(editingRoot ? "API contract root metadata updated. Published revisions and exact API pins remain unchanged." : "API contract root created. Attach a source, ingest it, and review a candidate before attaching it to an API.");
+      onMessage(editingRoot ? t("apiContracts.apiContractRootMetadataUpdatedPublishedRevisionsAndExact") : t("apiContracts.apiContractRootCreatedAttachASourceIngestIt"));
     } catch (error) {
-      onMessage(developerAssetError(error, `API contract could not be ${editingRoot ? "updated" : "created"}.`));
+      onMessage(developerAssetError(error, t("apiContracts.apiContractCouldNotBe", { value1: String(editingRoot ? "updated" : "created") })));
     } finally {
       setBusy(false);
     }
@@ -160,9 +163,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       await developerAssetsApi.archiveAPIContract(selected.id, selected.revision);
       setArchiveOpen(false);
       await load();
-      onMessage("API contract root archived without deleting candidates, immutable revisions, attachments, maps, or audit history.");
+      onMessage(t("apiContracts.apiContractRootArchivedWithoutDeletingCandidatesImmutableRevisions"));
     } catch (error) {
-      onMessage(developerAssetError(error, "API contract could not be archived."));
+      onMessage(developerAssetError(error, t("apiContracts.apiContractCouldNotBeArchived")));
     } finally { setBusy(false); }
   }
 
@@ -173,9 +176,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       await developerAssetsApi.attachAPIContractSource(selected.id, sourceID, sourceRole);
       setSourceOpen(false);
       await loadContractDetail(selected.id);
-      onMessage("Fixed deployment source attached. This does not publish or approve a contract candidate.");
+      onMessage(t("apiContracts.fixedDeploymentSourceAttachedThisDoesNotPublishOr"));
     } catch (error) {
-      onMessage(developerAssetError(error, "Contract source could not be attached."));
+      onMessage(developerAssetError(error, t("apiContracts.contractSourceCouldNotBeAttached")));
     } finally {
       setBusy(false);
     }
@@ -190,9 +193,9 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
       setAcknowledged(false);
       await load();
       await loadContractDetail(selected.id);
-      onMessage(`Reviewed immutable contract revision r${result.revision.revision} published.`);
+      onMessage(t("apiContracts.reviewedImmutableContractRevisionRPublished", { revision: String(result.revision.revision) }));
     } catch (error) {
-      onMessage(developerAssetError(error, "Contract candidate could not be published."));
+      onMessage(developerAssetError(error, t("apiContracts.contractCandidateCouldNotBePublished")));
     } finally {
       setBusy(false);
     }
@@ -202,45 +205,45 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
   const active: Section = "contracts";
 
   return <>
-    <PageHeader eyebrow="Docs" title="API contracts" action={<Button onClick={() => openRootEditor()}><Plus data-slot="icon" />Create contract</Button>} />
+    <PageHeader eyebrow={t("navigation.docs")} title={t("navigation.apiContracts")} action={<Button onClick={() => openRootEditor()}><Plus data-slot="icon" />{t("apiContracts.createContract")}</Button>} />
     <DocumentationNavigation active={active} onNavigate={onNavigate} />
-    {loading ? <LoadingPanel label="Loading API contracts" /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
-      <DataTable label="API contract catalog" className="developer-asset-directory">
-        <DataTableHeader className="developer-contract-columns"><span>Contract</span><span>Candidates</span><span>Published</span></DataTableHeader>
+    {loading ? <LoadingPanel label={t("apiContracts.loadingAPIContracts")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
+      <DataTable label={t("apiContracts.apiContractCatalog")} className="developer-asset-directory">
+        <DataTableHeader className="developer-contract-columns"><span>{t("apiContracts.contract")}</span><span>{t("apiContracts.candidates")}</span><span>{t("apiContracts.published")}</span></DataTableHeader>
         {contracts.map((contract) => <DataTableRow className={`developer-contract-columns developer-asset-selectable ${contract.id === selectedID ? "selected" : ""}`} key={contract.id}>
-          <button type="button" className="developer-asset-record-button" onClick={() => { setSelectedID(contract.id); setTab("summary"); }}><span className="resource-icon"><FileCode2 /></span><span><strong>{contract.name}</strong><small>OpenAPI · {contract.slug}</small></span></button>
-          <span><strong className="cell-value">{contract.id === selectedID ? candidates.length : "—"}</strong><small className="cell-note">review queue</small></span>
-          <span><strong className="cell-value">{contract.id === selectedID ? revisions.length : "—"}</strong><small className="cell-note">immutable</small></span>
+          <button type="button" className="developer-asset-record-button" onClick={() => { setSelectedID(contract.id); setTab("summary"); }}><span className="resource-icon"><FileCode2 /></span><span><strong>{contract.name}</strong><small>{t("apiContracts.openapi")} {contract.slug}</small></span></button>
+          <span><strong className="cell-value">{contract.id === selectedID ? candidates.length : "—"}</strong><small className="cell-note">{t("apiContracts.reviewQueue")}</small></span>
+          <span><strong className="cell-value">{contract.id === selectedID ? revisions.length : "—"}</strong><small className="cell-note">{t("apiContracts.immutable")}</small></span>
         </DataTableRow>)}
-        {contracts.length === 0 && <DataTableEmpty columns={3}>No deployment-owned API contract exists yet.</DataTableEmpty>}
+        {contracts.length === 0 && <DataTableEmpty columns={3}>{t("apiContracts.noDeploymentOwnedAPIContractExistsYet")}</DataTableEmpty>}
       </DataTable>
       <section className="panel developer-asset-inspector">
         {selected ? <>
-          <PanelHeader title={selected.name} description={selected.description || "Reusable OpenAPI contract root."} action={<span className="heading-actions"><ReviewStateBadge state={selected.lifecycle} /><Button outline onClick={() => openRootEditor(selected)}><Pencil data-slot="icon" />Edit root</Button>{selected.lifecycle !== "archived" && <><Button outline onClick={() => { setRootAcknowledged(false); setArchiveOpen(true); }}><Archive data-slot="icon" />Archive</Button><Button outline onClick={() => { setSourceID(sources[0]?.id ?? ""); setSourceRole("primary"); setSourceOpen(true); }}><Link2 data-slot="icon" />Attach source</Button>{selectedCandidate && <Button disabled={!candidateValid(selectedCandidate)} onClick={() => { setAcknowledged(false); setPublishOpen(true); }}><ShieldCheck data-slot="icon" />Review candidate</Button>}</>}</span>} />
-          <div className="developer-contract-evidence"><div><strong>Sources</strong><span>{sourceBindings.length || "None"}</span></div><div><strong>Candidates</strong><span>{candidates.length}</span></div><div><strong>Published revisions</strong><span>{revisions.length}</span></div></div>
-          <div className="developer-asset-candidate-picker"><label><span>Candidate</span><select value={selectedCandidateID} onChange={(event) => { setSelectedCandidateID(event.target.value); setTab("summary"); }}>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.id} · {candidate.openapi_version || "OpenAPI"}</option>)}</select></label>{selectedCandidate && <ReviewStateBadge state={candidateValid(selectedCandidate) ? "valid" : "needs_review"} />}</div>
+          <PanelHeader title={selected.name} description={selected.description || t("apiContracts.reusableOpenAPIContractRoot")} action={<span className="heading-actions"><ReviewStateBadge state={selected.lifecycle} /><Button outline onClick={() => openRootEditor(selected)}><Pencil data-slot="icon" />{t("apiContracts.editRoot")}</Button>{selected.lifecycle !== "archived" && <><Button outline onClick={() => { setRootAcknowledged(false); setArchiveOpen(true); }}><Archive data-slot="icon" />{t("apiContracts.archive")}</Button><Button outline onClick={() => { setSourceID(sources[0]?.id ?? ""); setSourceRole("primary"); setSourceOpen(true); }}><Link2 data-slot="icon" />{t("apiContracts.attachSource")}</Button>{selectedCandidate && <Button disabled={!candidateValid(selectedCandidate)} onClick={() => { setAcknowledged(false); setPublishOpen(true); }}><ShieldCheck data-slot="icon" />{t("apiContracts.reviewCandidate")}</Button>}</>}</span>} />
+          <div className="developer-contract-evidence"><div><strong>{t("navigation.sources")}</strong><span>{sourceBindings.length || t("apiContracts.none")}</span></div><div><strong>{t("apiContracts.candidates")}</strong><span>{candidates.length}</span></div><div><strong>{t("apiContracts.publishedRevisions")}</strong><span>{revisions.length}</span></div></div>
+          <div className="developer-asset-candidate-picker"><label><span>{t("apiContracts.candidate")}</span><select value={selectedCandidateID} onChange={(event) => { setSelectedCandidateID(event.target.value); setTab("summary"); }}>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.id} · {candidate.openapi_version || t("apiContracts.openapi2")}</option>)}</select></label>{selectedCandidate && <ReviewStateBadge state={candidateValid(selectedCandidate) ? "valid" : "needs_review"} />}</div>
           {candidateRecord ? <>
-            <div className="developer-asset-inspector-tabs"><SegmentedControl label="Contract candidate review" value={tab} onChange={setTab} items={[
-              { id: "summary", label: "Review" }, { id: "operations", label: "Operations", count: candidateRecord.operations.length }, { id: "schemas", label: "Schemas", count: candidateRecord.schemas.length }, { id: "examples", label: "Examples", count: candidateRecord.examples.length }, { id: "map", label: "Contract Map" }, { id: "contract", label: "Normalized" }, { id: "diagnostics", label: "Diagnostics" },
+            <div className="developer-asset-inspector-tabs"><SegmentedControl label={t("apiContracts.contractCandidateReview")} value={tab} onChange={setTab} items={[
+              { id: "summary", label: t("common.review") }, { id: "operations", label: t("common.operations"), count: candidateRecord.operations.length }, { id: "schemas", label: t("common.schemas"), count: candidateRecord.schemas.length }, { id: "examples", label: t("common.examples"), count: candidateRecord.examples.length }, { id: "map", label: t("common.map") }, { id: "contract", label: t("common.normalized") }, { id: "diagnostics", label: t("common.diagnostics") },
             ]} /></div>
             <div className="developer-asset-inspector-body">
-              {tab === "summary" && <><dl className="entity-detail-grid"><div><dt>Candidate ID</dt><dd><code>{candidateRecord.candidate.id}</code></dd></div><div><dt>Content hash</dt><dd><code>{candidateRecord.candidate.content_hash}</code></dd></div><div><dt>Ingestion run</dt><dd><code>{candidateRecord.candidate.ingestion_run_id}</code></dd></div><div><dt>Format</dt><dd>{candidateRecord.candidate.source_format || "—"}</dd></div></dl><PrettyJSON value={candidateRecord.candidate.validation_result} label="Contract validation evidence" /></>}
-              {tab === "operations" && renderRecordList(candidateRecord.operations, "No operations were normalized.")}
-              {tab === "schemas" && renderRecordList(candidateRecord.schemas, "No schemas were normalized.")}
-              {tab === "examples" && renderRecordList(candidateRecord.examples, "No examples were normalized.")}
-              {tab === "map" && <>{candidateRecord.map ? <><MarkdownEvidence label="Contract Map agent markdown">{candidateRecord.map.agent_markdown}</MarkdownEvidence><PrettyJSON value={candidateRecord.map.map} label="Contract Map data" /></> : <p className="empty-row">No Contract Map is stored for this candidate.</p>}</>}
-              {tab === "contract" && <PrettyJSON value={candidateRecord.candidate.normalized_contract} label="Normalized OpenAPI contract" />}
-              {tab === "diagnostics" && <PrettyJSON value={candidateRecord.candidate.diagnostics} label="Contract candidate diagnostics" />}
+              {tab === "summary" && <><dl className="entity-detail-grid"><div><dt>{t("apiContracts.candidateID")}</dt><dd><code>{candidateRecord.candidate.id}</code></dd></div><div><dt>{t("apiContracts.contentHash")}</dt><dd><code>{candidateRecord.candidate.content_hash}</code></dd></div><div><dt>{t("apiContracts.ingestionRun")}</dt><dd><code>{candidateRecord.candidate.ingestion_run_id}</code></dd></div><div><dt>{t("apiContracts.format")}</dt><dd>{candidateRecord.candidate.source_format || "—"}</dd></div></dl><PrettyJSON value={candidateRecord.candidate.validation_result} label={t("apiContracts.contractValidationEvidence")} /></>}
+              {tab === "operations" && renderRecordList(candidateRecord.operations, t("apiContracts.noOperationsWereNormalized"))}
+              {tab === "schemas" && renderRecordList(candidateRecord.schemas, t("apiContracts.noSchemasWereNormalized"))}
+              {tab === "examples" && renderRecordList(candidateRecord.examples, t("apiContracts.noExamplesWereNormalized"))}
+              {tab === "map" && <>{candidateRecord.map ? <><MarkdownEvidence label={t("apiContracts.contractMapAgentMarkdown")}>{candidateRecord.map.agent_markdown}</MarkdownEvidence><PrettyJSON value={candidateRecord.map.map} label={t("apiContracts.contractMapData")} /></> : <p className="empty-row">{t("apiContracts.noContractMapIsStoredForThisCandidate")}</p>}</>}
+              {tab === "contract" && <PrettyJSON value={candidateRecord.candidate.normalized_contract} label={t("apiContracts.normalizedOpenAPIContract")} />}
+              {tab === "diagnostics" && <PrettyJSON value={candidateRecord.candidate.diagnostics} label={t("apiContracts.contractCandidateDiagnostics")} />}
             </div>
-          </> : <p className="empty-row">No candidate is ready for review. Attach a fixed source and run its acquisition workflow.</p>}
-          {revisions.length > 0 && <div className="developer-asset-publication-list"><PanelHeader level={3} title="Immutable revisions" />{revisions.map((revision) => <div key={revision.id}><span><GitBranch /><span><strong>Revision {revision.revision}</strong><small>{revision.id}</small></span></span><span><Badge color="green"><Check />reviewed</Badge><code>{revision.content_hash}</code></span></div>)}</div>}
-          <div className="developer-asset-used-by"><PanelHeader level={3} title="Used by APIs" description="These APIs attach this contract. Publishing a new revision will not move their exact pins." />{usedBy.map(({ integration, binding }) => <div className="entity-related-row" key={binding.id}><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.version_key} · exact revision {binding.pinned_revision_id || "unresolved"}</small></span><Badge color={binding.primary ? "violet" : "blue"}>{binding.primary ? "primary" : "attached"}</Badge></div>)}{usedBy.length === 0 && <p className="empty-row">This contract is not attached to an API.</p>}</div>
-        </> : <div className="developer-asset-inspector-empty"><FileCode2 /><strong>Select an API contract</strong><small>Sources, candidates, deterministic validation, maps, and reviewed revisions will appear here.</small></div>}
+          </> : <p className="empty-row">{t("apiContracts.noCandidateIsReadyForReviewAttachAFixed")}</p>}
+          {revisions.length > 0 && <div className="developer-asset-publication-list"><PanelHeader level={3} title={t("apiContracts.immutableRevisions")} />{revisions.map((revision) => <div key={revision.id}><span><GitBranch /><span><strong>{t("apiContracts.revision")} {revision.revision}</strong><small>{revision.id}</small></span></span><span><Badge color="green"><Check />{t("apiContracts.reviewed")}</Badge><code>{revision.content_hash}</code></span></div>)}</div>}
+          <div className="developer-asset-used-by"><PanelHeader level={3} title={t("apiContracts.usedByAPIs")} description={t("apiContracts.theseAPIsAttachThisContractPublishingANewRevision")} />{usedBy.map(({ integration, binding }) => <div className="entity-related-row" key={binding.id}><span className="settings-icon"><GitBranch /></span><span><strong>{integration.display_name}</strong><small>{integration.version_key} {t("apiContracts.exactRevision")} {binding.pinned_revision_id || t("apiContracts.unresolved")}</small></span><Badge color={binding.primary ? "violet" : "blue"}>{binding.primary ? t("apiContracts.primary2") : t("apiContracts.attached")}</Badge></div>)}{usedBy.length === 0 && <p className="empty-row">{t("apiContracts.thisContractIsNotAttachedToAnAPI")}</p>}</div>
+        </> : <div className="developer-asset-inspector-empty"><FileCode2 /><strong>{t("apiContracts.selectAnAPIContract")}</strong><small>{t("apiContracts.sourcesCandidatesDeterministicValidationMapsAndReviewedRevisionsWill")}</small></div>}
       </section>
     </div>}
-    <Dialog open={createOpen} onClose={setCreateOpen} title={editingRoot ? "Edit API contract root" : "Create API contract"} description={editingRoot ? "Update root metadata only. Immutable contract revisions and exact API pins are not rewritten." : "Create a reusable OpenAPI identity. It is not attachable until a candidate is validated and explicitly reviewed."} actions={<><Button outline onClick={() => setCreateOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !name.trim() || !slug.trim() || Boolean(editingRoot && !rootAcknowledged)} onClick={() => void saveContract()}>{busy ? "Saving…" : editingRoot ? "Save root metadata" : "Create contract"}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>Name</span><input value={name} onChange={(event) => { setName(event.target.value); if (!editingRoot) setSlug(slugify(event.target.value)); }} /></label><label className="auth-field"><span>Slug</span><input value={slug} onChange={(event) => setSlug(slugify(event.target.value))} /></label></div><label className="auth-field"><span>Description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="auth-field"><span>Visibility</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as APIContract["visibility"])}><option value="private">Private</option><option value="public">Public</option></select><small>Public visibility is explicit; candidate publication still requires review.</small></label>{editingRoot && <><div className="notice"><GitBranch /><span><strong>{usedBy.length} affected API attachment{usedBy.length === 1 ? "" : "s"}.</strong> Root metadata may be visible to those operators, but their exact contract revision pins will not change.</span></div><label className="compact-check"><input type="checkbox" checked={rootAcknowledged} onChange={(event) => setRootAcknowledged(event.target.checked)} /><span>I reviewed the affected APIs and this root metadata change.</span></label></>}</div></Dialog>
-    <Dialog open={archiveOpen} onClose={setArchiveOpen} title={`Archive ${selected?.name ?? "API contract"}`} description="Archive the reusable root without deleting candidates, immutable revisions, maps, citations, bindings, or audit history." actions={<><Button outline onClick={() => setArchiveOpen(false)}>Cancel</Button><Button color="red" disabled={busy || !rootAcknowledged} onClick={() => void archiveContract()}>{busy ? "Archiving…" : "Archive root"}</Button></>}><div className="auth-form compact-form"><div className="notice"><Archive /><span><strong>{usedBy.length} affected API attachment{usedBy.length === 1 ? "" : "s"}.</strong> Existing exact pins remain recorded; review each API’s Resources tab before archiving.</span></div><label className="compact-check"><input type="checkbox" checked={rootAcknowledged} onChange={(event) => setRootAcknowledged(event.target.checked)} /><span>I reviewed every affected API and understand this does not detach or delete history.</span></label></div></Dialog>
-    <Dialog open={sourceOpen} onClose={setSourceOpen} title={`Attach source to ${selected?.name ?? "contract"}`} description="This records a fixed acquisition source. It does not approve or publish any candidate." actions={<><Button outline onClick={() => setSourceOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !sourceID} onClick={() => void attachSource()}>{busy ? "Attaching…" : "Attach source"}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>Deployment source</span><select value={sourceID} onChange={(event) => setSourceID(event.target.value)}><option value="">Select a source</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.kind}</option>)}</select></label><label className="auth-field"><span>Role</span><select value={sourceRole} onChange={(event) => setSourceRole(event.target.value as "primary" | "supplemental")}><option value="primary">Primary</option><option value="supplemental">Supplemental</option></select></label></div></Dialog>
-    <Dialog open={publishOpen} onClose={setPublishOpen} title="Review and publish contract candidate" description="Confirm the normalized OpenAPI, operations, schemas, examples, diagnostics, and Contract Map before creating an immutable revision." actions={<><Button outline onClick={() => setPublishOpen(false)}>Cancel</Button><Button color="indigo" disabled={busy || !acknowledged || !selectedCandidate || !candidateValid(selectedCandidate)} onClick={() => void publishCandidate()}>{busy ? "Publishing…" : "Publish reviewed revision"}</Button></>}><div className="developer-asset-review-confirmation"><dl className="entity-detail-grid"><div><dt>Candidate</dt><dd><code>{selectedCandidate?.id}</code></dd></div><div><dt>Content hash</dt><dd><code>{selectedCandidate?.content_hash}</code></dd></div><div><dt>Operations</dt><dd>{candidateRecord?.operations.length ?? 0}</dd></div><div><dt>Schemas</dt><dd>{candidateRecord?.schemas.length ?? 0}</dd></div></dl><div className="notice"><GitBranch /><span><strong>{usedBy.length} affected API attachment{usedBy.length === 1 ? "" : "s"}.</strong> Their exact revision pins will not change. Any upgrade must be explicit in each API’s Resources tab.</span></div><label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I reviewed this exact validated candidate and its citations. I understand publication is immutable.</span></label></div></Dialog>
+    <Dialog open={createOpen} onClose={setCreateOpen} title={editingRoot ? t("apiContracts.editAPIContractRoot") : t("apiContracts.createAPIContract")} description={editingRoot ? t("apiContracts.updateRootMetadataOnlyImmutableContractRevisionsAndExact") : t("apiContracts.createAReusableOpenAPIIdentityItIsNotAttachable")} actions={<><Button outline onClick={() => setCreateOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !name.trim() || !slug.trim() || Boolean(editingRoot && !rootAcknowledged)} onClick={() => void saveContract()}>{busy ? t("common.saving") : editingRoot ? t("apiContracts.saveRootMetadata") : t("apiContracts.createContract")}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>{t("apiContracts.name")}</span><input value={name} onChange={(event) => { setName(event.target.value); if (!editingRoot) setSlug(slugify(event.target.value)); }} /></label><label className="auth-field"><span>{t("apiContracts.slug")}</span><input value={slug} onChange={(event) => setSlug(slugify(event.target.value))} /></label></div><label className="auth-field"><span>{t("apiContracts.description")}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="auth-field"><span>{t("apiContracts.visibility")}</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as APIContract["visibility"])}><option value="private">{t("apiContracts.private")}</option><option value="public">{t("apiContracts.public")}</option></select><small>{t("apiContracts.publicVisibilityIsExplicitCandidatePublicationStillRequiresReview")}</small></label>{editingRoot && <><div className="notice"><GitBranch /><span><strong>{usedBy.length} {t("apiContracts.affectedAPIAttachment")}{usedBy.length === 1 ? "" : t("apiContracts.s")}.</strong> {t("apiContracts.rootMetadataMayBeVisibleToThoseOperatorsBut")}</span></div><label className="compact-check"><input type="checkbox" checked={rootAcknowledged} onChange={(event) => setRootAcknowledged(event.target.checked)} /><span>{t("apiContracts.iReviewedTheAffectedAPIsAndThisRootMetadata")}</span></label></>}</div></Dialog>
+    <Dialog open={archiveOpen} onClose={setArchiveOpen} title={t("apiContracts.archive2", { value1: String(selected?.name ?? "API contract") })} description={t("apiContracts.archiveTheReusableRootWithoutDeletingCandidatesImmutableRevisions")} actions={<><Button outline onClick={() => setArchiveOpen(false)}>{t("common.cancel")}</Button><Button color="red" disabled={busy || !rootAcknowledged} onClick={() => void archiveContract()}>{busy ? t("apiContracts.archiving") : t("apiContracts.archiveRoot")}</Button></>}><div className="auth-form compact-form"><div className="notice"><Archive /><span><strong>{usedBy.length} {t("apiContracts.affectedAPIAttachment")}{usedBy.length === 1 ? "" : t("apiContracts.s")}.</strong> {t("apiContracts.existingExactPinsRemainRecordedReviewEachAPIS")}</span></div><label className="compact-check"><input type="checkbox" checked={rootAcknowledged} onChange={(event) => setRootAcknowledged(event.target.checked)} /><span>{t("apiContracts.iReviewedEveryAffectedAPIAndUnderstandThisDoes")}</span></label></div></Dialog>
+    <Dialog open={sourceOpen} onClose={setSourceOpen} title={t("apiContracts.attachSourceTo", { value1: String(selected?.name ?? "contract") })} description={t("apiContracts.thisRecordsAFixedAcquisitionSourceItDoesNot")} actions={<><Button outline onClick={() => setSourceOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !sourceID} onClick={() => void attachSource()}>{busy ? t("apiContracts.attaching") : t("apiContracts.attachSource")}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>{t("apiContracts.deploymentSource")}</span><select value={sourceID} onChange={(event) => setSourceID(event.target.value)}><option value="">{t("apiContracts.selectASource")}</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name} · {source.kind}</option>)}</select></label><label className="auth-field"><span>{t("apiContracts.role")}</span><select value={sourceRole} onChange={(event) => setSourceRole(event.target.value as "primary" | "supplemental")}><option value="primary">{t("apiContracts.primary")}</option><option value="supplemental">{t("apiContracts.supplemental")}</option></select></label></div></Dialog>
+    <Dialog open={publishOpen} onClose={setPublishOpen} title={t("apiContracts.reviewAndPublishContractCandidate")} description={t("apiContracts.confirmTheNormalizedOpenAPIOperationsSchemasExamplesDiagnosticsAnd")} actions={<><Button outline onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !acknowledged || !selectedCandidate || !candidateValid(selectedCandidate)} onClick={() => void publishCandidate()}>{busy ? t("apiContracts.publishing") : t("apiContracts.publishReviewedRevision")}</Button></>}><div className="developer-asset-review-confirmation"><dl className="entity-detail-grid"><div><dt>{t("apiContracts.candidate")}</dt><dd><code>{selectedCandidate?.id}</code></dd></div><div><dt>{t("apiContracts.contentHash")}</dt><dd><code>{selectedCandidate?.content_hash}</code></dd></div><div><dt>{t("apiContracts.operations")}</dt><dd>{candidateRecord?.operations.length ?? 0}</dd></div><div><dt>{t("apiContracts.schemas")}</dt><dd>{candidateRecord?.schemas.length ?? 0}</dd></div></dl><div className="notice"><GitBranch /><span><strong>{usedBy.length} {t("apiContracts.affectedAPIAttachment")}{usedBy.length === 1 ? "" : t("apiContracts.s")}.</strong> {t("apiContracts.theirExactRevisionPinsWillNotChangeAnyUpgrade")}</span></div><label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{t("apiContracts.iReviewedThisExactValidatedCandidateAndItsCitations")}</span></label></div></Dialog>
   </>;
 }

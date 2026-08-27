@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -19,6 +20,8 @@ type recipeDeveloperAssetEvidenceStore struct {
 	api          model.APIDeveloperAssetPublication
 	otherAPI     model.APIDeveloperAssetPublication
 	apiRevision  model.IntegrationRevision
+	contract     model.APIContractRevision
+	candidate    store.APIContractCandidateRecord
 	globalUnits  []store.DeveloperAssetKnowledgeResult
 	apiUnits     []store.DeveloperAssetKnowledgeResult
 	otherAPIUnit store.DeveloperAssetKnowledgeResult
@@ -74,6 +77,20 @@ func (s *recipeDeveloperAssetEvidenceStore) IntegrationRevisions(_ context.Conte
 		return nil, store.ErrNotFound
 	}
 	return []model.IntegrationRevision{s.apiRevision}, nil
+}
+
+func (s *recipeDeveloperAssetEvidenceStore) APIContractRevision(ctx context.Context, deploymentID, id string) (model.APIContractRevision, error) {
+	if s.contract.DeploymentID == deploymentID && s.contract.ID == id {
+		return s.contract, nil
+	}
+	return s.Store.APIContractRevision(ctx, deploymentID, id)
+}
+
+func (s *recipeDeveloperAssetEvidenceStore) APIContractCandidate(ctx context.Context, deploymentID, id string) (store.APIContractCandidateRecord, error) {
+	if s.candidate.Candidate.DeploymentID == deploymentID && s.candidate.Candidate.ID == id {
+		return s.candidate, nil
+	}
+	return s.Store.APIContractCandidate(ctx, deploymentID, id)
 }
 
 func (s *recipeDeveloperAssetEvidenceStore) SearchIndexGenerations(_ context.Context, deploymentID, publicationKind, publicationID string) ([]model.SearchIndexGeneration, error) {
@@ -134,6 +151,52 @@ func recipeDeveloperAssetTestUnit(scopeKind, indexID, assetKind, sourceKind, sou
 	}
 }
 
+func recipeContractOperationTestFixture(visibility model.Visibility) (model.APIDeveloperAssetPublication, model.APIPublicationContractAsset, model.APIContractRevision, store.APIContractCandidateRecord, model.APIContractOperation) {
+	revisionHash := recipeDeveloperAssetTestDigest("contract-revision")
+	operation := model.APIContractOperation{
+		ID: "operation-create-payment", APIContractCandidateID: "contract-candidate", OperationKey: "POST /payments", OperationID: "createPayment",
+		Method: "post", PathTemplate: "/payments", Summary: "Create payment", Security: json.RawMessage(`[{"apiKey":[]}]`),
+		RequestSchemaRefs: []string{"CreatePaymentRequest"}, ResponseSchemaRefs: []string{"Payment"},
+		ContentHash: recipeDeveloperAssetTestDigest("operation-create-payment"),
+	}
+	revision := model.APIContractRevision{
+		ID: "contract-revision", DeploymentID: "prod_acme", APIContractID: "contract-payments", APIContractName: "Payments API",
+		APIContractSlug: "payments", APIContractDescription: "Payments contract", APIContractKind: "openapi",
+		APIContractCandidateID: operation.APIContractCandidateID, Revision: 7, ContentHash: revisionHash, Visibility: visibility,
+	}
+	asset := model.APIPublicationContractAsset{
+		BindingID: "contract-binding", APIContractID: revision.APIContractID, APIContractName: revision.APIContractName,
+		APIContractSlug: revision.APIContractSlug, APIContractDescription: revision.APIContractDescription, APIContractKind: revision.APIContractKind,
+		APIContractRevisionID: revision.ID, Primary: true, ContentHash: revisionHash, Visibility: visibility,
+	}
+	publication := model.APIDeveloperAssetPublication{
+		ID: "api-publication", DeploymentID: revision.DeploymentID, APIID: "api-selected", APIRevisionID: "api-revision",
+		SnapshotHash: recipeDeveloperAssetTestDigest("api-publication"), Contracts: []model.APIPublicationContractAsset{asset},
+	}
+	candidate := store.APIContractCandidateRecord{Candidate: model.APIContractCandidate{
+		ID: operation.APIContractCandidateID, DeploymentID: revision.DeploymentID, APIContractID: revision.APIContractID,
+		ContentHash: revisionHash, Visibility: visibility,
+	}, Operations: []model.APIContractOperation{operation}}
+	return publication, asset, revision, candidate, operation
+}
+
+func recipeContractOperationTestUnit(publication model.APIDeveloperAssetPublication, revision model.APIContractRevision, candidate model.APIContractCandidate, operation model.APIContractOperation, visibility model.Visibility) model.KnowledgeUnit {
+	citation, _ := json.Marshal(map[string]any{
+		"publication_kind": "contract", "publication_id": revision.ID,
+		"index_publication_kind": "api", "index_publication_id": publication.ID,
+		"api_contract_revision_id": revision.ID, "api_contract_candidate_id": candidate.ID,
+		"api_contract_operation_id": operation.ID, "operation_key": operation.OperationKey,
+		"method": operation.Method, "path_template": operation.PathTemplate, "content_hash": operation.ContentHash,
+	})
+	metadata, _ := json.Marshal(map[string]any{"asset_kind": "contract"})
+	return model.KnowledgeUnit{
+		ID: "unit-" + operation.ID, Kind: "contract_operation", SourcePublicationKind: "contract",
+		SourcePublicationID: revision.ID, SourceEntityID: operation.ID, Title: operation.Summary,
+		Content: strings.ToUpper(operation.Method) + " " + operation.PathTemplate, Visibility: visibility,
+		Citation: citation, Metadata: metadata, ContentHash: operation.ContentHash,
+	}
+}
+
 func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()
@@ -149,15 +212,20 @@ func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t
 			ContentHash:                       recipeDeveloperAssetTestDigest("global-revision"), Visibility: model.VisibilityPrivate,
 		}},
 	}
+	_, contractAsset, contractRevision, contractCandidate, operation := recipeContractOperationTestFixture(model.VisibilityPrivate)
+	contractAsset.APIContractRevisionID = contractRevisionID
+	contractRevision.ID = contractRevisionID
 	api := model.APIDeveloperAssetPublication{
 		ID: "selected-api-publication", DeploymentID: "prod_acme", APIID: "api-selected", APIRevisionID: "api-revision-selected",
 		DeploymentDocumentationPublicationID: global.ID, SnapshotHash: recipeDeveloperAssetTestDigest("selected-api-snapshot"),
 		Documentation: []model.APIPublicationDocumentationAsset{{DocumentationCollectionRevisionID: apiDocRevisionID, ContentHash: recipeDeveloperAssetTestDigest("selected-doc-revision"), Visibility: model.VisibilityPrivate}},
-		Contracts:     []model.APIPublicationContractAsset{{APIContractRevisionID: contractRevisionID, ContentHash: recipeDeveloperAssetTestDigest("selected-contract-revision"), Visibility: model.VisibilityPrivate}},
+		Contracts:     []model.APIPublicationContractAsset{contractAsset},
 		SDKs: []model.APIPublicationSDKAsset{{
 			SDKContentPublicationID: sdkPublicationID, ContentHash: recipeDeveloperAssetTestDigest("selected-sdk-asset"), Visibility: model.VisibilityPrivate,
 		}},
 	}
+	contractRevision.ContentHash = contractAsset.ContentHash
+	contractCandidate.Candidate.ContentHash = contractRevision.ContentHash
 	otherAPI := model.APIDeveloperAssetPublication{
 		ID: "other-api-publication", DeploymentID: "prod_acme", APIID: "api-other", APIRevisionID: "api-revision-other",
 		SnapshotHash: recipeDeveloperAssetTestDigest("other-api-snapshot"),
@@ -165,6 +233,7 @@ func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t
 	globalUnit := recipeDeveloperAssetTestUnit("global_documentation", global.ID, "documentation", "documentation_collection", globalRevisionID, "global-auth", "Global authentication guidance.", "Authenticate requests globally.")
 	apiDocUnit := recipeDeveloperAssetTestUnit("api", api.ID, "documentation", "documentation_collection", apiDocRevisionID, "selected-doc", "Selected API guide", "Create payments with the selected API.")
 	contractUnit := recipeDeveloperAssetTestUnit("api", api.ID, "contract", "contract", contractRevisionID, "selected-operation", "Create payment operation", "POST /payments")
+	operationUnit := recipeContractOperationTestUnit(api, contractRevision, contractCandidate.Candidate, operation, model.VisibilityPrivate)
 	sdkUnit := recipeDeveloperAssetTestUnit("api", api.ID, "sdk", "sdk", sdkPublicationID, "selected-sdk-sample", "Create payment sample", "client.payments.create(input)")
 	otherSDKUnit := recipeDeveloperAssetTestUnit("api", otherAPI.ID, "sdk", "sdk", "other-sdk-publication", "other-secret-sdk", "Other API SDK", "otherApi.secretOperation()")
 	backend := &recipeDeveloperAssetEvidenceStore{
@@ -173,13 +242,14 @@ func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t
 			ID: api.DeploymentID, OrganisationID: "org_acme",
 		},
 		integration: model.Integration{
-			ID: api.APIID, DeploymentID: api.DeploymentID, DisplayName: "Selected API", FamilyKey: "payments", VersionKey: "v1",
+			ID: api.APIID, DeploymentID: api.DeploymentID, DisplayName: "Selected API", FamilyKey: "payments", VersionKey: "v1", Visibility: model.VisibilityPrivate,
 		},
 		global: global, api: api, otherAPI: otherAPI,
 		apiRevision: model.IntegrationRevision{ID: api.APIRevisionID, IntegrationID: api.APIID, Revision: 4, State: "published"},
+		contract:    contractRevision, candidate: contractCandidate,
 		globalUnits: []store.DeveloperAssetKnowledgeResult{{Unit: globalUnit, FusedScore: 1}},
 		apiUnits: []store.DeveloperAssetKnowledgeResult{
-			{Unit: apiDocUnit, FusedScore: .9}, {Unit: contractUnit, FusedScore: .8}, {Unit: sdkUnit, FusedScore: .7},
+			{Unit: apiDocUnit, FusedScore: .9}, {Unit: operationUnit, FusedScore: .85}, {Unit: contractUnit, FusedScore: .8}, {Unit: sdkUnit, FusedScore: .7},
 		},
 		otherAPIUnit: store.DeveloperAssetKnowledgeResult{Unit: otherSDKUnit, FusedScore: 10},
 	}
@@ -204,6 +274,7 @@ func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t
 		recipeDeveloperAssetDocumentationKind:     false,
 		recipeDeveloperAssetContractKind:          false,
 		recipeDeveloperAssetSDKKind:               false,
+		recipeContractOperationKind:               false,
 	}
 	selectedUnits := 0
 	for _, item := range evidence {
@@ -218,6 +289,10 @@ func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t
 		case recipeDeveloperAssetAPIPublicationKind:
 			if item.ResourceID != api.ID || item.Version != api.APIRevisionID || recipeEvidenceField(item.Excerpt, "Publication ID") != api.ID || recipeEvidenceField(item.Excerpt, "API revision ID") != api.APIRevisionID || recipeEvidenceField(item.Excerpt, "Snapshot hash") != api.SnapshotHash || recipeEvidenceField(item.Excerpt, "Global documentation publication ID") != global.ID {
 				t.Fatalf("API publication evidence is not exact: %#v", item)
+			}
+		case recipeContractOperationKind:
+			if recipeEvidenceField(item.Excerpt, "Method") != "POST" || recipeEvidenceField(item.Excerpt, "Path template") != "/payments" || recipeEvidenceField(item.Excerpt, "Request schemas") != "CreatePaymentRequest" || recipeEvidenceField(item.Excerpt, "Security schemes") != "apiKey" {
+				t.Fatalf("contract operation evidence is not exact: %#v", item)
 			}
 		}
 		if strings.Contains(item.Excerpt, otherAPI.ID) || strings.Contains(item.Excerpt, "other-secret-sdk") || strings.Contains(item.Label, "Other API") {
@@ -245,7 +320,9 @@ func TestRecipeDeveloperAssetEvidenceUsesExactGlobalAndSelectedAPIPublications(t
 	if selectedUnits != 4 {
 		t.Fatalf("selected developer-asset units = %d, want 4", selectedUnits)
 	}
-	if len(backend.queries) != 2 || backend.queries[0].DeploymentDocumentationPublicationID != global.ID || backend.queries[0].APIDeveloperAssetPublicationID != "" || backend.queries[1].APIDeveloperAssetPublicationID != api.ID || backend.queries[1].APIID != api.APIID || backend.queries[1].DeploymentDocumentationPublicationID != "" {
+	if len(backend.queries) != 3 || backend.queries[0].APIDeveloperAssetPublicationID != api.ID || !reflect.DeepEqual(backend.queries[0].AssetKinds, []string{"contract"}) ||
+		backend.queries[1].DeploymentDocumentationPublicationID != global.ID || backend.queries[1].APIDeveloperAssetPublicationID != "" ||
+		backend.queries[2].APIDeveloperAssetPublicationID != api.ID || backend.queries[2].APIID != api.APIID || backend.queries[2].DeploymentDocumentationPublicationID != "" {
 		t.Fatalf("retrieval was not split into exact global and selected-API scopes: %#v", backend.queries)
 	}
 
@@ -343,6 +420,78 @@ func TestRecipeDeveloperAssetDependenciesIgnoreUnrelatedPublicationChanges(t *te
 	otherRecipe.Dependencies = recipeGroundingDependencies(analysis, otherSeed)
 	if !recipeGroundingMatches(otherRecipe, current, otherSeed) {
 		t.Fatal("a recipe which did not select the changed developer asset became stale")
+	}
+}
+
+func TestRecipeContractOperationEvidenceIgnoresUnrelatedWrapperChanges(t *testing.T) {
+	t.Parallel()
+	publication, asset, revision, candidate, operation := recipeContractOperationTestFixture(model.VisibilityPublic)
+	selected, err := recipeContractOperationEvidence(model.VisibilityPublic, publication, asset, revision, candidate.Candidate, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedPublication := publication
+	updatedPublication.ID = "api-publication-with-unrelated-sdk"
+	updatedPublication.SnapshotHash = recipeDeveloperAssetTestDigest("api-publication-with-unrelated-sdk")
+	unchanged, err := recipeContractOperationEvidence(model.VisibilityPublic, updatedPublication, asset, revision, candidate.Candidate, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ResourceID != unchanged.ResourceID || selected.Version != unchanged.Version || selected.Fingerprint != unchanged.Fingerprint {
+		t.Fatalf("unrelated aggregate publication change altered the operation identity:\nold=%#v\nnew=%#v", selected, unchanged)
+	}
+	if selected.Excerpt == unchanged.Excerpt || !strings.Contains(unchanged.Excerpt, updatedPublication.ID) || !strings.Contains(unchanged.Excerpt, updatedPublication.SnapshotHash) {
+		t.Fatalf("operation evidence lost current publication audit provenance: %#v", unchanged)
+	}
+	changedOperation := operation
+	changedOperation.ContentHash = recipeDeveloperAssetTestDigest("operation-create-payment-v2")
+	changed, err := recipeContractOperationEvidence(model.VisibilityPublic, updatedPublication, asset, revision, candidate.Candidate, changedOperation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Fingerprint == selected.Fingerprint || changed.Version == selected.Version {
+		t.Fatalf("operation content change retained its prior identity: old=%#v new=%#v", selected, changed)
+	}
+}
+
+func TestRecipeContractOperationDependencyRestoreAndPublicValidation(t *testing.T) {
+	t.Parallel()
+	publication, asset, revision, candidate, operation := recipeContractOperationTestFixture(model.VisibilityPublic)
+	integration := model.Integration{
+		ID: publication.APIID, DeploymentID: publication.DeploymentID, DisplayName: "Payments API",
+		FamilyKey: "payments", VersionKey: "v1", Visibility: model.VisibilityPublic,
+	}
+	backend := &recipeDeveloperAssetEvidenceStore{
+		Store:       store.NewMemory(),
+		deployment:  model.Deployment{ID: publication.DeploymentID, OrganisationID: "org_acme"},
+		integration: integration,
+		api:         publication,
+		apiRevision: model.IntegrationRevision{ID: publication.APIRevisionID, IntegrationID: publication.APIID, Revision: 1, State: "published"},
+		contract:    revision,
+		candidate:   candidate,
+	}
+	service := New(backend)
+	selected, err := recipeContractOperationEvidence(integration.Visibility, publication, asset, revision, candidate.Candidate, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markers := recipeDeveloperAssetPublicationEvidence(recipeDeveloperAssetScope{api: &publication})
+	dependency := model.RecipeDependency{Kind: selected.Kind, ResourceID: selected.ResourceID, Version: selected.Fingerprint}
+	restored, err := service.restoreRecipeDeveloperAssetDependencies(context.Background(), integration, markers, []model.RecipeDependency{dependency})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != len(markers)+1 || restored[len(restored)-1].ResourceID != selected.ResourceID || restored[len(restored)-1].Fingerprint != selected.Fingerprint {
+		t.Fatalf("exact operation dependency was not restored: %#v", restored)
+	}
+	recipe := model.Recipe{ContractVersion: model.RecipeContractProductIntegrationV2, IntegrationID: integration.ID}
+	if err := service.validatePublicRecipeDeveloperAssetEvidence(context.Background(), publication.DeploymentID, recipe, selected); err != nil {
+		t.Fatalf("exact public contract operation was rejected: %v", err)
+	}
+	tampered := selected
+	tampered.Excerpt = strings.Replace(tampered.Excerpt, "Path template: /payments", "Path template: /admin", 1)
+	if err := service.validatePublicRecipeDeveloperAssetEvidence(context.Background(), publication.DeploymentID, recipe, tampered); !errors.Is(err, errPublicRecipeEvidence) {
+		t.Fatalf("tampered contract operation evidence was not rejected: %v", err)
 	}
 }
 
@@ -534,7 +683,7 @@ func TestRecipeDeveloperAssetPublicEvidenceChecksUnderlyingExactRevision(t *test
 		}},
 	}
 	service := New(backend)
-	recipe := model.Recipe{IntegrationID: publication.APIID}
+	recipe := model.Recipe{ContractVersion: model.RecipeContractProductIntegrationV2, IntegrationID: publication.APIID}
 	if err := service.validatePublicRecipeDeveloperAssetEvidence(context.Background(), publication.DeploymentID, recipe, evidence); err != nil {
 		t.Fatalf("exact public developer evidence was rejected: %v", err)
 	}

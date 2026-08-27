@@ -77,10 +77,44 @@ type SitemapSeeds = {
   diagnostics: IngestionDiagnostic[];
 };
 
-async function sitemapSeeds(root: URL, settings: CrawlerSettings): Promise<SitemapSeeds> {
-  const target = new URL("/sitemap.xml", root).toString();
+function normalizedWebsitePath(value: URL): string | null {
   try {
-    const { response } = await secureFetch(target, settings, "application/xml,text/xml,text/plain;q=0.5");
+    const decoded = decodeURIComponent(value.pathname).replaceAll("\\", "/");
+    if (decoded.includes("\0")) return null;
+    const normalized = path.posix.normalize(decoded.startsWith("/") ? decoded : `/${decoded}`);
+    return normalized === "." ? "/" : normalized;
+  } catch {
+    return null;
+  }
+}
+
+export function websiteURLWithinScope(root: URL, candidate: URL): boolean {
+  if (candidate.origin !== root.origin) return false;
+  const rootPath = normalizedWebsitePath(root);
+  const candidatePath = normalizedWebsitePath(candidate);
+  if (!rootPath || !candidatePath) return false;
+  const boundary = rootPath === "/" ? "/" : rootPath.replace(/\/+$/, "");
+  return boundary === "/" || candidatePath === boundary || candidatePath.startsWith(`${boundary}/`);
+}
+
+function websiteSitemapURL(root: URL): string {
+  const rootPath = normalizedWebsitePath(root) ?? "/";
+  const boundary = rootPath === "/" ? "" : rootPath.replace(/\/+$/, "");
+  const target = new URL(root.origin);
+  target.pathname = `${boundary}/sitemap.xml`;
+  return target.toString();
+}
+
+async function sitemapSeeds(root: URL, settings: CrawlerSettings): Promise<SitemapSeeds> {
+  const target = websiteSitemapURL(root);
+  try {
+    const { response } = await secureFetch(target, settings, "application/xml,text/xml,text/plain;q=0.5", {
+      redirectPolicy: async (_from, to) => {
+        if (!websiteURLWithinScope(root, to)) {
+          throw new CrawlerJobError("source_redirect_not_allowed", "Website sitemap discovery may not leave the configured source path.");
+        }
+      },
+    });
     if (!response.ok) return { urls: [], skippedCount: 0, diagnostics: [] };
     const xml = await boundedResponseText(response, settings.maxBytes);
     const values = [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map((match) => match[1].replaceAll("&amp;", "&"));
@@ -96,13 +130,13 @@ async function sitemapSeeds(root: URL, settings: CrawlerSettings): Promise<Sitem
     for (const value of values.slice(0, settings.maxPages)) {
       try {
         const url = await assertSafeURL(value, settings);
-        if (url.origin === root.origin) result.push(canonicalize(url.toString()));
+        if (websiteURLWithinScope(root, url)) result.push(canonicalize(url.toString()));
         else {
           skippedCount++;
           diagnostics.push({
             code: "website_sitemap_entry_skipped",
             severity: "warning",
-            message: "A sitemap entry was skipped because it is outside the configured source origin.",
+            message: "A sitemap entry was skipped because it is outside the configured source path.",
             url: target,
           });
         }
@@ -251,7 +285,7 @@ async function ingestWebsite(job: Job, settings: CrawlerSettings): Promise<Inges
   const configuration = new Configuration({ persistStorage: false });
   const queue = await RequestQueue.open(`crawl-${job.id}`, { config: configuration });
   const crawler = new CheerioCrawler({
-    httpClient: new PinnedCrawlerHttpClient(settings, root.origin),
+    httpClient: new PinnedCrawlerHttpClient(settings, root.origin, {}, (candidate) => websiteURLWithinScope(root, candidate)),
     requestQueue: queue,
     maxRequestsPerCrawl: settings.maxPages,
     maxRequestRetries: 1,
@@ -272,14 +306,14 @@ async function ingestWebsite(job: Job, settings: CrawlerSettings): Promise<Inges
       }
       const finalURL = canonicalize(request.loadedUrl ?? request.url);
       const final = await assertSafeURL(finalURL, settings);
-      if (final.origin !== root.origin) throw new CrawlerJobError("source_redirect_not_allowed", "Website crawls may not navigate to a different origin.");
+      if (!websiteURLWithinScope(root, final)) throw new CrawlerJobError("source_redirect_not_allowed", "Website crawls may not navigate outside the configured source path.");
       const requestedURL = canonicalize(request.url);
       if (requestedURL !== finalURL && !redirectedURLs.has(requestedURL)) {
         redirectedURLs.add(requestedURL);
         addDiagnostic({
           code: "website_page_redirected",
           severity: "info",
-          message: "A discovered website page redirected within the configured source origin.",
+          message: "A discovered website page redirected within the configured source path.",
           url: requestedURL,
           redirectedTo: finalURL,
         });
@@ -327,7 +361,16 @@ async function ingestWebsite(job: Job, settings: CrawlerSettings): Promise<Inges
         transformRequestFunction: (candidate) => {
           try {
             const candidateURL = canonicalize(candidate.url);
-            if (new URL(candidateURL).origin !== root.origin) return null;
+            if (!websiteURLWithinScope(root, new URL(candidateURL))) {
+              skippedCount++;
+              addDiagnostic({
+                code: "website_link_outside_scope_skipped",
+                severity: "info",
+                message: "A discovered page was skipped because it is outside the configured source path.",
+                url: candidateURL,
+              });
+              return null;
+            }
             if (observedURLs.has(candidateURL)) return { ...candidate, url: candidateURL };
             observedURLs.add(candidateURL);
             if (acceptedURLs.size >= settings.maxPages) {

@@ -69,6 +69,7 @@ export class PinnedCrawlerHttpClient implements BaseHttpClient {
     private readonly settings: CrawlerSettings,
     private readonly allowedOrigin: string,
     private readonly fetchOptions: SecureFetchOptions = {},
+    private readonly allowedURL: (url: URL) => boolean = (url) => url.origin === allowedOrigin,
   ) {}
 
   async stream(request: HttpRequest): Promise<StreamingHttpResponse> {
@@ -79,8 +80,8 @@ export class PinnedCrawlerHttpClient implements BaseHttpClient {
       throw new CrawlerJobError("source_proxy_not_allowed", "Documentation crawling cannot use an outbound proxy.");
     }
     const requestedURL = new URL(request.url);
-    if (requestedURL.origin !== this.allowedOrigin) {
-      throw new CrawlerJobError("source_redirect_not_allowed", "Website crawls may not navigate to a different origin.");
+    if (!this.allowedURL(requestedURL)) {
+      throw new CrawlerJobError("source_redirect_not_allowed", "Website crawls may not navigate outside the configured source boundary.");
     }
 
     const result = await secureFetch(
@@ -91,8 +92,8 @@ export class PinnedCrawlerHttpClient implements BaseHttpClient {
         ...this.fetchOptions,
         headers: { ...outboundHeaders(request), ...this.fetchOptions.headers },
         redirectPolicy: async (from, to) => {
-          if (to.origin !== this.allowedOrigin) {
-            throw new CrawlerJobError("source_redirect_not_allowed", "Website crawls may not navigate to a different origin.");
+          if (!this.allowedURL(to)) {
+            throw new CrawlerJobError("source_redirect_not_allowed", "Website crawls may not navigate outside the configured source boundary.");
           }
           await this.fetchOptions.redirectPolicy?.(from, to);
         },

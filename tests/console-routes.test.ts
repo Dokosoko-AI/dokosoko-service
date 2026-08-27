@@ -202,19 +202,19 @@ test("entity URLs encode UIDs and resolve to their owning section", () => {
 
 test("API workspaces expose the task-oriented setup tabs with stable, round-trippable URLs", () => {
   assert.deepEqual(INTEGRATION_TABS, [
-    { id: "overview", label: "Quick Start" },
-    { id: "documentation", label: "Resources" },
-    { id: "access", label: "Keys & Access" },
-    { id: "tools", label: "Tools" },
-    { id: "test", label: "Test" },
-    { id: "history", label: "History" },
+    { id: "overview", label: "routes.quickStart" },
+    { id: "documentation", label: "routes.resources" },
+    { id: "access", label: "routes.keysAccess" },
+    { id: "tools", label: "routes.tools" },
+    { id: "test", label: "routes.test" },
+    { id: "history", label: "routes.history" },
   ]);
   assert.deepEqual(INTEGRATION_PRIMARY_TABS, [
-    { id: "overview", label: "Quick Start" },
-    { id: "documentation", label: "Resources" },
-    { id: "access", label: "Keys & Access" },
-    { id: "tools", label: "Tools" },
-    { id: "test", label: "Test" },
+    { id: "overview", label: "routes.quickStart" },
+    { id: "documentation", label: "routes.resources" },
+    { id: "access", label: "routes.keysAccess" },
+    { id: "tools", label: "routes.tools" },
+    { id: "test", label: "routes.test" },
   ], "History remains routable but lives behind the API More menu");
   const uid = "voice api/v3";
   for (const tab of INTEGRATION_TABS) {
@@ -262,10 +262,10 @@ test("API validation findings open the matching local setup area", () => {
 
 test("settings has stable routes for every overview area", () => {
   assert.deepEqual(SETTINGS_TABS, [
-    { id: "overview", label: "Overview" },
-    { id: "storage", label: "Database & storage" },
-    { id: "ai", label: "AI configuration" },
-    { id: "root", label: "Root access" },
+    { id: "overview", label: "routes.overview" },
+    { id: "storage", label: "routes.databaseStorage" },
+    { id: "ai", label: "routes.aiConfiguration" },
+    { id: "root", label: "routes.rootAccess" },
   ]);
   assert.equal(settingsPath(), "/settings");
   for (const tab of SETTINGS_TABS.filter((candidate) => candidate.id !== "overview")) {

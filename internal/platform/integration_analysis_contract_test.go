@@ -60,6 +60,20 @@ func productAnalysisSDK(id string) model.IntegrationEvidence {
 	}
 }
 
+func productAnalysisContractOperation(integrationID, revisionID, operationID string) model.IntegrationEvidence {
+	resourceID := recipeContractOperationResourceID(integrationID, revisionID, operationID)
+	return model.IntegrationEvidence{
+		Kind: recipeContractOperationKind, ResourceID: resourceID, Label: "Create payment", Version: "contract-operation-v1",
+		Excerpt: "API ID: " + integrationID + "\n" +
+			"API contract revision ID: " + revisionID + "\n" +
+			"API contract revision content hash: sha256:contract\n" +
+			"Operation record ID: " + operationID + "\n" +
+			"Operation key: POST /payments\nMethod: POST\nPath template: /payments\n" +
+			"Operation content hash: sha256:operation\nRequest schemas: CreatePaymentRequest\nResponse schemas: Payment\nSecurity schemes: apiKey",
+		Fingerprint: "contract-operation-fingerprint",
+	}
+}
+
 func TestDeterministicIntegrationRecipeSeedsSelectExactProductCapabilities(t *testing.T) {
 	t.Parallel()
 	integrationID := "integration-payments-v2"
@@ -102,6 +116,30 @@ func TestDeterministicIntegrationRecipeSeedsSelectExactProductCapabilities(t *te
 	apiSeeds := deterministicIntegrationRecipeSeeds(model.Product{Slug: "acme"}, model.Integration{ID: integrationID, FamilyKey: "payments", VersionKey: "v2"}, apiOnlyEvidence)
 	if len(apiSeeds) != 0 {
 		t.Fatalf("whole API resource was treated as one callable operation: %#v", apiSeeds)
+	}
+}
+
+func TestDeterministicIntegrationRecipeSeedsPreferPublishedContractOperations(t *testing.T) {
+	t.Parallel()
+	integrationID := "integration-payments-v2"
+	operation := productAnalysisContractOperation(integrationID, "contract-r7", "operation-create")
+	evidence := []model.IntegrationEvidence{
+		productAnalysisScope(integrationID),
+		productAnalysisIntegration(integrationID),
+		productAnalysisTool(integrationID, "tool-create-charge"),
+		operation,
+	}
+	seeds := deterministicIntegrationRecipeSeeds(model.Product{Slug: "acme"}, model.Integration{ID: integrationID, FamilyKey: "payments", VersionKey: "v2"}, evidence)
+	if len(seeds) != 1 || !reflect.DeepEqual(seeds[0].CapabilityIDs, []string{operation.ResourceID}) || !reflect.DeepEqual(seeds[0].EvidenceIDs, []string{operation.ResourceID}) {
+		t.Fatalf("published contract operation was not preferred over the reviewed tool fallback: %#v", seeds)
+	}
+	if !integrationRecipeCapabilityViable(operation, integrationID) {
+		t.Fatal("exact contract operation was rejected as a recipe capability")
+	}
+	tampered := operation
+	tampered.Excerpt = strings.Replace(tampered.Excerpt, "API ID: "+integrationID, "API ID: another-api", 1)
+	if integrationRecipeCapabilityViable(tampered, integrationID) {
+		t.Fatal("cross-API contract operation was accepted")
 	}
 }
 

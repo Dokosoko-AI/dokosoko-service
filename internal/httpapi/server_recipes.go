@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +36,10 @@ func (s *Server) recipeCreationError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) recipeUpdateError(w http.ResponseWriter, err error) {
+	if errors.Is(err, platform.ErrRecipeDeletionNotAllowed) {
+		writeError(w, http.StatusUnprocessableEntity, "recipe_delete_not_allowed", err.Error(), nil)
+		return
+	}
 	if errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrCatalogConflict) {
 		writeError(w, http.StatusConflict, "recipe_revision_conflict", "The recipe changed. Reload it and review the latest revision before saving again.", nil)
 		return
@@ -51,13 +57,38 @@ func (value recipeRevisionExpectation) valid() bool {
 }
 
 func recipeAvailableForMCP(recipe model.Recipe, public bool) bool {
-	if recipe.State != "published" || recipe.NeedsAttention || recipe.ContractVersion != model.RecipeContractProductIntegrationV2 {
+	if recipe.State != "published" || recipe.NeedsAttention || (recipe.ContractVersion != model.RecipeContractProductIntegrationV2 && recipe.ContractVersion != model.RecipeContractDeploymentV3) {
 		return false
 	}
-	if recipe.PublishedAt == nil || strings.TrimSpace(recipe.IntegrationID) == "" || strings.TrimSpace(recipe.StableURI) == "" || strings.TrimSpace(recipe.CurrentRevisionID) == "" {
+	apiIDs := recipeAPIIDs(recipe)
+	if recipe.PublishedAt == nil || len(apiIDs) == 0 || strings.TrimSpace(recipe.StableURI) == "" || strings.TrimSpace(recipe.CurrentRevisionID) == "" {
 		return false
+	}
+	if recipe.ContractVersion == model.RecipeContractDeploymentV3 {
+		bindingIDs, valid := recipeRevisionBindingAPIIDs(recipe.CurrentRevision)
+		if recipe.CurrentRevision == nil || recipe.CurrentRevision.SpecVersion != model.RecipeSpecVersion3 || !valid || !slices.Equal(apiIDs, bindingIDs) {
+			return false
+		}
 	}
 	return !public || recipe.Visibility == model.VisibilityPublic
+}
+
+func recipeRevisionBindingAPIIDs(revision *model.RecipeRevision) ([]string, bool) {
+	if revision == nil || len(revision.APIBindings) == 0 {
+		return nil, false
+	}
+	values := make([]string, 0, len(revision.APIBindings))
+	seen := make(map[string]bool, len(revision.APIBindings))
+	for _, binding := range revision.APIBindings {
+		id := strings.TrimSpace(binding.IntegrationID)
+		if id == "" || strings.TrimSpace(binding.IntegrationRevisionID) == "" || strings.TrimSpace(binding.IntegrationManifestHash) == "" || seen[id] {
+			return nil, false
+		}
+		seen[id] = true
+		values = append(values, id)
+	}
+	sort.Strings(values)
+	return values, true
 }
 
 func (s *Server) publishedRecipes(ctx context.Context, productID string, public bool) ([]model.Recipe, error) {
@@ -177,14 +208,22 @@ func (s *Server) recipes(w http.ResponseWriter, r *http.Request, productID strin
 		writeJSON(w, http.StatusOK, map[string]any{"items": values})
 	case http.MethodPost:
 		var input struct {
-			Prompt        string `json:"prompt"`
-			IntegrationID string `json:"integration_id"`
+			Prompt         string   `json:"prompt"`
+			IntegrationID  string   `json:"integration_id"`
+			IntegrationIDs []string `json:"integration_ids"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateRecipeFromPromptFor(r.Context(), productID, input.IntegrationID, input.Prompt, actor(r))
+		if strings.TrimSpace(input.IntegrationID) != "" {
+			if len(input.IntegrationIDs) != 0 {
+				writeError(w, http.StatusBadRequest, "invalid_request", "use integration_ids instead of combining it with integration_id", nil)
+				return
+			}
+			input.IntegrationIDs = []string{input.IntegrationID}
+		}
+		value, err := s.service.CreateRecipeFromPromptWithAPIs(r.Context(), productID, input.IntegrationIDs, input.Prompt, actor(r))
 		if err != nil {
 			s.recipeCreationError(w, err)
 			return
@@ -235,8 +274,19 @@ func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recip
 			return
 		}
 		writeJSON(w, http.StatusOK, value)
+	case http.MethodDelete:
+		var input recipeRevisionExpectation
+		if err := decodeJSON(r.Body, &input); err != nil || !input.valid() {
+			writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
+			return
+		}
+		if err := s.service.DeleteRecipe(r.Context(), productID, recipeID, input.Revision, input.CurrentRevisionID, actor(r)); err != nil {
+			s.recipeUpdateError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
-		w.Header().Set("Allow", "GET, PATCH")
+		w.Header().Set("Allow", "GET, PATCH, DELETE")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
 }

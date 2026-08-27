@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { useState } from "react";
 
 import {
@@ -16,6 +18,7 @@ export function useAdminActivityWorkspace({ currentUser, apiConnected, showToast
   apiConnected: boolean;
   showToast: (message: string) => void;
 }) {
+  const { t } = useTranslation();
   const [reportSubmissions, setReportSubmissions] = useState<APISupportSubmission[]>([]);
   const [reportDetail, setReportDetail] = useState<APISupportSubmission | null>(null);
   const [reportDetailBusy, setReportDetailBusy] = useState(false);
@@ -37,7 +40,7 @@ export function useAdminActivityWorkspace({ currentUser, apiConnected, showToast
     try {
       setReportDetail(await api.supportSubmission(submission.id));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not load this submission.");
+      showToast(error instanceof APIError ? error.message : t("adminWorkflow.couldNotLoadThisSubmission"));
       setReportDetail(null);
     } finally {
       setReportDetailBusy(false);
@@ -51,7 +54,7 @@ export function useAdminActivityWorkspace({ currentUser, apiConnected, showToast
       setRootEnrollment(value);
       setRootCode("");
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not start root enrollment.");
+      showToast(error instanceof APIError ? error.message : t("adminWorkflow.couldNotStartRootEnrollment"));
     } finally {
       setRootBusy(false);
     }
@@ -66,22 +69,22 @@ export function useAdminActivityWorkspace({ currentUser, apiConnected, showToast
       setRootRecoveryCodes(value.recovery_codes);
       setRootEnrollment(null);
       setRootCode("");
-      showToast("MFA-protected root administrator created.");
+      showToast(t("adminWorkflow.mfaProtectedRootAdministratorCreated"));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "MFA verification failed.");
+      showToast(error instanceof APIError ? error.message : t("adminWorkflow.mfaVerificationFailed"));
     } finally {
       setRootBusy(false);
     }
   }
 
   async function revokeRootUser(user: APIUser) {
-    if (!window.confirm(`Revoke root access for ${user.email}? Their active sessions will end immediately.`)) return;
+    if (!window.confirm(t("adminWorkflow.confirmRevokeRoot", { email: user.email }))) return;
     try {
       await api.revokeRootUser(user.id);
       setRootUsers((items) => items.map((item) => item.id === user.id ? { ...item, revoked_at: new Date().toISOString() } : item));
-      showToast(`${user.email} was revoked.`);
+      showToast(t("adminWorkflow.wasRevoked", { email: String(user.email) }));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Could not revoke root administrator.");
+      showToast(error instanceof APIError ? error.message : t("adminWorkflow.couldNotRevokeRootAdministrator"));
     }
   }
 

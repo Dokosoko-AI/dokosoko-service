@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -160,12 +161,12 @@ func recipeGroundingDependenciesForContract(analysis model.IntegrationAnalysis, 
 	normalizedSeed.EvidenceIDs = append([]string(nil), seed.EvidenceIDs...)
 	sort.Strings(normalizedSeed.CapabilityIDs)
 	sort.Strings(normalizedSeed.EvidenceIDs)
-	integrationID, _ := integrationScopeID(analysis.Evidence)
+	integrationIDs := integrationScopeIDs(analysis.Evidence)
 	input, _ := json.Marshal(struct {
 		AuthoringContract string           `json:"authoring_contract"`
-		IntegrationID     string           `json:"integration_id"`
+		IntegrationIDs    []string         `json:"integration_ids"`
 		Seed              model.RecipeSeed `json:"seed"`
-	}{AuthoringContract: authoringContract, IntegrationID: integrationID, Seed: normalizedSeed})
+	}{AuthoringContract: authoringContract, IntegrationIDs: integrationIDs, Seed: normalizedSeed})
 	return append(values, model.RecipeDependency{Kind: recipeAuthoringInputDependencyKind, ResourceID: normalizedSeed.Slug, Version: evidenceFingerprint(recipeAuthoringInputDependencyKind, string(input))})
 }
 
@@ -191,14 +192,18 @@ func recipeDependencySetsMatch(actual, expected []model.RecipeDependency) bool {
 }
 
 func recipeGroundingMatches(recipe model.Recipe, analysis model.IntegrationAnalysis, seed model.RecipeSeed) bool {
-	integrationID, scoped := integrationScopeID(analysis.Evidence)
-	if !scoped || integrationID == "" || recipe.ContractVersion != model.RecipeContractProductIntegrationV2 || recipe.IntegrationID != integrationID || recipe.AnalysisID != analysis.ID || recipe.CurrentRevisionID == "" || recipe.CurrentRevision == nil || recipe.CurrentRevision.SpecVersion != model.RecipeSpecVersion2 || recipe.Title != seed.Title || recipe.Outcome != seed.Outcome || recipe.Audience != "coding_agent" {
+	integrationIDs := integrationScopeIDs(analysis.Evidence)
+	expectedSpecVersion := model.RecipeSpecVersion3
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 {
+		expectedSpecVersion = model.RecipeSpecVersion2
+	}
+	if len(integrationIDs) == 0 || (recipe.ContractVersion != model.RecipeContractDeploymentV3 && recipe.ContractVersion != model.RecipeContractProductIntegrationV2) || !slices.Equal(recipeIntegrationIDs(recipe), integrationIDs) || recipe.AnalysisID != analysis.ID || recipe.CurrentRevisionID == "" || recipe.CurrentRevision == nil || recipe.CurrentRevision.SpecVersion != expectedSpecVersion || recipe.Title != seed.Title || recipe.Outcome != seed.Outcome || recipe.Audience != "coding_agent" {
 		return false
 	}
 	if _, ok := recipeResolveProductSelection(analysis, seed); !ok {
 		return false
 	}
-	return recipeDependencySetsMatch(recipe.Dependencies, recipeGroundingDependencies(analysis, seed))
+	return recipeDependencySetsMatch(recipe.Dependencies, recipeGroundingDependenciesForContract(analysis, seed, recipe.ContractVersion))
 }
 
 // recipeDependenciesMatchCurrentContract prevents the synthetic authoring
@@ -213,9 +218,11 @@ func recipeDependenciesMatchCurrentContract(recipe model.Recipe, spec model.Reci
 		}
 		evidenceIDs = append(evidenceIDs, item.ResourceID)
 	}
-	analysis := model.IntegrationAnalysis{Evidence: append([]model.IntegrationEvidence{
-		{Kind: integrationScopeEvidenceKind, ResourceID: recipe.IntegrationID},
-	}, selectedEvidence...)}
+	scopeEvidence := make([]model.IntegrationEvidence, 0, len(recipeIntegrationIDs(recipe))+len(selectedEvidence))
+	for _, integrationID := range recipeIntegrationIDs(recipe) {
+		scopeEvidence = append(scopeEvidence, model.IntegrationEvidence{Kind: integrationScopeEvidenceKind, ResourceID: integrationID})
+	}
+	analysis := model.IntegrationAnalysis{Evidence: append(scopeEvidence, selectedEvidence...)}
 	seed := model.RecipeSeed{
 		Slug:          recipe.Slug,
 		Title:         recipe.Title,
@@ -225,7 +232,7 @@ func recipeDependenciesMatchCurrentContract(recipe model.Recipe, spec model.Reci
 		SDKID:         spec.SDKID,
 		EvidenceIDs:   evidenceIDs,
 	}
-	return recipeDependencySetsMatch(recipe.Dependencies, recipeGroundingDependencies(analysis, seed))
+	return recipeDependencySetsMatch(recipe.Dependencies, recipeGroundingDependenciesForContract(analysis, seed, recipe.ContractVersion))
 }
 
 func recipeEvidenceField(excerpt, name string) string {
@@ -493,12 +500,16 @@ func selectRecipeReferences(ids []string, allowed []model.RecipeReference) ([]mo
 }
 
 func (s *Service) authorRecipe(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, instruction string) (authoredRecipe, error) {
+	return s.authorRecipeForContract(ctx, product, analysis, seed, instruction, model.RecipeContractDeploymentV3)
+}
+
+func (s *Service) authorRecipeForContract(ctx context.Context, product model.Product, analysis model.IntegrationAnalysis, seed model.RecipeSeed, instruction, contractVersion string) (authoredRecipe, error) {
 	selectedEvidence, selectionOK := recipeResolveProductSelection(analysis, seed)
 	if !selectionOK {
 		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
 	selectedAnalysis := recipeAnalysisWithEvidence(analysis, selectedEvidence)
-	canonicalSpec, err := deterministicRecipeSpec(analysis, seed)
+	canonicalSpec, err := deterministicRecipeSpecForContract(analysis, seed, contractVersion)
 	if err != nil {
 		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
@@ -528,7 +539,7 @@ func (s *Service) authorRecipe(ctx context.Context, product model.Product, analy
 				if referencesOK {
 					spec := canonicalSpec
 					spec.ReferenceIDs = append([]string(nil), response.ReferenceIDs...)
-					recipe := model.Recipe{IntegrationID: spec.IntegrationID, ContractVersion: model.RecipeContractProductIntegrationV2, Title: seed.Title, Outcome: seed.Outcome, Audience: "coding_agent"}
+					recipe := recipeForSpecValidation(spec, contractVersion, seed)
 					findings := validateRecipeSpec(spec, recipe, selectedEvidence)
 					markdown := renderRecipeSpec(spec, references)
 					findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, references, recipeGroundedURLs(selectedAnalysis)...)...)
@@ -544,13 +555,23 @@ func (s *Service) authorRecipe(ctx context.Context, product model.Product, analy
 	// Deterministic output includes no optional reading list. Its factual URLs
 	// are direct, server-owned operation facts and are validated as grounded.
 	markdown := renderRecipeSpec(spec, nil)
-	recipe := model.Recipe{IntegrationID: spec.IntegrationID, ContractVersion: model.RecipeContractProductIntegrationV2, Title: seed.Title, Outcome: seed.Outcome, Audience: "coding_agent"}
+	recipe := recipeForSpecValidation(spec, contractVersion, seed)
 	findings := validateRecipeSpec(spec, recipe, selectedEvidence)
 	findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, nil, recipeGroundedURLs(selectedAnalysis)...)...)
 	if hasRecipeErrors(findings) {
 		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
 	return authoredRecipe{Spec: spec, Markdown: markdown, GeneratedBy: "deterministic"}, nil
+}
+
+func recipeForSpecValidation(spec model.RecipeSpec, contractVersion string, seed model.RecipeSeed) model.Recipe {
+	value := model.Recipe{ContractVersion: contractVersion, Title: seed.Title, Outcome: seed.Outcome, Audience: "coding_agent"}
+	if contractVersion == model.RecipeContractProductIntegrationV2 {
+		value.IntegrationID = spec.IntegrationID
+	} else {
+		value.APIAttachments = append([]model.RecipeAPIAttachment(nil), spec.APIAttachments...)
+	}
+	return value
 }
 
 func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec model.RecipeSpec, markdown string, selectedEvidence []model.IntegrationEvidence, findings []model.RecipeValidationFinding) (string, []model.RecipeValidationFinding) {
@@ -586,7 +607,7 @@ func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec 
 
 var recipeReviewFindingMessages = map[string]string{
 	"delivery_scope":        "The plan includes connector-delivery or platform-administration work instead of only the product integration.",
-	"multiple_capabilities": "The plan appears to cover more than one independently implementable product capability.",
+	"multiple_capabilities": "The selected capabilities do not form one coherent minimal workflow, or include an API the workflow does not require.",
 	"sdk_scope":             "The plan makes an SDK claim without an exact reviewed operation-to-SDK binding.",
 	"non_actionable_step":   "At least one step does not make a tangible change in the consuming project.",
 	"unobservable_check":    "At least one verification check lacks an observable pass condition.",

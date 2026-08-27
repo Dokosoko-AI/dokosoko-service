@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ const (
 	recipeDeveloperAssetDocumentationKind     = "developer_asset_documentation"
 	recipeDeveloperAssetContractKind          = "developer_asset_contract"
 	recipeDeveloperAssetSDKKind               = "developer_asset_sdk"
+	recipeContractOperationKind               = "product_contract_operation"
 
 	maxRecipeDeveloperAssetEvidence       = 12
 	maxRecipeDeveloperAssetGlobalEvidence = 4
@@ -48,6 +50,145 @@ func recipeDeveloperAssetSupportingKind(kind string) bool {
 	default:
 		return false
 	}
+}
+
+func recipeContractOperationResourceID(apiID, revisionID, operationID string) string {
+	return strings.Join([]string{recipeContractOperationKind, apiID, revisionID, operationID}, ":")
+}
+
+func parseRecipeContractOperationResourceID(resourceID string) (apiID, revisionID, operationID string, ok bool) {
+	parts := strings.Split(resourceID, ":")
+	if len(parts) != 4 || parts[0] != recipeContractOperationKind || parts[1] == "" || parts[2] == "" || parts[3] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[2], parts[3], true
+}
+
+func recipeContractOperationSecuritySchemes(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	values := make([]string, 0)
+	collect := func(requirement map[string]any) {
+		for name := range requirement {
+			values = append(values, name)
+		}
+	}
+	switch typed := value.(type) {
+	case []any:
+		for _, rawRequirement := range typed {
+			requirement, ok := rawRequirement.(map[string]any)
+			if !ok {
+				return nil, errors.New("contract operation security requirement must be an object")
+			}
+			collect(requirement)
+		}
+	case map[string]any:
+		// Older normalized candidates used an empty object for an unspecified
+		// operation-level security value. Accept that historical representation,
+		// and conservatively expose any named schemes if it is non-empty.
+		collect(typed)
+	case nil:
+	default:
+		return nil, errors.New("contract operation security must be an object or array")
+	}
+	return canonicalStringSet(values), nil
+}
+
+func recipeEvidenceStringList(values []string) string {
+	clean := canonicalStringSet(values)
+	for index := range clean {
+		clean[index] = evidenceText(clean[index])
+	}
+	return strings.Join(canonicalStringSet(clean), ", ")
+}
+
+func recipeContractOperationMethodValid(method string) bool {
+	switch method {
+	case "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE":
+		return true
+	default:
+		return false
+	}
+}
+
+// recipeContractOperationEvidence derives a callable recipe capability from
+// the immutable contract graph, not from retrieved prose. Search determines
+// relevance only; every field which can reach a recipe is reconstructed and
+// verified against the exact API publication, revision, candidate, and
+// operation records.
+func recipeContractOperationEvidence(apiVisibility model.Visibility, publication model.APIDeveloperAssetPublication, asset model.APIPublicationContractAsset, revision model.APIContractRevision, candidate model.APIContractCandidate, operation model.APIContractOperation) (model.IntegrationEvidence, error) {
+	method := strings.ToUpper(strings.TrimSpace(operation.Method))
+	pathTemplate := strings.TrimSpace(operation.PathTemplate)
+	if publication.ID == "" || publication.DeploymentID == "" || publication.APIID == "" || publication.APIRevisionID == "" ||
+		asset.APIContractRevisionID != revision.ID || asset.ContentHash != revision.ContentHash || !asset.MatchesRevisionIdentity(revision) ||
+		revision.DeploymentID != publication.DeploymentID || revision.APIContractCandidateID != candidate.ID ||
+		candidate.DeploymentID != publication.DeploymentID || candidate.APIContractID != revision.APIContractID || candidate.ContentHash != revision.ContentHash ||
+		operation.ID == "" || operation.APIContractCandidateID != candidate.ID || strings.TrimSpace(operation.OperationKey) == "" ||
+		!recipeContractOperationMethodValid(method) || pathTemplate == "" || !strings.HasPrefix(pathTemplate, "/") || strings.ContainsAny(pathTemplate, " \t\r\n") ||
+		!validDeveloperAssetContentHash(publication.SnapshotHash) || !validDeveloperAssetContentHash(revision.ContentHash) || !validDeveloperAssetContentHash(operation.ContentHash) {
+		return model.IntegrationEvidence{}, errors.New("contract operation is not an exact callable API publication fact")
+	}
+	security, err := compactDeveloperAssetJSON(operation.Security)
+	if err != nil {
+		return model.IntegrationEvidence{}, err
+	}
+	securitySchemes, err := recipeContractOperationSecuritySchemes(operation.Security)
+	if err != nil {
+		return model.IntegrationEvidence{}, err
+	}
+	visibility, err := developerAssetVisibility(apiVisibility, asset.Visibility, revision.Visibility, candidate.Visibility)
+	if err != nil {
+		return model.IntegrationEvidence{}, err
+	}
+	operationKey := evidenceText(operation.OperationKey)
+	operationID := evidenceText(operation.OperationID)
+	if operationKey == "" || operationKey != operation.OperationKey || strings.ContainsAny(operation.OperationKey, "\r\n") {
+		return model.IntegrationEvidence{}, errors.New("contract operation key is not canonical")
+	}
+	requestSchemas := recipeEvidenceStringList(operation.RequestSchemaRefs)
+	responseSchemas := recipeEvidenceStringList(operation.ResponseSchemaRefs)
+	securitySchemesText := recipeEvidenceStringList(securitySchemes)
+	resourceID := recipeContractOperationResourceID(publication.APIID, revision.ID, operation.ID)
+	version := strings.Join([]string{revision.ID, revision.ContentHash, operation.ContentHash}, "@")
+	fingerprint := evidenceFingerprint(
+		recipeContractOperationKind, resourceID, publication.APIID, revision.APIContractID,
+		revision.ID, revision.ContentHash, candidate.ID, operation.ID, operation.OperationKey,
+		operation.OperationID, method, pathTemplate, requestSchemas, responseSchemas, security,
+		string(visibility), operation.ContentHash,
+	)
+	lines := []string{
+		"API publication ID: " + evidenceText(publication.ID),
+		"API publication snapshot hash: " + publication.SnapshotHash,
+		"API ID: " + evidenceText(publication.APIID),
+		"API contract revision ID: " + evidenceText(revision.ID),
+		"API contract revision content hash: " + revision.ContentHash,
+		"API contract candidate ID: " + evidenceText(candidate.ID),
+		"Operation record ID: " + evidenceText(operation.ID),
+		"Operation key: " + operationKey,
+		"Method: " + method,
+		"Path template: " + pathTemplate,
+		"Operation content hash: " + operation.ContentHash,
+	}
+	for _, value := range []struct{ label, text string }{
+		{"Operation ID", operationID},
+		{"Request schemas", requestSchemas},
+		{"Response schemas", responseSchemas},
+		{"Security schemes", securitySchemesText},
+	} {
+		if value.text != "" {
+			lines = append(lines, value.label+": "+value.text)
+		}
+	}
+	label := truncateRunes(evidenceText(firstNonEmpty(operation.Summary, operation.OperationID, operation.OperationKey, method+" "+pathTemplate)), 160)
+	return model.IntegrationEvidence{
+		Kind: recipeContractOperationKind, ResourceID: resourceID, Label: label,
+		Excerpt: strings.Join(lines, "\n"), Version: version, Visibility: visibility, Fingerprint: fingerprint,
+	}, nil
 }
 
 func recipeDeveloperAssetEvidenceKind(assetKind string) string {
@@ -266,6 +407,12 @@ func (s *Service) retrieveRecipeDeveloperAssetScope(ctx context.Context, integra
 	result := make([]model.IntegrationEvidence, 0, min(limit, len(values)))
 	runes := 0
 	for _, value := range values {
+		// Callable contract operations are reconstructed separately from the
+		// immutable contract graph. Their retrieved prose is useful for ranking,
+		// but is never accepted as the operation contract itself.
+		if value.Unit.Kind == "contract_operation" {
+			continue
+		}
 		var provenance recipeDeveloperAssetUnitContext
 		var exact bool
 		if scopeKind == "global_documentation" {
@@ -285,6 +432,99 @@ func (s *Service) retrieveRecipeDeveloperAssetScope(ctx context.Context, integra
 			break
 		}
 		result = append(result, evidence)
+		runes += itemRunes
+	}
+	return result, nil
+}
+
+func (s *Service) retrieveRecipeContractOperationEvidence(ctx context.Context, integration model.Integration, scope recipeDeveloperAssetScope, query string) ([]model.IntegrationEvidence, error) {
+	if scope.api == nil {
+		return nil, nil
+	}
+	query = truncateRunes(strings.Join(strings.Fields(query), " "), 500)
+	if query == "" {
+		query = firstNonEmpty(integration.DisplayName, integration.FamilyKey, integration.ID)
+	}
+	if _, err := s.BuildDeveloperAssetSearchIndex(ctx, "api", scope.api.ID); err != nil {
+		return nil, err
+	}
+	values, err := s.store.RetrieveDeveloperAssetKnowledge(ctx, store.DeveloperAssetKnowledgeQuery{
+		DeploymentID: integration.DeploymentID, APIDeveloperAssetPublicationID: scope.api.ID, APIID: integration.ID,
+		BuilderVersion: DeveloperAssetIndexBuilderVersion, RetrievalProfileVersion: DeveloperAssetRetrievalProfileVersion,
+		AssetKinds: []string{"contract"}, QueryText: query, QueryEmbedding: localDeveloperAssetEmbedding(query), Limit: 1000,
+	})
+	if err != nil {
+		return nil, err
+	}
+	recipeDeveloperAssetSortResults(query, values)
+	assets := make(map[string]model.APIPublicationContractAsset, len(scope.api.Contracts))
+	for _, asset := range scope.api.Contracts {
+		assets[asset.APIContractRevisionID] = asset
+	}
+	type contractRecord struct {
+		revision  model.APIContractRevision
+		candidate store.APIContractCandidateRecord
+	}
+	records := make(map[string]contractRecord, len(scope.api.Contracts))
+	result := make([]model.IntegrationEvidence, 0, min(maxRecipeDeveloperAssetEvidence, len(values)))
+	seen := make(map[string]bool)
+	runes := 0
+	for _, value := range values {
+		unit := value.Unit
+		if unit.Kind != "contract_operation" {
+			continue
+		}
+		asset, attached := assets[unit.SourcePublicationID]
+		if !attached || unit.SourcePublicationKind != "contract" || unit.SourceEntityID == "" {
+			return nil, errors.New("retrieval returned a contract operation outside the selected API publication")
+		}
+		record, loaded := records[unit.SourcePublicationID]
+		if !loaded {
+			revision, lookupErr := s.store.APIContractRevision(ctx, integration.DeploymentID, unit.SourcePublicationID)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			candidate, lookupErr := s.store.APIContractCandidate(ctx, integration.DeploymentID, revision.APIContractCandidateID)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			record = contractRecord{revision: revision, candidate: candidate}
+			records[unit.SourcePublicationID] = record
+		}
+		var operation *model.APIContractOperation
+		for index := range record.candidate.Operations {
+			if record.candidate.Operations[index].ID == unit.SourceEntityID {
+				operation = &record.candidate.Operations[index]
+				break
+			}
+		}
+		if operation == nil || unit.ContentHash != operation.ContentHash {
+			return nil, errors.New("retrieved contract operation does not match its exact candidate")
+		}
+		citation := developerAssetJSONStrings(unit.Citation)
+		if citation == nil || citation["index_publication_kind"] != "api" || citation["index_publication_id"] != scope.api.ID ||
+			citation["publication_id"] != record.revision.ID || citation["api_contract_revision_id"] != record.revision.ID ||
+			citation["api_contract_candidate_id"] != record.candidate.Candidate.ID || citation["api_contract_operation_id"] != operation.ID ||
+			citation["operation_key"] != operation.OperationKey || strings.ToUpper(citation["method"]) != strings.ToUpper(operation.Method) ||
+			citation["path_template"] != operation.PathTemplate || citation["content_hash"] != operation.ContentHash {
+			return nil, errors.New("retrieved contract operation citation is inexact")
+		}
+		evidence, evidenceErr := recipeContractOperationEvidence(integration.Visibility, *scope.api, asset, record.revision, record.candidate.Candidate, *operation)
+		if evidenceErr != nil {
+			return nil, evidenceErr
+		}
+		if unit.Visibility != evidence.Visibility {
+			return nil, errors.New("retrieved contract operation visibility is inexact")
+		}
+		itemRunes := len([]rune(evidence.Excerpt))
+		if seen[evidence.ResourceID] {
+			return nil, errors.New("retrieval returned a duplicate contract operation")
+		}
+		if len(result) == maxRecipeDeveloperAssetEvidence || runes+itemRunes > maxRecipeDeveloperAssetEvidenceRunes {
+			break
+		}
+		result = append(result, evidence)
+		seen[evidence.ResourceID] = true
 		runes += itemRunes
 	}
 	return result, nil
@@ -416,10 +656,15 @@ func (s *Service) scopedRecipeDeveloperAssetEvidence(ctx context.Context, integr
 		return nil, err
 	}
 	values := recipeDeveloperAssetPublicationEvidence(scope)
+	operations, err := s.retrieveRecipeContractOperationEvidence(ctx, integration, scope, query)
+	if err != nil {
+		return nil, err
+	}
 	retrieved, err := s.retrieveRecipeDeveloperAssetEvidence(ctx, integration, scope, query)
 	if err != nil {
 		return nil, err
 	}
+	values = append(values, operations...)
 	return append(values, retrieved...), nil
 }
 
@@ -498,6 +743,39 @@ func selectedRecipeDeveloperAssetEvidence(evidence []model.IntegrationEvidence, 
 	return selected
 }
 
+func selectedRecipeContractOperationEvidence(evidence []model.IntegrationEvidence, evidenceIDs []string) []model.IntegrationEvidence {
+	selectedIDs := make(map[string]bool, len(evidenceIDs))
+	for _, evidenceID := range evidenceIDs {
+		selectedIDs[evidenceID] = true
+	}
+	selected := make([]model.IntegrationEvidence, 0, len(selectedIDs))
+	for _, item := range evidence {
+		if item.Kind == recipeContractOperationKind && selectedIDs[item.ResourceID] {
+			selected = append(selected, item)
+		}
+	}
+	return selected
+}
+
+func prioritizeRecipeContractOperationEvidence(fresh, priority []model.IntegrationEvidence) []model.IntegrationEvidence {
+	result := make([]model.IntegrationEvidence, 0, maxRecipeDeveloperAssetEvidence)
+	seen := make(map[string]bool)
+	runes := 0
+	for _, item := range append(priority, fresh...) {
+		if item.Kind != recipeContractOperationKind || seen[item.ResourceID] {
+			continue
+		}
+		itemRunes := len([]rune(item.Excerpt))
+		if len(result) == maxRecipeDeveloperAssetEvidence || runes+itemRunes > maxRecipeDeveloperAssetEvidenceRunes {
+			continue
+		}
+		result = append(result, item)
+		seen[item.ResourceID] = true
+		runes += itemRunes
+	}
+	return result
+}
+
 // prioritizeRecipeDeveloperAssetEvidence keeps explicit citations before
 // filling the remainder of the same small count and context budget with fresh
 // retrieval results.
@@ -538,6 +816,10 @@ func (s *Service) relevantRecipeDeveloperAssetAnalysis(ctx context.Context, prod
 	if err != nil {
 		return analysis, err
 	}
+	operations, err := s.retrieveRecipeContractOperationEvidence(ctx, integration, scope, outcome)
+	if err != nil {
+		return analysis, err
+	}
 	retrieved, err := s.retrieveRecipeDeveloperAssetEvidence(ctx, integration, scope, outcome)
 	if err != nil {
 		return analysis, err
@@ -552,12 +834,15 @@ func (s *Service) relevantRecipeDeveloperAssetAnalysis(ctx context.Context, prod
 		selectedIDs = append(selectedIDs, recipe.EvidenceIDs...)
 	}
 	selected := selectedRecipeDeveloperAssetEvidence(analysis.Evidence, selectedIDs)
-	values := make([]model.IntegrationEvidence, 0, len(analysis.Evidence)+len(retrieved))
+	selectedOperations := selectedRecipeContractOperationEvidence(analysis.Evidence, selectedIDs)
+	operations = prioritizeRecipeContractOperationEvidence(operations, selectedOperations)
+	values := make([]model.IntegrationEvidence, 0, len(analysis.Evidence)+len(operations)+len(retrieved))
 	for _, item := range analysis.Evidence {
-		if !recipeDeveloperAssetSupportingKind(item.Kind) {
+		if !recipeDeveloperAssetSupportingKind(item.Kind) && item.Kind != recipeContractOperationKind {
 			values = append(values, item)
 		}
 	}
+	values = append(values, operations...)
 	values = append(values, retrieved...)
 	analysis.Evidence = prioritizeRecipeDeveloperAssetEvidence(values, selected)
 	return analysis, nil
@@ -587,6 +872,47 @@ func (s *Service) restoreRecipeDeveloperAssetDependencies(ctx context.Context, i
 		existing[item.ResourceID] = true
 	}
 	for _, dependency := range dependencies {
+		if dependency.Kind != recipeContractOperationKind || existing[dependency.ResourceID] {
+			continue
+		}
+		apiID, revisionID, operationID, ok := parseRecipeContractOperationResourceID(dependency.ResourceID)
+		if !ok || apiID != integration.ID {
+			continue
+		}
+		var asset *model.APIPublicationContractAsset
+		for index := range scope.api.Contracts {
+			if scope.api.Contracts[index].APIContractRevisionID == revisionID {
+				asset = &scope.api.Contracts[index]
+				break
+			}
+		}
+		if asset == nil {
+			continue
+		}
+		revision, lookupErr := s.store.APIContractRevision(ctx, integration.DeploymentID, revisionID)
+		if lookupErr != nil {
+			return evidence, lookupErr
+		}
+		candidate, lookupErr := s.store.APIContractCandidate(ctx, integration.DeploymentID, revision.APIContractCandidateID)
+		if lookupErr != nil {
+			return evidence, lookupErr
+		}
+		for _, operation := range candidate.Operations {
+			if operation.ID != operationID {
+				continue
+			}
+			item, buildErr := recipeContractOperationEvidence(integration.Visibility, *scope.api, *asset, revision, candidate.Candidate, operation)
+			if buildErr != nil {
+				return evidence, buildErr
+			}
+			if item.Fingerprint == dependency.Version {
+				evidence = append(evidence, item)
+				existing[item.ResourceID] = true
+			}
+			break
+		}
+	}
+	for _, dependency := range dependencies {
 		if !recipeDeveloperAssetSupportingKind(dependency.Kind) || existing[dependency.ResourceID] {
 			continue
 		}
@@ -610,6 +936,57 @@ func (s *Service) restoreRecipeDeveloperAssetDependencies(ctx context.Context, i
 }
 
 func (s *Service) validatePublicRecipeDeveloperAssetEvidence(ctx context.Context, productID string, recipe model.Recipe, item model.IntegrationEvidence) error {
+	if item.Kind == recipeContractOperationKind {
+		if item.Visibility != model.VisibilityPublic {
+			return errPublicRecipeEvidence
+		}
+		apiID, revisionID, operationID, ok := parseRecipeContractOperationResourceID(item.ResourceID)
+		if !ok || !slices.Contains(recipeIntegrationIDs(recipe), apiID) {
+			return errPublicRecipeEvidence
+		}
+		publicationID := recipeEvidenceField(item.Excerpt, "API publication ID")
+		publication, err := s.store.APIDeveloperAssetPublication(ctx, productID, publicationID)
+		if err != nil {
+			return err
+		}
+		integration, err := s.store.Integration(ctx, productID, apiID)
+		if err != nil {
+			return err
+		}
+		var asset *model.APIPublicationContractAsset
+		for index := range publication.Contracts {
+			if publication.Contracts[index].APIContractRevisionID == revisionID {
+				asset = &publication.Contracts[index]
+				break
+			}
+		}
+		if publication.APIID != apiID || asset == nil {
+			return errPublicRecipeEvidence
+		}
+		revision, err := s.store.APIContractRevision(ctx, productID, revisionID)
+		if err != nil {
+			return err
+		}
+		candidate, err := s.store.APIContractCandidate(ctx, productID, revision.APIContractCandidateID)
+		if err != nil {
+			return err
+		}
+		for _, operation := range candidate.Operations {
+			if operation.ID != operationID {
+				continue
+			}
+			expected, buildErr := recipeContractOperationEvidence(integration.Visibility, publication, *asset, revision, candidate.Candidate, operation)
+			if buildErr != nil {
+				return buildErr
+			}
+			if expected.Kind != item.Kind || expected.ResourceID != item.ResourceID || expected.Label != item.Label || expected.Excerpt != item.Excerpt ||
+				expected.Version != item.Version || expected.Visibility != item.Visibility || expected.Fingerprint != item.Fingerprint {
+				return errPublicRecipeEvidence
+			}
+			return nil
+		}
+		return errPublicRecipeEvidence
+	}
 	if !recipeDeveloperAssetSupportingKind(item.Kind) {
 		return nil
 	}
@@ -656,7 +1033,7 @@ func (s *Service) validatePublicRecipeDeveloperAssetEvidence(ctx context.Context
 		if err != nil {
 			return err
 		}
-		if publication.APIID != recipe.IntegrationID || publication.SnapshotHash != indexHash {
+		if !slices.Contains(recipeIntegrationIDs(recipe), publication.APIID) || publication.SnapshotHash != indexHash {
 			return errPublicRecipeEvidence
 		}
 		integration, err := s.store.Integration(ctx, productID, publication.APIID)

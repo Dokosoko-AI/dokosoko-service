@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { CheckCircle2, ChevronRight, TriangleAlert, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "../core/control";
@@ -49,20 +51,21 @@ export function IntegrationQuickStart({
   advanced: ReactNode;
   onNavigate: (path: string) => void;
 }) {
+  const { t } = useTranslation();
   const readyCount = steps.filter((step) => step.ready).length;
   const nextStep = steps.findIndex((step) => !step.ready);
-  const statusLabel = status === "checking" ? "Checking status" : status === "ready" ? "Ready to publish" : status === "published" ? "Published" : "Needs setup";
+  const statusLabel = status === "checking" ? t("integrationQuickStart.checkingStatus") : status === "ready" ? t("integrationQuickStart.readyToPublish") : status === "published" ? t("integrationQuickStart.published") : t("integrationQuickStart.needsSetup");
   const lifecycleColor = lifecycle === "active" ? "green" : lifecycle === "deprecated" ? "amber" : "zinc";
 
   return <div className="integration-tab-content integration-quick-start">
     <div className="api-status-bar">
       <span><span className={`status-dot${status === "checking" ? " checking" : ""}`} /><strong>{statusLabel}</strong><small>{statusDetail}</small></span>
-      <Badge color={lifecycleColor}>{lifecycle}</Badge>
+      <Badge color={lifecycleColor}>{lifecycle === "active" ? t("integrationQuickStart.active") : lifecycle === "deprecated" ? t("integrationQuickStart.deprecated") : lifecycle === "archived" ? t("integrationQuickStart.archived") : lifecycle}</Badge>
     </div>
     <section className="panel onboarding-checklist">
       <PanelHeader
-        title="Get your API ready"
-        description="Follow the shortest path to a testable, publishable API. Each step opens the exact place to finish it."
+        title={t("integrationQuickStart.getYourAPIReady")}
+        description={t("integrationQuickStart.followTheShortestPathToATestablePublishableAPI")}
         action={<Badge color={readyCount === steps.length ? "green" : "violet"}>{readyCount}/{steps.length}</Badge>}
       />
       {steps.map((step, index) => {
@@ -70,19 +73,19 @@ export function IntegrationQuickStart({
         return <WorkspaceLink key={step.label} path={step.path} onNavigate={onNavigate} className={`integration-health-check${isNext ? " next" : ""}`}>
           <span className={`health-icon ${step.ready ? "ready" : ""}`}>{step.ready ? <CheckCircle2 /> : <span className="step-number">{index + 1}</span>}</span>
           <span><strong>{step.label}</strong><small>{step.detail}</small></span>
-          <Badge color={step.ready ? "green" : isNext ? "violet" : "zinc"}>{step.ready ? "Ready" : isNext ? "Next" : "Setup"}</Badge>
+          <Badge color={step.ready ? "green" : isNext ? "violet" : "zinc"}>{step.ready ? t("integrationQuickStart.ready") : isNext ? t("integrationQuickStart.next") : t("integrationQuickStart.setup")}</Badge>
           <ChevronRight />
         </WorkspaceLink>;
       })}
     </section>
     <details className="panel advanced-details quick-start-advanced">
-      <summary>Optional setup and API details</summary>
+      <summary>{t("integrationQuickStart.optionalSetupAndAPIDetails")}</summary>
       <div className="advanced-details-body">
         {validations.length > 0 && <section className="panel quick-start-validation-list">
-          <PanelHeader title="Publication details" description="Additional findings from the current candidate snapshot." />
+          <PanelHeader title={t("integrationQuickStart.publicationDetails")} description={t("integrationQuickStart.additionalFindingsFromTheCurrentCandidateSnapshot")} />
           {validations.map((validation) => <WorkspaceLink key={validation.code} path={validation.path} onNavigate={onNavigate} className={`publish-validation ${validation.level}`}>
             <span>{validation.level === "error" ? <XCircle /> : <TriangleAlert />}</span>
-            <span><strong>{validation.level === "error" ? "Resolve before publishing" : "Review before publishing"}</strong><small>{validation.message}</small></span>
+            <span><strong>{validation.level === "error" ? t("integrationQuickStart.resolveBeforePublishing") : t("integrationQuickStart.reviewBeforePublishing")}</strong><small>{validation.message}</small></span>
             <ChevronRight />
           </WorkspaceLink>)}
         </section>}

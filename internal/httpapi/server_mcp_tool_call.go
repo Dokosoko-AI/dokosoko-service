@@ -21,7 +21,7 @@ type publishedRecipeSummary struct {
 	Slug            string     `json:"slug"`
 	Title           string     `json:"title"`
 	Outcome         string     `json:"outcome"`
-	IntegrationID   string     `json:"integration_id"`
+	IntegrationIDs  []string   `json:"integration_ids"`
 	ContractVersion string     `json:"contract_version"`
 	RevisionID      string     `json:"revision_id"`
 	PublishedAt     *time.Time `json:"published_at"`
@@ -35,11 +35,28 @@ func recipeSummary(value model.Recipe) publishedRecipeSummary {
 		Slug:            value.Slug,
 		Title:           value.Title,
 		Outcome:         value.Outcome,
-		IntegrationID:   value.IntegrationID,
+		IntegrationIDs:  recipeAPIIDs(value),
 		ContractVersion: value.ContractVersion,
 		RevisionID:      value.CurrentRevisionID,
 		PublishedAt:     value.PublishedAt,
 	}
+}
+
+func recipeAPIIDs(value model.Recipe) []string {
+	if value.ContractVersion == model.RecipeContractProductIntegrationV2 && strings.TrimSpace(value.IntegrationID) != "" {
+		return []string{strings.TrimSpace(value.IntegrationID)}
+	}
+	values := make([]string, 0, len(value.APIAttachments))
+	seen := make(map[string]bool)
+	for _, attachment := range value.APIAttachments {
+		id := strings.TrimSpace(attachment.IntegrationID)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			values = append(values, id)
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 func sortedRecipeSummaries(values []model.Recipe) []publishedRecipeSummary {
@@ -74,12 +91,12 @@ func recipeSummaryOutputSchema() map[string]any {
 			"slug":             map[string]any{"type": "string"},
 			"title":            map[string]any{"type": "string"},
 			"outcome":          map[string]any{"type": "string"},
-			"integration_id":   map[string]any{"type": "string"},
-			"contract_version": map[string]any{"type": "string", "const": model.RecipeContractProductIntegrationV2},
+			"integration_ids":  map[string]any{"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": map[string]any{"type": "string"}},
+			"contract_version": map[string]any{"type": "string", "enum": []string{model.RecipeContractProductIntegrationV2, model.RecipeContractDeploymentV3}},
 			"revision_id":      map[string]any{"type": "string"},
 			"published_at":     map[string]any{"type": "string", "format": "date-time"},
 		},
-		"required": []string{"uri", "slug", "title", "outcome", "integration_id", "contract_version", "revision_id", "published_at"},
+		"required": []string{"uri", "slug", "title", "outcome", "integration_ids", "contract_version", "revision_id", "published_at"},
 	}
 }
 
@@ -100,12 +117,12 @@ func recipePlanOutputSchema() map[string]any {
 			"recipe_uri":       map[string]any{"type": "string"},
 			"title":            map[string]any{"type": "string"},
 			"outcome":          map[string]any{"type": "string"},
-			"integration_id":   map[string]any{"type": "string"},
-			"contract_version": map[string]any{"type": "string", "const": model.RecipeContractProductIntegrationV2},
+			"integration_ids":  map[string]any{"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": map[string]any{"type": "string"}},
+			"contract_version": map[string]any{"type": "string", "enum": []string{model.RecipeContractProductIntegrationV2, model.RecipeContractDeploymentV3}},
 			"revision_id":      map[string]any{"type": "string"},
 			"next_step":        map[string]any{"type": "string"},
 		},
-		"required": []string{"recipe_uri", "title", "outcome", "integration_id", "contract_version", "revision_id", "next_step"},
+		"required": []string{"recipe_uri", "title", "outcome", "integration_ids", "contract_version", "revision_id", "next_step"},
 	}
 }
 
@@ -115,15 +132,15 @@ func recipeCheckOutputSchema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"recipe_uri":       map[string]any{"type": "string"},
-			"integration_id":   map[string]any{"type": "string"},
-			"contract_version": map[string]any{"type": "string", "const": model.RecipeContractProductIntegrationV2},
+			"integration_ids":  map[string]any{"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": map[string]any{"type": "string"}},
+			"contract_version": map[string]any{"type": "string", "enum": []string{model.RecipeContractProductIntegrationV2, model.RecipeContractDeploymentV3}},
 			"state":            map[string]any{"type": "string", "const": "published"},
 			"current":          map[string]any{"type": "boolean", "const": true},
 			"needs_attention":  map[string]any{"type": "boolean", "const": false},
 			"revision_id":      map[string]any{"type": "string"},
 			"published_at":     map[string]any{"type": "string", "format": "date-time"},
 		},
-		"required": []string{"recipe_uri", "integration_id", "contract_version", "state", "current", "needs_attention", "revision_id", "published_at"},
+		"required": []string{"recipe_uri", "integration_ids", "contract_version", "state", "current", "needs_attention", "revision_id", "published_at"},
 	}
 }
 
@@ -243,7 +260,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCErrorData(w, request.ID, -32004, "No published recipe exactly matches this outcome", map[string]any{"reason": "no_exact_match", "candidate_count": len(values), "candidates_truncated": truncated, "candidates": candidates})
 			return
 		}
-		writeToolResult(w, request.ID, map[string]any{"recipe_uri": selected.StableURI, "title": selected.Title, "outcome": selected.Outcome, "integration_id": selected.IntegrationID, "contract_version": selected.ContractVersion, "revision_id": selected.CurrentRevisionID, "next_step": "Read the recipe resource, then implement and verify its minimal product-integration steps. MCP is already connected."})
+		writeToolResult(w, request.ID, map[string]any{"recipe_uri": selected.StableURI, "title": selected.Title, "outcome": selected.Outcome, "integration_ids": recipeAPIIDs(*selected), "contract_version": selected.ContractVersion, "revision_id": selected.CurrentRevisionID, "next_step": "Read the recipe resource, then implement and verify its minimal product-integration steps. MCP is already connected."})
 	case "integration.check":
 		recipeURI, valid := exactRecipeToolStringArgument(params.Arguments, "recipe_uri")
 		if !valid {
@@ -255,7 +272,7 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 			writeRPCError(w, request.ID, -32004, "Recipe resource not found")
 			return
 		}
-		writeToolResult(w, request.ID, map[string]any{"recipe_uri": recipe.StableURI, "integration_id": recipe.IntegrationID, "contract_version": recipe.ContractVersion, "state": recipe.State, "current": recipe.State == "published" && !recipe.NeedsAttention, "needs_attention": recipe.NeedsAttention, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt})
+		writeToolResult(w, request.ID, map[string]any{"recipe_uri": recipe.StableURI, "integration_ids": recipeAPIIDs(recipe), "contract_version": recipe.ContractVersion, "state": recipe.State, "current": recipe.State == "published" && !recipe.NeedsAttention, "needs_attention": recipe.NeedsAttention, "revision_id": recipe.CurrentRevisionID, "published_at": recipe.PublishedAt})
 	case "deployment.get_manifest", "product.get_manifest":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Deployment discovery failed")

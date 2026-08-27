@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,7 +16,8 @@ func recipeProductEvidence(values []model.IntegrationEvidence) []model.Integrati
 	for _, item := range values {
 		switch item.Kind {
 		case "integration", "resource_set", "source_publication", "sdk", "tool",
-			recipeDeveloperAssetDocumentationKind, recipeDeveloperAssetContractKind, recipeDeveloperAssetSDKKind:
+			recipeDeveloperAssetDocumentationKind, recipeDeveloperAssetContractKind, recipeDeveloperAssetSDKKind,
+			recipeContractOperationKind:
 			result = append(result, item)
 		}
 	}
@@ -26,14 +28,18 @@ func recipeCapabilityEvidence(item model.IntegrationEvidence) bool {
 	// A recipe needs one operation-shaped contract. A whole API resource set is
 	// useful analysis context, but it does not identify one callable operation
 	// and therefore cannot safely support implementation prose by itself.
-	return item.Kind == "tool"
+	return item.Kind == "tool" || item.Kind == recipeContractOperationKind
 }
 
 func recipeProductCapabilityIDs(values []model.IntegrationEvidence) []string {
 	result := make([]string, 0)
 	seen := make(map[string]bool)
+	contractOperationsAvailable := false
 	for _, item := range recipeProductEvidence(values) {
-		if recipeCapabilityEvidence(item) && item.ResourceID != "" && !seen[item.ResourceID] {
+		contractOperationsAvailable = contractOperationsAvailable || item.Kind == recipeContractOperationKind
+	}
+	for _, item := range recipeProductEvidence(values) {
+		if recipeCapabilityEvidence(item) && (!contractOperationsAvailable || item.Kind == recipeContractOperationKind) && item.ResourceID != "" && !seen[item.ResourceID] {
 			result = append(result, item.ResourceID)
 			seen[item.ResourceID] = true
 		}
@@ -84,7 +90,7 @@ func recipeResolveProductSelection(analysis model.IntegrationAnalysis, seed mode
 		}
 		capabilitySet[id] = true
 	}
-	if len(capabilitySet) != 1 {
+	if len(capabilitySet) < 1 || len(capabilitySet) > 4 {
 		return nil, false
 	}
 	if seed.SDKID != "" {
@@ -94,6 +100,21 @@ func recipeResolveProductSelection(analysis model.IntegrationAnalysis, seed mode
 		}
 	}
 	return selected, true
+}
+
+func recipeCapabilityIntegrationID(item model.IntegrationEvidence) string {
+	switch item.Kind {
+	case recipeContractOperationKind:
+		integrationID, _, _, ok := parseRecipeContractOperationResourceID(item.ResourceID)
+		if ok && recipeEvidenceField(item.Excerpt, "API ID") == integrationID {
+			return integrationID
+		}
+	case "tool":
+		if recipeEvidenceField(item.Excerpt, "Scope") == model.ToolScopeAPI {
+			return strings.TrimSpace(recipeEvidenceField(item.Excerpt, "Owner integration ID"))
+		}
+	}
+	return ""
 }
 
 func recipeSelectedCapabilitySupportsMCP(seed model.RecipeSeed, allowed map[string]model.IntegrationEvidence) bool {
@@ -219,19 +240,37 @@ func recipeInstructionTextValid(item model.RecipeInstruction, allowed map[string
 }
 
 func deterministicRecipeSpec(analysis model.IntegrationAnalysis, seed model.RecipeSeed) (model.RecipeSpec, error) {
+	return deterministicRecipeSpecForContract(analysis, seed, model.RecipeContractProductIntegrationV2)
+}
+
+func deterministicRecipeSpecForContract(analysis model.IntegrationAnalysis, seed model.RecipeSeed, contractVersion string) (model.RecipeSpec, error) {
 	selected, ok := recipeResolveProductSelection(analysis, seed)
-	if !ok || len(seed.CapabilityIDs) != 1 {
+	if !ok || len(seed.CapabilityIDs) < 1 || len(seed.CapabilityIDs) > 4 {
 		return model.RecipeSpec{}, ErrRecipeNeedsInput
 	}
 	allowed, ambiguous := recipeUniqueEvidenceByID(selected)
 	for id := range ambiguous {
 		delete(allowed, id)
 	}
-	integrationID, scoped := integrationScopeID(analysis.Evidence)
-	if !scoped || integrationID == "" {
+	integrationIDs := integrationScopeIDs(analysis.Evidence)
+	if len(integrationIDs) == 0 {
 		return model.RecipeSpec{}, ErrRecipeNeedsInput
 	}
-	spec := model.RecipeSpec{SchemaVersion: model.RecipeSpecVersion2, IntegrationID: integrationID, Title: seed.Title, Outcome: seed.Outcome, SDKID: seed.SDKID, CapabilityIDs: append([]string(nil), seed.CapabilityIDs...)}
+	attached := make(map[string]bool, len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		attached[integrationID] = true
+	}
+	spec := model.RecipeSpec{SchemaVersion: model.RecipeSpecVersion3, APIAttachments: recipeAPIAttachments(integrationIDs), Title: seed.Title, Outcome: seed.Outcome, SDKID: seed.SDKID, CapabilityIDs: append([]string(nil), seed.CapabilityIDs...)}
+	if contractVersion == model.RecipeContractProductIntegrationV2 {
+		if len(integrationIDs) != 1 || len(seed.CapabilityIDs) != 1 {
+			return model.RecipeSpec{}, ErrRecipeNeedsInput
+		}
+		spec.SchemaVersion = model.RecipeSpecVersion2
+		spec.IntegrationID = integrationIDs[0]
+		spec.APIAttachments = nil
+	} else if contractVersion != model.RecipeContractDeploymentV3 {
+		return model.RecipeSpec{}, ErrRecipeNeedsInput
+	}
 	if sdk, hasSDK := recipeSDKPrerequisite(seed, allowed); seed.SDKID != "" {
 		if !hasSDK {
 			return model.RecipeSpec{}, ErrRecipeNeedsInput
@@ -240,8 +279,45 @@ func deterministicRecipeSpec(analysis model.IntegrationAnalysis, seed model.Reci
 	}
 	for _, capabilityID := range seed.CapabilityIDs {
 		item, exists := allowed[capabilityID]
-		if !exists || item.Kind != "tool" {
+		ownerID := recipeCapabilityIntegrationID(item)
+		if !exists || !recipeCapabilityEvidence(item) || ownerID == "" || !attached[ownerID] {
 			return model.RecipeSpec{}, ErrRecipeNeedsInput
+		}
+		if item.Kind == recipeContractOperationKind {
+			method := strings.ToUpper(recipeEvidenceField(item.Excerpt, "Method"))
+			pathTemplate := recipeEvidenceField(item.Excerpt, "Path template")
+			operationKey := recipeEvidenceField(item.Excerpt, "Operation key")
+			requestSchemas := recipeEvidenceField(item.Excerpt, "Request schemas")
+			responseSchemas := recipeEvidenceField(item.Excerpt, "Response schemas")
+			securitySchemes := recipeEvidenceField(item.Excerpt, "Security schemes")
+			if method == "" || pathTemplate == "" || operationKey == "" || seed.SDKID != "" {
+				return model.RecipeSpec{}, ErrRecipeNeedsInput
+			}
+			ref := []model.RecipeEvidenceRef{{Kind: item.Kind, ResourceID: item.ResourceID, Fingerprint: item.Fingerprint}}
+			if securitySchemes != "" {
+				spec.Prerequisites = append(spec.Prerequisites, model.RecipeInstruction{
+					Action:         fmt.Sprintf("Configure %s authentication for %s through the consuming project's existing runtime credential boundary.", recipeCode(securitySchemes), recipeCode(item.Label)),
+					ExpectedResult: "The operation authenticates without credential values being stored in source code.",
+					Evidence:       ref,
+				})
+			}
+			implementation := fmt.Sprintf("Add one product client operation for %s that sends %s to the exact path template %s.", recipeCode(item.Label), recipeCode(method), recipeCode(pathTemplate))
+			mappingAction := fmt.Sprintf("Map the inputs and returned value for %s to the consuming project's existing types and error model.", recipeCode(item.Label))
+			mappingResult := "Inputs, results, and failures remain bounded by the reviewed operation contract."
+			if requestSchemas != "" || responseSchemas != "" {
+				mappingAction = fmt.Sprintf("Map request schemas %s and response schemas %s for %s to the consuming project's existing types and error model.", recipeCode(firstNonEmpty(requestSchemas, "none")), recipeCode(firstNonEmpty(responseSchemas, "none")), recipeCode(item.Label))
+				mappingResult = "Inputs and results remain bounded by the exact reviewed schema references."
+			}
+			spec.Steps = append(spec.Steps,
+				model.RecipeInstruction{Action: implementation, ExpectedResult: "The consuming project has one explicit product integration boundary for this operation.", Evidence: ref},
+				model.RecipeInstruction{Action: mappingAction, ExpectedResult: mappingResult, Evidence: ref},
+			)
+			spec.Checks = append(spec.Checks, model.RecipeInstruction{
+				Action:         fmt.Sprintf("Run a focused test for %s using non-secret fixtures for %s %s.", recipeCode(item.Label), recipeCode(method), recipeCode(pathTemplate)),
+				ExpectedResult: "The test exercises the product operation and rejects a response outside the reviewed contract.",
+				Evidence:       ref,
+			})
+			continue
 		}
 		backend := strings.ToLower(recipeEvidenceField(item.Excerpt, "Backend"))
 		method := strings.ToUpper(recipeEvidenceField(item.Excerpt, "Method"))
@@ -296,8 +372,11 @@ func equalRecipeInstructions(left, right []model.RecipeInstruction) bool {
 
 func canonicalRecipeInstructions(spec model.RecipeSpec, selectedEvidence []model.IntegrationEvidence) (model.RecipeSpec, error) {
 	productEvidence := recipeProductEvidence(selectedEvidence)
-	evidence := make([]model.IntegrationEvidence, 0, len(productEvidence)+1)
-	evidence = append(evidence, model.IntegrationEvidence{Kind: integrationScopeEvidenceKind, ResourceID: spec.IntegrationID, Fingerprint: "validation-scope"})
+	integrationIDs := recipeSpecIntegrationIDs(spec)
+	evidence := make([]model.IntegrationEvidence, 0, len(productEvidence)+len(integrationIDs))
+	for _, integrationID := range integrationIDs {
+		evidence = append(evidence, model.IntegrationEvidence{Kind: integrationScopeEvidenceKind, ResourceID: integrationID, Fingerprint: "validation-scope"})
+	}
 	evidence = append(evidence, productEvidence...)
 	evidenceIDs := make([]string, 0, len(productEvidence))
 	for _, item := range productEvidence {
@@ -305,7 +384,11 @@ func canonicalRecipeInstructions(spec model.RecipeSpec, selectedEvidence []model
 			evidenceIDs = append(evidenceIDs, item.ResourceID)
 		}
 	}
-	return deterministicRecipeSpec(model.IntegrationAnalysis{Evidence: evidence}, model.RecipeSeed{
+	contractVersion := model.RecipeContractDeploymentV3
+	if spec.SchemaVersion == model.RecipeSpecVersion2 {
+		contractVersion = model.RecipeContractProductIntegrationV2
+	}
+	return deterministicRecipeSpecForContract(model.IntegrationAnalysis{Evidence: evidence}, model.RecipeSeed{
 		Slug:          "canonical-validation",
 		Title:         spec.Title,
 		Outcome:       spec.Outcome,
@@ -313,7 +396,49 @@ func canonicalRecipeInstructions(spec model.RecipeSpec, selectedEvidence []model
 		CapabilityIDs: append([]string(nil), spec.CapabilityIDs...),
 		SDKID:         spec.SDKID,
 		EvidenceIDs:   evidenceIDs,
-	})
+	}, contractVersion)
+}
+
+func recipeAPIAttachments(integrationIDs []string) []model.RecipeAPIAttachment {
+	values := make([]model.RecipeAPIAttachment, len(integrationIDs))
+	for index, integrationID := range integrationIDs {
+		values[index] = model.RecipeAPIAttachment{IntegrationID: integrationID}
+	}
+	return values
+}
+
+func recipeSpecIntegrationIDs(spec model.RecipeSpec) []string {
+	if spec.SchemaVersion == model.RecipeSpecVersion2 && strings.TrimSpace(spec.IntegrationID) != "" {
+		return []string{strings.TrimSpace(spec.IntegrationID)}
+	}
+	values := make([]string, 0, len(spec.APIAttachments))
+	seen := make(map[string]bool)
+	for _, attachment := range spec.APIAttachments {
+		id := strings.TrimSpace(attachment.IntegrationID)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			values = append(values, id)
+		}
+	}
+	sort.Strings(values)
+	return values
+}
+
+func recipeIntegrationIDs(recipe model.Recipe) []string {
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 && strings.TrimSpace(recipe.IntegrationID) != "" {
+		return []string{strings.TrimSpace(recipe.IntegrationID)}
+	}
+	values := make([]string, 0, len(recipe.APIAttachments))
+	seen := make(map[string]bool)
+	for _, attachment := range recipe.APIAttachments {
+		id := strings.TrimSpace(attachment.IntegrationID)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			values = append(values, id)
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 func renderRecipeSpec(spec model.RecipeSpec, references []model.RecipeReference) string {
@@ -349,11 +474,15 @@ func renderRecipeSpec(spec model.RecipeSpec, references []model.RecipeReference)
 
 func validateRecipeSpec(spec model.RecipeSpec, recipe model.Recipe, selectedEvidence []model.IntegrationEvidence) []model.RecipeValidationFinding {
 	findings := make([]model.RecipeValidationFinding, 0)
-	if spec.SchemaVersion != model.RecipeSpecVersion2 || spec.IntegrationID == "" || spec.IntegrationID != recipe.IntegrationID || spec.Title != recipe.Title || spec.Outcome != recipe.Outcome {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "invalid_recipe_spec", Message: "The structured recipe does not match its product integration, title, outcome, or current schema."})
+	expectedVersion := model.RecipeSpecVersion3
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 {
+		expectedVersion = model.RecipeSpecVersion2
 	}
-	if len(spec.Prerequisites) > 4 || len(spec.Steps) < 2 || len(spec.Steps) > 8 || len(spec.Checks) < 1 || len(spec.Checks) > 3 || len(spec.CapabilityIDs) != 1 || len(spec.ReferenceIDs) > 8 {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "invalid_recipe_shape", Message: "Keep the recipe to 0-4 prerequisites, 2-8 steps, 1-3 checks, at most 8 references, and exactly one product capability."})
+	if spec.SchemaVersion != expectedVersion || !slices.Equal(recipeSpecIntegrationIDs(spec), recipeIntegrationIDs(recipe)) || spec.Title != recipe.Title || spec.Outcome != recipe.Outcome {
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "invalid_recipe_spec", Message: "The structured recipe does not match its API attachments, title, outcome, or current schema."})
+	}
+	if len(spec.Prerequisites) > 4 || len(spec.Steps) < 2 || len(spec.Steps) > 8 || len(spec.Checks) < 1 || len(spec.Checks) > 4 || len(spec.CapabilityIDs) < 1 || len(spec.CapabilityIDs) > 4 || len(spec.ReferenceIDs) > 8 {
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "invalid_recipe_shape", Message: "Keep the recipe to 0-4 prerequisites, 2-8 steps, 1-4 checks, at most 8 references, and 1-4 exact product capabilities."})
 	}
 	allowed, ambiguous := recipeUniqueEvidenceByID(recipeProductEvidence(selectedEvidence))
 	for id := range ambiguous {
@@ -377,7 +506,7 @@ func validateRecipeSpec(spec model.RecipeSpec, recipe model.Recipe, selectedEvid
 	}
 	canonical, canonicalErr := canonicalRecipeInstructions(spec, selectedEvidence)
 	if canonicalErr != nil || !equalRecipeInstructions(spec.Prerequisites, canonical.Prerequisites) || !equalRecipeInstructions(spec.Steps, canonical.Steps) || !equalRecipeInstructions(spec.Checks, canonical.Checks) {
-		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "noncanonical_recipe_instructions", Message: "Recipe instructions must use the server-owned operation template derived from the exact reviewed tool and SDK."})
+		findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "noncanonical_recipe_instructions", Message: "Recipe instructions must use the server-owned operation template derived from the exact reviewed API operation, tool, and SDK evidence."})
 	}
 	changesProject := false
 	coveredCapabilities := make(map[string]bool)
@@ -389,7 +518,11 @@ func validateRecipeSpec(spec model.RecipeSpec, recipe model.Recipe, selectedEvid
 	validateInstruction := func(item model.RecipeInstruction, requireExpected, implementationStep bool) {
 		key := strings.ToLower(item.Action + "\x00" + item.ExpectedResult)
 		combined := item.Action + " " + item.ExpectedResult
-		if seenInstructions[key] || !recipeInstructionTextValid(item, allowed, requireExpected, productMCP) || len(item.Evidence) == 0 || len(item.Evidence) > 8 || strings.Contains(combined, spec.IntegrationID) {
+		containsInternalIntegrationID := false
+		for _, integrationID := range recipeSpecIntegrationIDs(spec) {
+			containsInternalIntegrationID = containsInternalIntegrationID || strings.Contains(combined, integrationID)
+		}
+		if seenInstructions[key] || !recipeInstructionTextValid(item, allowed, requireExpected, productMCP) || len(item.Evidence) == 0 || len(item.Evidence) > 8 || containsInternalIntegrationID {
 			findings = append(findings, model.RecipeValidationFinding{Level: "error", Code: "invalid_recipe_instruction", Message: "Every instruction must be concise, evidence-backed, and include an observable expected result where required."})
 			return
 		}

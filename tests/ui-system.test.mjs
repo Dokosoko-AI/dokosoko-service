@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile as readRawFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
-import { clientSource, consoleSource, stylesSource } from "./source-surface.mjs";
+import { clientSource, consoleSource, resolveEnglishTranslations, stylesSource } from "./source-surface.mjs";
 
 const appFile = (path) => new URL(`../${path}`, import.meta.url);
 const repositoryFile = (path) => new URL(`../../${path}`, import.meta.url);
+
+async function readFile(target, encoding) {
+  const source = await readRawFile(target, encoding);
+  return typeof source === "string" && String(target).includes("/app/") ? resolveEnglishTranslations(source) : source;
+}
 
 test("keeps the complete source inventory inside the owned core component layer", async () => {
   const importedDirectory = appFile("app/components/core/");
@@ -89,13 +94,13 @@ test("maps the owned typography and Figma semantic theme into one UI contract", 
   assert.match(themeToggle, /import \{ Moon, Sun \} from "lucide-react"/);
   assert.match(themeToggle, /dark \? <Moon aria-hidden="true" \/> : <Sun aria-hidden="true" \/>/);
   assert.doesNotMatch(themeToggle, /theme-toggle-(?:label|track)/);
-  assert.match(consoleApp, /className="sidebar-bottom">\s*<ThemeToggle \/>/);
-  assert.match(consoleApp, /className="mobile-theme-toggle"><ThemeToggle \/><\/div>/);
+  assert.match(consoleApp, /className="sidebar-bottom">\s*<div className="preference-controls">\s*<ThemeToggle \/>\s*<LanguageSwitcher \/>/);
+  assert.match(consoleApp, /className="mobile-preference-controls"><LanguageSwitcher mobile \/><ThemeToggle \/><\/div>/);
   assert.match(styles, /\.theme-toggle\s*\{[^}]*width:\s*38px[^}]*height:\s*38px[^}]*display:\s*grid[^}]*place-items:\s*center[^}]*border:\s*0[^}]*background:\s*transparent/);
   assert.match(styles, /\.theme-toggle svg\s*\{[^}]*width:\s*17px[^}]*height:\s*17px/);
   assert.doesNotMatch(styles, /theme-toggle-(?:label|track)/);
-  assert.match(styles, /\.mobile-theme-toggle \.theme-toggle\s*\{[^}]*width:\s*34px[^}]*height:\s*34px/);
-  assert.match(styles, /\.mobile-theme-toggle\s*\{\s*display:\s*none/);
+  assert.match(styles, /\.mobile-preference-controls :is\(\.theme-toggle, \.language-toggle\)\s*\{[^}]*width:\s*34px[^}]*height:\s*34px/);
+  assert.match(styles, /\.mobile-preference-controls\s*\{\s*display:\s*none/);
 });
 
 test("keeps desktop workspaces focused without constraining builders", async () => {

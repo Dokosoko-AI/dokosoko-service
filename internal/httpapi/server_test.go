@@ -478,27 +478,31 @@ func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
 		t.Fatalf("recipe discovery instructions status=%d body=%s", discovery.Code, discovery.Body.String())
 	}
 	tools := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":10,"method":"tools/list","params":{}}`)
-	if tools.Code != http.StatusOK || !strings.Contains(tools.Body.String(), `"name":"integration.recipes.list"`) || !strings.Contains(tools.Body.String(), `"outputSchema"`) || !strings.Contains(tools.Body.String(), `"const":"product-integration-v2"`) || !strings.Contains(tools.Body.String(), "This tool never guesses") {
+	if tools.Code != http.StatusOK || !strings.Contains(tools.Body.String(), `"name":"integration.recipes.list"`) || !strings.Contains(tools.Body.String(), `"outputSchema"`) || !strings.Contains(tools.Body.String(), `"enum":["product-integration-v2","deployment-recipe-v3"]`) || !strings.Contains(tools.Body.String(), "This tool never guesses") {
 		t.Fatalf("recipe tool contracts status=%d body=%s", tools.Code, tools.Body.String())
 	}
+	if recipe.ContractVersion != model.RecipeContractDeploymentV3 || len(recipe.APIAttachments) != 1 {
+		t.Fatalf("generated MCP recipe did not use deployment contract: %#v", recipe)
+	}
+	integrationID := recipe.APIAttachments[0].IntegrationID
 
 	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"description":"Product integration implementation:`) || !strings.Contains(w.Body.String(), `"mimeType":"text/markdown"`) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) || !strings.Contains(w.Body.String(), `"integration_id":"`+recipe.IntegrationID+`"`) || !strings.Contains(w.Body.String(), `"published_at"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"description":"Product integration implementation:`) || !strings.Contains(w.Body.String(), `"mimeType":"text/markdown"`) || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"integration_ids":["`+integrationID+`"]`) || !strings.Contains(w.Body.String(), `"published_at"`) {
 		t.Fatalf("recipe resource list status=%d body=%s", w.Code, w.Body.String())
 	}
 	readBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": map[string]any{"uri": recipe.StableURI}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(readBody))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"integration_ids":["`+integrationID+`"]`) {
 		t.Fatalf("recipe resource read status=%d body=%s", w.Code, w.Body.String())
 	}
 	checkBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": map[string]any{"name": "integration.check", "arguments": map[string]any{"recipe_uri": recipe.StableURI}}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(checkBody))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) || !strings.Contains(w.Body.String(), `"integration_id":"`+recipe.IntegrationID+`"`) || !strings.Contains(w.Body.String(), `"current":true`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"integration_ids":["`+integrationID+`"]`) || !strings.Contains(w.Body.String(), `"current":true`) {
 		t.Fatalf("recipe check status=%d body=%s", w.Code, w.Body.String())
 	}
 	listBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": map[string]any{"name": "integration.recipes.list", "arguments": map[string]any{}}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(listBody))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"integration_ids":["`+integrationID+`"]`) {
 		t.Fatalf("compact recipe list status=%d body=%s", w.Code, w.Body.String())
 	}
 	for _, internalField := range []string{`"organisation_id"`, `"product_id"`, `"dependencies"`, `"current_revision"`, `"analysis_id"`} {
@@ -508,7 +512,7 @@ func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
 	}
 	planBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "integration.plan", "arguments": map[string]any{"outcome": recipe.Outcome}}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(planBody))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"product-integration-v2"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"integration_ids":["`+integrationID+`"]`) {
 		t.Fatalf("recipe plan status=%d body=%s", w.Code, w.Body.String())
 	}
 	noMatchBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 30, "method": "tools/call", "params": map[string]any{"name": "integration.plan", "arguments": map[string]any{"outcome": "unrelated outcome that is not published"}}})

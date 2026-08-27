@@ -1,5 +1,8 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   CheckCircle2,
   Copy,
@@ -123,31 +126,33 @@ function clearIdentityTestErrorQuery(marker: string) {
   window.history.replaceState(window.history.state, "", `${url.pathname}${query ? `?${query}` : ""}${url.hash}`);
 }
 
-function testStatusLabel(status?: APIIdentityTest["status"]) {
-  if (status === "passed") return "Passed";
-  if (status === "failed") return "Failed";
-  if (status === "expired") return "Expired";
-  if (status === "pending") return "Waiting for sign-in";
-  return "Not tested";
+function testStatusLabel(status: APIIdentityTest["status"] | undefined, t: TFunction) {
+  if (status === "passed") return t("identity.passed");
+  if (status === "failed") return t("identity.failed");
+  if (status === "expired") return t("identity.expired");
+  if (status === "pending") return t("identity.waitingForSignIn");
+  return t("identity.notTested");
 }
 
-function identityTestMessage(test: APIIdentityTest | undefined, customerClaim: string) {
-  if (!test) return "Complete one real sign-in before activation.";
-  if (test.status === "passed") return `Customer ${test.customer_id || "claim resolved"}${test.completed_at ? ` · ${new Date(test.completed_at).toLocaleString()}` : ""}`;
-  if (test.status === "pending") return "Finish the provider sign-in in this browser to complete the test.";
-  if (test.status === "expired" || test.failure_code === "test_expired") return "This test expired. Start a new test and complete the provider sign-in within ten minutes.";
-  if (test.failure_code === "configuration_changed") return "The saved configuration changed during the test. Start a fresh test for the current draft.";
-  if (test.failure_code === "authorization_denied") return "The provider sign-in was cancelled or denied. Start the test again when the test user can continue.";
-  if (test.failure_code === "authorization_code_missing") return "The provider returned without an authorization code. Check the exact callback URL and try again.";
-  if (test.failure_code === "oidc_authorization_failed") return "DokoSoko could not open the OIDC authorization flow. Check the issuer and client settings.";
-  if (test.failure_code === "oidc_verification_failed") return "The OIDC callback could not be verified. Check the client secret, callback URL, and optional audience or resource.";
-  if (test.failure_code === "client_authentication_unsupported") return "The confidential OIDC client must support client_secret_basic or client_secret_post.";
-  if (test.failure_code === "issuer_mismatch") return "The provider returned a different issuer. Use the exact issuer advertised by its discovery document.";
-  if (test.failure_code === "subject_missing") return "The ID token did not include a subject claim. Check the provider application and token configuration.";
-  if (test.failure_code === "customer_claim_missing") return `The ID token did not include ${customerClaim || "the customer account claim"}. Add that claim at the identity provider and test again.`;
-  if (test.failure_code === "access_token_missing") return "The provider did not issue an API access token. Check the optional audience or resource and user consent.";
-  if (test.failure_code === "access_token_expired") return "The provider issued an already-expired access token. Check its token settings and test again.";
-  return "The OIDC sign-in could not be verified. Review the connection settings and start a new test.";
+function identityTestMessage(test: APIIdentityTest | undefined, customerClaim: string, t: TFunction) {
+  if (!test) return t("identity.completeOneRealSignInBeforeActivation");
+  if (test.status === "passed") return test.completed_at
+    ? t("identity.customerTestPassedAt", { customer: test.customer_id || t("identity.claimResolved"), completedAt: new Date(test.completed_at) })
+    : t("identity.customerTestPassed", { customer: test.customer_id || t("identity.claimResolved") });
+  if (test.status === "pending") return t("identity.finishProviderSignIn");
+  if (test.status === "expired" || test.failure_code === "test_expired") return t("identity.testExpiredStartAgain");
+  if (test.failure_code === "configuration_changed") return t("identity.configurationChangedDuringTest");
+  if (test.failure_code === "authorization_denied") return t("identity.authorizationDeniedDuringTest");
+  if (test.failure_code === "authorization_code_missing") return t("identity.authorizationCodeMissing");
+  if (test.failure_code === "oidc_authorization_failed") return t("identity.oidcAuthorizationFailed");
+  if (test.failure_code === "oidc_verification_failed") return t("identity.oidcVerificationFailed");
+  if (test.failure_code === "client_authentication_unsupported") return t("identity.clientAuthenticationUnsupported");
+  if (test.failure_code === "issuer_mismatch") return t("identity.issuerMismatch");
+  if (test.failure_code === "subject_missing") return t("identity.subjectMissing");
+  if (test.failure_code === "customer_claim_missing") return t("identity.customerClaimMissing", { claim: customerClaim || t("identity.customerAccountClaim") });
+  if (test.failure_code === "access_token_missing") return t("identity.accessTokenMissing");
+  if (test.failure_code === "access_token_expired") return t("identity.accessTokenExpired");
+  return t("identity.signInCouldNotBeVerified");
 }
 
 async function copyText(value: string) {
@@ -166,6 +171,7 @@ async function copyText(value: string) {
 }
 
 export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onMessage }: OIDCIdentitySetupProps) {
+  const { t } = useTranslation();
 	const [editing, setEditing] = useState(() => !identity?.configured || identityConfigurationNeedsReview(identity));
 	const [operation, setOperation] = useState<IdentityOperation>(null);
 	const [error, setError] = useState("");
@@ -205,13 +211,13 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
       setCallbackTestFailure("");
       clearIdentityTestQuery(callbackTestID);
     }).catch((caught) => {
-      if (!cancelled) setCallbackTestFailure(caught instanceof APIError ? caught.message : "The returned OIDC test could not be loaded.");
+      if (!cancelled) setCallbackTestFailure(caught instanceof APIError ? caught.message : t("identity.returnedTestLoadFailed"));
     }).finally(() => {
       if (cancelled) return;
       setCallbackTestLoading(false);
     });
     return () => { cancelled = true; };
-  }, [callbackTestID, canLoadCallbackTest]);
+  }, [callbackTestID, canLoadCallbackTest, t]);
 
   useEffect(() => {
     if (callbackTestError && identity && !loading) clearIdentityTestErrorQuery(callbackTestError);
@@ -259,9 +265,9 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
       onChanged(saved);
       setClientSecret("");
       setEditing(false);
-      onMessage(active ? "Changes saved as a disabled draft. Test again before activating." : "OIDC draft saved. Test a real sign-in next.");
+      onMessage(active ? t("identity.changesSavedAsADisabledDraftTestAgainBefore") : t("identity.oidcDraftSavedTestARealSignInNext"));
     } catch (caught) {
-      setError(caught instanceof APIError ? caught.message : "The OIDC draft could not be saved.");
+      setError(caught instanceof APIError ? caught.message : t("identity.draftSaveFailed"));
     } finally {
       setOperation(null);
     }
@@ -281,7 +287,7 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
         window.location.assign(started.authorization_url);
       }
     } catch (caught) {
-      setError(caught instanceof APIError || caught instanceof Error ? caught.message : "The OIDC test could not be started.");
+      setError(caught instanceof APIError || caught instanceof Error ? caught.message : t("identity.testStartFailed"));
     } finally {
       setOperation(null);
     }
@@ -296,7 +302,7 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
       setSelectedTest({ id: callbackTestID, value: test });
       clearIdentityTestQuery(callbackTestID);
     } catch (caught) {
-      setCallbackTestFailure(caught instanceof APIError ? caught.message : "The returned OIDC test could not be loaded.");
+      setCallbackTestFailure(caught instanceof APIError ? caught.message : t("identity.returnedTestLoadFailed"));
     } finally {
       setCallbackTestLoading(false);
     }
@@ -309,9 +315,9 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
     try {
       const activated = await api.activateIdentity(identity.revision, lastTest.id);
       onChanged(activated);
-      onMessage("OIDC customer sign-in is active.");
+      onMessage(t("identity.oidcCustomerSignInIsActive"));
     } catch (caught) {
-      setError(caught instanceof APIError ? caught.message : "OIDC could not be activated.");
+      setError(caught instanceof APIError ? caught.message : t("identity.activationFailed"));
     } finally {
       setOperation(null);
     }
@@ -340,9 +346,9 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
       const disabled = await api.disableIdentity(identity.revision);
       onChanged(disabled);
       setConfirmingDisable(false);
-      onMessage("Customer sign-in is disabled.");
+      onMessage(t("identity.customerSignInIsDisabled"));
     } catch (caught) {
-      setError(caught instanceof APIError ? caught.message : "Customer sign-in could not be disabled.");
+      setError(caught instanceof APIError ? caught.message : t("identity.disableFailed"));
     } finally {
       setOperation(null);
     }
@@ -356,119 +362,119 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
       const disconnected = await api.disconnectIdentity(identity.revision);
       onChanged(disconnected);
       setConfirmingDisconnect(false);
-      onMessage("The OIDC provider is disconnected.");
+      onMessage(t("identity.theOIDCProviderIsDisconnected"));
     } catch (caught) {
-      setError(caught instanceof APIError ? caught.message : "The OIDC provider could not be disconnected.");
+      setError(caught instanceof APIError ? caught.message : t("identity.disconnectFailed"));
     } finally {
       setOperation(null);
     }
   }
 
   const pageActions = active && !editing ? <span className="heading-actions">
-    <Button outline disabled={operation !== null} onClick={() => setEditing(true)}><Pencil data-slot="icon" />Edit</Button>
-    <Button outline disabled={operation !== null || callbackTestLoading} onClick={() => void beginTest()}><RefreshCw data-slot="icon" />{operation === "test" ? "Opening provider…" : "Test again"}</Button>
-    <Button color="red" disabled={operation !== null} onClick={() => setConfirmingDisable(true)}>Disable</Button>
+    <Button outline disabled={operation !== null} onClick={() => setEditing(true)}><Pencil data-slot="icon" />{t("identity.edit")}</Button>
+    <Button outline disabled={operation !== null || callbackTestLoading} onClick={() => void beginTest()}><RefreshCw data-slot="icon" />{operation === "test" ? t("identity.openingProvider") : t("identity.testAgain")}</Button>
+    <Button color="red" disabled={operation !== null} onClick={() => setConfirmingDisable(true)}>{t("identity.disable")}</Button>
   </span> : undefined;
 
-  if (loading) return <><PageHeader eyebrow="Identity" title="Customer sign-in" /><section className="panel identity-loading"><RefreshCw /><span><strong>Loading identity settings</strong><small>Getting the exact callback URL and current OIDC connection.</small></span></section></>;
+  if (loading) return <><PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} /><section className="panel identity-loading"><RefreshCw /><span><strong>{t("identity.loadingIdentitySettings")}</strong><small>{t("identity.gettingTheExactCallbackURLAndCurrentOIDCConnection")}</small></span></section></>;
 
-  if (!identity || loadError) return <><PageHeader eyebrow="Identity" title="Customer sign-in" /><section className="panel identity-load-error"><TriangleAlert /><span><strong>Identity settings are unavailable</strong><small>{loadError || "The server did not return identity setup metadata."}</small></span></section></>;
+  if (!identity || loadError) return <><PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} /><section className="panel identity-load-error"><TriangleAlert /><span><strong>{t("identity.identitySettingsAreUnavailable")}</strong><small>{loadError || t("identity.theServerDidNotReturnIdentitySetupMetadata")}</small></span></section></>;
 
   return <>
-    <PageHeader eyebrow="Identity" title="Customer sign-in" action={pageActions} />
+    <PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} action={pageActions} />
 
     {(error || loadError) && <div className="identity-error" role="alert"><XCircle /><span>{error || loadError}</span></div>}
 
-    {callbackTestError && <div className="identity-callback-warning" role="alert"><TriangleAlert /><span><strong>This OIDC test could not be completed</strong><small>The callback was expired, already used, or invalid. It did not pass or change the saved test result. Start a sign-in test again.</small></span></div>}
+    {callbackTestError && <div className="identity-callback-warning" role="alert"><TriangleAlert /><span><strong>{t("identity.thisOIDCTestCouldNotBeCompleted")}</strong><small>{t("identity.theCallbackWasExpiredAlreadyUsedOrInvalidIt")}</small></span></div>}
 
-    {reviewRequired && <div className="identity-review-notice" role="status"><TriangleAlert /><span><strong>Review migrated settings</strong><small>Complete the required OIDC values and save this draft before testing. {identity.credential_present ? "The encrypted client secret is reused unless you replace it." : "Enter the OIDC client secret before saving."}</small></span></div>}
+    {reviewRequired && <div className="identity-review-notice" role="status"><TriangleAlert /><span><strong>{t("identity.reviewMigratedSettings")}</strong><small>{t("identity.completeTheRequiredOIDCValuesAndSaveThisDraft")} {identity.credential_present ? t("identity.theEncryptedClientSecretIsReusedUnlessYouReplace") : t("identity.enterTheOIDCClientSecretBeforeSaving")}</small></span></div>}
 
     {editing ? <div className="identity-setup-grid">
       <section className="panel identity-setup-card">
-        <PanelHeader title="1 · Connect your provider" description="Register one confidential OIDC web application for DokoSoko customer sign-in." action={<Badge color="violet">Confidential web app</Badge>} />
+        <PanelHeader title={t("identity.n1ConnectYourProvider")} description={t("identity.registerOneConfidentialOIDCWebApplicationForDokoSokoCustomer")} action={<Badge color="violet">{t("identity.confidentialWebApp")}</Badge>} />
         <div className="identity-instructions">
-          <span>1</span><p>Register a <strong>confidential web application</strong> with your OIDC provider.</p>
-          <span>2</span><p>Add this exact URL to the application&apos;s allowed callback URLs.</p>
-          <span>3</span><p>Copy the exact issuer from OIDC discovery, then the application&apos;s Client ID and Client Secret.</p>
+          <span>1</span><p>{t("identity.registerA")} <strong>{t("identity.confidentialWebApplication")}</strong> {t("identity.withYourOIDCProvider")}</p>
+          <span>2</span><p>{t("identity.addThisExactURLToTheApplicationSAllowed")}</p>
+          <span>3</span><p>{t("identity.copyTheExactIssuerFromOIDCDiscoveryThenThe")}</p>
         </div>
         <div className="identity-copy-field">
-          <span><small>Allowed callback URL</small><code>{callbackURL}</code></span>
-          <Button outline disabled={!callbackURL} aria-label="Copy OIDC callback URL" onClick={() => void copyText(callbackURL).then(() => onMessage("Callback URL copied."))}><Copy data-slot="icon" />Copy</Button>
+          <span><small>{t("identity.allowedCallbackURL")}</small><code>{callbackURL}</code></span>
+          <Button outline disabled={!callbackURL} aria-label={t("identity.copyOIDCCallbackURL")} onClick={() => void copyText(callbackURL).then(() => onMessage(t("identity.callbackURLCopied")))}><Copy data-slot="icon" />{t("identity.copy")}</Button>
         </div>
         <div className="auth-form compact-form identity-form">
-          <label className="auth-field"><span>Issuer URL</span><input type="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={issuerInput} aria-invalid={!issuerReady} onChange={(event) => setIssuerInput(event.target.value)} placeholder="https://identity.example.com/" /><small className={!issuerReady ? "identity-field-error" : undefined}>{issuerReady ? <>Use the exact issuer value advertised by the provider. <a className="identity-discovery-link" href={discoveryURL} target="_blank" rel="noreferrer">Open discovery document <ExternalLink /></a></> : "Enter an exact credential-free HTTPS issuer URL; local HTTP is allowed."}</small></label>
-          <div className="two-fields"><label className="auth-field"><span>Client ID</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={clientID} onChange={(event) => setClientID(event.target.value)} /></label><label className="auth-field"><span>{identity.credential_present ? "New client secret (optional)" : "Client secret"}</span><input type="password" autoComplete="new-password" placeholder={identity.credential_present ? "************" : undefined} value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} /><small>{identity.credential_present ? "Encrypted secret stored. Type a new value only to replace it." : "Stored encrypted and never returned."}</small></label></div>
+          <label className="auth-field"><span>{t("identity.issuerURL")}</span><input type="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={issuerInput} aria-invalid={!issuerReady} onChange={(event) => setIssuerInput(event.target.value)} placeholder="https://identity.example.com/" /><small className={!issuerReady ? "identity-field-error" : undefined}>{issuerReady ? <>{t("identity.useTheExactIssuerValueAdvertisedByTheProvider")} <a className="identity-discovery-link" href={discoveryURL} target="_blank" rel="noreferrer">{t("identity.openDiscoveryDocument")} <ExternalLink /></a></> : t("identity.enterAnExactCredentialFreeHTTPSIssuerURLLocal")}</small></label>
+          <div className="two-fields"><label className="auth-field"><span>{t("identity.clientID")}</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={clientID} onChange={(event) => setClientID(event.target.value)} /></label><label className="auth-field"><span>{identity.credential_present ? t("identity.newClientSecretOptional") : t("identity.clientSecret")}</span><input type="password" autoComplete="new-password" placeholder={identity.credential_present ? "************" : undefined} value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} /><small>{identity.credential_present ? t("identity.encryptedSecretStoredTypeANewValueOnlyTo") : t("identity.storedEncryptedAndNeverReturned")}</small></label></div>
         </div>
       </section>
 
       <section className="panel identity-setup-card">
-        <PanelHeader title="2 · Map your customer" description="Tell DokoSoko which ID-token claim identifies the customer account." />
+        <PanelHeader title={t("identity.n2MapYourCustomer")} description={t("identity.tellDokoSokoWhichIDTokenClaimIdentifiesTheCustomer")} />
         <div className="auth-form compact-form identity-form">
-          <label className="auth-field"><span>Customer account claim</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={customerClaim} onChange={(event) => setCustomerClaim(event.target.value)} placeholder="https://your-company.com/customer_id" /><small>Required string claim in the ID token. Prefer a stable, namespaced claim configured at your identity provider.</small></label>
+          <label className="auth-field"><span>{t("identity.customerAccountClaim")}</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={customerClaim} onChange={(event) => setCustomerClaim(event.target.value)} placeholder="https://your-company.com/customer_id" /><small>{t("identity.requiredStringClaimInTheIDTokenPreferA")}</small></label>
           <div className="identity-separate-field">
             <span className="identity-separate-icon"><ShieldCheck /></span>
-            <label className="auth-field"><span>Authorization API origin</span><input type="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={authorizationAPIOrigin} aria-invalid={!authorizationAPIOriginReady} onChange={(event) => setAuthorizationAPIOrigin(event.target.value)} placeholder="https://api.your-company.com" /><small className={!authorizationAPIOriginReady ? "identity-field-error" : undefined}>{authorizationAPIOriginReady ? <>This is your API, separate from the identity provider. During sign-in DokoSoko calls <code>{accessEvaluationURL(authorizationAPIOrigin) || "/v1/access/evaluations"}</code> with the customer token.</> : "Use a credential-free HTTPS origin on the default port; local HTTP is allowed."}</small></label>
+            <label className="auth-field"><span>{t("identity.authorizationAPIOrigin")}</span><input type="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={authorizationAPIOrigin} aria-invalid={!authorizationAPIOriginReady} onChange={(event) => setAuthorizationAPIOrigin(event.target.value)} placeholder="https://api.your-company.com" /><small className={!authorizationAPIOriginReady ? "identity-field-error" : undefined}>{authorizationAPIOriginReady ? <>{t("identity.thisIsYourAPISeparateFromTheIdentityProvider")} <code>{accessEvaluationURL(authorizationAPIOrigin) || "/v1/access/evaluations"}</code> {t("identity.withTheCustomerToken")}</> : t("identity.useACredentialFreeHTTPSOriginOnTheDefault")}</small></label>
           </div>
           <details className="advanced-details identity-advanced">
-            <summary>Advanced OIDC settings</summary>
+            <summary>{t("identity.advancedOIDCSettings")}</summary>
             <div className="advanced-details-body auth-form compact-form">
-              <label className="auth-field"><span>Scopes</span><input value={scopes} aria-invalid={!openIDScopeReady} onChange={(event) => setScopes(event.target.value)} /><small className={!openIDScopeReady ? "identity-field-error" : undefined}>{openIDScopeReady ? <>Keep <code>openid</code>; add only scopes your authorization API needs.</> : <><code>openid</code> is required.</>}</small></label>
-              <div className="two-fields"><label className="auth-field"><span>Audience (optional)</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="https://api.your-company.com" /><small>Provider-specific audience parameter for the access token.</small></label><label className="auth-field"><span>OAuth resource (optional)</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={oauthResource} aria-invalid={!oauthResourceReady} onChange={(event) => setOAuthResource(event.target.value)} placeholder="urn:example:customer-api" /><small className={!oauthResourceReady ? "identity-field-error" : undefined}>{oauthResourceReady ? "RFC 8707 absolute URI resource indicator, when required by your provider." : "Enter an absolute URI without a fragment."}</small></label></div>
-              <label className="auth-field"><span>Installation claim (optional)</span><input value={installationClaim} onChange={(event) => setInstallationClaim(event.target.value)} placeholder="https://your-company.com/installation_id" /></label>
+              <label className="auth-field"><span>{t("identity.scopes")}</span><input value={scopes} aria-invalid={!openIDScopeReady} onChange={(event) => setScopes(event.target.value)} /><small className={!openIDScopeReady ? "identity-field-error" : undefined}>{openIDScopeReady ? <>{t("identity.keep")} <code>openid</code>{t("identity.addOnlyScopesYourAuthorizationAPINeeds")}</> : <><code>openid</code> {t("identity.isRequired")}</>}</small></label>
+              <div className="two-fields"><label className="auth-field"><span>{t("identity.audienceOptional")}</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="https://api.your-company.com" /><small>{t("identity.providerSpecificAudienceParameterForTheAccessToken")}</small></label><label className="auth-field"><span>{t("identity.oauthResourceOptional")}</span><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={oauthResource} aria-invalid={!oauthResourceReady} onChange={(event) => setOAuthResource(event.target.value)} placeholder={t("identity.urnExampleCustomerApi")} /><small className={!oauthResourceReady ? "identity-field-error" : undefined}>{oauthResourceReady ? t("identity.rfcN8707AbsoluteURIResourceIndicatorWhenRequiredBy") : t("identity.enterAnAbsoluteURIWithoutAFragment")}</small></label></div>
+              <label className="auth-field"><span>{t("identity.installationClaimOptional")}</span><input value={installationClaim} onChange={(event) => setInstallationClaim(event.target.value)} placeholder="https://your-company.com/installation_id" /></label>
             </div>
           </details>
         </div>
       </section>
 
-      {active && <div className="identity-edit-warning"><TriangleAlert /><span><strong>Saving changes disables customer sign-in.</strong><small>The new revision must pass a real OIDC sign-in test before it can be activated.</small></span></div>}
+      {active && <div className="identity-edit-warning"><TriangleAlert /><span><strong>{t("identity.savingChangesDisablesCustomerSignIn")}</strong><small>{t("identity.theNewRevisionMustPassARealOIDCSign")}</small></span></div>}
       <div className="identity-form-actions">
-        {configured && !reviewRequired && <Button outline disabled={operation !== null} onClick={cancelEditing}>Cancel</Button>}
-        <Button color="indigo" disabled={operation !== null || !formReady} onClick={() => void saveDraft()}><KeyRound data-slot="icon" />{operation === "save" ? "Saving draft…" : reviewRequired ? "Save reviewed draft" : "Save draft"}</Button>
+        {configured && !reviewRequired && <Button outline disabled={operation !== null} onClick={cancelEditing}>{t("common.cancel")}</Button>}
+        <Button color="indigo" disabled={operation !== null || !formReady} onClick={() => void saveDraft()}><KeyRound data-slot="icon" />{operation === "save" ? t("identity.savingDraft") : reviewRequired ? t("identity.saveReviewedDraft") : t("identity.saveDraft")}</Button>
       </div>
     </div> : <>
       <section className="panel identity-summary">
-        <PanelHeader title="OIDC connection" description={active ? "Customer sign-in is active for private MCP clients." : "The configuration is saved but cannot serve private clients until it passes a test and is activated."} action={<Badge color={active ? "green" : draftTestPassed ? "blue" : "amber"}>{active ? "Active" : draftTestPassed ? "Tested draft" : "Draft"}</Badge>} />
+        <PanelHeader title={t("identity.oidcConnection")} description={active ? t("identity.customerSignInIsActiveForPrivateMCPClients") : t("identity.theConfigurationIsSavedButCannotServePrivateClients")} action={<Badge color={active ? "green" : draftTestPassed ? "blue" : "amber"}>{active ? t("identity.active") : draftTestPassed ? t("identity.testedDraft") : t("identity.draft")}</Badge>} />
         <dl className="identity-summary-grid">
-          <div><dt>Issuer</dt><dd>{identity.issuer}</dd></div>
-          <div><dt>Token target</dt><dd>{identity.audience || identity.oauth_resource || "Provider default"}</dd></div>
-          <div><dt>Customer account claim</dt><dd>{identity.customer_account_claim}</dd></div>
-          <div><dt>Authorization API</dt><dd>{identity.authorization_api_origin}</dd></div>
+          <div><dt>{t("identity.issuer")}</dt><dd>{identity.issuer}</dd></div>
+          <div><dt>{t("identity.tokenTarget")}</dt><dd>{identity.audience || identity.oauth_resource || t("identity.providerDefault")}</dd></div>
+          <div><dt>{t("identity.customerAccountClaim")}</dt><dd>{identity.customer_account_claim}</dd></div>
+          <div><dt>{t("identity.authorizationAPI")}</dt><dd>{identity.authorization_api_origin}</dd></div>
         </dl>
-        {!active && <div className="panel-footer-actions"><small>Need to change a value?</small><Button outline disabled={operation !== null} onClick={() => setEditing(true)}><Pencil data-slot="icon" />Edit draft</Button></div>}
+        {!active && <div className="panel-footer-actions"><small>{t("identity.needToChangeAValue")}</small><Button outline disabled={operation !== null} onClick={() => setEditing(true)}><Pencil data-slot="icon" />{t("identity.editDraft")}</Button></div>}
       </section>
 
       <div className="identity-verification-grid">
         <section className="panel identity-verification-card">
           <header className="identity-verification-header">
-            <div className="identity-verification-copy"><h2 className="type-heading">Test sign-in</h2><p className="type-body">This verifies only the OIDC sign-in and mapped customer claim. Use each API&apos;s Test tab to verify end-to-end authorization.</p></div>
-            <Button color={testPassedForCurrentState ? "dark" : "indigo"} outline={testPassedForCurrentState} disabled={operation !== null || callbackTestLoading} onClick={() => void beginTest()}>{operation === "test" ? "Opening provider…" : testPassedForCurrentState ? "Test again" : "Test sign-in"}<ExternalLink data-slot="icon" /></Button>
+            <div className="identity-verification-copy"><h2 className="type-heading">{t("identity.testSignIn")}</h2><p className="type-body">{t("identity.thisVerifiesOnlyTheOIDCSignInAndMapped")}</p></div>
+            <Button color={testPassedForCurrentState ? "dark" : "indigo"} outline={testPassedForCurrentState} disabled={operation !== null || callbackTestLoading} onClick={() => void beginTest()}>{operation === "test" ? t("identity.openingProvider") : testPassedForCurrentState ? t("identity.testAgain") : t("identity.testSignIn")}<ExternalLink data-slot="icon" /></Button>
           </header>
           <div className={`identity-test-result ${callbackTestLoading ? "pending" : callbackTestFailure ? "failed" : testStaleForCurrentRevision ? "stale" : draftTestExpiredForActivation ? "expired" : lastTest?.status ?? "untested"}`}>
             {callbackTestLoading ? <RefreshCw /> : callbackTestFailure ? <XCircle /> : testStaleForCurrentRevision || draftTestExpiredForActivation ? <TriangleAlert /> : lastTest?.status === "passed" ? <CheckCircle2 /> : lastTest?.status === "failed" || lastTest?.status === "expired" ? <XCircle /> : <RefreshCw />}
-            <span><strong>{callbackTestLoading ? "Loading returned OIDC test" : callbackTestFailure ? "Could not load returned OIDC test" : testStaleForCurrentRevision ? "Not tested for this revision" : draftTestExpiredForActivation ? "Test expired for activation" : testStatusLabel(lastTest?.status)}</strong><small>{callbackTestLoading ? "Retrieving the exact test transaction from this OIDC callback." : callbackTestFailure || (testStaleForCurrentRevision ? `Run Test sign-in for revision ${identity.revision}.` : draftTestExpiredForActivation ? "Run Test sign-in again, then activate before the new test expires." : identityTestMessage(lastTest, identity.customer_account_claim))}</small>{callbackTestFailure && <Button outline className="identity-test-retry" disabled={callbackTestLoading || operation !== null} onClick={() => void retryCallbackTest()}>Retry</Button>}</span>
+            <span><strong>{callbackTestLoading ? t("identity.loadingReturnedOIDCTest") : callbackTestFailure ? t("identity.couldNotLoadReturnedOIDCTest") : testStaleForCurrentRevision ? t("identity.notTestedForThisRevision") : draftTestExpiredForActivation ? t("identity.testExpiredForActivation") : testStatusLabel(lastTest?.status, t)}</strong><small>{callbackTestLoading ? t("identity.retrievingTheExactTestTransactionFromThisOIDCCallback") : callbackTestFailure || (testStaleForCurrentRevision ? t("identity.runTestSignInForRevision", { revision: String(identity.revision) }) : draftTestExpiredForActivation ? t("identity.runTestSignInAgainThenActivateBeforeThe") : identityTestMessage(lastTest, identity.customer_account_claim, t))}</small>{callbackTestFailure && <Button outline className="identity-test-retry" disabled={callbackTestLoading || operation !== null} onClick={() => void retryCallbackTest()}>{t("common.retry")}</Button>}</span>
           </div>
         </section>
 
         <section className="panel identity-verification-card">
           <header className="identity-verification-header">
-            <div className="identity-verification-copy"><h2 className="type-heading">Activate customer sign-in</h2><p className="type-body">Activation is allowed only for the exact configuration revision that passed the OIDC sign-in test.</p></div>
-            {!active && <Button color="indigo" disabled={operation !== null || !draftTestPassed} onClick={() => void activate()}>{operation === "activate" ? "Activating…" : "Activate"}</Button>}
+            <div className="identity-verification-copy"><h2 className="type-heading">{t("identity.activateCustomerSignIn")}</h2><p className="type-body">{t("identity.activationIsAllowedOnlyForTheExactConfigurationRevision")}</p></div>
+            {!active && <Button color="indigo" disabled={operation !== null || !draftTestPassed} onClick={() => void activate()}>{operation === "activate" ? t("identity.activating") : t("identity.activate")}</Button>}
           </header>
-          {active && <div className="identity-active-state"><LockKeyhole /><span><strong>Private identity is active</strong><small>Revision {identity.revision}. Disabling this connection fails closed.</small></span></div>}
-          {!active && !draftTestPassed && <small className="identity-action-hint">{draftTestExpiredForActivation ? "The passed test expired. Test sign-in again to activate this draft." : <>Pass the OIDC sign-in test for revision {identity.revision} first.</>}</small>}
+          {active && <div className="identity-active-state"><LockKeyhole /><span><strong>{t("identity.privateIdentityIsActive")}</strong><small>{t("identity.revision")} {identity.revision}{t("identity.disablingThisConnectionFailsClosed")}</small></span></div>}
+          {!active && !draftTestPassed && <small className="identity-action-hint">{draftTestExpiredForActivation ? t("identity.thePassedTestExpiredTestSignInAgainTo") : t("identity.passTheOIDCSignInTestForRevisionFirst", { revision: identity.revision })}</small>}
         </section>
       </div>
 
       {configured && !active && <section className="panel identity-disconnect-zone">
-        <PanelHeader title="Disconnect provider" description="Remove this disabled OIDC connection when it is no longer used." action={!confirmingDisconnect ? <Button color="red" outline disabled={operation !== null} onClick={() => setConfirmingDisconnect(true)}>Disconnect provider</Button> : undefined} />
-        {confirmingDisconnect && <div className="identity-disconnect-confirm" role="alert"><TriangleAlert /><span><strong>Disconnect this OIDC provider permanently?</strong><small>This removes the saved OIDC configuration, encrypted client secret, and test history. Customer-account and audit records remain.</small></span><span className="heading-actions"><Button outline disabled={operation !== null} onClick={() => setConfirmingDisconnect(false)}>Cancel</Button><Button color="red" disabled={operation !== null} onClick={() => void disconnect()}>{operation === "disconnect" ? "Disconnecting…" : "Disconnect provider"}</Button></span></div>}
+        <PanelHeader title={t("identity.disconnectProvider")} description={t("identity.removeThisDisabledOIDCConnectionWhenItIsNo")} action={!confirmingDisconnect ? <Button color="red" outline disabled={operation !== null} onClick={() => setConfirmingDisconnect(true)}>{t("identity.disconnectProvider")}</Button> : undefined} />
+        {confirmingDisconnect && <div className="identity-disconnect-confirm" role="alert"><TriangleAlert /><span><strong>{t("identity.disconnectThisOIDCProviderPermanently")}</strong><small>{t("identity.thisRemovesTheSavedOIDCConfigurationEncryptedClientSecret")}</small></span><span className="heading-actions"><Button outline disabled={operation !== null} onClick={() => setConfirmingDisconnect(false)}>{t("common.cancel")}</Button><Button color="red" disabled={operation !== null} onClick={() => void disconnect()}>{operation === "disconnect" ? t("identity.disconnecting") : t("identity.disconnectProvider")}</Button></span></div>}
       </section>}
     </>}
 
     {confirmingDisable && <section className="panel identity-disable-confirm" aria-labelledby="disable-identity-title">
       <TriangleAlert />
-      <span><strong id="disable-identity-title">Disable customer sign-in?</strong><small>New private MCP sessions will fail immediately. Your OIDC configuration stays saved.</small></span>
-      <span className="heading-actions"><Button outline disabled={operation !== null} onClick={() => setConfirmingDisable(false)}>Cancel</Button><Button color="red" disabled={operation !== null} onClick={() => void disable()}>{operation === "disable" ? "Disabling…" : "Disable sign-in"}</Button></span>
+      <span><strong id="disable-identity-title">{t("identity.disableCustomerSignIn")}</strong><small>{t("identity.newPrivateMCPSessionsWillFailImmediatelyYourOIDC")}</small></span>
+      <span className="heading-actions"><Button outline disabled={operation !== null} onClick={() => setConfirmingDisable(false)}>{t("common.cancel")}</Button><Button color="red" disabled={operation !== null} onClick={() => void disable()}>{operation === "disable" ? t("identity.disabling") : t("identity.disableSignIn")}</Button></span>
     </section>}
   </>;
 }

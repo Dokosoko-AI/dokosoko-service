@@ -161,12 +161,26 @@ func recipeToolLabel(value model.Tool, integration *model.Integration) string {
 }
 
 func integrationScopeID(evidence []model.IntegrationEvidence) (string, bool) {
-	for _, item := range evidence {
-		if item.Kind == integrationScopeEvidenceKind && strings.TrimSpace(item.ResourceID) != "" {
-			return item.ResourceID, true
-		}
+	values := integrationScopeIDs(evidence)
+	if len(values) == 1 {
+		return values[0], true
 	}
 	return "", false
+}
+
+func integrationScopeIDs(evidence []model.IntegrationEvidence) []string {
+	seen := make(map[string]bool)
+	values := make([]string, 0)
+	for _, item := range evidence {
+		id := strings.TrimSpace(item.ResourceID)
+		if item.Kind != integrationScopeEvidenceKind || id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		values = append(values, id)
+	}
+	sort.Strings(values)
+	return values
 }
 
 func integrationRecipePrefix(product model.Product, integration model.Integration) string {
@@ -339,6 +353,9 @@ func (s *Service) scopedIntegrationEvidence(ctx context.Context, product model.P
 		return nil, model.Integration{}, err
 	}
 	values = append(values, developerAssets...)
+	for index := range values {
+		values[index].IntegrationIDs = []string{integration.ID}
+	}
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].Kind == values[j].Kind {
 			if values[i].Label == values[j].Label {
@@ -475,7 +492,7 @@ func (s *Service) deterministicIntegrationPlan(ctx context.Context, product mode
 	if integration == nil {
 		unknowns = append(unknowns, model.IntegrationUnknown{ID: "integration-scope", Question: "Which product API should the recipe implement?", Why: "A product-integration recipe must be bound to one selected API and its exact reviewed evidence.", Blocking: true})
 	} else if len(plan.Recipes) == 0 {
-		unknowns = append(unknowns, model.IntegrationUnknown{ID: "product-capability", Question: "Which exact product operation should the recipe implement?", Why: "No revision-exact API-owned tool currently supplies one callable, schema-bound operation for a tangible recipe.", Blocking: true})
+		unknowns = append(unknowns, model.IntegrationUnknown{ID: "product-capability", Question: "Which exact product operation should the recipe implement?", Why: "No published API contract operation or revision-exact reviewed tool currently supplies one callable product capability for a tangible recipe.", Blocking: true})
 	}
 	return plan, unknowns
 }
@@ -485,6 +502,19 @@ func integrationRecipeCapabilityViable(item model.IntegrationEvidence, integrati
 		return false
 	}
 	switch item.Kind {
+	case recipeContractOperationKind:
+		method := recipeEvidenceField(item.Excerpt, "Method")
+		pathTemplate := recipeEvidenceField(item.Excerpt, "Path template")
+		apiID, revisionID, operationID, parsed := parseRecipeContractOperationResourceID(item.ResourceID)
+		if !parsed || apiID != integrationID || recipeEvidenceField(item.Excerpt, "API ID") != integrationID ||
+			recipeEvidenceField(item.Excerpt, "API contract revision ID") != revisionID ||
+			recipeEvidenceField(item.Excerpt, "Operation record ID") != operationID ||
+			recipeEvidenceField(item.Excerpt, "Operation key") == "" ||
+			recipeEvidenceField(item.Excerpt, "API contract revision content hash") == "" ||
+			recipeEvidenceField(item.Excerpt, "Operation content hash") == "" {
+			return false
+		}
+		return recipeContractOperationMethodValid(method) && strings.HasPrefix(pathTemplate, "/") && !strings.ContainsAny(pathTemplate, " \t\r\n")
 	case "tool":
 		if recipeEvidenceField(item.Excerpt, "Exact bound tool revision") != item.Version || recipeEvidenceField(item.Excerpt, "Scope") != model.ToolScopeAPI || recipeEvidenceField(item.Excerpt, "Owner integration ID") != integrationID || recipeEvidenceField(item.Excerpt, "Backend") == "" || recipeEvidenceField(item.Excerpt, "Upstream drifted") != "false" {
 			return false
@@ -545,15 +575,15 @@ func boundedIntegrationRecipeSlug(value string, limit int) string {
 func deterministicIntegrationRecipeSeeds(product model.Product, integration model.Integration, evidence []model.IntegrationEvidence) []model.RecipeSeed {
 	productEvidence := recipeProductEvidence(evidence)
 	byID, ambiguous := recipeUniqueEvidenceByID(productEvidence)
-	toolCapabilityIDs := make([]string, 0)
+	operationCapabilityIDs := make([]string, 0)
 	for _, capabilityID := range recipeProductCapabilityIDs(productEvidence) {
 		item, exists := byID[capabilityID]
 		if !exists || ambiguous[capabilityID] || !integrationRecipeCapabilityViable(item, integration.ID) {
 			continue
 		}
-		toolCapabilityIDs = append(toolCapabilityIDs, capabilityID)
+		operationCapabilityIDs = append(operationCapabilityIDs, capabilityID)
 	}
-	capabilityIDs := toolCapabilityIDs
+	capabilityIDs := operationCapabilityIDs
 	prefix := integrationRecipePrefix(product, integration)
 	result := make([]model.RecipeSeed, 0, min(len(capabilityIDs), 12))
 	seenSlugs := make(map[string]bool)

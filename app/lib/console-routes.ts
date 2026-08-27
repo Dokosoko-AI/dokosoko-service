@@ -19,6 +19,21 @@ export type IntegrationTab = "overview" | "documentation" | "access" | "tools" |
 export type IntegrationResourceTab = "documentation" | "contracts" | "sdks";
 export type SettingsTab = "overview" | "storage" | "ai" | "root";
 
+export type RouteLabelKey =
+  | "routes.quickStart"
+  | "routes.resources"
+  | "routes.keysAccess"
+  | "routes.tools"
+  | "routes.test"
+  | "routes.history"
+  | "routes.documentation"
+  | "routes.apiContracts"
+  | "routes.sdks"
+  | "routes.overview"
+  | "routes.databaseStorage"
+  | "routes.aiConfiguration"
+  | "routes.rootAccess";
+
 export type EntityKind =
   | "integration"
   | "resource-set"
@@ -36,30 +51,30 @@ export type ConsoleRoute =
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
   | { kind: "not-found"; section: "product"; path: string };
 
-export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: string }> = [
-  { id: "overview", label: "Quick Start" },
-  { id: "documentation", label: "Resources" },
-  { id: "access", label: "Keys & Access" },
-  { id: "tools", label: "Tools" },
-  { id: "test", label: "Test" },
-  { id: "history", label: "History" },
+export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: RouteLabelKey }> = [
+  { id: "overview", label: "routes.quickStart" },
+  { id: "documentation", label: "routes.resources" },
+  { id: "access", label: "routes.keysAccess" },
+  { id: "tools", label: "routes.tools" },
+  { id: "test", label: "routes.test" },
+  { id: "history", label: "routes.history" },
 ];
 
 export const INTEGRATION_PRIMARY_TABS = INTEGRATION_TABS.filter(
-  (tab): tab is { id: Exclude<IntegrationTab, "history">; label: string } => tab.id !== "history",
+  (tab): tab is { id: Exclude<IntegrationTab, "history">; label: RouteLabelKey } => tab.id !== "history",
 );
 
-export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; label: string }> = [
-  { id: "documentation", label: "Documentation" },
-  { id: "contracts", label: "API contracts" },
-  { id: "sdks", label: "SDKs" },
+export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; label: RouteLabelKey }> = [
+  { id: "documentation", label: "routes.documentation" },
+  { id: "contracts", label: "routes.apiContracts" },
+  { id: "sdks", label: "routes.sdks" },
 ];
 
-export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "storage", label: "Database & storage" },
-  { id: "ai", label: "AI configuration" },
-  { id: "root", label: "Root access" },
+export const SETTINGS_TABS: Array<{ id: SettingsTab; label: RouteLabelKey }> = [
+  { id: "overview", label: "routes.overview" },
+  { id: "storage", label: "routes.databaseStorage" },
+  { id: "ai", label: "routes.aiConfiguration" },
+  { id: "root", label: "routes.rootAccess" },
 ];
 
 export const SECTION_PATHS: Record<Section, string> = {

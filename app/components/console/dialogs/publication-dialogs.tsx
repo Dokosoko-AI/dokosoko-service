@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
 
 import { Button, Dialog } from "../../core/control";
@@ -8,6 +10,7 @@ import type { usePublicationWorkflow } from "../use-publication-workflow";
 export function PublicationDialogs({ workspace }: {
   workspace: ReturnType<typeof usePublicationWorkflow>;
 }) {
+  const { t } = useTranslation();
   const {
     pendingPublication, setPendingPublication,
     pendingMCPEnable, setPendingMCPEnable,
@@ -20,22 +23,22 @@ export function PublicationDialogs({ workspace }: {
     <Dialog
       open={Boolean(pendingPublication)}
       onClose={(open) => { if (!open) setPendingPublication(null); }}
-      title={`Make ${pendingPublication?.name ?? "source"} public?`}
-      description={pendingPublication?.detail ?? "Confirm public visibility."}
-      actions={<><Button outline onClick={() => setPendingPublication(null)}>Cancel</Button><Button color="indigo" disabled={!acknowledged} onClick={confirmPublication}>Publish</Button></>}
+      title={t("publicationDialogs.makePublic", { value1: String(pendingPublication?.name ?? "source") })}
+      description={pendingPublication?.detail ?? t("publicationDialogs.confirmPublicVisibility")}
+      actions={<><Button outline onClick={() => setPendingPublication(null)}>{t("common.cancel")}</Button><Button color="indigo" disabled={!acknowledged} onClick={confirmPublication}>{t("publicationDialogs.publish")}</Button></>}
     >
-      <label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I understand this reviewed content will be available anonymously through Public MCP.</span></label>
+      <label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{t("publicationDialogs.iUnderstandThisReviewedContentWillBeAvailableAnonymously")}</span></label>
     </Dialog>
 
     <Dialog
       open={pendingMCPEnable}
       onClose={setPendingMCPEnable}
-      title="Enable Public MCP?"
-      description="Anonymous clients will be able to discover public APIs, documentation, recipes, and read-only resources."
-      actions={<><Button outline onClick={() => setPendingMCPEnable(false)}>Cancel</Button><Button color="indigo" disabled={!acknowledged} onClick={confirmMCPEnable}>Enable Public MCP</Button></>}
+      title={t("publicationDialogs.enablePublicMCP")}
+      description={t("publicationDialogs.anonymousClientsWillBeAbleToDiscoverPublicAPIs")}
+      actions={<><Button outline onClick={() => setPendingMCPEnable(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={!acknowledged} onClick={confirmMCPEnable}>{t("publicationDialogs.enablePublicMCP2")}</Button></>}
     >
-      <div className="private-default-note"><ShieldCheck />Private tools, customer identity, runtime credentials, and private sources remain unavailable on the public endpoint.</div>
-      <label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I understand the public, read-only catalog becomes anonymously accessible.</span></label>
+      <div className="private-default-note"><ShieldCheck />{t("publicationDialogs.privateToolsCustomerIdentityRuntimeCredentialsAndPrivateSources")}</div>
+      <label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{t("publicationDialogs.iUnderstandThePublicReadOnlyCatalogBecomesAnonymously")}</span></label>
     </Dialog>
   </>;
 }

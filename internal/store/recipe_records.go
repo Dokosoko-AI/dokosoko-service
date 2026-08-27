@@ -29,17 +29,86 @@ func prepareRecipeRecord(value model.Recipe) (model.Recipe, error) {
 	}
 	switch value.ContractVersion {
 	case model.RecipeContractLegacyMCPV1:
-		if value.IntegrationID != "" {
+		if value.IntegrationID != "" || len(value.APIAttachments) != 0 {
 			return model.Recipe{}, errors.New("legacy recipes cannot have an Integration binding")
 		}
 	case model.RecipeContractProductIntegrationV2:
 		if value.IntegrationID == "" {
 			return model.Recipe{}, errors.New("product-integration recipes require an Integration binding")
 		}
+		if len(value.APIAttachments) == 0 {
+			value.APIAttachments = []model.RecipeAPIAttachment{{IntegrationID: value.IntegrationID}}
+		}
+	case model.RecipeContractDeploymentV3:
+		if value.IntegrationID != "" {
+			return model.Recipe{}, errors.New("deployment recipes cannot be owned by one Integration")
+		}
 	default:
 		return model.Recipe{}, errors.New("unsupported recipe contract version")
 	}
+	attachments, err := normalizeRecipeAPIAttachments(value.APIAttachments)
+	if err != nil {
+		return model.Recipe{}, err
+	}
+	value.APIAttachments = attachments
+	if value.ContractVersion == model.RecipeContractProductIntegrationV2 && (len(attachments) != 1 || attachments[0].IntegrationID != value.IntegrationID) {
+		return model.Recipe{}, errors.New("product-integration recipe attachment must match its Integration binding")
+	}
 	return value, nil
+}
+
+func normalizeRecipeAPIAttachments(values []model.RecipeAPIAttachment) ([]model.RecipeAPIAttachment, error) {
+	if len(values) > 8 {
+		return nil, errors.New("recipes may attach at most 8 APIs")
+	}
+	result := append([]model.RecipeAPIAttachment(nil), values...)
+	for index := range result {
+		result[index].IntegrationID = strings.TrimSpace(result[index].IntegrationID)
+		if result[index].IntegrationID == "" {
+			return nil, errors.New("recipe API attachment IDs are required")
+		}
+	}
+	slices.SortFunc(result, func(left, right model.RecipeAPIAttachment) int {
+		return strings.Compare(left.IntegrationID, right.IntegrationID)
+	})
+	for index := 1; index < len(result); index++ {
+		if result[index-1].IntegrationID == result[index].IntegrationID {
+			return nil, errors.New("recipe API attachments must be unique")
+		}
+	}
+	return result, nil
+}
+
+func recipeAttachmentIDs(values []model.RecipeAPIAttachment) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = value.IntegrationID
+	}
+	return result
+}
+
+func normalizeRecipeAPIBindings(values []model.RecipeAPIBinding) ([]model.RecipeAPIBinding, error) {
+	if len(values) > 8 {
+		return nil, errors.New("recipe revisions may bind at most 8 APIs")
+	}
+	result := append([]model.RecipeAPIBinding(nil), values...)
+	for index := range result {
+		result[index].IntegrationID = strings.TrimSpace(result[index].IntegrationID)
+		result[index].IntegrationRevisionID = strings.TrimSpace(result[index].IntegrationRevisionID)
+		result[index].IntegrationManifestHash = strings.TrimSpace(result[index].IntegrationManifestHash)
+		if result[index].IntegrationID == "" || result[index].IntegrationRevisionID == "" || !validRecipeSHA256(result[index].IntegrationManifestHash) {
+			return nil, errors.New("recipe API bindings require an Integration, exact revision, and SHA-256 manifest hash")
+		}
+	}
+	slices.SortFunc(result, func(left, right model.RecipeAPIBinding) int {
+		return strings.Compare(left.IntegrationID, right.IntegrationID)
+	})
+	for index := 1; index < len(result); index++ {
+		if result[index-1].IntegrationID == result[index].IntegrationID {
+			return nil, errors.New("recipe API bindings must be unique")
+		}
+	}
+	return result, nil
 }
 
 func prepareRecipeAudit(recipe model.Recipe, event *model.AuditEvent, allowedActions ...string) (prior, current []byte, outcome string, err error) {
@@ -99,6 +168,7 @@ func validateRecipeTransition(stored, candidate model.Recipe) error {
 		return err
 	}
 	if candidate.AnalysisID != stored.AnalysisID ||
+		!slices.Equal(candidate.APIAttachments, stored.APIAttachments) ||
 		candidate.Title != stored.Title ||
 		candidate.Outcome != stored.Outcome ||
 		candidate.Audience != stored.Audience ||
@@ -154,6 +224,10 @@ func recipeTransitionBumpsCatalog(stored, candidate model.Recipe) bool {
 	return stored.State == "published" || candidate.State == "published"
 }
 
+func recipeDeletionAllowed(recipe model.Recipe) bool {
+	return recipe.ContractVersion == model.RecipeContractLegacyMCPV1 || recipe.State == "outdated"
+}
+
 func recipeTimesEqual(left, right *time.Time) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -184,25 +258,62 @@ func prepareRecipeRevisionRecord(recipe model.Recipe, value model.RecipeRevision
 		return model.RecipeRevision{}, errors.New("AI recipe revisions require model and prompt provenance")
 	}
 
-	if recipe.ContractVersion != model.RecipeContractProductIntegrationV2 {
+	if recipe.ContractVersion == model.RecipeContractLegacyMCPV1 {
+		if len(value.APIBindings) != 0 {
+			return model.RecipeRevision{}, errors.New("legacy recipe revisions cannot have API bindings")
+		}
 		return value, nil
 	}
-	if recipe.IntegrationID == "" || value.SpecVersion != model.RecipeSpecVersion2 || value.IntegrationRevisionID == "" {
-		return model.RecipeRevision{}, errors.New("product-integration recipe revisions require an exact Integration and v2 spec binding")
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 {
+		if recipe.IntegrationID == "" || value.SpecVersion != model.RecipeSpecVersion2 || value.IntegrationRevisionID == "" {
+			return model.RecipeRevision{}, errors.New("product-integration recipe revisions require an exact Integration and v2 spec binding")
+		}
+		if len(value.APIBindings) == 0 {
+			value.APIBindings = []model.RecipeAPIBinding{{IntegrationID: recipe.IntegrationID, IntegrationRevisionID: value.IntegrationRevisionID, IntegrationManifestHash: value.IntegrationManifestHash}}
+		}
+	} else if recipe.ContractVersion == model.RecipeContractDeploymentV3 {
+		if value.SpecVersion != model.RecipeSpecVersion3 || value.IntegrationRevisionID != "" || value.IntegrationManifestHash != "" {
+			return model.RecipeRevision{}, errors.New("deployment recipe revisions require a v3 spec and revision-level API bindings")
+		}
+	}
+	bindings, err := normalizeRecipeAPIBindings(value.APIBindings)
+	if err != nil {
+		return model.RecipeRevision{}, err
+	}
+	value.APIBindings = bindings
+	if !slices.Equal(recipeAttachmentIDs(recipe.APIAttachments), recipeBindingIntegrationIDs(bindings)) {
+		return model.RecipeRevision{}, errors.New("recipe revision API bindings must exactly match current API attachments")
 	}
 	var typed model.RecipeSpec
 	decoder := json.NewDecoder(bytes.NewReader(value.Spec))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&typed); err != nil {
-		return model.RecipeRevision{}, errors.New("product-integration recipe spec is invalid")
+		return model.RecipeRevision{}, errors.New("recipe spec is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return model.RecipeRevision{}, errors.New("product-integration recipe spec is invalid")
+		return model.RecipeRevision{}, errors.New("recipe spec is invalid")
 	}
-	if typed.SchemaVersion != model.RecipeSpecVersion2 || typed.IntegrationID != recipe.IntegrationID || typed.Title != recipe.Title || typed.Outcome != recipe.Outcome {
-		return model.RecipeRevision{}, errors.New("product-integration recipe spec does not match its recipe binding")
+	if typed.Title != recipe.Title || typed.Outcome != recipe.Outcome {
+		return model.RecipeRevision{}, errors.New("recipe spec does not match its recipe identity")
+	}
+	if recipe.ContractVersion == model.RecipeContractProductIntegrationV2 && (typed.SchemaVersion != model.RecipeSpecVersion2 || typed.IntegrationID != recipe.IntegrationID || len(typed.APIAttachments) != 0) {
+		return model.RecipeRevision{}, errors.New("product-integration recipe spec does not match its Integration binding")
+	}
+	if recipe.ContractVersion == model.RecipeContractDeploymentV3 {
+		attachments, attachmentErr := normalizeRecipeAPIAttachments(typed.APIAttachments)
+		if attachmentErr != nil || typed.SchemaVersion != model.RecipeSpecVersion3 || typed.IntegrationID != "" || !slices.Equal(attachments, recipe.APIAttachments) {
+			return model.RecipeRevision{}, errors.New("deployment recipe spec does not match its API attachments")
+		}
 	}
 	return value, nil
+}
+
+func recipeBindingIntegrationIDs(values []model.RecipeAPIBinding) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = value.IntegrationID
+	}
+	return result
 }
 
 func recipeSpecJSON(raw json.RawMessage) ([]byte, error) {

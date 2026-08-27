@@ -154,6 +154,7 @@ type AIRecipeStore interface {
 	Recipe(context.Context, string, string) (model.Recipe, error)
 	RecipeBySlug(context.Context, string, string) (model.Recipe, error)
 	CreateRecipeWithRevision(context.Context, model.Recipe, model.RecipeRevision, RecipeMutation) (model.Recipe, error)
+	DeleteRecipe(context.Context, string, string, RecipeMutation) error
 	SaveRecipeTransition(context.Context, model.Recipe, RecipeMutation) (model.Recipe, error)
 	RecipeRevisions(context.Context, string) ([]model.RecipeRevision, error)
 	SaveRecipeRevision(context.Context, model.Recipe, model.RecipeRevision, RecipeMutation) (model.Recipe, error)

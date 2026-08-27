@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import clsx from 'clsx'
 import type React from 'react'
 import { Button } from './button'
@@ -15,9 +16,10 @@ export function PaginationPrevious({
   className,
   children = 'Previous',
 }: React.PropsWithChildren<{ href?: string | null; className?: string }>) {
+  const { t } = useTranslation();
   return (
     <span className={clsx(className, 'grow basis-0')}>
-      <Button {...(href === null ? { disabled: true } : { href })} plain aria-label="Previous page">
+      <Button {...(href === null ? { disabled: true } : { href })} plain aria-label={t("pagination.previousPage")}>
         <svg className="stroke-current" data-slot="icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
             d="M2.75 8H13.25M2.75 8L5.25 5.5M2.75 8L5.25 10.5"
@@ -37,9 +39,10 @@ export function PaginationNext({
   className,
   children = 'Next',
 }: React.PropsWithChildren<{ href?: string | null; className?: string }>) {
+  const { t } = useTranslation();
   return (
     <span className={clsx(className, 'flex grow basis-0 justify-end')}>
-      <Button {...(href === null ? { disabled: true } : { href })} plain aria-label="Next page">
+      <Button {...(href === null ? { disabled: true } : { href })} plain aria-label={t("pagination.nextPage")}>
         {children}
         <svg className="stroke-current" data-slot="icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
@@ -64,11 +67,12 @@ export function PaginationPage({
   current = false,
   children,
 }: React.PropsWithChildren<{ href: string; className?: string; current?: boolean }>) {
+  const { t } = useTranslation();
   return (
     <Button
       href={href}
       plain
-      aria-label={`Page ${children}`}
+      aria-label={t("pagination.page", { children: String(children) })}
       aria-current={current ? 'page' : undefined}
       className={clsx(
         className,
@@ -83,16 +87,17 @@ export function PaginationPage({
 
 export function PaginationGap({
   className,
-  children = <>&hellip;</>,
+  children,
   ...props
 }: React.ComponentPropsWithoutRef<'span'>) {
+  const { t } = useTranslation();
   return (
     <span
       aria-hidden="true"
       {...props}
       className={clsx(className, 'w-9 text-center text-sm/6 font-semibold text-zinc-950 select-none dark:text-white')}
     >
-      {children}
+      {children ?? t("pagination.hellip")}
     </span>
   )
 }

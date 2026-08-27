@@ -1,8 +1,10 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { Check, Copy, Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { APIDeployment, APIError, APIOrganisation, APIUser, SetupEnrollment, api } from "../lib/api";
 import type { ConsoleFixtures } from "../dev/console-fixtures";
 import { Button } from "./core/control";
@@ -11,11 +13,12 @@ import { ConsoleApp } from "./ConsoleApp";
 type Gate = "loading" | "console" | "setup" | "login" | "onboarding" | "error";
 type SetupStep = "identity" | "mfa" | "recovery";
 
-function errorMessage(error: unknown): string {
-  return error instanceof APIError ? error.message : "DokoSoko could not complete the request.";
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof APIError ? error.message : fallback;
 }
 
 export function RootGate() {
+  const { t } = useTranslation();
   const [gate, setGate] = useState<Gate>("loading");
   const [consoleMode, setConsoleMode] = useState<"live" | "fixtures">("live");
   const [consoleFixtures, setConsoleFixtures] = useState<ConsoleFixtures | null>(null);
@@ -23,6 +26,30 @@ export function RootGate() {
   const [deployment, setDeployment] = useState<APIDeployment | null>(null);
   const [onboardingOrganisation, setOnboardingOrganisation] = useState<APIOrganisation | null>(null);
   const [problem, setProblem] = useState("");
+
+  const openWorkspace = useCallback(async (value: APIUser) => {
+    setUser(value);
+    try {
+      const organisations = await api.organisations();
+      if (organisations.length === 0) {
+        setOnboardingOrganisation(null);
+        setGate("onboarding");
+        return;
+      }
+      try {
+        const currentDeployment = await api.deployment();
+        setDeployment(currentDeployment);
+        setGate("console");
+      } catch (error) {
+        if (!(error instanceof APIError) || error.status !== 404) throw error;
+        setOnboardingOrganisation(organisations[0]);
+        setGate("onboarding");
+      }
+    } catch (error) {
+      setProblem(errorMessage(error, t("auth.requestFailed")));
+      setGate("error");
+    }
+  }, [t]);
 
   useEffect(() => {
     if (
@@ -39,7 +66,7 @@ export function RootGate() {
         setGate("console");
       }).catch((error) => {
         if (cancelled) return;
-        setProblem(errorMessage(error));
+        setProblem(errorMessage(error, t("auth.requestFailed")));
         setGate("error");
       });
       return () => { cancelled = true; };
@@ -62,43 +89,19 @@ export function RootGate() {
           if (error instanceof APIError && error.status === 401) {
             setGate("login");
           } else {
-            setProblem(errorMessage(error));
+            setProblem(errorMessage(error, t("auth.requestFailed")));
             setGate("error");
           }
         }
       }
     }).catch((error) => {
       if (!cancelled) {
-        setProblem(errorMessage(error));
+        setProblem(errorMessage(error, t("auth.requestFailed")));
         setGate("error");
       }
     });
     return () => { cancelled = true; };
-  }, []);
-
-  async function openWorkspace(value: APIUser) {
-    setUser(value);
-    try {
-      const organisations = await api.organisations();
-      if (organisations.length === 0) {
-        setOnboardingOrganisation(null);
-        setGate("onboarding");
-        return;
-      }
-      try {
-        const currentDeployment = await api.deployment();
-        setDeployment(currentDeployment);
-        setGate("console");
-      } catch (error) {
-        if (!(error instanceof APIError) || error.status !== 404) throw error;
-        setOnboardingOrganisation(organisations[0]);
-        setGate("onboarding");
-      }
-    } catch (error) {
-      setProblem(errorMessage(error));
-      setGate("error");
-    }
-  }
+  }, [openWorkspace, t]);
 
   async function logout() {
     try {
@@ -110,11 +113,11 @@ export function RootGate() {
     }
   }
 
-  if (gate === "loading") return <AuthShell icon={<ShieldCheck />} title="Opening DokoSoko" description="Loading the authenticated deployment…" />;
+  if (gate === "loading") return <AuthShell icon={<ShieldCheck />} title={t("auth.openingDokoSoko")} description={t("auth.loadingTheAuthenticatedDeployment")} />;
   if (gate === "setup") return <SetupScreen onComplete={openWorkspace} />;
   if (gate === "login") return <LoginScreen onComplete={openWorkspace} />;
   if (gate === "onboarding") return <WorkspaceSetup existingOrganisation={onboardingOrganisation} onComplete={(value) => { setDeployment(value); setGate("console"); }} />;
-  if (gate === "error") return <AuthShell icon={<TriangleAlert />} title="Deployment needs attention" description={problem || "Authentication is not configured. Check the setup token, master key, database, and public URL."} />;
+  if (gate === "error") return <AuthShell icon={<TriangleAlert />} title={t("auth.deploymentNeedsAttention")} description={problem || t("auth.authenticationIsNotConfiguredCheckTheSetupTokenMaster")} />;
   return <ConsoleApp key={deployment?.id ?? "fixture-preview"} mode={consoleMode} fixtures={consoleFixtures} currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
 }
 
@@ -123,6 +126,7 @@ function slugify(value: string): string {
 }
 
 function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisation: APIOrganisation | null; onComplete: (deployment: APIDeployment) => void }) {
+  const { t } = useTranslation();
   const [organisationName, setOrganisationName] = useState(existingOrganisation?.name ?? "");
   const [deploymentName, setDeploymentName] = useState("");
   const [environmentName, setEnvironmentName] = useState("Production");
@@ -139,26 +143,27 @@ function WorkspaceSetup({ existingOrganisation, onComplete }: { existingOrganisa
       await api.createDeploymentEnvironment(organisation.id, environmentName, slugify(environmentName), true);
       onComplete(deployment);
     } catch (error) {
-      setProblem(errorMessage(error));
+      setProblem(errorMessage(error, t("auth.requestFailed")));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <AuthShell icon={<ShieldCheck />} title="Configure this DokoSoko deployment" description="Name this connector deployment and create the first environment agents will target.">
+    <AuthShell icon={<ShieldCheck />} title={t("auth.configureThisDokoSokoDeployment")} description={t("auth.nameThisConnectorDeploymentAndCreateTheFirstEnvironment")}>
       <form className="auth-form" onSubmit={create}>
-        <Field label="Organisation"><input required disabled={Boolean(existingOrganisation)} value={organisationName} onChange={(event) => setOrganisationName(event.target.value)} /></Field>
-        <Field label="Deployment name" hint="The identity of this DokoSoko installation. APIs and versions are added later as Integrations."><input required value={deploymentName} onChange={(event) => setDeploymentName(event.target.value)} placeholder="Developer Platform connector" /></Field>
-        <Field label="First environment" hint="The deployment stage agents should target first, such as Production, Staging, or Development."><input required value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} /></Field>
+        <Field label={t("auth.organisation")}><input required disabled={Boolean(existingOrganisation)} value={organisationName} onChange={(event) => setOrganisationName(event.target.value)} /></Field>
+        <Field label={t("auth.deploymentName")} hint={t("auth.theIdentityOfThisDokoSokoInstallationAPIsAndVersions")}><input required value={deploymentName} onChange={(event) => setDeploymentName(event.target.value)} placeholder={t("auth.developerPlatformConnector")} /></Field>
+        <Field label={t("auth.firstEnvironment")} hint={t("auth.theDeploymentStageAgentsShouldTargetFirstSuchAs")}><input required value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} /></Field>
         {problem && <AuthProblem>{problem}</AuthProblem>}
-        <Button type="submit" color="indigo" disabled={busy}>{busy ? "Creating workspace…" : "Create and open console"}</Button>
+        <Button type="submit" color="indigo" disabled={busy}>{busy ? t("auth.creatingWorkspace") : t("auth.createAndOpenConsole")}</Button>
       </form>
     </AuthShell>
   );
 }
 
 function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<SetupStep>("identity");
   const [setupToken, setSetupToken] = useState("");
   const [email, setEmail] = useState("");
@@ -180,7 +185,7 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
       setEnrollment(value);
       setStep("mfa");
     } catch (error) {
-      setProblem(errorMessage(error));
+      setProblem(errorMessage(error, t("auth.requestFailed")));
     } finally {
       setBusy(false);
     }
@@ -197,7 +202,7 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
       setRecoveryCodes(result.recovery_codes);
       setStep("recovery");
     } catch (error) {
-      setProblem(errorMessage(error));
+      setProblem(errorMessage(error, t("auth.requestFailed")));
     } finally {
       setBusy(false);
     }
@@ -209,23 +214,23 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
 
   if (step === "mfa" && enrollment) {
     return (
-      <AuthShell icon={<ShieldCheck />} title="Secure the root account" description="Scan the QR code with Google Authenticator, then enter the current six-digit code.">
+      <AuthShell icon={<ShieldCheck />} title={t("auth.secureTheRootAccount")} description={t("auth.scanTheQRCodeWithGoogleAuthenticatorThenEnter")}>
         <div className="setup-progress"><span className="done">1</span><i /><span className="active">2</span><i /><span>3</span></div>
         <div className="authenticator-setup">
-          <strong>Setup Google Authenticator</strong>
+          <strong>{t("auth.setupGoogleAuthenticator")}</strong>
           <div className="authenticator-qr">
-            <QRCodeSVG value={enrollment.provisioning_uri} size={176} level="M" marginSize={2} title="Google Authenticator setup QR code" />
+            <QRCodeSVG value={enrollment.provisioning_uri} size={176} level="M" marginSize={2} title={t("auth.googleAuthenticatorSetupQRCode")} />
           </div>
           <div className="authenticator-secret">
-            <small>Alternatively, manually set up with this secret</small>
+            <small>{t("auth.alternativelyManuallySetUpWithThisSecret")}</small>
             <code>{enrollment.totp_secret}</code>
-            <a href={enrollment.provisioning_uri}>Open authenticator app</a>
+            <a href={enrollment.provisioning_uri}>{t("auth.openAuthenticatorApp")}</a>
           </div>
         </div>
         <form className="auth-form" onSubmit={complete}>
-          <Field label="Six-digit code"><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="123456" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></Field>
+          <Field label={t("auth.sixDigitCode")}><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="123456" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></Field>
           {problem && <AuthProblem>{problem}</AuthProblem>}
-          <Button type="submit" color="indigo" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify and create root user"}</Button>
+          <Button type="submit" color="indigo" disabled={busy || code.length !== 6}>{busy ? t("common.verifying") : t("auth.verifyAndCreateRootUser")}</Button>
         </form>
       </AuthShell>
     );
@@ -233,36 +238,37 @@ function SetupScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
 
   if (step === "recovery" && createdUser) {
     return (
-      <AuthShell icon={<Check />} title="Save your recovery codes" description="These one-time codes are the only fallback if the root authenticator is unavailable.">
+      <AuthShell icon={<Check />} title={t("auth.saveYourRecoveryCodes")} description={t("auth.theseOneTimeCodesAreTheOnlyFallbackIf")}>
         <div className="setup-progress"><span className="done">1</span><i /><span className="done">2</span><i /><span className="active">3</span></div>
         <div className="recovery-grid">{recoveryCodes.map((value) => <code key={value}>{value}</code>)}</div>
-        <div className="auth-actions"><Button type="button" outline onClick={copyRecoveryCodes}><Copy data-slot="icon" />Copy codes</Button><Button type="button" color="indigo" onClick={() => onComplete(createdUser)}>I saved them — open console</Button></div>
+        <div className="auth-actions"><Button type="button" outline onClick={copyRecoveryCodes}><Copy data-slot="icon" />{t("auth.copyCodes")}</Button><Button type="button" color="indigo" onClick={() => onComplete(createdUser)}>{t("auth.iSavedThemOpenConsole")}</Button></div>
       </AuthShell>
     );
   }
 
   return (
-    <AuthShell icon={<KeyRound />} title="Create the first root user" description="Use the one-time setup token from your deployment environment. MFA is mandatory.">
+    <AuthShell icon={<KeyRound />} title={t("auth.createTheFirstRootUser")} description={t("auth.useTheOneTimeSetupTokenFromYourDeployment")}>
       <div className="setup-progress"><span className="active">1</span><i /><span>2</span><i /><span>3</span></div>
       <form className="auth-form" onSubmit={begin}>
-        <Field label="Setup token"><input required type="password" autoComplete="off" value={setupToken} onChange={(event) => setSetupToken(event.target.value)} /></Field>
-        <Field label="Root email"><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-        <Field label="Password" hint="14+ characters with upper, lower, and a number">
+        <Field label={t("auth.setupToken")}><input required type="password" autoComplete="off" value={setupToken} onChange={(event) => setSetupToken(event.target.value)} /></Field>
+        <Field label={t("auth.rootEmail")}><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
+        <Field label={t("auth.password")} hint={t("auth.n14CharactersWithUpperLowerAndANumber")}>
           <div className="password-input">
             <input required type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={14} value={password} onChange={(event) => setPassword(event.target.value)} />
-            <button type="button" className="password-visibility" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>
+            <button type="button" className="password-visibility" aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>
               {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
             </button>
           </div>
         </Field>
         {problem && <AuthProblem>{problem}</AuthProblem>}
-        <Button type="submit" color="indigo" disabled={busy}>{busy ? "Preparing MFA…" : "Continue to MFA"}</Button>
+        <Button type="submit" color="indigo" disabled={busy}>{busy ? t("auth.preparingMFA") : t("auth.continueToMFA")}</Button>
       </form>
     </AuthShell>
   );
 }
 
 function LoginScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
+  const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -277,27 +283,28 @@ function LoginScreen({ onComplete }: { onComplete: (user: APIUser) => void }) {
       const session = await api.login(email, password, code);
       onComplete(session.user);
     } catch (error) {
-      setProblem(errorMessage(error));
+      setProblem(errorMessage(error, t("auth.requestFailed")));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <AuthShell icon={<LockKeyhole />} title="Sign in to DokoSoko" description="Root administration requires your password and current authenticator code.">
+    <AuthShell icon={<LockKeyhole />} title={t("auth.signInToDokoSoko")} description={t("auth.rootAdministrationRequiresYourPasswordAndCurrentAuthenticatorCode")}>
       <form className="auth-form" onSubmit={login}>
-        <Field label="Email"><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-        <Field label="Password"><input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-        <Field label="Authenticator code"><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></Field>
+        <Field label={t("auth.email")}><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
+        <Field label={t("auth.password")}><input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+        <Field label={t("auth.authenticatorCode")}><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></Field>
         {problem && <AuthProblem>{problem}</AuthProblem>}
-        <Button type="submit" color="indigo" disabled={busy || code.length !== 6}>{busy ? "Signing in…" : "Sign in"}</Button>
+        <Button type="submit" color="indigo" disabled={busy || code.length !== 6}>{busy ? t("auth.signingIn") : t("auth.signIn")}</Button>
       </form>
     </AuthShell>
   );
 }
 
 function AuthShell({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children?: React.ReactNode }) {
-  return <main className="auth-shell"><section className="auth-card"><span className="auth-icon">{icon}</span><h1 className="type-section-title">{title}</h1><p className="type-body">{description}</p>{children}</section><footer className="type-caption">Private by default · MFA enforced · security events audited</footer></main>;
+  const { t } = useTranslation();
+  return <main className="auth-shell"><section className="auth-card"><span className="auth-icon">{icon}</span><h1 className="type-section-title">{title}</h1><p className="type-body">{description}</p>{children}</section><footer className="type-caption">{t("auth.privateByDefaultMFAEnforcedSecurityEventsAudited")}</footer></main>;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {

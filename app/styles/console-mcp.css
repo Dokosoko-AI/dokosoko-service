@@ -40,3 +40,17 @@
 .catalog-tool strong { font-size: var(--text-body); }
 .catalog-tool code { align-self: center; overflow: hidden; color: var(--accent); font-size: var(--text-caption); text-overflow: ellipsis; white-space: nowrap; }
 .catalog-tool small { grid-column: 1 / -1; color: var(--muted); font-size: var(--text-caption); }
+.dialog-panel:has(.source-kind-options) { width: min(620px, 100%); }
+.source-kind-selector { min-width: 0; margin: 0; padding: 0; border: 0; }
+.source-kind-selector > legend { margin-bottom: 7px; color: var(--text-strong); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.source-kind-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.source-kind-options > label { position: relative; min-width: 0; min-height: 102px; display: grid; align-content: center; justify-items: center; gap: 9px; padding: 14px 10px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--text); background: var(--surface); cursor: pointer; text-align: center; }
+.source-kind-options > label:hover { border-color: var(--accent-highlight); background: var(--accent-soft); }
+.source-kind-options > label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.source-kind-options > label.selected { border-color: var(--accent); color: var(--accent-strong); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.source-kind-options input { position: absolute; opacity: 0; pointer-events: none; }
+.source-kind-options strong { overflow-wrap: anywhere; font-size: var(--text-label); font-weight: var(--weight-semibold); }
+.source-kind-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: var(--accent); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.source-kind-icon svg { width: 17px; height: 17px; }
+.source-kind-check { position: absolute; top: 8px; right: 8px; width: 14px; height: 14px; color: var(--accent); opacity: 0; }
+.source-kind-options > label.selected .source-kind-check { opacity: 1; }

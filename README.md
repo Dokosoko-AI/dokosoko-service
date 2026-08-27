@@ -131,12 +131,15 @@ instruction bodies are versioned per product and can be restored to their safe
 defaults. DokoSoko applies its immutable safety policy separately; operators
 cannot edit or disable it through prompt configuration.
 
-Recipes are immutable, reviewed product-integration plans grounded in bounded
-published evidence. A coding agent discovers them only after connecting through
-MCP, so recipe content never explains how to connect to DokoSoko. Each current
-recipe targets one tangible product capability with minimal prerequisites,
-ordered implementation steps, observable checks, and grounded references.
-Generated content is never published automatically.
+Recipes are immutable, reviewed deployment-level product-integration plans
+grounded in bounded published evidence. A coding agent discovers them only
+after connecting through MCP, so recipe content never explains how to connect
+to DokoSoko. A recipe may attach multiple APIs when one coherent workflow
+requires exact capabilities from each; every revision freezes those APIs'
+published revisions and manifest hashes. The generator detects eligible APIs
+from reviewed evidence, while the server owns the attachments, instructions,
+validation, and publication boundary. Generated content is never published
+automatically.
 
 ## Deploy and verify
 

@@ -186,7 +186,7 @@ html[data-preview="fixtures"] .app-shell .sidebar { height: 100vh; }
 .nav-item.active { color: var(--sidebar-text-active); background: var(--sidebar-active); box-shadow: inset 0 0 0 1px var(--sidebar-line); }
 .nav-symbol { width: 18px; color: var(--subtle); text-align: center; font-size: var(--text-heading); }
 .sidebar-bottom { margin-top: auto; }
-.sidebar-bottom > .theme-toggle { margin-bottom: 3px; }
+.preference-controls { display: flex; align-items: center; gap: 2px; margin-bottom: 3px; }
 .account { display: flex; min-width: 0; align-items: center; gap: 10px; margin: 14px 4px 0; padding: 13px 7px 1px; border-top: 1px solid var(--sidebar-line); font-size: var(--text-body); color: var(--sidebar-text-active); }
 .account > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
 .account strong, .account small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -251,7 +251,7 @@ main.workspace-wide { --workspace-max: var(--workspace-wide); }
 .topbar { position: sticky; top: 0; z-index: 20; height: 64px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(12px); }
 .topbar-inner { width: 100%; max-width: var(--workspace-max); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-inline: auto; padding-inline: var(--page-gutter); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
-.mobile-theme-toggle { display: none; }
+.mobile-preference-controls { display: none; }
 .product-switcher { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .product-switcher { border: 0; background: transparent; color: inherit; text-align: left; }
 .product-switcher > span:nth-child(2) { display: grid; gap: 1px; }

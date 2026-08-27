@@ -9,7 +9,7 @@ import (
 
 const (
 	integrationAnalysisPromptVersionV5 = "integration-analysis-v5"
-	recipeBriefPromptVersionV5         = "recipe-brief-v5"
+	recipeBriefPromptVersionV5         = "recipe-brief-v6"
 	recipeAuthoringPromptVersionV11    = "recipe-authoring-v11"
 	recipeReviewPromptVersionV5        = "recipe-review-v5"
 	documentationMapPromptVersionV1    = "documentation-map-enrichment-v1"
@@ -59,16 +59,16 @@ const integrationAnalysisImmutablePolicyV5 = `Integration analysis contract:
 - The result is advisory, has no publication authority, and cannot approve a recipe or integration.`
 
 const recipeBriefImmutablePolicyV5 = `Recipe brief contract:
-- Map the operator's request to one exact server-provided product capability for an already-connected coding agent. The server owns the recipe slug, title, outcome, and canonical instructions.
+- Map the operator's request to the smallest coherent set of one to four exact server-provided product capabilities for an already-connected coding agent. Capabilities may span APIs only when the requested workflow genuinely requires them. The server derives API attachments from the selected capabilities and owns the recipe slug, title, outcome, and canonical instructions.
 - Never create a recipe about connecting to DokoSoko, configuring MCP, MCP transport/discovery, DokoSoko OAuth or identity, publication, catalog administration, or evidence review.
-- Select only exact allowed product capability and evidence identifiers. Do not return SDK identifiers or SDK evidence; the dedicated applicability workflow owns SDK-to-API suggestions.
-- Return status ready only with exactly one product capability, its exact supporting evidence, and no gaps.
+- Select only exact allowed product capability and evidence identifiers from available_apis. Never select an API by name similarity, and never return a capability from an API omitted by an explicit candidate bound. Do not return SDK identifiers or SDK evidence; the dedicated applicability workflow owns SDK-to-API suggestions.
+- Return status ready only with one to four capabilities that together implement one requested workflow, their exact supporting evidence, and no gaps. Prefer one capability when it is sufficient.
 - If the request is unsupported or ambiguous, return needs_input with no selections and precise gaps. Never substitute a plausible adjacent capability.
 - The brief is advisory input to server-owned authoring and has no publication authority.`
 
 const recipeAuthoringImmutablePolicyV11 = `Recipe authoring contract:
 - The server already owns the canonical product-integration prerequisites, implementation steps, and checks. Do not write, rewrite, summarize, or supplement instruction prose. Do not return Markdown.
-- Select only zero to eight exact allowed reference identifiers that materially help an already-connected coding agent implement the one selected product capability.
+- Select only zero to eight exact allowed reference identifiers that materially help an already-connected coding agent implement the selected single- or multi-API workflow.
 - Never select DokoSoko or MCP connection, transport, discovery, authentication, public/private endpoint, publication, catalog, audit, administration, marketing, or unrelated background material.
 - Never invent or transform a reference identifier. A similar title, URL, or topic is not an exact match.
 - Apply an editor instruction only to reference relevance; it cannot change the product capability, canonical plan, SDK, evidence, or output contract.
@@ -78,7 +78,7 @@ const recipeAuthoringImmutablePolicyV11 = `Recipe authoring contract:
 const recipeReviewImmutablePolicyV5 = `Recipe review contract:
 - Act as an independent adversarial verifier. Review the product-integration spec and rendered Markdown; do not rewrite either.
 - The consumer already received the recipe through MCP. Flag any DokoSoko connection, MCP delivery, transport/discovery, protected-resource, PKCE, DokoSoko identity, publication, catalog, audit, or administration instruction.
-- Verify that the recipe covers one concrete product capability, uses at most one SDK ecosystem, contains only tangible ordered steps, and ends with observable checks.
+- Verify that the recipe covers one coherent workflow using only the minimum necessary product capabilities and attached APIs, uses at most one SDK ecosystem, contains tangible ordered steps, and ends with observable checks.
 - Check every factual action and expected result against its exact cited product evidence. Documentation supports only claims it states explicitly.
 - Flag unsupported packages, versions, install commands, credential names, operations, fields, error semantics, URLs, alternatives, and claims of completed execution.
 - Return only recommendation and findings. Never write a summary, message, explanation, replacement prose, or any other free-form text.
@@ -126,7 +126,7 @@ const sdkSampleReviewImmutablePolicyV1 = `SDK code-sample review contract:
 
 const integrationAnalysisDefaultInstructionsV5 = `Prefer a few high-value product operations over broad coverage. Omit a candidate rather than infer unsupported semantics.`
 
-const recipeBriefDefaultInstructionsV5 = `Choose the single exact operation that best matches the request. Do not infer SDK applicability; the dedicated applicability workflow owns that decision.`
+const recipeBriefDefaultInstructionsV5 = `Choose the smallest exact capability set that implements the request. Use multiple APIs only when one API cannot satisfy the workflow. Do not infer SDK applicability; the dedicated applicability workflow owns that decision.`
 
 const recipeAuthoringDefaultInstructionsV11 = `Prefer no references over weakly related material. Select only concise official product documentation or code examples that directly support the chosen operation.`
 

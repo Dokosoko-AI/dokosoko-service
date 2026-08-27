@@ -1,5 +1,7 @@
 "use client";
 
+
+import { useTranslation } from "react-i18next";
 import { ArrowLeft, Check, Eye, RefreshCw, Search, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -76,15 +78,17 @@ type ConsoleAppProps = {
 };
 
 export function ConsoleApp({ mode, fixtures, currentUser, currentDeployment, onLogout }: ConsoleAppProps) {
+  const { t } = useTranslation();
   if (mode === "fixtures") {
-    if (!fixtures) return <section className="panel entity-missing" role="status"><div><h1>Loading fixture preview</h1></div></section>;
+    if (!fixtures) return <section className="panel entity-missing" role="status"><div><h1>{t("console.loadingFixturePreview")}</h1></div></section>;
     return <ConsoleWorkspace fixturePreview fixtures={fixtures} currentUser={currentUser} currentDeployment={fixtures.deployment} onLogout={onLogout} />;
   }
-  if (!currentDeployment) return <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>Deployment unavailable</h1><p>Reload the console or check the service API.</p></div></section>;
+  if (!currentDeployment) return <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>{t("console.deploymentUnavailable")}</h1><p>{t("console.reloadTheConsoleOrCheckTheServiceAPI")}</p></div></section>;
   return <ConsoleWorkspace fixturePreview={false} currentUser={currentUser} currentDeployment={currentDeployment} onLogout={onLogout} />;
 }
 
 function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeployment, onLogout }: { fixturePreview: boolean; fixtures?: ConsoleFixtures; currentUser?: APIUser | null; currentDeployment: APIDeployment; onLogout?: () => void | Promise<void> }) {
+  const { t } = useTranslation();
   const [product, setProduct] = useState<APIProduct>(deploymentAsProduct(currentDeployment));
   const [workspaceLoading, setWorkspaceLoading] = useState(!fixturePreview);
   const [workspaceLoadProblems, setWorkspaceLoadProblems] = useState<string[]>([]);
@@ -113,9 +117,9 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     window.setTimeout(() => setToast(null), 2200);
   }, []);
   const recordWorkspaceLoadProblem = useCallback((area: string, error?: unknown) => {
-    const detail = error instanceof APIError ? error.message : error instanceof Error ? error.message : "Request failed";
+    const detail = error instanceof APIError ? error.message : error instanceof Error ? error.message : t("console.requestFailed");
     setWorkspaceLoadProblems((current) => current.includes(`${area}: ${detail}`) ? current : [...current, `${area}: ${detail}`]);
-  }, []);
+  }, [t]);
   const clearToolBuilderSeed = useCallback(() => setToolBuilderSeed(null), []);
   const { consoleRoute, section, settingsTab, navigateToPath, navigateToSection, navigateToGroup, onToolBuilderDirtyChange } = useConsoleNavigation({ onLeaveToolBuilder: clearToolBuilderSeed });
   const apiConnected = !fixturePreview;
@@ -127,7 +131,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const adminWorkspace = useAdminActivityWorkspace({ currentUser, apiConnected, showToast });
   const { reportSubmissions, setReportSubmissions, rootUsers, setRootUsers, setRootOpen, setRootRecoveryCodes, auditEvents, setAuditEvents, openSupportSubmission, revokeRootUser } = adminWorkspace;
   const aiWorkspace = useAIWorkspaceState({ product, fixturePreview, onLoadProblem: recordWorkspaceLoadProblem, showToast });
-  const { aiConnections, aiProfiles, aiPrompts, analyses, recipes, aiProviderUsage, recipeBusy, workloadBusy, setProviderPickerOpen, openAIConnection, openAIWorkload, openAIPrompt, testAIConnection, saveAIWorkloadSelection, createRecipe, generateRecipesFromEvidence, generateIntegrationSetupGuide, reworkRecipe, editRecipe, approveRecipe, publishRecipe, runSystemDoctor } = aiWorkspace;
+  const { aiConnections, aiProfiles, aiPrompts, analyses, recipes, aiProviderUsage, recipeBusy, workloadBusy, setProviderPickerOpen, openAIConnection, openAIWorkload, openAIPrompt, testAIConnection, saveAIWorkloadSelection, createRecipe, generateRecipesFromEvidence, generateIntegrationSetupGuide, reworkRecipe, editRecipe, deleteRecipe, approveRecipe, publishRecipe, runSystemDoctor } = aiWorkspace;
   const sourceWorkspace = useSourceWorkflow({ product, apiConnected, sources, setSources, refreshCatalog, showToast });
   const { setAddSourceOpen, crawlSource, attachReviewedSourcePublication, publishSource } = sourceWorkspace;
   const toolBuilderUID = consoleRoute.kind === "tool-builder" ? consoleRoute.uid : undefined;
@@ -149,11 +153,11 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     }).catch((error: unknown) => {
       if (!cancelled) {
         setGrantDefinitionsStatus("unavailable");
-        recordWorkspaceLoadProblem("Grant registry", error);
+        recordWorkspaceLoadProblem(t("console.grantRegistry"), error);
       }
     });
     return () => { cancelled = true; };
-  }, [fixturePreview, consoleRoute.kind, consoleRoute.path, consoleRoute.section, recordWorkspaceLoadProblem]);
+  }, [fixturePreview, consoleRoute.kind, consoleRoute.path, consoleRoute.section, recordWorkspaceLoadProblem, t]);
 
   useEffect(() => {
     if (fixturePreview || !toolBuilderUID) return;
@@ -182,7 +186,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
         setProduct(distributionResult.value.product);
         setPublicMCPEnabled(distributionResult.value.product.public_mcp_enabled);
         setProductRevision(distributionResult.value.product.revision);
-      } else recordWorkspaceLoadProblem("Distribution", distributionResult.reason);
+      } else recordWorkspaceLoadProblem(t("console.distribution"), distributionResult.reason);
       if (sourcesResult.status === "fulfilled") {
         const remoteSources = sourcesResult.value;
         const [crawlHistories, publicationHistories] = await Promise.all([
@@ -194,25 +198,25 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
           const latest = crawlHistories[index]?.[0];
           const latestPublication = publicationHistories[index]?.[0];
           const crawlState: Source["crawlState"] = latest ? latest.state === "failed" ? "failed" : latest.state === "cancelled" ? "cancelled" : latest.state === "review" || latest.state === "succeeded" ? "review" : latest.state === "running" ? "running" : "queued" : source.published ? "synced" : local?.crawlState ?? "draft";
-          return { id: source.id, name: source.name, kind: source.kind, location: source.location, visibility: source.visibility, published: source.published, quarantined: source.quarantined, crawlState: latest && latestPublication?.crawl_job_id === latest.id && crawlState === "review" ? "synced" : crawlState, pages: latest?.fetched_count ?? local?.pages ?? 0, lastCrawl: latest ? latest.finished_at ? new Date(latest.finished_at).toLocaleString() : latest.state : local?.lastCrawl ?? "Not crawled", revision: source.revision, latestPublication };
+          return { id: source.id, name: source.name, kind: source.kind, location: source.location, visibility: source.visibility, published: source.published, quarantined: source.quarantined, crawlState: latest && latestPublication?.crawl_job_id === latest.id && crawlState === "review" ? "synced" : crawlState, pages: latest?.fetched_count ?? local?.pages ?? 0, lastCrawl: latest ? latest.finished_at ? t("format.dateTime", { value: new Date(latest.finished_at) }) : latest.state : local?.lastCrawl ?? "not-crawled", revision: source.revision, latestPublication };
         }));
-      } else recordWorkspaceLoadProblem("Documentation", sourcesResult.reason);
-      if (toolsResult.status === "fulfilled") setTools(toolsResult.value); else recordWorkspaceLoadProblem("Tools", toolsResult.reason);
-      if (mcpResult.status === "fulfilled") setMCPConnections(mcpResult.value); else recordWorkspaceLoadProblem("MCP connections", mcpResult.reason);
-      if (nativeResult.status === "fulfilled") setNativePlugins(nativeResult.value); else recordWorkspaceLoadProblem("Native tools", nativeResult.reason);
-      if (integrationsResult.status === "fulfilled") setIntegrations(integrationsResult.value); else recordWorkspaceLoadProblem("APIs", integrationsResult.reason);
-      if (resourcesResult.status === "fulfilled") setResourceSets(resourcesResult.value); else recordWorkspaceLoadProblem("Resources", resourcesResult.reason);
-      if (identityResult.status === "fulfilled") { setIdentityConfig(identityResult.value); setIdentityLoadError(""); } else setIdentityLoadError(identityResult.reason instanceof APIError ? identityResult.reason.message : "Identity settings could not be loaded.");
+      } else recordWorkspaceLoadProblem(t("console.documentation"), sourcesResult.reason);
+      if (toolsResult.status === "fulfilled") setTools(toolsResult.value); else recordWorkspaceLoadProblem(t("navigation.tools"), toolsResult.reason);
+      if (mcpResult.status === "fulfilled") setMCPConnections(mcpResult.value); else recordWorkspaceLoadProblem(t("console.mcpConnections"), mcpResult.reason);
+      if (nativeResult.status === "fulfilled") setNativePlugins(nativeResult.value); else recordWorkspaceLoadProblem(t("console.nativeTools"), nativeResult.reason);
+      if (integrationsResult.status === "fulfilled") setIntegrations(integrationsResult.value); else recordWorkspaceLoadProblem(t("navigation.apis"), integrationsResult.reason);
+      if (resourcesResult.status === "fulfilled") setResourceSets(resourcesResult.value); else recordWorkspaceLoadProblem(t("console.resources"), resourcesResult.reason);
+      if (identityResult.status === "fulfilled") { setIdentityConfig(identityResult.value); setIdentityLoadError(""); } else setIdentityLoadError(identityResult.reason instanceof APIError ? identityResult.reason.message : t("console.identitySettingsLoadFailed"));
       setIdentityLoading(false);
-      if (reportsResult.status === "fulfilled") setReportSubmissions(reportsResult.value); else recordWorkspaceLoadProblem("Support outbox", reportsResult.reason);
-      if (rootsResult.status === "fulfilled") setRootUsers(rootsResult.value); else recordWorkspaceLoadProblem("Root users", rootsResult.reason);
-      if (auditResult.status === "fulfilled") setAuditEvents(auditResult.value); else recordWorkspaceLoadProblem("Audit", auditResult.reason);
+      if (reportsResult.status === "fulfilled") setReportSubmissions(reportsResult.value); else recordWorkspaceLoadProblem(t("navigation.supportOutbox"), reportsResult.reason);
+      if (rootsResult.status === "fulfilled") setRootUsers(rootsResult.value); else recordWorkspaceLoadProblem(t("console.rootUsers"), rootsResult.reason);
+      if (auditResult.status === "fulfilled") setAuditEvents(auditResult.value); else recordWorkspaceLoadProblem(t("console.audit"), auditResult.reason);
       if (accountsResult.status === "fulfilled") { setCustomerAccounts(accountsResult.value.items); setCustomerAccountsHaveMore(accountsResult.value.has_more); setCustomerAccountsStatus("ready"); } else setCustomerAccountsStatus("unavailable");
       setWorkspaceLoading(false);
     };
     void load();
     return () => { cancelled = true; };
-  }, [fixturePreview, product.id, product.organisation_id, recordWorkspaceLoadProblem, setAuditEvents, setDistribution, setMCPConnections, setProductRevision, setPublicMCPEnabled, setReportSubmissions, setRootUsers]);
+  }, [fixturePreview, product.id, product.organisation_id, recordWorkspaceLoadProblem, setAuditEvents, setDistribution, setMCPConnections, setProductRevision, setPublicMCPEnabled, setReportSubmissions, setRootUsers, t]);
 
   async function refreshCatalog() {
     const [integrationValues, setValues, toolValues, eventValues] = await Promise.all([api.integrations(), api.resourceSets(), api.tools(product.id), api.auditEvents(product.organisation_id).catch(() => null)]);
@@ -232,17 +236,17 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     const updated = await api.setNativePluginEnabled(pluginID, enabled);
     setNativePlugins((items) => items.map((item) => item.id === updated.id ? updated : item));
     await refreshTools();
-    showToast(`${updated.id} is ${updated.state}.`);
+    showToast(t("console.is", { id: String(updated.id), state: String(updated.state) }));
   }
 
   async function updateCustomerAccountState(account: APICustomerAccount, state: APICustomerAccount["state"]): Promise<boolean> {
     try {
       const updated = await api.updateCustomerAccount(product.id, account.id, state, account.revision);
       setCustomerAccounts((items) => items.map((item) => item.id === updated.id ? updated : item));
-      showToast(`${account.external_id} is ${state}.`);
+      showToast(t("console.is2", { external_id: String(account.external_id), state: String(state) }));
       return true;
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "Customer access could not be changed.");
+      showToast(error instanceof APIError ? error.message : t("console.customerAccessCouldNotBeChanged"));
       return false;
     }
   }
@@ -256,27 +260,27 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
       setCustomerAccountsHaveMore(page.has_more);
       return true;
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : "More customer accounts could not be loaded.");
+      showToast(error instanceof APIError ? error.message : t("console.moreCustomerAccountsCouldNotBeLoaded"));
       return false;
     }
   }
 
   function reviewToolTestProposal(target: APITool, proposal: APIToolTestAnalysisProposal) {
     if ((target.backend_kind ?? "http") !== "http" || target.state !== "draft") {
-      showToast("Create an independent HTTP draft before reviewing this proposal in Builder.");
+      showToast(t("console.createAnIndependentHTTPDraftBeforeReviewingThisProposal"));
       return;
     }
     if (target.id === proposal.base_tool_id && target.revision !== proposal.base_revision) {
-      showToast("The tool revision changed after analysis. Run a new live test before reviewing proposed changes.");
+      showToast(t("console.theToolRevisionChangedAfterAnalysisRunANew"));
       return;
     }
     setToolBuilderSelection({ uid: target.id, tool: target, failed: false });
-    setToolBuilderSeed({ toolID: target.id, revision: target.revision, proposal: { proposal_id: proposal.proposal_id, summary: "Suggested from consented sanitized live-test evidence. Accept or reject each field.", valid: proposal.valid, draft: { ...proposal.draft, namespace: target.namespace, name: target.name, endpoint: target.endpoint ?? "", upstream_auth: target.upstream_auth ?? proposal.draft.upstream_auth, request_example: target.request_example, response_example: target.response_example, credential_present: Boolean(target.credential_present) }, changes: proposal.changes, findings: proposal.findings } });
+    setToolBuilderSeed({ toolID: target.id, revision: target.revision, proposal: { proposal_id: proposal.proposal_id, summary: t("console.liveTestProposalReviewSummary"), valid: proposal.valid, draft: { ...proposal.draft, namespace: target.namespace, name: target.name, endpoint: target.endpoint ?? "", upstream_auth: target.upstream_auth ?? proposal.draft.upstream_auth, request_example: target.request_example, response_example: target.response_example, credential_present: Boolean(target.credential_present) }, changes: proposal.changes, findings: proposal.findings } });
     navigateToPath(toolBuilderPath(target.id));
   }
 
-  function beginRecipeCreation(integrationID: string) {
-    setRecipeDialog({ kind: "create", integrationID, value: "" });
+  function beginRecipeCreation() {
+    setRecipeDialog({ kind: "create", value: "" });
   }
 
   function beginRecipeEdit(recipe: APIRecipe) {
@@ -293,7 +297,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     if (!value) return;
     let saved: APIRecipe | null;
     if (recipeDialog.kind === "create") {
-      saved = await createRecipe(value, recipeDialog.integrationID);
+      saved = await createRecipe(value);
     } else if (recipeDialog.kind === "edit") {
       const parsed = parseRecipeSpecEditor(value, recipeEditableSpec(recipeDialog.recipe));
       if (!parsed.ok) return;
@@ -309,8 +313,8 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const publicEndpoint = distribution?.public_mcp_endpoint ?? "/mcp/public";
   const publicAgentSetupURL = distribution?.agent_setup.public.url ?? "/agent-setup/public/prompt.md";
   const privateAgentSetupURL = distribution?.agent_setup.private.url ?? "/agent-setup/private/prompt.md";
-  const publicAgentSetup = distribution?.agent_setup.public ?? { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, publicAgentSetupURL, "public"), contains_secret: false as const };
-  const privateAgentSetup = distribution?.agent_setup.private ?? { available: identityConfig?.configured === true && identityConfig.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(product.name, privateAgentSetupURL, "private"), contains_secret: false as const };
+  const publicAgentSetup = distribution?.agent_setup.public ?? { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(publicAgentSetupURL, "public", { deploymentName: product.name, kindLabel: t("common.public"), connectLabel: t("agentAccess.connectYourAgentToName", { name: product.name }), ariaLabel: t("agentAccess.connectYourAgentUsingMCP", { name: product.name, kind: t("common.public") }) }), contains_secret: false as const };
+  const privateAgentSetup = distribution?.agent_setup.private ?? { available: identityConfig?.configured === true && identityConfig.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(privateAgentSetupURL, "private", { deploymentName: product.name, kindLabel: t("common.private"), connectLabel: t("agentAccess.connectYourAgentToName", { name: product.name }), ariaLabel: t("agentAccess.connectYourAgentUsingMCP", { name: product.name, kind: t("common.private") }) }), contains_secret: false as const };
   const mcpConnectionReady = Boolean(mcpName.trim() && mcpNamespace.trim() && mcpEndpoint.trim() && mcpAccessToken.trim());
   const activeNavigation = navigation.find((item) => item.sections.some((candidate) => candidate.id === section));
   const selectedToolBuilderTool = toolBuilderUID && toolBuilderSelection?.uid === toolBuilderUID ? toolBuilderSelection.tool : null;
@@ -319,10 +323,10 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const toolBuilderIntegrationID = consoleRoute.kind === "tool-builder" ? consoleRoute.integrationID ?? selectedToolBuilderTool?.owner_integration_id : undefined;
   const toolBuilderIntegration = toolBuilderIntegrationID ? integrations.find((integration) => integration.id === toolBuilderIntegrationID) : undefined;
   const toolBuilderContent = consoleRoute.kind !== "tool-builder" ? null
-    : consoleRoute.uid && !selectedToolBuilderTool && !toolBuilderLoadFailed ? <section className="panel entity-missing"><RefreshCw /><div><h1>Loading HTTP tool draft</h1></div></section>
-    : consoleRoute.uid && toolBuilderLoadFailed ? <section className="panel entity-missing" role="alert"><TriangleAlert /><div><h1>HTTP tool draft unavailable</h1></div><Button outline onClick={() => { setToolBuilderSelection(null); setToolBuilderLoadAttempt((value) => value + 1); }}>Retry</Button></section>
-    : consoleRoute.uid && (!selectedToolBuilderTool || (selectedToolBuilderTool.backend_kind ?? "http") !== "http") ? <section className="panel entity-missing"><Search /><div><h1>HTTP tool draft unavailable</h1></div><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />Return to tools</ConsoleLink></section>
-    : toolBuilderIntegrationID && !toolBuilderIntegration ? <section className="panel entity-missing"><TriangleAlert /><div><h1>Owning API unavailable</h1></div></section>
+    : consoleRoute.uid && !selectedToolBuilderTool && !toolBuilderLoadFailed ? <section className="panel entity-missing"><RefreshCw /><div><h1>{t("console.loadingHTTPToolDraft")}</h1></div></section>
+    : consoleRoute.uid && toolBuilderLoadFailed ? <section className="panel entity-missing" role="alert"><TriangleAlert /><div><h1>{t("console.httpToolDraftUnavailable")}</h1></div><Button outline onClick={() => { setToolBuilderSelection(null); setToolBuilderLoadAttempt((value) => value + 1); }}>{t("common.retry")}</Button></section>
+    : consoleRoute.uid && (!selectedToolBuilderTool || (selectedToolBuilderTool.backend_kind ?? "http") !== "http") ? <section className="panel entity-missing"><Search /><div><h1>{t("console.httpToolDraftUnavailable")}</h1></div><ConsoleLink path={sectionPath("tools")} onNavigate={navigateToPath} className="entity-back-link"><ArrowLeft />{t("console.returnToTools")}</ConsoleLink></section>
+    : toolBuilderIntegrationID && !toolBuilderIntegration ? <section className="panel entity-missing"><TriangleAlert /><div><h1>{t("console.owningAPIUnavailable")}</h1></div></section>
     : toolBuilderIntegration ? <IntegrationToolBuilderRoute key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} integration={toolBuilderIntegration} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useEntityDetail({ consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, reportSubmissions, auditEvents, rootUsers });
@@ -330,14 +334,14 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const integrationViewProps = { live: apiConnected, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
 
   return <div className="app-shell">
-    <a className="skip-link" href="#main-content">Skip to content</a>
+    <a className="skip-link" href="#main-content">{t("console.skipToContent")}</a>
     <ConsoleSidebar section={section} activeNavigationID={activeNavigation?.id} currentUser={currentUser} onLogout={onLogout} onNavigate={navigateToPath} />
     <main id="main-content" className={workspaceClass} tabIndex={-1}>
       <ConsoleTopbar productName={product.name} section={section} activeNavigationID={activeNavigation?.id} onGroupChange={navigateToGroup} />
       <div className="content">
-        {fixturePreview && <div className="workspace-notice preview"><Eye /><span><strong>Fixture preview</strong><small>Development-only sample data.</small></span></div>}
-        {workspaceLoading && <div className="workspace-notice loading"><RefreshCw className="spin" /><span><strong>Loading deployment data</strong></span></div>}
-        {workspaceLoadProblems.length > 0 && <div className="workspace-notice error"><TriangleAlert /><span><strong>Some data could not be loaded</strong><small>{workspaceLoadProblems.join(" · ")}</small></span><Button outline onClick={() => window.location.reload()}>Reload</Button></div>}
+        {fixturePreview && <div className="workspace-notice preview"><Eye /><span><strong>{t("console.fixturePreview")}</strong><small>{t("console.developmentOnlySampleData")}</small></span></div>}
+        {workspaceLoading && <div className="workspace-notice loading"><RefreshCw className="spin" /><span><strong>{t("console.loadingDeploymentData")}</strong></span></div>}
+        {workspaceLoadProblems.length > 0 && <div className="workspace-notice error"><TriangleAlert /><span><strong>{t("console.someDataCouldNotBeLoaded")}</strong><small>{workspaceLoadProblems.join(" · ")}</small></span><Button outline onClick={() => window.location.reload()}>{t("common.reload")}</Button></div>}
         <ViewStack>
           {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} />
             : consoleRoute.kind === "tool-builder" ? toolBuilderContent
@@ -353,7 +357,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
               {section === "sdks" && <SDKCatalogView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "query-lab" && <QueryLabView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "identity" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} onChanged={setIdentityConfig} onMessage={showToast} />}
-              {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onApprove={approveRecipe} onPublish={publishRecipe} />}
+              {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onDelete={deleteRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
               {section === "sources" && <SourcesView sources={sources} navigation={<DocumentationNavigation active="sources" onNavigate={navigateToPath} />} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
               {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
               {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
