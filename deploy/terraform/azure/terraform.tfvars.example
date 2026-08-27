@@ -1,0 +1,17 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "East US"
+
+# Leave empty to use the generated *.azurecontainerapps.io hostname.
+public_url = ""
+
+service_image = "ghcr.io/example/dokosoko@sha256:replace-me"
+crawler_image = "ghcr.io/example/dokosoko-crawler@sha256:replace-me"
+
+database_password = "replace-with-at-least-24-characters"
+master_key         = "replace-with-32-random-bytes-encoded-as-base64"
+setup_token        = "replace-with-at-least-32-random-characters"
+
+# ai_provider       = "openai"
+# ai_api_key        = "replace-me"
+# ai_endpoint       = "https://api.openai.com/v1"
+# ai_model_analysis = "gpt-5.6-terra"

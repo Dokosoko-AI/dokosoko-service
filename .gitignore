@@ -42,3 +42,14 @@ yarn-error.log*
 /storage/
 /outputs/
 /work/
+
+# Terraform/OpenTofu working data and local secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+.terraform.tfstate.lock.info
+crash.log

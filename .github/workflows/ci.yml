@@ -74,6 +74,31 @@ jobs:
         working-directory: examples/mcp-acceptance-client
         run: go test ./...
 
+  terraform:
+    name: Terraform (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [aws, digitalocean, azure, gcp]
+    defaults:
+      run:
+        working-directory: deploy/terraform/${{ matrix.provider }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+      - name: Check formatting
+        run: terraform fmt -check
+      - name: Initialize providers
+        run: terraform init -backend=false -input=false
+      - name: Validate configuration
+        run: terraform validate -no-color
+      - name: Test deployment plan
+        run: terraform test -no-color
+
   containers:
     name: Container contracts
     runs-on: ubuntu-latest

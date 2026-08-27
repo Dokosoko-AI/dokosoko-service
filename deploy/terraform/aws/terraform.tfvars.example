@@ -1,0 +1,15 @@
+region          = "us-east-1"
+public_url      = "https://dokosoko.example.com"
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+
+service_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/dokosoko@sha256:replace-me"
+crawler_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/dokosoko-crawler@sha256:replace-me"
+
+database_password = "replace-with-at-least-24-characters"
+master_key         = "replace-with-32-random-bytes-encoded-as-base64"
+setup_token        = "replace-with-at-least-32-random-characters"
+
+# ai_provider       = "openai"
+# ai_api_key        = "replace-me"
+# ai_endpoint       = "https://api.openai.com/v1"
+# ai_model_analysis = "gpt-5.6-terra"

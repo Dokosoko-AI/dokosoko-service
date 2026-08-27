@@ -161,6 +161,11 @@ pnpm run verify
 docker compose config
 ```
 
+Production-shaped Terraform roots for AWS, DigitalOcean, Azure, and Google
+Cloud are documented in [`deploy/terraform`](deploy/terraform/README.md). They
+deploy the service and crawler from immutable image digests and make the
+current single-replica shared-filesystem constraint explicit.
+
 PostgreSQL integration tests run when `DOKOSOKO_TEST_DATABASE_URL` or
 `TEST_DATABASE_URL` points to a disposable database with pgvector. The MCP
 acceptance client is a separate Go module under

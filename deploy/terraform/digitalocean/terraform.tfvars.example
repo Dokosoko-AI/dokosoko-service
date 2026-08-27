@@ -1,0 +1,17 @@
+# Prefer exporting DIGITALOCEAN_TOKEN instead of storing it in this file:
+# export TF_VAR_digitalocean_token=...
+digitalocean_token = "replace-me"
+region             = "nyc3"
+public_url       = "https://dokosoko.example.com"
+certificate_name = "dokosoko.example.com"
+
+service_image = "registry.digitalocean.com/example/dokosoko@sha256:replace-me"
+crawler_image = "registry.digitalocean.com/example/dokosoko-crawler@sha256:replace-me"
+
+master_key  = "replace-with-32-random-bytes-encoded-as-base64"
+setup_token = "replace-with-at-least-32-random-characters"
+
+# ai_provider       = "openai"
+# ai_api_key        = "replace-me"
+# ai_endpoint       = "https://api.openai.com/v1"
+# ai_model_analysis = "gpt-5.6-terra"

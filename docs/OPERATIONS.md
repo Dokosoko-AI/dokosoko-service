@@ -22,6 +22,9 @@ the first customer is invited.
   on port 443. Local HTTP is a development-only exception.
 - Configure root-level feedback and error submission URLs before advertising
   the corresponding MCP tools. Empty URLs intentionally disable those tools.
+- Use one of the reviewed [`deploy/terraform`](../deploy/terraform/README.md)
+  roots as the cloud baseline. Keep the app/crawler workload at one replica
+  until uploads and crawl snapshots no longer depend on one shared filesystem.
 
 ## Release procedure
 
