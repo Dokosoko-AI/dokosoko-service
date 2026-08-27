@@ -17,7 +17,8 @@ export type Section =
 
 export type IntegrationTab = "overview" | "documentation" | "access" | "tools" | "test" | "history";
 export type IntegrationResourceTab = "documentation" | "contracts" | "sdks";
-export type SettingsTab = "overview" | "storage" | "ai" | "root";
+export type SettingsTab = "overview" | "tenant" | "ai" | "root";
+export type IdentityTab = "sign-in" | "customer-accounts";
 
 export type RouteLabelKey =
   | "routes.quickStart"
@@ -30,7 +31,7 @@ export type RouteLabelKey =
   | "routes.apiContracts"
   | "routes.sdks"
   | "routes.overview"
-  | "routes.databaseStorage"
+  | "routes.tenantSettings"
   | "routes.aiConfiguration"
   | "routes.rootAccess";
 
@@ -45,7 +46,7 @@ export type EntityKind =
   | "root-user";
 
 export type ConsoleRoute =
-  | { kind: "section"; section: Section; path: string; settingsTab?: SettingsTab }
+  | { kind: "section"; section: Section; path: string; settingsTab?: SettingsTab; identityTab?: IdentityTab }
   | { kind: "tool-builder"; section: "tools"; uid?: string; integrationID?: string; path: string }
   | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; integrationResourceTab?: IntegrationResourceTab; path: string }
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
@@ -72,9 +73,14 @@ export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; labe
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: RouteLabelKey }> = [
   { id: "overview", label: "routes.overview" },
-  { id: "storage", label: "routes.databaseStorage" },
+  { id: "tenant", label: "routes.tenantSettings" },
   { id: "ai", label: "routes.aiConfiguration" },
   { id: "root", label: "routes.rootAccess" },
+];
+
+export const IDENTITY_TABS: Array<{ id: IdentityTab; label: "navigation.customerSignIn" | "navigation.customerAccounts" }> = [
+  { id: "sign-in", label: "navigation.customerSignIn" },
+  { id: "customer-accounts", label: "navigation.customerAccounts" },
 ];
 
 export const SECTION_PATHS: Record<Section, string> = {
@@ -120,6 +126,10 @@ export function sectionPath(section: Section): string {
 
 export function settingsPath(tab: SettingsTab = "overview"): string {
   return tab === "overview" ? SECTION_PATHS.settings : `${SECTION_PATHS.settings}/${tab}`;
+}
+
+export function identityPath(tab: IdentityTab = "sign-in"): string {
+  return tab === "sign-in" ? SECTION_PATHS.identity : `${SECTION_PATHS.identity}/${tab}`;
 }
 
 export function entityPath(entity: EntityKind, uid: string): string {
@@ -196,6 +206,13 @@ export function parseConsolePath(pathname: string): ConsoleRoute {
     const tab = settingsMatch[1] as SettingsTab;
     if (!SETTINGS_TABS.some((candidate) => candidate.id === tab) || tab === "overview") return { kind: "not-found", section: "product", path };
     return { kind: "section", section: "settings", settingsTab: tab, path: settingsPath(tab) };
+  }
+
+  const identityMatch = path.match(/^\/identity\/([^/]+)$/);
+  if (identityMatch) {
+    const tab = identityMatch[1] as IdentityTab;
+    if (!IDENTITY_TABS.some((candidate) => candidate.id === tab) || tab === "sign-in") return { kind: "not-found", section: "product", path };
+    return { kind: "section", section: "identity", identityTab: tab, path: identityPath(tab) };
   }
 
   const section = (Object.entries(SECTION_PATHS) as Array<[Section, string]>).find(([, candidate]) => candidate === path)?.[0];

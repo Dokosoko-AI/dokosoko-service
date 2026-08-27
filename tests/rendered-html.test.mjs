@@ -64,6 +64,8 @@ test("keeps the rendered navigation destinations backed by canonical routes", as
   for (const path of ["/integrations", "/identity", "/tools", "/tools/connections", "/recipes", "/agent-access", "/operations/outbox", "/settings"]) {
     assert.ok(routes.includes(`"${path}"`), `${path} should be registered`);
   }
+  assert.match(routes, /IdentityTab = "sign-in" \| "customer-accounts"/);
+  assert.match(routes, /identityPath\(tab: IdentityTab/);
   for (const entity of ["integration", "resource-set", "source", "tool", "connection", "report", "audit-event", "root-user"]) {
     assert.ok(routes.includes(`| "${entity}"`) || routes.includes(`  ${entity}:`), `${entity} should be routable`);
   }
@@ -72,6 +74,40 @@ test("keeps the rendered navigation destinations backed by canonical routes", as
   assert.match(styles, /\.entity-detail-grid/);
   assert.match(styles, /\.agent-setup-grid/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: var\(--space-section\); \}/);
+});
+
+test("keeps each MCP endpoint and its controls inside the matching delivery card", async () => {
+  const source = await consoleSource();
+  const styles = await stylesSource();
+  const distribution = componentSource(source, "DistributionView", "AgentSetupCard");
+  const setupCard = componentSource(source, "AgentSetupCard", "SourcesView");
+
+  assert.doesNotMatch(distribution, /public-mcp-card|privateMCPSetup|mcpSetupButtons/);
+  assert.match(distribution, /AgentSetupCard kind="public"[^\n]*endpoint=\{publicEndpoint\}[^\n]*enabled=\{enabled\}[^\n]*onEnabledChange=\{onEnabledChange\}/);
+  assert.match(distribution, /AgentSetupCard kind="private"[^\n]*endpoint=\{privateEndpoint\}/);
+  assert.match(setupCard, /className="agent-setup-state"[^\n]*<Badge[^\n]*\{isPublic && onEnabledChange && <Switch checked=\{enabled\}/);
+  assert.match(setupCard, /className="agent-setup-kind"[^\n]*<Badge[^\n]*<h2 aria-label=\{`\$\{kindLabel\}:[^`]+`\}>MCP button<\/h2><\/span>/);
+  assert.match(setupCard, /const previewLabel = isPublic \? `\[[^`]+\] \$\{connectLabel\}` : connectLabel/);
+  assert.match(setupCard, /<span className="agent-setup-label">\{previewLabel\}<\/span>/);
+  assert.doesNotMatch(setupCard, /enablePublicMCPFirst|Enable Public MCP first/);
+  assert.match(setupCard, /className="agent-setup-description-slot"><p className="agent-setup-description">\{isPublic \? "Offer an authentication-free[^:]+" : "Offer an authenticated MCP endpoint with private resources and access scoped to the signed-in customer\."\}<\/p><\/div>/);
+  assert.match(setupCard, /className="agent-setup-guide-slot" aria-hidden=\{!setup\.available && isPublic\}/);
+  assert.ok(setupCard.indexOf("<CopyButton") < setupCard.indexOf('className="agent-setup-guide-slot"'), "setup instructions must follow the full-width MCP copy button");
+  assert.match(setupCard, /: !isPublic && <><div className="inline-warning"><TriangleAlert \/>Configure customer identity first\.<\/div><Button outline className="agent-identity-action"/);
+  assert.doesNotMatch(setupCard, /agent-setup-public-control/);
+  assert.match(setupCard, /<h2 aria-label=\{`\$\{kindLabel\}:[^`]+`\}>MCP button<\/h2>/);
+  assert.match(setupCard, /className="endpoint agent-setup-endpoint"[^\n]*<code>\{endpoint\}<\/code>/);
+  assert.match(source, /const privateEndpoint = distribution\?\.private_mcp_endpoint \?\? "\/mcp"/);
+  assert.match(source, /<DistributionView[^\n]*publicEndpoint=\{publicEndpoint\} privateEndpoint=\{privateEndpoint\}/);
+  assert.doesNotMatch(styles, /public-mcp-card|public-mcp-copy|switch-stack/);
+  assert.match(styles, /\.agent-setup-card \{[^}]*grid-template-rows: minmax\(132px, auto\) 1fr/);
+  assert.match(styles, /\.agent-setup-preview \{[^}]*padding: 24px 18px/);
+  assert.match(styles, /\.agent-setup-label \{[^}]*max-width: 260px/);
+  assert.match(styles, /\.agent-setup-kind \{[^}]*display: inline-flex[^}]*gap: 8px/);
+  assert.match(styles, /\.agent-setup-kind h2 \{[^}]*margin: 0/);
+  assert.match(styles, /\.agent-setup-description-slot \{[^}]*min-height: 22px[^}]*margin-bottom: 8px/);
+  assert.match(styles, /\.agent-setup-guide-slot \{[^}]*min-height: 18px[^}]*margin-top: 10px/);
+  assert.match(styles, /\.agent-setup-guide-link \{[^}]*display: flex[^}]*width: fit-content[^}]*margin-left: auto/);
 });
 
 test("gives AI configuration a dedicated, guarded settings workspace", async () => {
@@ -98,6 +134,18 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   assert.match(source, /settings\.otherOpenAPICompatibleProviders/);
   assert.doesNotMatch(source, /Already connected · manage settings/);
   assert.match(source, /function AIProviderLogo/);
+  const providerLogoSource = componentSource(source, "AIProviderLogo", "OpenAIBlossom");
+  assert.match(source, /function OpenAIBlossom/);
+  for (const logo of ["GoogleLogo", "AnthropicLogo", "DigitalOceanLogo", "XAILogo", "DeepSeekLogo"]) {
+    assert.match(source, new RegExp(`function ${logo}`));
+  }
+  assert.match(source, /viewBox="146\.694 227\.042 267\.198 264\.812"/);
+  assert.doesNotMatch(providerLogoSource, /"◉"|"✦"|t\("settings\.(?:a|do|ds)"\)|"xAI"/);
+  assert.match(source, /className="provider-row ai-provider-row"/);
+  assert.match(source, /className="ai-provider-row-actions"/);
+  assert.match(source, /className=\{`ai-provider-select \$\{selected \? "has-provider" : ""\}`\}/);
+  assert.match(source, /selected && <AIProviderLogo provider=\{selected\.provider\} \/>/);
+  assert.match(source, /providerConnection \? "aiDialogs\.manage" : "aiDialogs\.connect"/);
   for (const provider of ["openai", "google", "anthropic", "digitalocean", "xai", "deepseek"]) {
     assert.match(source, new RegExp(`provider === "${provider}"`));
   }
@@ -116,13 +164,20 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   ];
   for (const key of promptKeys) assert.match(source, new RegExp(key.replaceAll(".", "\\.")));
   assert.match(source, /Versioned instructions for analysis, recipe, developer-asset enrichment, applicability-suggestion, and sample-review workflows/);
-  assert.match(source, /Reset to safe default/);
+  assert.match(source, /className="panel advanced-details ai-workflow-prompts-advanced"/);
+  assert.match(source, /<summary>Advanced<\/summary>/);
+  assert.match(source, /<AIWorkflowPromptsAdvanced prompts=\{prompts\} onEditPrompt=\{onEditPrompt\} \/>/);
+  assert.match(source, /disabled=\{promptBusy \|\| activePrompt\?\.source !== "override"\} onClick=\{resetAIPromptOverride\}>Reset default<\/Button>/);
+  assert.match(source, /api\.resetAIPrompt\(product\.id, current\.key, current\.revision\)/);
   assert.match(source, /Save new version/);
   assert.match(source, /built-in safety policy cannot be edited or disabled/);
   assert.doesNotMatch(source, /defaultInstructions|default_instructions/);
   assert.doesNotMatch(source, /<Badge[^>]*>Native<\/Badge>|<Badge[^>]*>Custom<\/Badge>/);
   assert.match(source, /title=\{t\("aiDialogs\.configure", \{ workloadRole: aiWorkloadName\(workloadRole, t\) \}\)\}/);
-  assert.match(source, /Leave blank to keep the stored credential/);
+  assert.match(source, /const storedCredentialMask = "\*{12}"/);
+  assert.match(source, /placeholder=\{providerConnection \? storedCredentialMask : "Required before enabling"\}/);
+  assert.doesNotMatch(source, /aiDialogs\.leaveBlankToKeepTheStoredCredential/);
+  assert.doesNotMatch(source, /aiDialogs\.encryptedAtRestRedactedFromEveryResponseAndShared|Encrypted at rest, redacted from every response/);
   assert.doesNotMatch(source, /title="Configure LLM profile"/);
   assert.doesNotMatch(styles, /\.ai-settings-hero|\.ai-hero-mark|\.ai-hero-stat/);
   assert.match(styles, /\.ai-table-panel/);
@@ -144,6 +199,16 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   assert.match(api, /provider_role:\n\s+type: string\n\s+enum:\n\s+- primary\n\s+- backup/);
   assert.match(api, /endpoint:\n\s+type: string\n\s+format: uri\n\s+description: Fixed HTTPS provider origin/);
   for (const provider of ["digitalocean", "xai", "deepseek"]) assert.match(api, new RegExp(provider));
+});
+
+test("keeps the Settings overview free of deployment metadata", async () => {
+  const source = await consoleSource();
+  const settings = componentSource(source, "SettingsView", "RootAccessPanel");
+
+  assert.match(settings, /className="settings-grid"/);
+  assert.doesNotMatch(settings, /<RootAccessPanel|root-management|onAddRoot|onRevokeRoot|currentUser/);
+  assert.doesNotMatch(settings, /title="Deployment"|entity-detail-grid|product\.(?:name|catalog_revision|public_mcp_enabled)/);
+  assert.doesNotMatch(source, /<SettingsView[^>]*(?:product|currentUser|onAddRoot|onRevokeRoot)=/);
 });
 
 test("ships one evidence-to-recipe review workflow", async () => {
@@ -398,7 +463,7 @@ test("keeps API authorization policy authoring in API Access and out of root Too
   assert.doesNotMatch(client, /APIAuthorizationSimulation|simulateAuthorizationPoint|authorization-points[^\n]*\/simulate|simulateIntegrationAuthorization/);
   assert.doesNotMatch(source, /APIAuthorizationSimulation|simulateAuthorizationPoint/);
 
-  assert.match(source, /\{section === "identity" && <OIDCIdentitySetup/);
+  assert.match(source, /\{section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup/);
   assert.match(source, /\{section === "tools" && <ToolsView/);
   assert.doesNotMatch(toolsView, /AuthorizationPolicyWorkspace|API action policies|Grant registry/);
   assert.match(integrationWorkspace, /activeTab === "access"[\s\S]*<AuthorizationPolicyWorkspace integration=\{integration\} onMessage=\{onMessage\} \/>/);
@@ -653,6 +718,7 @@ test("shows exact crawler classifier indicators during source review", async () 
 test("keeps private defaults and guarded public transitions in the client contract", async () => {
   const source = await consoleSource();
   const packageJson = await readFile(new URL("../package.json", import.meta.url), "utf8");
+  const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
   assert.match(source, /visibility:\s*"private"/);
   assert.match(source, /setPendingPublication/);
@@ -664,6 +730,13 @@ test("keeps private defaults and guarded public transitions in the client contra
   assert.match(source, /distribution\?\.agent_setup\.public/);
   assert.match(source, /distribution\?\.agent_setup\.private/);
   assert.match(source, /t\("agentAccess\.copyMCPButton", \{ kind:/);
+  assert.match(source, /CopyButton text=\{setup\.embed_code\}/);
+  assert.match(source, /buildAgentSetupEmbedCode/);
+  assert.match(source, /embed_code \|\| buildAgentSetupEmbedCode/);
+  assert.doesNotMatch(source, /className=\{`agent-access-chip/);
+  assert.match(openapi, /embed_script_url:[\s\S]*localized dokosoko-mcp-button Web Component/);
+  assert.match(openapi, /embed_code:[\s\S]*Secret-free script and Web Component markup/);
+  assert.match(openapi, /embed_html:[\s\S]*deprecated: true/);
   for (const client of ["Codex", "Claude Code", "Cursor", "OpenCode"]) assert.match(source, new RegExp(`name: "${client}"`));
   for (const asset of ["codex.svg", "claude-code.svg", "cursor.svg", "opencode.svg"]) {
     assert.match(source, new RegExp(asset.replace(".", "\\.")));
@@ -691,12 +764,12 @@ test("keeps Agent access headings and setup cards concise", async () => {
   ]) assert.doesNotMatch(source, new RegExp(removed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
-test("keeps live customer suspension controls under Agent access and fails closed while unavailable", async () => {
+test("keeps live customer suspension controls under Identity and fails closed while unavailable", async () => {
   const source = await consoleSource();
   const client = await clientSource();
   const styles = await stylesSource();
-  const distribution = componentSource(source, "DistributionView", "CustomerAccessPanel");
-  const customerAccess = componentSource(source, "CustomerAccessPanel", "AgentSetupCard");
+  const distribution = componentSource(source, "DistributionView", "AgentSetupCard");
+  const customerAccess = componentSource(source, "CustomerAccountsView", "EntityDetailView");
 
   assert.match(source, /const \[customerAccountsStatus, setCustomerAccountsStatus\] = useState<"loading" \| "ready" \| "unavailable">/);
   assert.match(source, /api\.customerAccounts\(product\.id\)/);
@@ -707,9 +780,13 @@ test("keeps live customer suspension controls under Agent access and fails close
   assert.match(client, /export type APICustomerAccountPage = \{[\s\S]*items: APICustomerAccount\[\];[\s\S]*has_more: boolean/);
   assert.match(client, /customerAccounts: \(productID: string, startingAfter = ""\) => request<APICustomerAccountPage>/);
   assert.match(client, /starting_after=\$\{encodeURIComponent\(startingAfter\)\}/);
-  assert.match(distribution, /<CustomerAccessPanel accounts=\{customerAccounts\} status=\{customerAccountsStatus\} hasMore=\{customerAccountsHaveMore\} onUpdate=\{onUpdateCustomerAccount\} onLoadMore=\{onLoadMoreCustomerAccounts\} \/>/);
+  assert.doesNotMatch(distribution, /customerAccounts|CustomerAccountsView|customer-access-panel/);
+  assert.match(source, /identityTab === "customer-accounts" && <CustomerAccountsView accounts=\{customerAccounts\} status=\{customerAccountsStatus\} hasMore=\{customerAccountsHaveMore\} onUpdate=\{updateCustomerAccountState\} onLoadMore=\{loadMoreCustomerAccounts\} onNavigate=\{navigateToPath\} \/>/);
+  assert.match(source, /<IdentityNavigation active="sign-in" onNavigate=\{navigateToPath\} \/>/);
+  assert.match(customerAccess, /<IdentityNavigation active="customer-accounts" onNavigate=\{onNavigate\} \/>/);
+  assert.match(customerAccess, /title="Customer accounts"/);
   for (const label of ["Customer access", "Loading customer accounts", "Customer accounts unavailable", "No customer accounts yet", "Suspend", "Reactivate", "Load more"]) {
-    assert.ok(customerAccess.includes(label), `${label} should be present in the Agent access customer controls`);
+    assert.ok(customerAccess.includes(label), `${label} should be present in the Identity customer controls`);
   }
   assert.match(customerAccess, /account\.external_id/);
   assert.match(customerAccess, /account\.last_authenticated_at/);
@@ -804,13 +881,14 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   const testGuidance = identitySetup.match(/<h2[^>]*>Test sign-in<\/h2><p[^>]*>([^<]+)<\/p>/)?.[1] ?? "";
 
   assert.match(source, /eyebrow="Administration" title="Settings" action=/);
-  for (const tab of ["storage", "ai", "root"]) {
+  for (const tab of ["tenant", "ai", "root"]) {
     assert.match(source, new RegExp(`settingsPath\\("${tab}"\\)`));
   }
+  assert.doesNotMatch(settingsTabs, /id: "storage"|databaseStorage/);
   assert.doesNotMatch(settingsTabs, /id: "identity"|label: "Customer identity"/);
   assert.doesNotMatch(settings, /Customer identity|OIDCIdentitySetup|onConfigureIdentity/);
   assert.doesNotMatch(source, /settingsPath\("identity"\)|function CustomerIdentitySettingsView|function IdentityContractPanel|\bidentityOpen\b|\bsetIdentityOpen\b|title="Customer identity integration"/);
-  assert.match(source, /\{section === "identity" && <OIDCIdentitySetup/);
+  assert.match(source, /\{section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup/);
   assert.match(source, /className="integration-identity-summary"/);
   assert.equal(styles.match(/\.identity-summary\s*\{/g)?.length, 1, "the OIDC summary layout should not be overridden by another workspace");
   assert.doesNotMatch(`${identitySetup}\n${styles}`, /identity-setup-steps|OIDC setup progress/);
@@ -941,6 +1019,25 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   assert.doesNotMatch(client, /organisation_claim|delegated_api_origin/);
   assert.match(client, /\/api\/v1\/identity-provider/);
   assert.doesNotMatch(client, /usage_hook_url|allowed_redirect_uris|entitlement_hook_url|APIAuthorizationSimulation|simulateAuthorizationPoint/);
+});
+
+test("edits revision-safe tenant profile settings without duplicating delivery controls", async () => {
+  const source = await consoleSource();
+  const tenantSettings = componentSource(source, "TenantSettingsView", "slugify");
+
+  assert.match(source, /settingsTab === "tenant" && <TenantSettingsView key=\{product\.revision\} product=\{product\} onSave=\{updateTenantSettings\} onNavigate=\{navigateToPath\} \/>/);
+  assert.match(source, /api\.updateDeployment\(\{ \.\.\.input, public_mcp_enabled: product\.public_mcp_enabled, revision: product\.revision \}\)/);
+  assert.match(source, /setProduct\(deploymentAsProduct\(updated\)\)/);
+  assert.match(tenantSettings, /title="Tenant settings"/);
+  assert.match(tenantSettings, /<SettingsTabs active="tenant"/);
+  for (const label of ["Tenant name", "Tenant slug", "Description", "Tenant ID", "Organisation ID", "Catalog revision", "Configuration revision"]) {
+    assert.ok(tenantSettings.includes(label), `${label} should be present in Tenant settings`);
+  }
+  assert.match(tenantSettings, /tenantSlugPattern\.test\(trimmedSlug\)/);
+  assert.match(tenantSettings, /maxLength=\{120\}/);
+  assert.match(tenantSettings, /maxLength=\{63\}/);
+  assert.match(tenantSettings, /maxLength=\{2000\}/);
+  assert.doesNotMatch(tenantSettings, /Switch|publicMCPEnabled|onEnabledChange/);
 });
 
 test("ships a local support outbox without an introductory notice", async () => {

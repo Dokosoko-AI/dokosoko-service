@@ -1,14 +1,13 @@
 import { useTranslation } from "react-i18next";
 import {
   AlertCircle, BookOpen, CheckCircle2, Clock3, Copy, Database, ExternalLink,
-  Globe2, LockKeyhole, MoreHorizontal, Plus, RefreshCw, TriangleAlert, Users, XCircle,
+  Globe2, LockKeyhole, MoreHorizontal, Plus, RefreshCw, TriangleAlert, XCircle,
 } from "lucide-react";
-import { useState } from "react";
 import Image from "next/image";
 
-import { type APICustomerAccount, type APIVisibility, type Distribution } from "../../lib/api";
+import { type APIVisibility, type Distribution } from "../../lib/api";
 import { Badge, Button, Switch } from "../core/control";
-import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, PanelHeader, SectionHeader, SegmentedControl } from "../core/layout";
+import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader as PageHeading, SectionHeader, SegmentedControl } from "../core/layout";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-assets/developer-asset-ai-advisory";
 import { CopyButton, EntityLink, Source, SummaryItem, agentClients } from "./shared";
 
@@ -23,15 +22,11 @@ export function DistributionView({
   onVisibilityChange,
   onCopied,
   publicEndpoint,
+  privateEndpoint,
   tenantName,
   publicAgentSetup,
   privateAgentSetup,
   onConfigureIdentity,
-  customerAccounts,
-  customerAccountsStatus,
-  customerAccountsHaveMore,
-  onUpdateCustomerAccount,
-  onLoadMoreCustomerAccounts,
   onOpenSources,
 }: {
   enabled: boolean;
@@ -42,34 +37,23 @@ export function DistributionView({
   onVisibilityChange: (kind: "source", id: string) => void;
   onCopied: (label: string) => void;
   publicEndpoint: string;
+  privateEndpoint: string;
   tenantName: string;
   publicAgentSetup: Distribution["agent_setup"]["public"];
   privateAgentSetup: Distribution["agent_setup"]["private"];
   onConfigureIdentity: () => void;
-  customerAccounts: APICustomerAccount[];
-  customerAccountsStatus: "loading" | "ready" | "unavailable";
-  customerAccountsHaveMore: boolean;
-  onUpdateCustomerAccount: (account: APICustomerAccount, state: APICustomerAccount["state"]) => Promise<boolean>;
-  onLoadMoreCustomerAccounts: () => Promise<boolean>;
   onOpenSources: () => void;
 }) {
   const { t } = useTranslation();
   return <>
-    <PageHeading eyebrow={t("agentAccess.delivery")} title={t("navigation.agentAccess")} action={<Button outline disabled={!privateAgentSetup.available} onClick={() => window.open(privateAgentSetup.url, "_blank", "noopener,noreferrer")}><ExternalLink data-slot="icon" />{t("agentAccess.privateMCPSetup")}</Button>} />
-    <section className={`public-mcp-card ${enabled ? "enabled" : ""}`}>
-      <div className="public-mcp-copy"><div className="icon-tile"><Globe2 /></div><div><div className="title-row"><h2>{t("agentAccess.publicMCP")}</h2><Badge color={enabled ? "green" : "zinc"}>{enabled ? t("agentAccess.live") : t("agentAccess.off")}</Badge></div><p>{t("agentAccess.offerAnAuthenticationFreeReadOnlyMCPEndpointContaining")}</p><div className="endpoint"><code>{publicEndpoint}</code><button type="button" aria-label={t("agentAccess.copyPublicMCPEndpoint")} onClick={() => { navigator.clipboard.writeText(publicEndpoint); onCopied(t("agentAccess.publicMCPEndpointCopied")); }}><Copy />{t("agentAccess.copy")}</button></div></div></div>
-      <div className="switch-stack"><Switch checked={enabled} onChange={onEnabledChange} label={t("agentAccess.enablePublicMCP")} /><small>{enabled ? t("agentAccess.acceptingAnonymousRequests") : t("agentAccess.disabledByDefault")}</small></div>
-    </section>
+    <PageHeading eyebrow={t("agentAccess.delivery")} title={t("navigation.agentAccess")} />
 
     <section className="section-block agent-setup-section">
-      <SectionHeader title={t("agentAccess.mcpSetupButtons")} />
       <div className="agent-setup-grid">
-        <AgentSetupCard kind="public" tenantName={tenantName} setup={publicAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
-        <AgentSetupCard kind="private" tenantName={tenantName} setup={privateAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
+        <AgentSetupCard kind="public" tenantName={tenantName} endpoint={publicEndpoint} setup={publicAgentSetup} enabled={enabled} onEnabledChange={onEnabledChange} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
+        <AgentSetupCard kind="private" tenantName={tenantName} endpoint={privateEndpoint} setup={privateAgentSetup} onCopied={onCopied} onConfigureIdentity={onConfigureIdentity} />
       </div>
     </section>
-
-    <CustomerAccessPanel accounts={customerAccounts} status={customerAccountsStatus} hasMore={customerAccountsHaveMore} onUpdate={onUpdateCustomerAccount} onLoadMore={onLoadMoreCustomerAccounts} />
 
     <section className="section-block">
       <SectionHeader title={t("agentAccess.resourceVisibility")} action={<Button outline onClick={onOpenSources}>{t("agentAccess.manageSources")}</Button>} />
@@ -88,32 +72,30 @@ export function DistributionView({
   </>;
 }
 
-function CustomerAccessPanel({ accounts, status, hasMore, onUpdate, onLoadMore }: { accounts: APICustomerAccount[]; status: "loading" | "ready" | "unavailable"; hasMore: boolean; onUpdate: (account: APICustomerAccount, state: APICustomerAccount["state"]) => Promise<boolean>; onLoadMore: () => Promise<boolean> }) {
-  const { t } = useTranslation();
-  const [busyAccount, setBusyAccount] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  async function updateAccount(account: APICustomerAccount, state: APICustomerAccount["state"]) {
-    if (state === "suspended" && !window.confirm(t("agentAccess.suspendCustomerMCPAccessWillFailClosedImmediately", { external_id: String(account.external_id) }))) return;
-    setBusyAccount(account.id);
-    try { await onUpdate(account, state); } finally { setBusyAccount(null); }
-  }
-
-  return <section className="panel customer-access-panel">
-    <PanelHeader title={t("agentAccess.customerAccess")} description={t("agentAccess.suspendACompromisedCustomerAccountWithoutChangingTheShared")} action={status === "ready" ? <Badge color="zinc">{t("agentAccess.accounts", { count: accounts.length })}</Badge> : undefined} />
-    {status === "loading" && <div className="customer-access-state"><RefreshCw /><span><strong>{t("agentAccess.loadingCustomerAccounts")}</strong></span></div>}
-    {status === "unavailable" && <div className="customer-access-state unavailable"><TriangleAlert /><span><strong>{t("agentAccess.customerAccountsUnavailable")}</strong></span></div>}
-    {status === "ready" && accounts.length === 0 && <div className="customer-access-empty"><Users /><span><strong>{t("agentAccess.noCustomerAccountsYet")}</strong><small>{t("agentAccess.accountsAppearAfterTheFirstSuccessfulCustomerSignIn")}</small></span></div>}
-    {status === "ready" && accounts.length > 0 && <div className="customer-access-list">{accounts.map((account) => <article className="customer-access-row" key={account.id}><span className="customer-access-identity"><strong>{account.external_id}</strong><small>{t("agentAccess.lastSignIn")} {t("format.dateTime", { value: new Date(account.last_authenticated_at) })}</small></span><Badge color={account.state === "active" ? "green" : "red"}>{account.state === "active" ? t("agentAccess.active") : t("agentAccess.suspended")}</Badge><Button outline disabled={busyAccount !== null} onClick={() => void updateAccount(account, account.state === "active" ? "suspended" : "active")}>{busyAccount === account.id ? t("common.saving") : account.state === "active" ? t("agentAccess.suspend") : t("agentAccess.reactivate")}</Button></article>)}{hasMore && <Button outline disabled={loadingMore} onClick={async () => { setLoadingMore(true); try { await onLoadMore(); } finally { setLoadingMore(false); } }}>{loadingMore ? t("common.loading") : t("agentAccess.loadMore")}</Button>}</div>}
-  </section>;
-}
-
-function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity }: { kind: "public" | "private"; tenantName: string; setup: Distribution["agent_setup"]["public"]; onCopied: (label: string) => void; onConfigureIdentity: () => void }) {
+function AgentSetupCard({ kind, tenantName, endpoint, setup, enabled = false, onEnabledChange, onCopied, onConfigureIdentity }: {
+  kind: "public" | "private";
+  tenantName: string;
+  endpoint: string;
+  setup: Distribution["agent_setup"]["public"];
+  enabled?: boolean;
+  onEnabledChange?: (enabled: boolean) => void;
+  onCopied: (label: string) => void;
+  onConfigureIdentity: () => void;
+}) {
   const { t } = useTranslation();
   const isPublic = kind === "public";
+  const kindLabel = isPublic ? t("agentAccess.publicMCP") : t("settings.privateMCP");
+  const connectLabel = t("agentAccess.connectYourAgentToName", { name: tenantName });
+  const previewLabel = isPublic ? `[${t("agentAccess.public")}] ${connectLabel}` : connectLabel;
   return <article className={`agent-setup-card ${!setup.available ? "agent-setup-disabled" : ""}`}>
-    <div className={`agent-setup-preview ${isPublic ? "public-agent-preview" : "private-agent-preview"}`}><a href={setup.available ? setup.url : undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!setup.available} onClick={(event) => { if (!setup.available) event.preventDefault(); }}><span className="agent-setup-label">{t("agentAccess.connectYourAgentTo")} {tenantName}</span><span className={`agent-access-chip ${kind}`}>{isPublic ? t("agentAccess.public") : t("agentAccess.private")}</span>{agentClients.map((client) => <Image key={client.id} className="agent-client-mark" src={`/agent-client-icons/${client.file}`} alt={client.name} width={20} height={20} />)}</a></div>
-    <div className="agent-setup-copy"><Badge color={isPublic ? "blue" : "violet"}>{isPublic ? <Globe2 /> : <LockKeyhole />}{isPublic ? t("agentAccess.public") : t("agentAccess.private")}</Badge><h3>{isPublic ? t("agentAccess.publicMCPButton") : t("agentAccess.privateMCPButton")}</h3>{setup.available ? <a className="agent-setup-guide-link" href={setup.url} target="_blank" rel="noopener noreferrer"><ExternalLink />{t("agentAccess.openSetupInstructions")}</a> : <div className="inline-warning"><TriangleAlert />{isPublic ? t("agentAccess.enablePublicMCPFirst") : t("agentAccess.configureCustomerIdentityFirst")}</div>}{!isPublic && !setup.available && <Button outline onClick={onConfigureIdentity}>{t("agentAccess.configureIdentity")}</Button>}<CopyButton text={setup.embed_html} label={t("agentAccess.copyMCPButton", { kind: isPublic ? t("agentAccess.public") : t("agentAccess.private") })} disabled={!setup.available} onCopied={() => onCopied(isPublic ? t("agentAccess.publicMCPButtonCopied") : t("agentAccess.privateMCPButtonCopied"))} /></div>
+    <div className={`agent-setup-preview ${isPublic ? "public-agent-preview" : "private-agent-preview"}`}><a href={setup.available ? setup.url : undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!setup.available} onClick={(event) => { if (!setup.available) event.preventDefault(); }}><span className="agent-setup-label">{previewLabel}</span>{agentClients.map((client) => <Image key={client.id} className="agent-client-mark" src={`/agent-client-icons/${client.file}`} alt={client.name} width={20} height={20} />)}</a></div>
+    <div className="agent-setup-copy">
+      <div className="agent-setup-card-heading"><span className="agent-setup-kind"><Badge color={isPublic ? "blue" : "violet"}>{isPublic ? <Globe2 /> : <LockKeyhole />}{isPublic ? t("agentAccess.public") : t("agentAccess.private")}</Badge><h2 aria-label={`${kindLabel}: ${t("agentAccess.mcpButton")}`}>{t("agentAccess.mcpButton")}</h2></span><span className="agent-setup-state"><Badge color={setup.available ? "green" : "zinc"}>{isPublic ? enabled ? t("agentAccess.live") : t("agentAccess.off") : setup.available ? t("agentAccess.active") : t("agentAccess.off")}</Badge>{isPublic && onEnabledChange && <Switch checked={enabled} onChange={onEnabledChange} label={t("agentAccess.enablePublicMCP")} />}</span></div>
+      <div className="agent-setup-description-slot"><p className="agent-setup-description">{isPublic ? t("agentAccess.offerAnAuthenticationFreeReadOnlyMCPEndpointContaining") : t("agentAccess.offerAnAuthenticatedMCPEndpointWithPrivateResourcesAndCustomerScopedAccess")}</p></div>
+      <div className="endpoint agent-setup-endpoint"><code>{endpoint}</code><button type="button" aria-label={`${kindLabel}: ${t("agentAccess.copy")}`} onClick={() => { void navigator.clipboard.writeText(endpoint); onCopied(`${kindLabel}: ${t("queryLab.copied")}`); }}><Copy />{t("agentAccess.copy")}</button></div>
+      <CopyButton text={setup.embed_code} label={t("agentAccess.copyMCPButton", { kind: isPublic ? t("agentAccess.public") : t("agentAccess.private") })} disabled={!setup.available} onCopied={() => onCopied(isPublic ? t("agentAccess.publicMCPButtonCopied") : t("agentAccess.privateMCPButtonCopied"))} />
+      <div className="agent-setup-guide-slot" aria-hidden={!setup.available && isPublic}>{setup.available ? <a className="agent-setup-guide-link" href={setup.url} target="_blank" rel="noopener noreferrer"><ExternalLink />{t("agentAccess.openSetupInstructions")}</a> : !isPublic && <><div className="inline-warning"><TriangleAlert />{t("agentAccess.configureCustomerIdentityFirst")}</div><Button outline className="agent-identity-action" onClick={onConfigureIdentity}>{t("agentAccess.configureIdentity")}</Button></>}</div>
+    </div>
   </article>;
 }
 

@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  IDENTITY_TABS,
   INTEGRATION_TABS,
   INTEGRATION_PRIMARY_TABS,
   INTEGRATION_RESOURCE_TABS,
   SETTINGS_TABS,
   SECTION_PATHS,
   entityPath,
+  identityPath,
   integrationPath,
   integrationToolBuilderPath,
   integrationValidationPath,
@@ -104,6 +106,15 @@ test("primary console sections have canonical, round-trippable URLs", () => {
   }
   assert.equal(sectionPath("identity"), "/identity");
   assert.deepEqual(parseConsolePath("/identity/"), { kind: "section", section: "identity", path: "/identity" });
+  assert.deepEqual(IDENTITY_TABS, [
+    { id: "sign-in", label: "navigation.customerSignIn" },
+    { id: "customer-accounts", label: "navigation.customerAccounts" },
+  ]);
+  assert.equal(identityPath(), "/identity");
+  assert.equal(identityPath("customer-accounts"), "/identity/customer-accounts");
+  assert.deepEqual(parseConsolePath("/identity/customer-accounts"), { kind: "section", section: "identity", identityTab: "customer-accounts", path: "/identity/customer-accounts" });
+  assert.deepEqual(parseConsolePath("/identity/customer-accounts/"), { kind: "section", section: "identity", identityTab: "customer-accounts", path: "/identity/customer-accounts" });
+  assert.equal(parseConsolePath("/identity/sign-in").kind, "not-found");
   assert.equal(parseConsolePath("/identity/auth0").kind, "not-found");
   assert.equal(parseConsolePath("/identity/authorization").kind, "not-found");
 });
@@ -263,7 +274,7 @@ test("API validation findings open the matching local setup area", () => {
 test("settings has stable routes for every overview area", () => {
   assert.deepEqual(SETTINGS_TABS, [
     { id: "overview", label: "routes.overview" },
-    { id: "storage", label: "routes.databaseStorage" },
+    { id: "tenant", label: "routes.tenantSettings" },
     { id: "ai", label: "routes.aiConfiguration" },
     { id: "root", label: "routes.rootAccess" },
   ]);
@@ -274,6 +285,8 @@ test("settings has stable routes for every overview area", () => {
     assert.deepEqual(parseConsolePath(path), { kind: "section", section: "settings", settingsTab: tab.id, path });
   }
   assert.deepEqual(parseConsolePath("/settings/ai/"), parseConsolePath("/settings/ai"));
+  assert.deepEqual(parseConsolePath("/settings/tenant/"), parseConsolePath("/settings/tenant"));
+  assert.equal(parseConsolePath("/settings/storage").kind, "not-found");
   assert.equal(parseConsolePath("/settings/identity").kind, "not-found");
   assert.equal(parseConsolePath("/settings/models").kind, "not-found");
 });

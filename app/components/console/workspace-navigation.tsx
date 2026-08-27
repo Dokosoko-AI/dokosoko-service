@@ -139,8 +139,9 @@ export function ConsoleSidebar({
       </nav>
       <div className="sidebar-bottom">
         <div className="preference-controls">
-          <ThemeToggle />
           <LanguageSwitcher />
+          <span className="preference-divider" aria-hidden="true" />
+          <ThemeToggle />
         </div>
         <ConsoleLink
           path={sectionPath("settings")}
@@ -197,7 +198,7 @@ export function ConsoleTopbar({
           <option value="settings">{t("navigation.settings")}</option>
         </select>
         <div className="topbar-actions">
-          <div className="mobile-preference-controls"><LanguageSwitcher mobile /><ThemeToggle /></div>
+          <div className="mobile-preference-controls"><LanguageSwitcher mobile /><span className="preference-divider" aria-hidden="true" /><ThemeToggle mobile /></div>
         </div>
       </div>
     </header>

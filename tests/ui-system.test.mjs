@@ -30,12 +30,14 @@ test("keeps the complete source inventory inside the owned core component layer"
   assert.ok(coreFiles.includes("layout.tsx"), "core should include the shared layout composition");
 
   const composition = await readFile(appFile("app/components/core/control.tsx"), "utf8");
-  for (const component of ["badge", "button", "switch"]) {
+  for (const component of ["badge", "button"]) {
     assert.match(composition, new RegExp(`from "\\.\\/${component}"`));
   }
-  for (const primitive of ["BaseButton", "BaseBadge", "BaseSwitch"]) {
+  for (const primitive of ["BaseButton", "BaseBadge"]) {
     assert.match(composition, new RegExp(`<${primitive}\\b`));
   }
+  assert.match(composition, /<Headless\.Switch\b/);
+  assert.doesNotMatch(composition, /BaseSwitch/);
 });
 
 test("uses one interface contract for headers, tabs, sections, panels, filters, and rows", async () => {
@@ -57,6 +59,10 @@ test("uses one interface contract for headers, tabs, sections, panels, filters, 
   assert.match(styles, /\.table-head, \.table-row\s*\{[^}]*min-height:\s*var\(--height-row\)[^}]*padding:\s*10px 18px/);
   assert.match(styles, /\.panel-heading\s*\{[^}]*min-height:\s*var\(--height-row\)[^}]*padding:\s*16px 18px/);
   assert.match(styles, /\.provider-row\s*\{[^}]*min-height:\s*var\(--height-row\)[^}]*padding:\s*12px 18px/);
+  assert.match(styles, /\.docs-query-lab-tab\s*\{[^}]*margin-left:\s*auto/);
+  assert.match(source, /className="provider-row audit-event-row"[^\n]*<span className="settings-icon"><ScrollText \/><\/span>[^\n]*<small className="audit-event-time">[^\n]*<ChevronRight \/>/);
+  assert.match(styles, /\.audit-event-row\s*\{[^}]*grid-template-columns:\s*42px minmax\(0, 1fr\) auto 16px/);
+  assert.match(styles, /\.audit-event-row > \.audit-event-time\s*\{[^}]*white-space:\s*nowrap/);
   assert.doesNotMatch(routes, /analytics:|activity:\s*"\/insights/);
   assert.match(routes, /"audit-event":\s*"reporting"/);
 });
@@ -66,6 +72,7 @@ test("maps the owned typography and Figma semantic theme into one UI contract", 
   const layout = await readFile(appFile("app/layout.tsx"), "utf8");
   const styles = await stylesSource();
   const themeToggle = await readFile(appFile("app/components/ThemeToggle.tsx"), "utf8");
+  const languageSwitcher = await readFile(appFile("app/components/LanguageSwitcher.tsx"), "utf8");
   const consoleApp = await consoleSource();
 
   assert.match(figmaTheme, /--primary:\s*#4f46e5/);
@@ -87,18 +94,35 @@ test("maps the owned typography and Figma semantic theme into one UI contract", 
   assert.match(styles, /\.core-control-shell::before\s*\{[^}]*var\(--surface\)/);
   assert.match(styles, /:is\(\.core-input, \.core-select, \.core-textarea\)\s*\{[^}]*var\(--ink\)[^}]*var\(--line-strong\)[^}]*var\(--surface\)/);
   assert.match(styles, /\.core-select option, \.core-select optgroup\s*\{[^}]*var\(--surface-elevated\)/);
+  assert.match(styles, /\.ai-provider-select > \.ai-provider-logo\s*\{[^}]*position:\s*absolute[^}]*width:\s*22px[^}]*pointer-events:\s*none/);
+  assert.match(styles, /\.ai-provider-select\.has-provider \.core-select\s*\{[^}]*padding-left:\s*38px/);
   assert.match(styles, /\.auth-field textarea\s*\{[^}]*var\(--font-ui\)/);
   assert.match(styles, /\.auth-field textarea\.code-input\s*\{[^}]*var\(--font-code\)/);
-  assert.match(themeToggle, /role="switch"/);
-  assert.match(themeToggle, /aria-checked=\{dark\}/);
-  assert.match(themeToggle, /import \{ Moon, Sun \} from "lucide-react"/);
-  assert.match(themeToggle, /dark \? <Moon aria-hidden="true" \/> : <Sun aria-hidden="true" \/>/);
+  assert.match(themeToggle, /type ThemePreference = "light" \| "dark" \| "system"/);
+  assert.match(themeToggle, /import \{ Check, Monitor, Moon, Sun \} from "lucide-react"/);
+  assert.match(themeToggle, /window\.matchMedia\(systemThemeQuery\)/);
+  assert.match(themeToggle, /media\.addEventListener\("change", handleSystemChange\)/);
+  assert.match(themeToggle, /localStorage\.setItem\(storageKey, preference\)/);
+  assert.match(themeToggle, /const longPressDelay = 300/);
+  assert.match(themeToggle, /function cycleTheme\(\)/);
+  assert.match(themeToggle, /onPointerDownCapture=\{startLongPress\}/);
+  assert.match(themeToggle, /onClickCapture=\{handleClick\}/);
+  assert.match(themeToggle, /buttonRef\.current\?\.click\(\)/);
+  assert.match(themeToggle, /event\.key !== "Enter" && event\.key !== " "/);
+  assert.match(themeToggle, /<Headless\.MenuItems[^>]+className="theme-menu"/);
+  for (const mode of ["light", "dark", "system"]) assert.match(themeToggle, new RegExp(`id: "${mode}"`));
   assert.doesNotMatch(themeToggle, /theme-toggle-(?:label|track)/);
-  assert.match(consoleApp, /className="sidebar-bottom">\s*<div className="preference-controls">\s*<ThemeToggle \/>\s*<LanguageSwitcher \/>/);
-  assert.match(consoleApp, /className="mobile-preference-controls"><LanguageSwitcher mobile \/><ThemeToggle \/><\/div>/);
+  assert.match(consoleApp, /className="sidebar-bottom">\s*<div className="preference-controls">\s*<LanguageSwitcher \/>\s*<span className="preference-divider" aria-hidden="true" \/>\s*<ThemeToggle \/>/);
+  assert.match(consoleApp, /className="mobile-preference-controls"><LanguageSwitcher mobile \/><span className="preference-divider" aria-hidden="true" \/><ThemeToggle mobile \/><\/div>/);
   assert.match(styles, /\.theme-toggle\s*\{[^}]*width:\s*38px[^}]*height:\s*38px[^}]*display:\s*grid[^}]*place-items:\s*center[^}]*border:\s*0[^}]*background:\s*transparent/);
   assert.match(styles, /\.theme-toggle svg\s*\{[^}]*width:\s*17px[^}]*height:\s*17px/);
+  assert.match(styles, /\.theme-menu-item\s*\{[^}]*grid-template-columns:\s*20px 18px minmax\(0, 1fr\)/);
   assert.doesNotMatch(styles, /theme-toggle-(?:label|track)/);
+  assert.match(styles, /\.preference-controls \.language-toggle\s*\{[^}]*flex:\s*1 1 auto/);
+  assert.match(styles, /\.preference-controls \.theme-toggle\s*\{[^}]*flex:\s*0 0 38px/);
+  assert.match(styles, /\.language-name\s*\{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/);
+  assert.doesNotMatch(languageSwitcher, /className="language-code"/);
+  assert.match(languageSwitcher, /className="language-menu-code"/);
   assert.match(styles, /\.mobile-preference-controls :is\(\.theme-toggle, \.language-toggle\)\s*\{[^}]*width:\s*34px[^}]*height:\s*34px/);
   assert.match(styles, /\.mobile-preference-controls\s*\{\s*display:\s*none/);
 });
@@ -237,6 +261,7 @@ test("keeps interactive controls semantic inside shared data tables", async () =
   const source = await consoleSource();
   const layout = await readFile(appFile("app/components/core/layout.tsx"), "utf8");
   const table = await readFile(appFile("app/components/core/table.tsx"), "utf8");
+  const controls = await readFile(appFile("app/components/core/control.tsx"), "utf8");
   const coreUI = await readFile(appFile("app/styles/core-ui.css"), "utf8");
   const styles = await stylesSource();
 
@@ -261,6 +286,9 @@ test("keeps interactive controls semantic inside shared data tables", async () =
   assert.match(styles, /\.core-table :is\(\.core-table-header, \.core-table-cell\):first-child\s*\{[^}]*padding-left:\s*var\(--table-gutter, 16px\)/);
   assert.match(styles, /\.row-arrow[^{]*\{[^}]*width:\s*32px[^}]*height:\s*32px/);
   assert.match(styles, /\.core-switch\s*\{[^}]*width:\s*40px[^}]*height:\s*24px/);
+  assert.match(controls, /<Headless\.Switch[\s\S]*className="core-switch"[\s\S]*<span aria-hidden="true" \/>/);
+  assert.doesNotMatch(controls, /Switch as BaseSwitch|<BaseSwitch/);
+  assert.match(styles, /\.core-switch\[data-checked\] span\s*\{[^}]*transform:\s*translateX\(16px\)/);
   assert.match(styles, /\.entity-link\s*\{[^}]*min-height:\s*24px/);
   assert.match(coreUI, /\.source-columns\s*\{[^}]*minmax\(220px, 1\.4fr\)[^}]*300px/);
   assert.doesNotMatch(coreUI, /\.source-columns\s*\{[^}]*minmax\(30px, auto\)/);

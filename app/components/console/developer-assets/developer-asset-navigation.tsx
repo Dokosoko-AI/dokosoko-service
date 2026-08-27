@@ -16,5 +16,5 @@ export function DocumentationNavigation({ active, onNavigate }: { active: Sectio
     { label: t("navigation.apiContracts"), section: "contracts" },
     { label: t("navigation.queryLab"), section: "query-lab" },
   ];
-  return <PageTabs label={t("developerAssets.docsAreas")}>{items.map((item) => <ConsoleLink key={item.section} path={sectionPath(item.section)} onNavigate={onNavigate} className={`page-tab ${active === item.section ? "active" : ""}`} ariaCurrent={active === item.section ? "page" : undefined}>{item.label}</ConsoleLink>)}</PageTabs>;
+  return <PageTabs label={t("developerAssets.docsAreas")}>{items.map((item) => <ConsoleLink key={item.section} path={sectionPath(item.section)} onNavigate={onNavigate} className={`page-tab${item.section === "query-lab" ? " docs-query-lab-tab" : ""}${active === item.section ? " active" : ""}`} ariaCurrent={active === item.section ? "page" : undefined}>{item.label}</ConsoleLink>)}</PageTabs>;
 }

@@ -105,6 +105,7 @@ func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	mux.HandleFunc("/api/v1/", server.adminAPI)
 	mux.HandleFunc("POST /mcp/public", server.publicMCP)
 	mux.HandleFunc("POST /mcp", server.privateMCP)
+	mux.HandleFunc("GET /agent-setup/button.js", server.agentSetupButtonScript)
 	mux.HandleFunc("GET /agent-setup/{kind}/prompt.md", server.agentSetupPrompt)
 	if options.UIDirectory != "" {
 		mux.Handle("/", staticConsole(options.UIDirectory))

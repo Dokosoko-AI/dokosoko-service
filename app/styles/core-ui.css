@@ -38,8 +38,8 @@
 .core-badge-amber { color: var(--warning); background: var(--warning-soft); }
 .core-badge-red { color: var(--danger); background: var(--danger-soft); }
 
-.core-switch { position: relative; flex: 0 0 auto; width: 40px; height: 24px; padding: 2px; border: 0; border-radius: 999px; background: var(--line-strong); transition: background .18s ease; }
-.core-switch span { display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-sm); transition: transform .18s ease; }
+.core-switch { position: relative; display: flex; flex: 0 0 auto; align-items: center; width: 40px; height: 24px; padding: 2px; border: 0; border-radius: 999px; background: var(--line-strong); cursor: pointer; transition: background .18s ease; }
+.core-switch span { display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-sm); transform: translateX(0); transition: transform .18s ease; }
 .core-switch[data-checked] { background: var(--accent); }
 .core-switch[data-checked] span { transform: translateX(16px); }
 .core-switch[data-disabled] { cursor: not-allowed; opacity: .45; }
@@ -55,8 +55,6 @@
 .dialog-body { margin-top: 20px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
 
-.switch-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
-.switch-stack small { color: var(--subtle); font-size: var(--text-caption); white-space: nowrap; }
 .visibility-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .segmented-control { width: fit-content; max-width: 100%; display: flex; align-items: center; gap: 3px; overflow-x: auto; margin: 0 0 12px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--soft); scrollbar-width: none; }
 .segmented-control::-webkit-scrollbar { display: none; }

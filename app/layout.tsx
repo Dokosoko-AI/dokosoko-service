@@ -1,16 +1,15 @@
 import type { Metadata } from "next";
 import { Geist, JetBrains_Mono } from "next/font/google";
 import { I18nProvider } from "./i18n/client";
-import { getRequestLocale, getServerTranslator } from "./i18n/server";
-import { directionForLocale } from "./i18n/settings";
+import { getServerTranslator } from "./i18n/server";
+import { defaultLocale, directionForLocale } from "./i18n/settings";
 import "./globals.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 const jetBrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subsets: ["latin"] });
 
 export async function generateMetadata(): Promise<Metadata> {
-  const locale = await getRequestLocale();
-  const t = await getServerTranslator(locale);
+  const t = await getServerTranslator(defaultLocale);
   return {
     title: t("metadata.title"),
     description: t("metadata.description"),
@@ -18,8 +17,8 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const locale = await getRequestLocale();
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const locale = defaultLocale;
   return (
     <html
       lang={locale}
@@ -30,7 +29,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("dokosoko-theme");var d=t==="dark"||t!=="light"&&matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.dataset.theme=d?"dark":"light"}catch(e){document.documentElement.dataset.theme="light"}})()`,
+            __html: `(function(){try{var t=localStorage.getItem("dokosoko-theme");var p=t==="light"||t==="dark"||t==="system"?t:"system";var d=p==="dark"||p==="system"&&matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.dataset.themePreference=p;document.documentElement.dataset.theme=d?"dark":"light";document.documentElement.style.colorScheme=d?"dark":"light"}catch(e){document.documentElement.dataset.themePreference="system";document.documentElement.dataset.theme="light";document.documentElement.style.colorScheme="light"}})()`,
           }}
         />
       </head>

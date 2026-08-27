@@ -5,7 +5,6 @@ import clsx from "clsx";
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 import { Badge as BaseBadge } from "./badge";
 import { Button as BaseButton } from "./button";
-import { Switch as BaseSwitch } from "./switch";
 
 type ButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "color"> & {
   color?: "dark" | "red" | "indigo";
@@ -46,14 +45,15 @@ export function Switch({ checked, onChange, disabled = false, label }: {
   label: string;
 }) {
   return (
-    <BaseSwitch
+    <Headless.Switch
       checked={checked}
       onChange={onChange}
       disabled={disabled}
       aria-label={label}
-      color="indigo"
       className="core-switch"
-    />
+    >
+      <span aria-hidden="true" />
+    </Headless.Switch>
   );
 }
 

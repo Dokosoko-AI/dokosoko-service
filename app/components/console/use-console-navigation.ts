@@ -5,6 +5,7 @@ import { startTransition, useCallback, useEffect, useRef, useState } from "react
 
 import {
   type ConsoleRoute,
+  type IdentityTab,
   type Section,
   type SettingsTab,
   parseConsolePath,
@@ -104,11 +105,16 @@ export function useConsoleNavigation({
     consoleRoute.kind === "section" && consoleRoute.section === "settings"
       ? consoleRoute.settingsTab ?? "overview"
       : "overview";
+  const identityTab: IdentityTab =
+    consoleRoute.kind === "section" && consoleRoute.section === "identity"
+      ? consoleRoute.identityTab ?? "sign-in"
+      : "sign-in";
 
   return {
     consoleRoute,
     section,
     settingsTab,
+    identityTab,
     navigateToPath,
     navigateToSection,
     navigateToGroup,

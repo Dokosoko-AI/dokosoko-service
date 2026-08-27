@@ -8,6 +8,7 @@ COPY api ./api
 COPY public ./public
 COPY worker ./worker
 COPY .openai ./.openai
+COPY scripts ./scripts
 COPY next.config.ts postcss.config.mjs tsconfig.json vite.config.ts next-env.d.ts ./
 RUN pnpm build
 

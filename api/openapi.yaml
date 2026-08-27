@@ -5083,6 +5083,7 @@ components:
           maxLength: 120
         slug:
           type: string
+          maxLength: 63
           pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
         description:
           type: string
@@ -11226,14 +11227,24 @@ components:
         url:
           type: string
           format: uri
+        embed_script_url:
+          type: string
+          format: uri
+          description: Public script that defines the localized dokosoko-mcp-button Web Component.
+        embed_code:
+          type: string
+          description: Secret-free script and Web Component markup for the localized MCP setup button.
         embed_html:
           type: string
-          description: Self-contained secret-free anchor markup.
+          deprecated: true
+          description: Legacy self-contained secret-free anchor markup. Use embed_code for new integrations.
         contains_secret:
           const: false
       required:
         - available
         - url
+        - embed_script_url
+        - embed_code
         - embed_html
         - contains_secret
     JSONRPCRequest:

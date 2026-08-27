@@ -19,6 +19,8 @@ import { IntegrationToolBuilderRoute } from "./integrations/IntegrationToolBuild
 import { OIDCIdentitySetup } from "./OIDCIdentitySetup";
 import { ToolBuilderView } from "./ToolBuilderView";
 import { DistributionView, SourcesView } from "./console/agent-access-views";
+import { CustomerAccountsView, IdentityNavigation } from "./console/identity-customer-accounts-view";
+import { TenantSettingsView } from "./console/tenant-settings-view";
 import {
   AIProviderLogo,
   AISettingsView,
@@ -28,7 +30,6 @@ import {
   RecipesView,
   RootAccessSettingsView,
   SettingsView,
-  StorageSettingsView,
   ToolsView,
 } from "./console/catalog-settings-views";
 import { APIContractsView } from "./console/developer-assets/api-contracts-view";
@@ -45,7 +46,7 @@ import { RecipeDialogs, type RecipeDialogState } from "./console/dialogs/recipe-
 import { parseRecipeSpecEditor, recipeEditableSpec, recipeSpecEditorValue } from "./console/dialogs/recipe-spec-editor";
 import { SourceDialogs } from "./console/dialogs/source-dialogs";
 import { IntegrationsView } from "./console/integration-views";
-import { ConsoleLink, type Source, buildAgentSetupEmbedHTML } from "./console/shared";
+import { ConsoleLink, type Source, agentSetupButtonScriptURL, buildAgentSetupEmbedCode, buildAgentSetupEmbedHTML } from "./console/shared";
 import { ConsoleNotFoundView, EntityDetailView, ResourceSetDetailView, ToolDetailView } from "./console/tool-views";
 import { useAdminActivityWorkspace } from "./console/use-admin-activity-workspace";
 import { useAIWorkspaceState } from "./console/use-ai-workspace";
@@ -121,7 +122,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     setWorkspaceLoadProblems((current) => current.includes(`${area}: ${detail}`) ? current : [...current, `${area}: ${detail}`]);
   }, [t]);
   const clearToolBuilderSeed = useCallback(() => setToolBuilderSeed(null), []);
-  const { consoleRoute, section, settingsTab, navigateToPath, navigateToSection, navigateToGroup, onToolBuilderDirtyChange } = useConsoleNavigation({ onLeaveToolBuilder: clearToolBuilderSeed });
+  const { consoleRoute, section, settingsTab, identityTab, navigateToPath, navigateToSection, navigateToGroup, onToolBuilderDirtyChange } = useConsoleNavigation({ onLeaveToolBuilder: clearToolBuilderSeed });
   const apiConnected = !fixturePreview;
 
   const mcpWorkspace = useMCPWorkspaceState({ fixtures, product, apiConnected, setTools, showToast });
@@ -265,6 +266,23 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     }
   }
 
+  async function updateTenantSettings(input: { name: string; slug: string; description: string }): Promise<boolean> {
+    if (fixturePreview) {
+      setProduct((current) => ({ ...current, ...input, revision: current.revision + 1 }));
+      showToast(t("tenantSettings.saved"));
+      return true;
+    }
+    try {
+      const updated = await api.updateDeployment({ ...input, public_mcp_enabled: product.public_mcp_enabled, revision: product.revision });
+      setProduct(deploymentAsProduct(updated));
+      showToast(t("tenantSettings.saved"));
+      return true;
+    } catch (error) {
+      showToast(error instanceof APIError ? error.message : t("tenantSettings.saveFailed"));
+      return false;
+    }
+  }
+
   function reviewToolTestProposal(target: APITool, proposal: APIToolTestAnalysisProposal) {
     if ((target.backend_kind ?? "http") !== "http" || target.state !== "draft") {
       showToast(t("console.createAnIndependentHTTPDraftBeforeReviewingThisProposal"));
@@ -311,10 +329,15 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const allResources = useMemo(() => sources.map((item) => ({ ...item, resourceType: "source" as const, type: item.kind, detail: item.location })), [sources]);
   const visibleResources = resourceFilter === "all" ? allResources : allResources.filter((item) => item.visibility === resourceFilter);
   const publicEndpoint = distribution?.public_mcp_endpoint ?? "/mcp/public";
+  const privateEndpoint = distribution?.private_mcp_endpoint ?? "/mcp";
   const publicAgentSetupURL = distribution?.agent_setup.public.url ?? "/agent-setup/public/prompt.md";
   const privateAgentSetupURL = distribution?.agent_setup.private.url ?? "/agent-setup/private/prompt.md";
-  const publicAgentSetup = distribution?.agent_setup.public ?? { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(publicAgentSetupURL, "public", { deploymentName: product.name, kindLabel: t("common.public"), connectLabel: t("agentAccess.connectYourAgentToName", { name: product.name }), ariaLabel: t("agentAccess.connectYourAgentUsingMCP", { name: product.name, kind: t("common.public") }) }), contains_secret: false as const };
-  const privateAgentSetup = distribution?.agent_setup.private ?? { available: identityConfig?.configured === true && identityConfig.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_html: buildAgentSetupEmbedHTML(privateAgentSetupURL, "private", { deploymentName: product.name, kindLabel: t("common.private"), connectLabel: t("agentAccess.connectYourAgentToName", { name: product.name }), ariaLabel: t("agentAccess.connectYourAgentUsingMCP", { name: product.name, kind: t("common.private") }) }), contains_secret: false as const };
+  const publicAgentSetup = distribution?.agent_setup.public
+    ? { ...distribution.agent_setup.public, available: publicMCPEnabled, unavailable_reason: publicMCPEnabled ? undefined : "public_mcp_disabled" as const, embed_script_url: distribution.agent_setup.public.embed_script_url || agentSetupButtonScriptURL(publicAgentSetupURL), embed_code: distribution.agent_setup.public.embed_code || buildAgentSetupEmbedCode(publicAgentSetupURL, "public") }
+    : { available: publicMCPEnabled, unavailable_reason: "public_mcp_disabled" as const, url: publicAgentSetupURL, embed_script_url: agentSetupButtonScriptURL(publicAgentSetupURL), embed_code: buildAgentSetupEmbedCode(publicAgentSetupURL, "public"), embed_html: buildAgentSetupEmbedHTML(publicAgentSetupURL, "public", { deploymentName: product.name, kindLabel: t("common.public"), connectLabel: `[${t("common.public")}] ${t("agentAccess.connectYourAgentToName", { name: product.name })}`, ariaLabel: t("agentAccess.connectYourAgentUsingMCP", { name: product.name, kind: t("common.public") }) }), contains_secret: false as const };
+  const privateAgentSetup = distribution?.agent_setup.private
+    ? { ...distribution.agent_setup.private, available: identityConfig?.configured === true && identityConfig.state === "active", unavailable_reason: identityConfig?.configured === true && identityConfig.state === "active" ? undefined : "identity_unavailable" as const, embed_script_url: distribution.agent_setup.private.embed_script_url || agentSetupButtonScriptURL(privateAgentSetupURL), embed_code: distribution.agent_setup.private.embed_code || buildAgentSetupEmbedCode(privateAgentSetupURL, "private") }
+    : { available: identityConfig?.configured === true && identityConfig.state === "active", unavailable_reason: "identity_unavailable" as const, url: privateAgentSetupURL, embed_script_url: agentSetupButtonScriptURL(privateAgentSetupURL), embed_code: buildAgentSetupEmbedCode(privateAgentSetupURL, "private"), embed_html: buildAgentSetupEmbedHTML(privateAgentSetupURL, "private", { deploymentName: product.name, kindLabel: t("common.private"), connectLabel: t("agentAccess.connectYourAgentToName", { name: product.name }), ariaLabel: t("agentAccess.connectYourAgentUsingMCP", { name: product.name, kind: t("common.private") }) }), contains_secret: false as const };
   const mcpConnectionReady = Boolean(mcpName.trim() && mcpNamespace.trim() && mcpEndpoint.trim() && mcpAccessToken.trim());
   const activeNavigation = navigation.find((item) => item.sections.some((candidate) => candidate.id === section));
   const selectedToolBuilderTool = toolBuilderUID && toolBuilderSelection?.uid === toolBuilderUID ? toolBuilderSelection.tool : null;
@@ -356,16 +379,17 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
               {section === "contracts" && <APIContractsView live={apiConnected} integrations={integrations} sources={sources} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "sdks" && <SDKCatalogView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "query-lab" && <QueryLabView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
-              {section === "identity" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} onChanged={setIdentityConfig} onMessage={showToast} />}
+              {section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} navigation={<IdentityNavigation active="sign-in" onNavigate={navigateToPath} />} onChanged={setIdentityConfig} onMessage={showToast} />}
+              {section === "identity" && identityTab === "customer-accounts" && <CustomerAccountsView accounts={customerAccounts} status={customerAccountsStatus} hasMore={customerAccountsHaveMore} onUpdate={updateCustomerAccountState} onLoadMore={loadMoreCustomerAccounts} onNavigate={navigateToPath} />}
               {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onDelete={deleteRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
               {section === "sources" && <SourcesView sources={sources} navigation={<DocumentationNavigation active="sources" onNavigate={navigateToPath} />} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
               {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
               {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
               {section === "mcp-preview" && <MCPPreviewView product={product} grants={grantDefinitions} grantStatus={grantDefinitionsStatus} available={apiConnected} privateEndpointEnabled={identityConfig?.configured === true && identityConfig.state === "active"} onMessage={showToast} onNavigate={navigateToPath} />}
-              {section === "distribution" && <DistributionView enabled={publicMCPEnabled} onEnabledChange={requestMCPChange} resources={visibleResources} resourceFilter={resourceFilter} setResourceFilter={setResourceFilter} onVisibilityChange={requestVisibility} onCopied={showToast} publicEndpoint={publicEndpoint} tenantName={product.name} publicAgentSetup={publicAgentSetup} privateAgentSetup={privateAgentSetup} onConfigureIdentity={() => navigateToSection("identity")} customerAccounts={customerAccounts} customerAccountsStatus={customerAccountsStatus} customerAccountsHaveMore={customerAccountsHaveMore} onUpdateCustomerAccount={updateCustomerAccountState} onLoadMoreCustomerAccounts={loadMoreCustomerAccounts} onOpenSources={() => navigateToSection("sources")} />}
+              {section === "distribution" && <DistributionView enabled={publicMCPEnabled} onEnabledChange={requestMCPChange} resources={visibleResources} resourceFilter={resourceFilter} setResourceFilter={setResourceFilter} onVisibilityChange={requestVisibility} onCopied={showToast} publicEndpoint={publicEndpoint} privateEndpoint={privateEndpoint} tenantName={product.name} publicAgentSetup={publicAgentSetup} privateAgentSetup={privateAgentSetup} onConfigureIdentity={() => navigateToSection("identity")} onOpenSources={() => navigateToSection("sources")} />}
               {section === "reporting" && <OutboxView submissions={reportSubmissions} events={auditEvents} onView={openSupportSubmission} onNavigate={navigateToPath} />}
-              {section === "settings" && settingsTab === "overview" && <SettingsView product={product} aiProfiles={aiProfiles} rootUsers={rootUsers} currentUser={currentUser ?? null} onDoctor={runSystemDoctor} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
-              {section === "settings" && settingsTab === "storage" && <StorageSettingsView onNavigate={navigateToPath} />}
+              {section === "settings" && settingsTab === "overview" && <SettingsView aiProfiles={aiProfiles} rootUsers={rootUsers} onDoctor={runSystemDoctor} onNavigate={navigateToPath} />}
+              {section === "settings" && settingsTab === "tenant" && <TenantSettingsView key={product.revision} product={product} onSave={updateTenantSettings} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "ai" && <AISettingsView profiles={aiProfiles} prompts={aiPrompts} connections={aiConnections} usage={aiProviderUsage} saving={workloadBusy} onSave={saveAIWorkloadSelection} onConfigure={openAIWorkload} onEditPrompt={openAIPrompt} onAddProvider={() => setProviderPickerOpen(true)} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "root" && <RootAccessSettingsView rootUsers={rootUsers} currentUser={currentUser ?? null} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
             </>}

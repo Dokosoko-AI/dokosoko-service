@@ -5,6 +5,8 @@ import {
   analysisMatchesIntegration,
   activeRecipeIntegrationID,
   apiFamilyKeyFromName,
+  agentSetupButtonScriptURL,
+  buildAgentSetupEmbedCode,
   buildAgentSetupEmbedHTML,
   integrationIncludesSourcePublication,
   recipeAnalysisIsFreshlyRunning,
@@ -161,4 +163,15 @@ test("console embed output escapes tenant-controlled values", () => {
   assert.doesNotMatch(embed, /<img src=x onerror=/);
   assert.match(embed, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.match(embed, /a=1&amp;b=2/);
+  assert.doesNotMatch(embed, />Public</);
+});
+
+test("console MCP button embed uses the localized Web Component instead of copied anchor markup", () => {
+  const setupURL = "https://console.example/agent-setup/private/prompt.md";
+  assert.equal(agentSetupButtonScriptURL(setupURL), "https://console.example/agent-setup/button.js");
+  assert.equal(
+    buildAgentSetupEmbedCode(setupURL, "private"),
+    `<script async src="https://console.example/agent-setup/button.js"></script>\n<dokosoko-mcp-button kind="private" lang="auto"></dokosoko-mcp-button>`,
+  );
+  assert.doesNotMatch(buildAgentSetupEmbedCode(setupURL, "private"), /<a\b|style=/);
 });

@@ -544,6 +544,8 @@ func TestAgentSetupDistributionAndPromptsFollowReadiness(t *testing.T) {
 			Available         bool   `json:"available"`
 			UnavailableReason string `json:"unavailable_reason"`
 			URL               string `json:"url"`
+			EmbedScriptURL    string `json:"embed_script_url"`
+			EmbedCode         string `json:"embed_code"`
 			EmbedHTML         string `json:"embed_html"`
 			ContainsSecret    bool   `json:"contains_secret"`
 		} `json:"agent_setup"`
@@ -558,10 +560,32 @@ func TestAgentSetupDistributionAndPromptsFollowReadiness(t *testing.T) {
 	if !private.Available || private.ContainsSecret || private.URL != "https://dokosoko.example/agent-setup/private/prompt.md" {
 		t.Fatalf("unexpected private setup state: %#v", private)
 	}
+	if private.EmbedScriptURL != "https://dokosoko.example/agent-setup/button.js" || !strings.Contains(private.EmbedCode, `<script async src="https://dokosoko.example/agent-setup/button.js"></script>`) || !strings.Contains(private.EmbedCode, `<dokosoko-mcp-button kind="private" lang="auto"></dokosoko-mcp-button>`) {
+		t.Fatalf("private embed code is not the localized Web Component: %#v", private)
+	}
+	if strings.Contains(private.EmbedCode, "<a ") || strings.Contains(private.EmbedCode, "style=") {
+		t.Fatalf("private embed code copied rendered button HTML: %s", private.EmbedCode)
+	}
 	for _, marker := range []string{"data-dokosoko-agent-setup=", "data-agent-client=\"codex\"", "data-agent-client=\"claude-code\"", "data-agent-client=\"cursor\"", "data-agent-client=\"opencode\"", "https://dokosoko.example/agent-client-icons/codex.svg", "https://dokosoko.example/agent-client-icons/claude-code.svg", "https://dokosoko.example/agent-client-icons/cursor.svg", "https://dokosoko.example/agent-client-icons/opencode.svg"} {
 		if !strings.Contains(private.EmbedHTML, marker) {
 			t.Fatalf("private embed omitted %q: %s", marker, private.EmbedHTML)
 		}
+	}
+	if strings.Contains(private.EmbedHTML, ">Private<") {
+		t.Fatalf("legacy private embed retained the removed access chip: %s", private.EmbedHTML)
+	}
+
+	buttonScript := request(t, handler, http.MethodGet, "/agent-setup/button.js", "", "")
+	if buttonScript.Code != http.StatusOK || !strings.HasPrefix(buttonScript.Header().Get("Content-Type"), "text/javascript") || buttonScript.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+		t.Fatalf("button script status = %d, headers = %#v, body = %s", buttonScript.Code, buttonScript.Header(), buttonScript.Body.String())
+	}
+	for _, marker := range []string{`customElements.define(elementName, DokoSokoMCPButton)`, `t(locale, "agentAccess.connectYourAgentToName"`, `"deploymentName":"Acme Platform"`, `"public":"https://dokosoko.example/agent-setup/public/prompt.md"`, `"private":"https://dokosoko.example/agent-setup/private/prompt.md"`, `Conecta tu agente a {{name}}`, `Connectez votre agent à {{name}}`, `Agent mit {{name}} verbinden`, `エージェントを{{name}}に接続`, `Підключити агента до {{name}}`, `Conecte seu agente a {{name}}`} {
+		if !strings.Contains(buttonScript.Body.String(), marker) {
+			t.Fatalf("button script omitted %q: %s", marker, buttonScript.Body.String())
+		}
+	}
+	if strings.Contains(buttonScript.Body.String(), "agent-access-chip") || strings.Contains(buttonScript.Body.String(), "__DOKOSOKO_AGENT_SETUP_CONFIG__") {
+		t.Fatalf("button script retained a chip or unresolved config: %s", buttonScript.Body.String())
 	}
 	for _, placeholder := range []string{"◉", "✳", "◆", "▣"} {
 		if strings.Contains(private.EmbedHTML, placeholder) {
@@ -584,6 +608,10 @@ func TestAgentSetupDistributionAndPromptsFollowReadiness(t *testing.T) {
 	}
 	if strings.Contains(privatePrompt.Body.String(), "doko_at_") || strings.Contains(privatePrompt.Body.String(), "doko_private_demo") {
 		t.Fatalf("private setup leaked a credential: %s", privatePrompt.Body.String())
+	}
+	privatePromptWithLanguage := request(t, handler, http.MethodGet, "/agent-setup/private/prompt.md?lang=ja", "", "")
+	if privatePromptWithLanguage.Code != http.StatusOK || privatePromptWithLanguage.Body.String() != privatePrompt.Body.String() {
+		t.Fatalf("prompt.md changed with the human UI locale: status=%d body=%s", privatePromptWithLanguage.Code, privatePromptWithLanguage.Body.String())
 	}
 
 	request(t, handler, http.MethodPatch, "/api/v1/products/prod_acme/distribution", "doko_admin_demo", `{"public_mcp_enabled":true,"acknowledge_public":true,"revision":1}`)

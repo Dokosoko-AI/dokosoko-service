@@ -145,14 +145,25 @@ export function agentClientAssetURL(setupURL: string, filename: string) {
   return `${origin}/agent-client-icons/${filename}`;
 }
 
+export function agentSetupButtonScriptURL(setupURL: string) {
+  try {
+    return new URL("/agent-setup/button.js", setupURL).toString();
+  } catch {
+    if (typeof window !== "undefined") return new URL("/agent-setup/button.js", window.location.origin).toString();
+  }
+  return "/agent-setup/button.js";
+}
+
+export function buildAgentSetupEmbedCode(setupURL: string, kind: "public" | "private") {
+  const scriptURL = escapeEmbedHTML(agentSetupButtonScriptURL(setupURL));
+  return `<script async src="${scriptURL}"></script>\n<dokosoko-mcp-button kind="${kind}" lang="auto"></dokosoko-mcp-button>`;
+}
+
 export function buildAgentSetupEmbedHTML(setupURL: string, kind: "public" | "private", copy: { deploymentName: string; kindLabel: string; connectLabel: string; ariaLabel: string }) {
   const url = escapeEmbedHTML(setupURL);
   const name = escapeEmbedHTML(copy.deploymentName);
-  const label = escapeEmbedHTML(copy.kindLabel);
   const connectLabel = escapeEmbedHTML(copy.connectLabel);
-  const ariaLabel = escapeEmbedHTML(copy.ariaLabel);
-  const chipColor = kind === "public" ? "#4338ca" : "#3f3f46";
-  const chipBackground = kind === "public" ? "#eef2ff" : "#f4f4f5";
+  const ariaLabel = escapeEmbedHTML(copy.connectLabel);
   const clients = agentClients.map((client) => `<img src="${escapeEmbedHTML(agentClientAssetURL(setupURL, client.file))}" alt="${client.name}" title="${client.name}" data-agent-client="${client.id}" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain">`).join("");
-  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" data-dokosoko-deployment="${name}" aria-label="${ariaLabel}" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>${connectLabel}</span><span style="padding:4px 8px;border-radius:999px;color:${chipColor};background:${chipBackground};font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">${label}</span>${clients}</a>`;
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="${kind}" data-dokosoko-deployment="${name}" aria-label="${ariaLabel}" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>${connectLabel}</span>${clients}</a>`;
 }

@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/http"
@@ -10,10 +12,17 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 )
 
+//go:embed agent_setup_button.js
+var agentSetupButtonJavaScript string
+
+const agentSetupButtonConfigPlaceholder = "globalThis.__DOKOSOKO_AGENT_SETUP_CONFIG__"
+
 type agentSetupLink struct {
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	URL               string `json:"url"`
+	EmbedScriptURL    string `json:"embed_script_url"`
+	EmbedCode         string `json:"embed_code"`
 	EmbedHTML         string `json:"embed_html"`
 	ContainsSecret    bool   `json:"contains_secret"`
 }
@@ -26,18 +35,23 @@ func (s *Server) agentSetupURL(kind string) string {
 	return s.baseURL + "/agent-setup/" + kind + "/prompt.md"
 }
 
+func (s *Server) agentSetupButtonScriptURL() string {
+	return s.baseURL + "/agent-setup/button.js"
+}
+
+func agentSetupEmbedCode(scriptURL, kind string) string {
+	return fmt.Sprintf(`<script async src="%s"></script>
+<dokosoko-mcp-button kind="%s" lang="auto"></dokosoko-mcp-button>`, html.EscapeString(scriptURL), kind)
+}
+
 func agentSetupEmbedHTML(tenantName, setupURL, assetOrigin, kind string) string {
 	name := html.EscapeString(promptLabel(tenantName))
 	url := html.EscapeString(setupURL)
-	label, chipBackground, chipColor := "Public", "#eef2ff", "#4338ca"
-	if kind == "private" {
-		label, chipBackground, chipColor = "Private", "#f4f4f5", "#3f3f46"
-	}
 	assetURL := func(filename string) string {
 		return html.EscapeString(strings.TrimRight(assetOrigin, "/") + "/agent-client-icons/" + filename)
 	}
 	clients := fmt.Sprintf(`<img src="%s" alt="Codex" title="Codex" data-agent-client="codex" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain"><img src="%s" alt="Claude Code" title="Claude Code" data-agent-client="claude-code" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain"><img src="%s" alt="Cursor" title="Cursor" data-agent-client="cursor" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain"><img src="%s" alt="OpenCode" title="OpenCode" data-agent-client="opencode" referrerpolicy="no-referrer" width="25" height="25" style="display:block;width:25px;height:25px;object-fit:contain">`, assetURL("codex.svg"), assetURL("claude-code.svg"), assetURL("cursor.svg"), assetURL("opencode.svg"))
-	return fmt.Sprintf(`<a href="%s" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="%s" aria-label="Connect your agent to %s using %s MCP" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to %s</span><span style="padding:4px 8px;border-radius:999px;color:%s;background:%s;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase">%s</span>%s</a>`, url, kind, name, strings.ToLower(label), name, chipColor, chipBackground, label, clients)
+	return fmt.Sprintf(`<a href="%s" target="_blank" rel="noopener noreferrer" data-dokosoko-agent-setup="%s" aria-label="Connect your agent to %s" style="display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px;border:1px solid #d4d4d8;border-radius:999px;color:#18181b;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08);font:600 16px/1.2 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont;&quot;Segoe UI&quot;,sans-serif;text-decoration:none"><span>Connect your agent to %s</span>%s</a>`, url, kind, name, name, clients)
 }
 
 func (s *Server) agentSetupLinks(ctx context.Context, product model.Product) map[string]agentSetupLink {
@@ -48,15 +62,48 @@ func (s *Server) agentSetupLinks(ctx context.Context, product model.Product) map
 		}
 	}
 	publicURL, privateURL := s.agentSetupURL("public"), s.agentSetupURL("private")
-	public := agentSetupLink{Available: product.PublicMCPEnabled, URL: publicURL, EmbedHTML: agentSetupEmbedHTML(product.Name, publicURL, s.baseURL, "public")}
+	scriptURL := s.agentSetupButtonScriptURL()
+	public := agentSetupLink{Available: product.PublicMCPEnabled, URL: publicURL, EmbedScriptURL: scriptURL, EmbedCode: agentSetupEmbedCode(scriptURL, "public"), EmbedHTML: agentSetupEmbedHTML(product.Name, publicURL, s.baseURL, "public")}
 	if !public.Available {
 		public.UnavailableReason = "public_mcp_disabled"
 	}
-	private := agentSetupLink{Available: privateAvailable, URL: privateURL, EmbedHTML: agentSetupEmbedHTML(product.Name, privateURL, s.baseURL, "private")}
+	private := agentSetupLink{Available: privateAvailable, URL: privateURL, EmbedScriptURL: scriptURL, EmbedCode: agentSetupEmbedCode(scriptURL, "private"), EmbedHTML: agentSetupEmbedHTML(product.Name, privateURL, s.baseURL, "private")}
 	if !private.Available {
 		private.UnavailableReason = "identity_unavailable"
 	}
 	return map[string]agentSetupLink{"public": public, "private": private}
+}
+
+func (s *Server) agentSetupButtonScript(w http.ResponseWriter, r *http.Request) {
+	deployment, err := s.service.Store().Deployment(r.Context())
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	product, err := s.service.Store().Product(r.Context(), deployment.ID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	config, err := json.Marshal(map[string]any{
+		"deploymentName": promptLabel(product.Name),
+		"setupURLs": map[string]string{
+			"public":  s.agentSetupURL("public"),
+			"private": s.agentSetupURL("private"),
+		},
+		"assetBaseURL": strings.TrimRight(s.baseURL, "/") + "/agent-client-icons",
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "The MCP button could not be rendered.", nil)
+		return
+	}
+	javascript := strings.Replace(agentSetupButtonJavaScript, agentSetupButtonConfigPlaceholder, string(config), 1)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write([]byte(javascript))
 }
 
 func (s *Server) agentSetupPrompt(w http.ResponseWriter, r *http.Request) {

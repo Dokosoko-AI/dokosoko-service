@@ -751,6 +751,8 @@ export type APIAgentSetupLink = {
   available: boolean;
   unavailable_reason?: "public_mcp_disabled" | "identity_unavailable";
   url: string;
+  embed_script_url: string;
+  embed_code: string;
   embed_html: string;
   contains_secret: false;
 };

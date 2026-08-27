@@ -1,7 +1,7 @@
 "use client";
 
 import * as Headless from "@headlessui/react";
-import { Check } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
 
@@ -61,7 +61,8 @@ export function LanguageSwitcher({ mobile = false }: { mobile?: boolean }) {
         title={`${t("languages.label")}: ${t(languageKeys[locale])}`}
       >
         <span className="language-flag" aria-hidden="true">{languageFlags[locale]}</span>
-        <span className="language-code" aria-hidden="true">{languageCodes[locale]}</span>
+        <span className="language-name">{t(languageKeys[locale])}</span>
+        <ChevronDown className="language-chevron" aria-hidden="true" />
       </Headless.MenuButton>
       <Headless.MenuItems transition anchor={mobile ? "bottom end" : "top start"} className="language-menu">
         {supportedLocales.map((candidate) => (

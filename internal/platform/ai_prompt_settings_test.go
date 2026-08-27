@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
 	"github.com/dokosoko/dokosoko-service/internal/store"
@@ -40,6 +41,9 @@ func TestAIPromptConfigurationsExposeOnlyEditableWorkflowBodies(t *testing.T) {
 		}
 		if configuration.Label == "" || configuration.Description == "" || configuration.Instructions == "" || configuration.DefaultVersion == "" {
 			t.Fatalf("incomplete default prompt configuration: %#v", configuration)
+		}
+		if utf8.RuneCountInString(configuration.Description) > 48 {
+			t.Fatalf("prompt description is too long for the settings table: %q", configuration.Description)
 		}
 		if configuration.Source != "default" || configuration.Revision != 1 || configuration.EffectiveVersion != configuration.DefaultVersion || configuration.UpdatedAt != nil {
 			t.Fatalf("unexpected default prompt state: %#v", configuration)

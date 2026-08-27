@@ -11,6 +11,8 @@ import { Button, Dialog, Switch } from "../../core/control";
 import { aiModelOptions, aiProviderLabel, aiProviders, aiWorkloadDescription, aiWorkloadName, aiWorkloads } from "../shared";
 import type { useAIWorkspaceState } from "../use-ai-workspace";
 
+const storedCredentialMask = "************";
+
 export function AIConfigurationDialogs({
   workspace,
   ProviderLogo,
@@ -81,7 +83,7 @@ export function AIConfigurationDialogs({
       onClose={setPromptOpen}
       title={activePrompt ? t("aiDialogs.edit", { label: String(activePrompt.label) }) : t("aiDialogs.editWorkflowInstructions")}
       description={t("aiDialogs.saveANewVersionOfTheWorkflowSpecificInstructions")}
-      actions={<><Button outline disabled={promptBusy || activePrompt?.source !== "override"} onClick={resetAIPromptOverride}>{t("aiDialogs.resetToSafeDefault")}</Button><Button outline onClick={() => setPromptOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={promptBusy || !activePrompt || !promptInstructions.trim() || promptInstructionBytes > 32768 || promptUnchanged} onClick={saveAIPromptOverride}>{promptBusy ? t("common.saving") : t("aiDialogs.saveNewVersion")}</Button></>}
+      actions={<><Button outline disabled={promptBusy || activePrompt?.source !== "override"} onClick={resetAIPromptOverride}>{t("aiDialogs.resetDefault")}</Button><Button outline onClick={() => setPromptOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={promptBusy || !activePrompt || !promptInstructions.trim() || promptInstructionBytes > 32768 || promptUnchanged} onClick={saveAIPromptOverride}>{promptBusy ? t("common.saving") : t("aiDialogs.saveNewVersion")}</Button></>}
     >
       <div className="auth-form compact-form ai-model-form ai-prompt-editor">
         {activePrompt && <div className="ai-dialog-workload"><span className="settings-icon"><BookOpen /></span><span><small>{activePrompt.source === "override" ? t("aiDialogs.customOverride") : t("aiDialogs.builtInDefault")}</small><strong>{activePrompt.effective_version}</strong></span></div>}
@@ -109,7 +111,7 @@ export function AIConfigurationDialogs({
     <Dialog
       open={providerOpen}
       onClose={setProviderOpen}
-      title={t("aiDialogs.connect", { value1: aiProviderLabel(providerKind, t) })}
+      title={t(providerConnection ? "aiDialogs.manage" : "aiDialogs.connect", { value1: aiProviderLabel(providerKind, t) })}
       description={t("aiDialogs.oneProviderConnectionOwnsOneCredentialTheAnalysisWorkload")}
       actions={<><Button outline onClick={() => setProviderOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={providerBusy || !providerEndpoint.trim() || (providerIsBackup && !providerBackupAnalysisModel.trim()) || (providerEnabled && !providerCredential.trim() && !providerConnection) || providerManagedByEnvironment} onClick={saveAIConnection}>{providerBusy ? t("common.saving") : t("aiDialogs.saveConnection")}</Button></>}
     >
@@ -117,7 +119,7 @@ export function AIConfigurationDialogs({
         <div className="ai-dialog-workload"><ProviderLogo provider={providerKind} /><span><small>{t("aiDialogs.provider")}</small><strong>{aiProviderLabel(providerKind, t)}</strong></span><Switch checked={providerEnabled} onChange={setProviderEnabled} label={t("aiDialogs.enabled")} /></div>
         {providerManagedByEnvironment ? <div className="private-default-note"><TerminalSquare />{t("aiDialogs.thisConnectionIsManagedByDOKOSOKOAIEnvironmentVariables")}</div> : <>
           <label className="auth-field"><span>{t("aiDialogs.providerOrigin")}</span><Input name="ai-provider-endpoint" type="url" autoComplete="off" readOnly={providerKind !== "openai-compatible"} value={providerEndpoint} onChange={(event) => setProviderEndpoint(event.target.value)} placeholder="https://api.provider.com" /><small>{providerKind === "openai-compatible" ? t("aiDialogs.aFixedPublicHTTPSOriginPrivateNetworkDestinationsRedirects") : t("aiDialogs.theNativeProviderOriginIsFixedByDokoSoko")}</small></label>
-          <label className="auth-field" htmlFor="ai-provider-credential"><span>{t("aiDialogs.apiCredential")}</span><Input id="ai-provider-credential" name="ai-provider-credential" type="password" autoComplete="new-password" value={providerCredential} onChange={(event) => setProviderCredential(event.target.value)} placeholder={providerConnection ? t("aiDialogs.leaveBlankToKeepTheStoredCredential") : t("aiDialogs.requiredBeforeEnabling")} /><small>{t("aiDialogs.encryptedAtRestRedactedFromEveryResponseAndShared")}</small></label>
+          <label className="auth-field" htmlFor="ai-provider-credential"><span>{t("aiDialogs.apiCredential")}</span><Input id="ai-provider-credential" name="ai-provider-credential" type="password" autoComplete="new-password" value={providerCredential} onChange={(event) => setProviderCredential(event.target.value)} placeholder={providerConnection ? storedCredentialMask : t("aiDialogs.requiredBeforeEnabling")} /></label>
           <div className="ai-backup-control"><span><strong>{t("aiDialogs.backupProvider")}</strong><small>{t("aiDialogs.onARetryableFailureSendTheSameBoundedPrompt")}</small></span><Switch checked={providerIsBackup} onChange={setProviderIsBackup} label={t("aiDialogs.useAsBackupProvider")} /></div>
           {providerIsBackup && <label className="auth-field"><span>{t("aiDialogs.analysisBackupModel")}</span>{providerKind === "openai-compatible" ? <Input value={providerBackupAnalysisModel} onChange={(event) => setProviderBackupAnalysisModel(event.target.value)} placeholder={t("aiDialogs.providerModelID")} /> : <Select value={providerBackupAnalysisModel} onChange={(event) => setProviderBackupAnalysisModel(event.target.value)}>{aiModelOptions[providerKind].map((model) => <option key={model} value={model}>{model}</option>)}</Select>}</label>}
         </>}

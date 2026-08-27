@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { APIError, APIIdentity, APIIdentityTest, api } from "../lib/api";
 import { Badge, Button } from "./core/control";
 import { PageHeader, PanelHeader } from "./core/layout";
@@ -26,6 +26,7 @@ type OIDCIdentitySetupProps = {
   identity: APIIdentity | null;
   loading: boolean;
   loadError: string;
+  navigation?: ReactNode;
   onChanged: (identity: APIIdentity) => void;
   onMessage: (message: string) => void;
 };
@@ -170,7 +171,7 @@ async function copyText(value: string) {
   }
 }
 
-export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onMessage }: OIDCIdentitySetupProps) {
+export function OIDCIdentitySetup({ identity, loading, loadError, navigation, onChanged, onMessage }: OIDCIdentitySetupProps) {
   const { t } = useTranslation();
 	const [editing, setEditing] = useState(() => !identity?.configured || identityConfigurationNeedsReview(identity));
 	const [operation, setOperation] = useState<IdentityOperation>(null);
@@ -376,12 +377,13 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
     <Button color="red" disabled={operation !== null} onClick={() => setConfirmingDisable(true)}>{t("identity.disable")}</Button>
   </span> : undefined;
 
-  if (loading) return <><PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} /><section className="panel identity-loading"><RefreshCw /><span><strong>{t("identity.loadingIdentitySettings")}</strong><small>{t("identity.gettingTheExactCallbackURLAndCurrentOIDCConnection")}</small></span></section></>;
+  if (loading) return <><PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} />{navigation}<section className="panel identity-loading"><RefreshCw /><span><strong>{t("identity.loadingIdentitySettings")}</strong><small>{t("identity.gettingTheExactCallbackURLAndCurrentOIDCConnection")}</small></span></section></>;
 
-  if (!identity || loadError) return <><PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} /><section className="panel identity-load-error"><TriangleAlert /><span><strong>{t("identity.identitySettingsAreUnavailable")}</strong><small>{loadError || t("identity.theServerDidNotReturnIdentitySetupMetadata")}</small></span></section></>;
+  if (!identity || loadError) return <><PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} />{navigation}<section className="panel identity-load-error"><TriangleAlert /><span><strong>{t("identity.identitySettingsAreUnavailable")}</strong><small>{loadError || t("identity.theServerDidNotReturnIdentitySetupMetadata")}</small></span></section></>;
 
   return <>
     <PageHeader eyebrow={t("identity.identity")} title={t("identity.customerSignIn")} action={pageActions} />
+    {navigation}
 
     {(error || loadError) && <div className="identity-error" role="alert"><XCircle /><span>{error || loadError}</span></div>}
 
