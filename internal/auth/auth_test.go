@@ -117,6 +117,18 @@ func TestFirstRunSetupRequiresTokenMFAAndCreatesSession(t *testing.T) {
 	}
 }
 
+func TestManagerCanDisableSetupTokenAfterInitialSetup(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	manager, err := auth.New(memory, auth.Config{MasterKey: []byte("0123456789abcdef0123456789abcdef"), PublicURL: "https://dokosoko.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.BeginSetup(context.Background(), "", auth.SetupInput{Email: "root@example.com", Password: "Long-and-Safe-Password-42!"}); !errors.Is(err, auth.ErrSetupToken) {
+		t.Fatalf("disabled setup error = %v", err)
+	}
+}
+
 func TestRootLoginRequiresPasswordAndMFA(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

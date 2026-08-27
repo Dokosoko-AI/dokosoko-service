@@ -14,13 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	airuntime "github.com/dokosoko/dokosoko-service/internal/ai"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
+	deploymentconfig "github.com/dokosoko/dokosoko-service/internal/config"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/lifecycle"
@@ -45,21 +45,20 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	address := env("DOKOSOKO_LISTEN", ":8080")
-	baseURL := env("DOKOSOKO_PUBLIC_URL", "http://localhost:8080")
-	uiDirectory := env("DOKOSOKO_UI_DIR", "./dist/client")
-	uploadDirectory, uploadMaxBytes, err := sourceUploadConfig()
+	configuration, err := deploymentconfig.Load()
 	if err != nil {
 		return err
 	}
-	if err := validatePublicURL(baseURL); err != nil {
+	address := configuration.Listen
+	baseURL := configuration.PublicURL
+	uploadDirectory, err := prepareSourceUploadDirectory(configuration.UploadDirectory)
+	if err != nil {
 		return err
 	}
-	setupToken := strings.TrimSpace(os.Getenv("DOKOSOKO_SETUP_TOKEN"))
-	if setupToken == "" || strings.HasPrefix(setupToken, "replace-") {
-		return errors.New("DOKOSOKO_SETUP_TOKEN must be a strong, one-time random value")
+	if err := validatePublicURL(baseURL, configuration.AllowInsecureHTTP); err != nil {
+		return err
 	}
-	masterKey, err := decodeMasterKey(os.Getenv("DOKOSOKO_MASTER_KEY"))
+	masterKey, err := decodeMasterKey(configuration.MasterKey)
 	if err != nil {
 		return err
 	}
@@ -69,8 +68,7 @@ func run(ctx context.Context) error {
 	var persistence store.Store
 	var authPersistence auth.Store
 	var pool *pgxpool.Pool
-	devMemory := boolEnv("DOKOSOKO_DEV_MEMORY")
-	if databaseURL := strings.TrimSpace(os.Getenv("DOKOSOKO_DATABASE_URL")); databaseURL != "" {
+	if databaseURL := configuration.DatabaseURL; databaseURL != "" {
 		pool, err = pgxpool.New(startupCtx, databaseURL)
 		if err != nil {
 			return fmt.Errorf("configure database: %w", err)
@@ -79,17 +77,28 @@ func run(ctx context.Context) error {
 		if err := pool.Ping(startupCtx); err != nil {
 			return fmt.Errorf("connect database: %w", err)
 		}
-		if err := store.Migrate(startupCtx, pool, env("DOKOSOKO_MIGRATIONS_DIR", "./migrations")); err != nil {
+		if err := store.Migrate(startupCtx, pool, configuration.MigrationsDirectory); err != nil {
 			return err
 		}
 		postgres := store.NewPostgres(pool, baseURL)
 		persistence, authPersistence = postgres, postgres
-	} else if devMemory {
+	} else if configuration.DevMemory {
 		memory := store.NewMemory()
 		persistence, authPersistence = memory, memory
 		log.Print("WARNING: DOKOSOKO_DEV_MEMORY is enabled; all data will be lost at restart")
 	} else {
 		return errors.New("DOKOSOKO_DATABASE_URL is required (use DOKOSOKO_DEV_MEMORY=true only for local disposable development)")
+	}
+	setupComplete, err := authPersistence.SetupCompleted(startupCtx)
+	if err != nil {
+		return fmt.Errorf("check initial setup status: %w", err)
+	}
+	setupToken := strings.TrimSpace(configuration.SetupToken)
+	if !setupComplete && (setupToken == "" || strings.HasPrefix(setupToken, "replace-")) {
+		return errors.New("DOKOSOKO_SETUP_TOKEN must be a strong, one-time random value until initial setup is complete")
+	}
+	if setupComplete {
+		setupToken = ""
 	}
 
 	authManager, err := auth.New(authPersistence, auth.Config{SetupToken: setupToken, MasterKey: masterKey, PublicURL: baseURL, SessionTTL: 8 * time.Hour})
@@ -101,9 +110,30 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("configure secret vault: %w", err)
 	}
 	platformService := platform.NewWithVault(persistence, vault)
+	configuredEnvironments := make([]platform.ControlPlaneEnvironmentConfiguration, 0)
+	if configuration.ControlPlane.Environments != nil {
+		configuredEnvironments = make([]platform.ControlPlaneEnvironmentConfiguration, 0, len(*configuration.ControlPlane.Environments))
+		for _, environment := range *configuration.ControlPlane.Environments {
+			configuredEnvironments = append(configuredEnvironments, platform.ControlPlaneEnvironmentConfiguration{Name: environment.Name, Slug: environment.Slug, IsProduction: environment.IsProduction})
+		}
+	}
+	var environmentConfiguration *[]platform.ControlPlaneEnvironmentConfiguration
+	if configuration.ControlPlane.Environments != nil {
+		environmentConfiguration = &configuredEnvironments
+	}
+	if err := platformService.ConfigureControlPlane(startupCtx, platform.ControlPlaneConfiguration{
+		Organisation: platform.ControlPlaneIdentityConfiguration{Name: configuration.ControlPlane.Organisation.Name, Slug: configuration.ControlPlane.Organisation.Slug},
+		Deployment: platform.ControlPlaneDeploymentConfiguration{
+			Name: configuration.ControlPlane.Deployment.Name, Slug: configuration.ControlPlane.Deployment.Slug, Description: configuration.ControlPlane.Deployment.Description,
+			FeedbackSubmissionURL: configuration.ControlPlane.Deployment.FeedbackSubmissionURL, ErrorSubmissionURL: configuration.ControlPlane.Deployment.ErrorSubmissionURL,
+		},
+		Environments: environmentConfiguration,
+	}); err != nil {
+		return fmt.Errorf("configure control plane: %w", err)
+	}
 	toolProxy := toolruntime.NewRuntime(persistence, nil, nil)
 	toolProxy.SetCredentialResolver(platformService)
-	toolProxy.SetPrivateLocalhostHosts(strings.Split(os.Getenv("DOKOSOKO_TOOL_LOCALHOST_HOSTS"), ","))
+	toolProxy.SetPrivateLocalhostHosts(configuration.ToolLocalhostHosts)
 	mcpBridge := mcpbridge.New(persistence, vault, nil, nil)
 	identityBroker := identity.NewBroker(persistence, vault, baseURL, nil, nil, nil)
 	reportingService := reporting.New(persistence)
@@ -113,8 +143,8 @@ func run(ctx context.Context) error {
 		Logger:                log.Default(),
 		State:                 persistence,
 		IdentityKey:           nativePluginIdentityKey(masterKey),
-		Required:              commaSeparatedEnv("DOKOSOKO_NATIVE_PLUGINS_REQUIRED"),
-		DisabledByEnvironment: commaSeparatedEnv("DOKOSOKO_NATIVE_PLUGINS_DISABLED"),
+		Required:              configuration.NativePluginsRequired,
+		DisabledByEnvironment: configuration.NativePluginsDisabled,
 	})
 	if err != nil {
 		return fmt.Errorf("configure native plugins: %w", err)
@@ -139,19 +169,22 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load deployment for native tool catalog: %w", deploymentErr)
 	}
 	if err := platformService.ConfigureEnvironmentAI(startupCtx, platform.AIEnvironmentConfig{
-		Provider: os.Getenv("DOKOSOKO_AI_PROVIDER"),
-		APIKey:   os.Getenv("DOKOSOKO_AI_API_KEY"),
-		Endpoint: os.Getenv("DOKOSOKO_AI_ENDPOINT"),
+		Provider:         configuration.AI.Provider,
+		APIKey:           configuration.AI.APIKey,
+		Endpoint:         configuration.AI.Endpoint,
+		MaxInputTokens:   configuration.AI.Analysis.MaxInputTokens,
+		MaxOutputTokens:  configuration.AI.Analysis.MaxOutputTokens,
+		DailyTokenBudget: configuration.AI.Analysis.DailyTokenBudget,
 		Models: map[airuntime.Workload]string{
-			airuntime.WorkloadAnalysis: os.Getenv("DOKOSOKO_AI_MODEL_ANALYSIS"),
+			airuntime.WorkloadAnalysis: configuration.AI.Analysis.Model,
 		},
 	}); err != nil {
 		return fmt.Errorf("configure AI: %w", err)
 	}
 	handler := httpapi.NewWithOptions(platformService, httpapi.Options{
-		BaseURL: baseURL, UIDirectory: uiDirectory, Auth: authManager,
-		UploadDirectory: uploadDirectory, UploadMaxBytes: uploadMaxBytes,
-		AllowDemoTokens: devMemory && boolEnv("DOKOSOKO_ALLOW_DEMO_TOKENS"), ToolRuntime: toolProxy, IdentityBroker: identityBroker, MCPBridge: mcpBridge, NativePlugins: nativePluginManager, Reporting: reportingService,
+		BaseURL: baseURL, UIDirectory: configuration.UIDirectory, Auth: authManager,
+		UploadDirectory: uploadDirectory, UploadMaxBytes: configuration.UploadMaxBytes,
+		AllowDemoTokens: configuration.DevMemory && configuration.AllowDemoTokens, ToolRuntime: toolProxy, IdentityBroker: identityBroker, MCPBridge: mcpBridge, NativePlugins: nativePluginManager, Reporting: reportingService, Configuration: configuration.Status,
 	})
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -210,68 +243,32 @@ func serve(ctx context.Context, server *http.Server, listener net.Listener) erro
 	}
 }
 
-func env(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func boolEnv(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func commaSeparatedEnv(key string) []string {
-	values := strings.Split(os.Getenv(key), ",")
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			result = append(result, value)
-		}
-	}
-	return result
-}
-
 func nativePluginIdentityKey(masterKey []byte) []byte {
 	mac := hmac.New(sha256.New, masterKey)
 	_, _ = mac.Write([]byte("dokosoko-native-plugin-identity-key-v1"))
 	return mac.Sum(nil)
 }
 
-func sourceUploadConfig() (string, int64, error) {
-	const defaultMaxBytes = int64(5_000_000)
-	directory := strings.TrimSpace(os.Getenv("DOKOSOKO_UPLOAD_DIR"))
-	maxBytes := defaultMaxBytes
-	if configured := strings.TrimSpace(os.Getenv("DOKOSOKO_UPLOAD_MAX_BYTES")); configured != "" {
-		value, err := strconv.ParseInt(configured, 10, 64)
-		if err != nil || value < 1 {
-			return "", 0, errors.New("DOKOSOKO_UPLOAD_MAX_BYTES must be a positive integer")
-		}
-		maxBytes = value
-	}
+func prepareSourceUploadDirectory(directory string) (string, error) {
+	directory = strings.TrimSpace(directory)
 	if directory == "" {
-		return "", maxBytes, nil
+		return "", nil
 	}
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
-		return "", 0, fmt.Errorf("resolve DOKOSOKO_UPLOAD_DIR: %w", err)
+		return "", fmt.Errorf("resolve uploads.directory: %w", err)
 	}
 	if err := os.MkdirAll(absolute, 0o700); err != nil {
-		return "", 0, fmt.Errorf("create DOKOSOKO_UPLOAD_DIR: %w", err)
+		return "", fmt.Errorf("create uploads.directory: %w", err)
 	}
 	info, err := os.Lstat(absolute)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", 0, errors.New("DOKOSOKO_UPLOAD_DIR must be a real directory, not a file or symlink")
+		return "", errors.New("uploads.directory must be a real directory, not a file or symlink")
 	}
 	if err := os.Chmod(absolute, 0o700); err != nil {
-		return "", 0, fmt.Errorf("secure DOKOSOKO_UPLOAD_DIR: %w", err)
+		return "", fmt.Errorf("secure uploads.directory: %w", err)
 	}
-	return absolute, maxBytes, nil
+	return absolute, nil
 }
 
 func decodeMasterKey(value string) ([]byte, error) {
@@ -283,7 +280,7 @@ func decodeMasterKey(value string) ([]byte, error) {
 	return decoded, nil
 }
 
-func validatePublicURL(value string) error {
+func validatePublicURL(value string, allowInsecureHTTP bool) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("DOKOSOKO_PUBLIC_URL must be an absolute http(s) origin without a path, query, or fragment")
@@ -291,7 +288,7 @@ func validatePublicURL(value string) error {
 	if parsed.Path != "" && parsed.Path != "/" {
 		return errors.New("DOKOSOKO_PUBLIC_URL must not contain a path")
 	}
-	if parsed.Scheme != "https" && !identity.IsLocalDevelopmentHostname(parsed.Hostname()) && !boolEnv("DOKOSOKO_ALLOW_INSECURE_HTTP") {
+	if parsed.Scheme != "https" && !identity.IsLocalDevelopmentHostname(parsed.Hostname()) && !allowInsecureHTTP {
 		return errors.New("DOKOSOKO_PUBLIC_URL must use HTTPS outside localhost")
 	}
 	return nil

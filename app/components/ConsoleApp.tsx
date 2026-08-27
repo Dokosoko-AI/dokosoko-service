@@ -21,6 +21,7 @@ import { ToolBuilderView } from "./ToolBuilderView";
 import { DistributionView, SourcesView } from "./console/agent-access-views";
 import { CustomerAccountsView, IdentityNavigation } from "./console/identity-customer-accounts-view";
 import { TenantSettingsView } from "./console/tenant-settings-view";
+import { ConfigurationSettingsView } from "./console/configuration-settings-view";
 import {
   AIProviderLogo,
   AISettingsView,
@@ -65,6 +66,7 @@ function deploymentAsProduct(value: APIDeployment): APIProduct {
     description: value.description,
     feedback_submission_url: value.feedback_submission_url,
     error_submission_url: value.error_submission_url,
+    managed_fields: value.managed_fields,
     catalog_revision: value.catalog_revision,
     public_mcp_enabled: value.public_mcp_enabled,
     revision: value.revision,
@@ -390,6 +392,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
               {section === "reporting" && <OutboxView submissions={reportSubmissions} events={auditEvents} onView={openSupportSubmission} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "overview" && <SettingsView aiProfiles={aiProfiles} rootUsers={rootUsers} onDoctor={runSystemDoctor} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "tenant" && <TenantSettingsView key={product.revision} product={product} onSave={updateTenantSettings} onNavigate={navigateToPath} />}
+              {section === "settings" && settingsTab === "configuration" && <ConfigurationSettingsView available={apiConnected} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "ai" && <AISettingsView profiles={aiProfiles} prompts={aiPrompts} connections={aiConnections} usage={aiProviderUsage} saving={workloadBusy} onSave={saveAIWorkloadSelection} onConfigure={openAIWorkload} onEditPrompt={openAIPrompt} onAddProvider={() => setProviderPickerOpen(true)} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "root" && <RootAccessSettingsView rootUsers={rootUsers} currentUser={currentUser ?? null} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
             </>}

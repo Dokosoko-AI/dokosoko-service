@@ -5,12 +5,14 @@ export type APIVisibility = Contract.Visibility;
 export type APIProduct = Omit<Contract.Product, "created_at" | "updated_at"> & {
   feedback_submission_url?: string;
   error_submission_url?: string;
+  managed_fields?: Contract.Deployment["managed_fields"];
 };
 
-export type APIDeployment = Omit<Contract.Deployment, "description" | "feedback_submission_url" | "error_submission_url" | "created_at" | "updated_at"> & {
+export type APIDeployment = Omit<Contract.Deployment, "description" | "feedback_submission_url" | "error_submission_url" | "managed_fields" | "created_at" | "updated_at"> & {
   description: string;
   feedback_submission_url: string;
   error_submission_url: string;
+  managed_fields?: Contract.Deployment["managed_fields"];
 };
 
 export type APIResourceSetRevision = Omit<Contract.ResourceSetRevision, "manifest"> & { manifest: Array<Record<string, unknown>> };
@@ -59,6 +61,8 @@ export type APIResourceSet = {
 export type APIOrganisation = Contract.Organisation;
 
 export type APIEnvironment = Omit<Contract.Environment, "created_at" | "updated_at">;
+
+export type APISystemConfiguration = Contract.SystemConfiguration;
 
 export type APIRuntimeAuthenticationType =
   | "none"

@@ -38,6 +38,8 @@ type Service struct {
 	vault                    *secretvault.Vault
 	aiRuntime                airuntime.Runtime
 	aiEnvironmentCredentials map[string]string
+	pendingAIConfiguration   *AIEnvironmentConfig
+	deploymentManagedFields  map[string]bool
 	nativeTools              NativeToolCatalog
 	sdkImportDoer            SDKImportDoer
 	now                      func() time.Time

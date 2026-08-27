@@ -73,6 +73,7 @@ type Config struct {
 
 type Manager struct {
 	store          Store
+	setupEnabled   bool
 	setupTokenHash [32]byte
 	masterKey      []byte
 	publicURL      string
@@ -128,9 +129,6 @@ type SetupResult struct {
 }
 
 func New(store Store, config Config) (*Manager, error) {
-	if strings.TrimSpace(config.SetupToken) == "" {
-		return nil, errors.New("setup token is required")
-	}
 	if len(config.MasterKey) != 32 {
 		return nil, errors.New("master key must be exactly 32 bytes")
 	}
@@ -138,7 +136,7 @@ func New(store Store, config Config) (*Manager, error) {
 		config.SessionTTL = 8 * time.Hour
 	}
 	return &Manager{
-		store: store, setupTokenHash: sha256.Sum256([]byte(config.SetupToken)), masterKey: append([]byte(nil), config.MasterKey...),
+		store: store, setupEnabled: strings.TrimSpace(config.SetupToken) != "", setupTokenHash: sha256.Sum256([]byte(config.SetupToken)), masterKey: append([]byte(nil), config.MasterKey...),
 		publicURL: strings.TrimRight(config.PublicURL, "/"), sessionTTL: config.SessionTTL,
 		now: func() time.Time { return time.Now().UTC() }, pending: make(map[string]pendingSetup),
 	}, nil
@@ -147,16 +145,16 @@ func New(store Store, config Config) (*Manager, error) {
 func (m *Manager) Status(ctx context.Context) (bool, error) { return m.store.SetupCompleted(ctx) }
 
 func (m *Manager) BeginSetup(ctx context.Context, setupToken string, input SetupInput) (Enrollment, error) {
-	provided := sha256.Sum256([]byte(setupToken))
-	if !hmac.Equal(provided[:], m.setupTokenHash[:]) {
-		return Enrollment{}, ErrSetupToken
-	}
 	completed, err := m.store.SetupCompleted(ctx)
 	if err != nil {
 		return Enrollment{}, err
 	}
 	if completed {
 		return Enrollment{}, ErrSetupComplete
+	}
+	provided := sha256.Sum256([]byte(setupToken))
+	if !m.setupEnabled || !hmac.Equal(provided[:], m.setupTokenHash[:]) {
+		return Enrollment{}, ErrSetupToken
 	}
 	return m.beginEnrollment(input)
 }

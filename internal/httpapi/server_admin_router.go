@@ -136,6 +136,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.rootUsers(w, r)
 	case len(parts) == 4 && parts[2] == "system" && parts[3] == "doctor" && r.Method == http.MethodGet:
 		s.systemDoctor(w, r)
+	case len(parts) == 4 && parts[2] == "system" && parts[3] == "configuration" && r.Method == http.MethodGet:
+		s.configurationStatus(w, r)
 	case len(parts) == 4 && parts[2] == "ai" && parts[3] == "connections":
 		s.aiProviderConnections(w, r)
 	case len(parts) == 6 && parts[2] == "ai" && parts[3] == "connections" && parts[5] == "test" && r.Method == http.MethodPost:

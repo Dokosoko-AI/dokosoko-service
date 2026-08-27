@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/auth"
+	deploymentconfig "github.com/dokosoko/dokosoko-service/internal/config"
 	"github.com/dokosoko/dokosoko-service/internal/httpapi"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
@@ -204,6 +205,31 @@ func TestMCPRejectsPreV2Requests(t *testing.T) {
 	handler.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Stateless MCPv2 Only") {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSystemConfigurationIsAuthenticatedAndRedacted(t *testing.T) {
+	t.Parallel()
+	handler := httpapi.NewWithOptions(platform.New(store.NewMemory()), httpapi.Options{
+		BaseURL: "https://dokosoko.example", AllowDemoTokens: true,
+		Configuration: deploymentconfig.Status{Version: 1, ConfigurationFile: "/etc/dokosoko/config.json", ChangesRequireRestart: true, Items: []deploymentconfig.Item{
+			{Key: "server.listen", Source: deploymentconfig.SourceConfigurationFile, Value: ":8080", Configured: true, RestartRequired: true},
+			{Key: "security.master_key", Source: deploymentconfig.SourceEnvironment, Sensitive: true, Configured: true, RestartRequired: true},
+		}},
+	})
+	unauthenticated := request(t, handler, http.MethodGet, "/api/v1/system/configuration", "", "")
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", unauthenticated.Code)
+	}
+	response := request(t, handler, http.MethodGet, "/api/v1/system/configuration", "doko_admin_demo", "")
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("configuration status = %d, headers = %#v, body = %s", response.Code, response.Header(), response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "master-key") {
+		t.Fatalf("configuration response leaked a secret: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"sensitive":true`) || !strings.Contains(response.Body.String(), `"source":"environment"`) {
+		t.Fatalf("configuration response omitted redaction metadata: %s", response.Body.String())
 	}
 }
 

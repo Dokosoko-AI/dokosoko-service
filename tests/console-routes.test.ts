@@ -276,6 +276,7 @@ test("settings has stable routes for every overview area", () => {
   assert.deepEqual(SETTINGS_TABS, [
     { id: "overview", label: "routes.overview" },
     { id: "tenant", label: "routes.tenantSettings" },
+    { id: "configuration", label: "routes.configuration" },
     { id: "ai", label: "routes.aiConfiguration" },
     { id: "root", label: "routes.rootAccess" },
   ]);

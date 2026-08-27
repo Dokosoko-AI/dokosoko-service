@@ -162,4 +162,32 @@ func NewMemory() *Memory {
 	}
 }
 
+// NewEmptyMemory returns a fully initialized store without the development
+// fixture workspace. It is intended for first-run lifecycle tests.
+func NewEmptyMemory() *Memory {
+	memory := NewMemory()
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	memory.orgs = make(map[string]model.Organisation)
+	memory.deployment = model.Deployment{}
+	memory.hasDeployment = false
+	memory.products = make(map[string]model.Product)
+	memory.envs = make(map[string]map[string]model.Environment)
+	memory.sources = make(map[string]map[string]model.Source)
+	memory.sourcePublications = make(map[string]map[string]model.SourcePublication)
+	memory.publicationDocuments = make(map[string]map[string]bool)
+	memory.crawlReviewDocuments = make(map[string][]model.CrawlReviewDocument)
+	memory.tools = make(map[string]map[string]model.Tool)
+	memory.mcpConnections = make(map[string]map[string]model.MCPConnection)
+	memory.reportSubmissions = make(map[string]map[string]model.ReportSubmission)
+	memory.aiProviderConnections = make(map[string]map[string]model.AIProviderConnection)
+	memory.aiWorkloadProfiles = make(map[string]map[string]model.AIWorkloadProfile)
+	memory.aiPromptStates = make(map[string]map[string]model.AIPromptState)
+	memory.integrationAnalyses = make(map[string]map[string]model.IntegrationAnalysis)
+	memory.recipes = make(map[string]map[string]model.Recipe)
+	memory.knowledge = make(map[string][]model.KnowledgeRecord)
+	memory.crawls = make(map[string][]model.CrawlJob)
+	return memory
+}
+
 func (m *Memory) Ping(context.Context) error { return nil }

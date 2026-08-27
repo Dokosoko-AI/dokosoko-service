@@ -37,6 +37,7 @@ import {
 
 function settings(overrides: Partial<CrawlerSettings> = {}): CrawlerSettings {
   return {
+    databaseURL: null,
     maxPages: 20,
     maxBytes: 4_096,
     dataDir: "/tmp/dokosoko-crawler-test-data",
@@ -124,6 +125,7 @@ test("localhost subdomains require an opt-in, an allowed port, and local-only re
 
 test("crawler settings keep localhost disabled by default and validate explicit options", () => {
   const defaults = loadCrawlerSettings({});
+  assert.equal(defaults.databaseURL, null);
   assert.equal(defaults.allowLocalhostSubdomains, false);
   assert.deepEqual([...defaults.localhostPorts], [80, 443]);
 
@@ -134,6 +136,42 @@ test("crawler settings keep localhost disabled by default and validate explicit 
   assert.equal(enabled.allowLocalhostSubdomains, true);
   assert.deepEqual([...enabled.localhostPorts], [8080, 33000]);
   assert.throws(() => loadCrawlerSettings({ DOKOSOKO_CRAWLER_LOCALHOST_PORTS: "0" }), errorCode("crawler_configuration_invalid"));
+});
+
+test("crawler settings share central configuration and retain environment precedence", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dokosoko-crawler-config-"));
+  try {
+    const configurationPath = path.join(directory, "dokosoko.config.json");
+    await writeFile(configurationPath, JSON.stringify({
+      $schema: "./dokosoko.config.schema.json",
+      version: 1,
+      database: { url: { env: "CRAWLER_DATABASE_SECRET" } },
+      uploads: { directory: "uploads" },
+      control_plane: {
+        organisation: { name: "Configured Organisation", slug: "configured-organisation" },
+        deployment: { name: "Configured Deployment", slug: "configured-deployment" },
+        environments: [{ name: "Production", slug: "production", is_production: true }],
+      },
+      crawler: { max_pages: 250, max_bytes: 2048, data_directory: "data", allow_localhost_subdomains: true, localhost_ports: [8080] },
+    }));
+    const configured = loadCrawlerSettings({ DOKOSOKO_CONFIG_FILE: configurationPath, DOKOSOKO_CRAWLER_MAX_PAGES: "300", CRAWLER_DATABASE_SECRET: "postgres://central" });
+    assert.equal(configured.databaseURL, "postgres://central");
+    assert.equal(configured.maxPages, 300);
+    assert.equal(configured.maxBytes, 2048);
+    assert.equal(configured.dataDir, path.join(directory, "data"));
+    assert.equal(configured.uploadDir, path.join(directory, "uploads"));
+    assert.equal(configured.allowLocalhostSubdomains, true);
+    assert.deepEqual([...configured.localhostPorts], [8080]);
+    const overridden = loadCrawlerSettings({ DOKOSOKO_CONFIG_FILE: configurationPath, DOKOSOKO_DATABASE_URL: "postgres://environment", CRAWLER_DATABASE_SECRET: "postgres://central" });
+    assert.equal(overridden.databaseURL, "postgres://environment");
+    const databaseSecretPath = path.join(directory, "database-url");
+    await writeFile(databaseSecretPath, "postgres://mounted\n");
+    const mounted = loadCrawlerSettings({ DOKOSOKO_DATABASE_URL_FILE: "database-url" }, { workingDirectory: directory });
+    assert.equal(mounted.databaseURL, "postgres://mounted");
+    assert.throws(() => loadCrawlerSettings({ DOKOSOKO_DATABASE_URL: "postgres://direct", DOKOSOKO_DATABASE_URL_FILE: "database-url" }, { workingDirectory: directory }), errorCode("crawler_configuration_invalid"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("claims queued or expired jobs with an owned lease and clears stale attempt evidence", async () => {

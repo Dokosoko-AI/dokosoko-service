@@ -249,6 +249,11 @@ func (s *Server) systemDoctor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": overall, "checks": checks, "generated_at": time.Now().UTC()})
 }
 
+func (s *Server) configurationStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.configuration)
+}
+
 func (s *Server) authenticateAdmin(r *http.Request) (string, bool, bool) {
 	if s.allowDemoTokens && isBearer(r, demoAdminToken) {
 		return "root_demo", false, true

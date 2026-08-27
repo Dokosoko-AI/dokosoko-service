@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/dokosoko/dokosoko-service/internal/auth"
+	deploymentconfig "github.com/dokosoko/dokosoko-service/internal/config"
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/mcpbridge"
 	"github.com/dokosoko/dokosoko-service/internal/nativeplugins"
@@ -42,6 +43,7 @@ type Server struct {
 	mcpBridge       *mcpbridge.Manager
 	nativePlugins   *nativeplugins.Manager
 	reporting       *reporting.Service
+	configuration   deploymentconfig.Status
 	baseURL         string
 	uploadDirectory string
 	uploadMaxBytes  int64
@@ -60,6 +62,7 @@ type Options struct {
 	MCPBridge       *mcpbridge.Manager
 	NativePlugins   *nativeplugins.Manager
 	Reporting       *reporting.Service
+	Configuration   deploymentconfig.Status
 	UploadDirectory string
 	UploadMaxBytes  int64
 	AllowDemoTokens bool
@@ -84,11 +87,14 @@ func NewWithUI(service *platform.Service, baseURL, uiDirectory string) http.Hand
 
 func NewWithOptions(service *platform.Service, options Options) http.Handler {
 	baseURL := strings.TrimRight(options.BaseURL, "/")
+	if options.Configuration.Version == 0 {
+		options.Configuration = deploymentconfig.Status{Version: deploymentconfig.CurrentVersion, ChangesRequireRestart: true, Items: []deploymentconfig.Item{}}
+	}
 	uploadMaxBytes := options.UploadMaxBytes
 	if uploadMaxBytes <= 0 {
 		uploadMaxBytes = defaultSourceUploadMaxBytes
 	}
-	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, mcpBridge: options.MCPBridge, nativePlugins: options.NativePlugins, reporting: options.Reporting, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rateLimiter: ratelimit.NewFixedWindow(time.Minute, maxHTTPRateWindows)}
+	server := &Server{service: service, auth: options.Auth, toolRuntime: options.ToolRuntime, identityBroker: options.IdentityBroker, mcpBridge: options.MCPBridge, nativePlugins: options.NativePlugins, reporting: options.Reporting, configuration: options.Configuration, baseURL: baseURL, uploadDirectory: strings.TrimSpace(options.UploadDirectory), uploadMaxBytes: uploadMaxBytes, allowDemoTokens: options.AllowDemoTokens, secureCookies: strings.HasPrefix(baseURL, "https://"), rateLimiter: ratelimit.NewFixedWindow(time.Minute, maxHTTPRateWindows)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.ready)

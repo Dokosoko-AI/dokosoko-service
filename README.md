@@ -99,6 +99,35 @@ The integrated service listens on `http://localhost:8080` by default and serves
 `DOKOSOKO_DEV_MEMORY=true`. Demo bearer tokens additionally require
 `DOKOSOKO_ALLOW_DEMO_TOKENS=true`.
 
+For deployment-owned settings, copy [`dokosoko.config.example.json`](dokosoko.config.example.json),
+set `DOKOSOKO_CONFIG_FILE` to its path, and mount the same file into the service
+and crawler. The versioned JSON file is strict and uses the precedence
+`built-in defaults < central file < environment variables`. Secrets are
+references to environment variables or mounted files rather than plaintext
+JSON. **Settings → Configuration** shows the effective source of every startup
+value with secrets redacted. Startup configuration changes require a process
+restart.
+
+The optional `control_plane` section manages stable organisation and deployment
+identity, submission URLs, and an additive set of environments. On a new
+database it can create the initial organisation, deployment, and environments;
+on an existing database the organisation identity must match and configured
+deployment fields are reconciled at startup. Managed tenant fields are marked
+read-only in the console and conflicting API writes return
+`configuration_managed`. Environments are added but never renamed or deleted by
+startup reconciliation.
+
+Central configuration intentionally does not own integrations, sources,
+reviewed publications, tools, recipes, identity-provider activation, root
+accounts, or public MCP publication. Those records have review, revision,
+secret-testing, or MFA lifecycles and remain database-backed console/API
+workflows. The JSON shape is documented by
+[`dokosoko.config.schema.json`](dokosoko.config.schema.json).
+
+The setup token is required only until the first MFA-protected root account has
+been created. Remove it from the deployment after setup; subsequent restarts
+disable the setup endpoint's token path while keeping normal root login active.
+
 Run the console development server with:
 
 ```bash
@@ -152,9 +181,10 @@ cp .env.example .env
 docker compose up --build
 ```
 
-`DOKOSOKO_DATABASE_PASSWORD`, `DOKOSOKO_MASTER_KEY`,
-`DOKOSOKO_SETUP_TOKEN`, and `DOKOSOKO_PUBLIC_URL` are required in the Compose
-deployment. Keep the master key stable and backed up.
+`DOKOSOKO_DATABASE_PASSWORD` and `DOKOSOKO_PUBLIC_URL` are required in the
+Compose deployment. Supply the master key through `DOKOSOKO_MASTER_KEY` or a
+central-file secret reference. `DOKOSOKO_SETUP_TOKEN` is required for the first
+start only. Keep the master key stable and backed up.
 
 ```bash
 pnpm run verify

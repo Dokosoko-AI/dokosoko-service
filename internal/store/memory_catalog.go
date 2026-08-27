@@ -49,6 +49,8 @@ func (m *Memory) CreateDeployment(_ context.Context, value model.Deployment) (mo
 	m.aiProviderConnections[value.ID] = make(map[string]model.AIProviderConnection)
 	m.aiWorkloadProfiles[value.ID] = make(map[string]model.AIWorkloadProfile)
 	m.aiPromptStates[value.ID] = make(map[string]model.AIPromptState)
+	m.integrationAnalyses[value.ID] = make(map[string]model.IntegrationAnalysis)
+	m.recipes[value.ID] = make(map[string]model.Recipe)
 	return value, nil
 }
 

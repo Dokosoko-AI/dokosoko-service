@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
@@ -9,10 +10,11 @@ import (
 
 type deploymentResponse struct {
 	model.Deployment
+	ManagedFields []string `json:"managed_fields"`
 }
 
 func (s *Server) deploymentResponse(value model.Deployment) deploymentResponse {
-	return deploymentResponse{Deployment: value}
+	return deploymentResponse{Deployment: value, ManagedFields: s.service.DeploymentManagedFields()}
 }
 
 func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +62,10 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 		}
 		value, err := s.service.UpdateDeployment(r.Context(), platform.DeploymentInput{Name: input.Name, Slug: input.Slug, Description: input.Description, FeedbackSubmissionURL: input.FeedbackSubmissionURL, ErrorSubmissionURL: input.ErrorSubmissionURL, PublicMCPEnabled: input.PublicMCPEnabled, Revision: input.Revision}, actor(r))
 		if err != nil {
+			if errors.Is(err, platform.ErrManagedByConfiguration) {
+				writeError(w, http.StatusConflict, "configuration_managed", "One or more tenant fields are managed by deployment configuration.", map[string]any{"managed_fields": s.service.DeploymentManagedFields()})
+				return
+			}
 			s.productCatalogError(w, err)
 			return
 		}

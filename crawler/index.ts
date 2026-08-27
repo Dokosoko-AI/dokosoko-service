@@ -975,10 +975,9 @@ export async function runOnce(
 }
 
 async function main() {
-  const connectionString = process.env.DOKOSOKO_DATABASE_URL;
-  if (!connectionString) throw new Error("DOKOSOKO_DATABASE_URL is required");
   const settings = loadCrawlerSettings();
-  const pool = new Pool({ connectionString, max: 4, statement_timeout: 30_000, application_name: "dokosoko-crawler" });
+  if (!settings.databaseURL) throw new Error("database.url or DOKOSOKO_DATABASE_URL is required");
+  const pool = new Pool({ connectionString: settings.databaseURL, max: 4, statement_timeout: 30_000, application_name: "dokosoko-crawler" });
   try {
     if (process.argv.includes("--once")) {
       await runOnce(pool, settings);

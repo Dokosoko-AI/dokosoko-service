@@ -1,10 +1,13 @@
 import { lookup } from "node:dns/promises";
+import { readFileSync } from "node:fs";
 import { isIP, type LookupFunction } from "node:net";
+import path from "node:path";
 
 const DEFAULT_MAX_PAGES = 500;
 const DEFAULT_MAX_BYTES = 5_000_000;
 
 export type CrawlerSettings = {
+  databaseURL: string | null;
   maxPages: number;
   maxBytes: number;
   dataDir: string;
@@ -34,8 +37,9 @@ function positiveInteger(value: string | undefined, fallback: number, name: stri
 
 function booleanSetting(value: string | undefined): boolean {
   if (value === undefined || value.trim() === "") return false;
-  if (value === "true" || value === "1") return true;
-  if (value === "false" || value === "0") return false;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
   throw new CrawlerJobError("crawler_configuration_invalid", "DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS must be true or false.");
 }
 
@@ -54,14 +58,187 @@ function portSetting(value: string | undefined): ReadonlySet<number> {
   return ports;
 }
 
-export function loadCrawlerSettings(env: Readonly<Record<string, string | undefined>> = process.env): CrawlerSettings {
+type CrawlerSettingsLoadOptions = {
+  readFile?: (filePath: string) => string;
+  workingDirectory?: string;
+};
+
+type CentralCrawlerConfiguration = Partial<{
+  database_url: CentralSecretReference;
+  max_pages: number;
+  max_bytes: number;
+  data_directory: string;
+  upload_directory: string;
+  allow_localhost_subdomains: boolean;
+  localhost_ports: number[];
+}>;
+
+type CentralSecretReference = { env?: string; file?: string };
+
+function configurationError(message: string, cause?: unknown): CrawlerJobError {
+  return new CrawlerJobError("crawler_configuration_invalid", message, cause === undefined ? undefined : { cause });
+}
+
+function record(value: unknown, name: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw configurationError(`${name} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: readonly string[], name: string): void {
+  const unknown = Object.keys(value).find((key) => !allowed.includes(key));
+  if (unknown) throw configurationError(`${name} contains unknown field ${unknown}.`);
+}
+
+function centralSecretReference(value: unknown, name: string): CentralSecretReference {
+  const secret = record(value, name);
+  assertKnownKeys(secret, ["env", "file"], name);
+  if (secret.env !== undefined && typeof secret.env !== "string") throw configurationError(`${name}.env must be a string.`);
+  if (secret.file !== undefined && typeof secret.file !== "string") throw configurationError(`${name}.file must be a string.`);
+  const environment = typeof secret.env === "string" ? secret.env.trim() : "";
+  const file = typeof secret.file === "string" ? secret.file.trim() : "";
+  if ((environment === "") === (file === "")) throw configurationError(`${name} must reference exactly one environment variable or file.`);
+  return environment ? { env: environment } : { file };
+}
+
+function validateCentralConfiguration(value: unknown): CentralCrawlerConfiguration {
+  const root = record(value, "Configuration file");
+  assertKnownKeys(root, ["$schema", "version", "server", "database", "security", "uploads", "tools", "native_plugins", "ai", "crawler", "control_plane"], "Configuration file");
+  if (root.version !== 1) throw configurationError("Configuration version must be 1.");
+  const sections: Array<[string, readonly string[]]> = [
+    ["server", ["listen", "public_url", "ui_directory"]],
+    ["database", ["url", "migrations_directory"]],
+    ["security", ["master_key", "setup_token", "dev_memory", "allow_demo_tokens", "allow_insecure_http"]],
+    ["uploads", ["directory", "max_bytes"]],
+    ["tools", ["localhost_hosts"]],
+    ["native_plugins", ["required", "disabled"]],
+    ["ai", ["provider", "api_key", "endpoint", "analysis"]],
+    ["crawler", ["max_pages", "max_bytes", "data_directory", "upload_directory", "allow_localhost_subdomains", "localhost_ports"]],
+    ["control_plane", ["organisation", "deployment", "environments"]],
+  ];
+  for (const [section, allowed] of sections) {
+    if (root[section] !== undefined) assertKnownKeys(record(root[section], section), allowed, section);
+  }
+  if (root.ai !== undefined) {
+    const ai = record(root.ai, "ai");
+    if (ai.analysis !== undefined) assertKnownKeys(record(ai.analysis, "ai.analysis"), ["model", "max_input_tokens", "max_output_tokens", "daily_token_budget"], "ai.analysis");
+  }
+  if (root.control_plane !== undefined) {
+    const controlPlane = record(root.control_plane, "control_plane");
+    if (controlPlane.organisation !== undefined) assertKnownKeys(record(controlPlane.organisation, "control_plane.organisation"), ["name", "slug"], "control_plane.organisation");
+    if (controlPlane.deployment !== undefined) assertKnownKeys(record(controlPlane.deployment, "control_plane.deployment"), ["name", "slug", "description", "feedback_submission_url", "error_submission_url"], "control_plane.deployment");
+    if (controlPlane.environments !== undefined) {
+      if (!Array.isArray(controlPlane.environments)) throw configurationError("control_plane.environments must be an array.");
+      for (const environment of controlPlane.environments) assertKnownKeys(record(environment, "control_plane.environments item"), ["name", "slug", "is_production"], "control_plane.environments item");
+    }
+  }
+  let databaseURL: CentralSecretReference | undefined;
+  for (const [section, key] of [["database", "url"], ["security", "master_key"], ["security", "setup_token"], ["ai", "api_key"]] as const) {
+    if (root[section] === undefined) continue;
+    const reference = record(root[section], section)[key];
+    if (reference === undefined) continue;
+    const secret = centralSecretReference(reference, `${section}.${key}`);
+    if (section === "database" && key === "url") databaseURL = secret;
+  }
+  const crawler = root.crawler === undefined ? {} : record(root.crawler, "crawler");
+  const uploads = root.uploads === undefined ? {} : record(root.uploads, "uploads");
   return {
-    maxPages: positiveInteger(env.DOKOSOKO_CRAWLER_MAX_PAGES, DEFAULT_MAX_PAGES, "DOKOSOKO_CRAWLER_MAX_PAGES"),
-    maxBytes: positiveInteger(env.DOKOSOKO_CRAWLER_MAX_BYTES, DEFAULT_MAX_BYTES, "DOKOSOKO_CRAWLER_MAX_BYTES"),
-    dataDir: env.DOKOSOKO_DATA_DIR?.trim() || "/data",
-    uploadDir: env.DOKOSOKO_UPLOAD_DIR?.trim() || null,
-    allowLocalhostSubdomains: booleanSetting(env.DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS),
-    localhostPorts: portSetting(env.DOKOSOKO_CRAWLER_LOCALHOST_PORTS),
+    ...(crawler as CentralCrawlerConfiguration),
+    ...(databaseURL === undefined ? {} : { database_url: databaseURL }),
+    ...(crawler.upload_directory === undefined && typeof uploads.directory === "string" ? { upload_directory: uploads.directory } : {}),
+  };
+}
+
+function readSecretFile(filePath: string, readFile: (filePath: string) => string, name: string): string {
+  try {
+    return readFile(filePath).trim();
+  } catch (error) {
+    throw configurationError(`${name} could not be read.`, error);
+  }
+}
+
+function databaseURLSetting(
+  env: Readonly<Record<string, string | undefined>>,
+  configured: CentralSecretReference | undefined,
+  workingDirectory: string,
+  configurationDirectory: string,
+  readFile: (filePath: string) => string,
+): string | null {
+  const direct = env.DOKOSOKO_DATABASE_URL?.trim() ?? "";
+  const environmentFile = env.DOKOSOKO_DATABASE_URL_FILE?.trim() ?? "";
+  if (direct && environmentFile) throw configurationError("DOKOSOKO_DATABASE_URL and DOKOSOKO_DATABASE_URL_FILE cannot both be set.");
+  if (direct) return direct;
+  if (environmentFile) return readSecretFile(path.resolve(workingDirectory, environmentFile), readFile, "DOKOSOKO_DATABASE_URL_FILE") || null;
+  if (configured?.env) return env[configured.env]?.trim() || null;
+  if (configured?.file) return readSecretFile(path.resolve(configurationDirectory, configured.file), readFile, "database.url secret file") || null;
+  return null;
+}
+
+function filePositiveInteger(value: unknown, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw configurationError(`${name} must be a positive integer.`);
+  return Number(value);
+}
+
+function fileBoolean(value: unknown, fallback: boolean, name: string): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw configurationError(`${name} must be true or false.`);
+  return value;
+}
+
+function fileString(value: unknown, fallback: string | null, name: string): string | null {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string") throw configurationError(`${name} must be a string.`);
+  return value.trim() || fallback;
+}
+
+function filePorts(value: unknown, fallback: ReadonlySet<number>): ReadonlySet<number> {
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value) || value.length === 0 || value.some((port) => !Number.isSafeInteger(port) || port < 1 || port > 65_535)) {
+    throw configurationError("crawler.localhost_ports contains an invalid port.");
+  }
+  return new Set(value as number[]);
+}
+
+function resolveConfiguredPath(value: string | null, base: string): string | null {
+  return value === null ? null : path.resolve(base, value);
+}
+
+export function loadCrawlerSettings(env: Readonly<Record<string, string | undefined>> = process.env, options: CrawlerSettingsLoadOptions = {}): CrawlerSettings {
+  const workingDirectory = options.workingDirectory ?? process.cwd();
+  const readFile = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
+  let configured: CentralCrawlerConfiguration = {};
+  let configurationDirectory = workingDirectory;
+  const configurationFile = env.DOKOSOKO_CONFIG_FILE?.trim();
+  if (configurationFile) {
+    const resolved = path.resolve(workingDirectory, configurationFile);
+    configurationDirectory = path.dirname(resolved);
+    try {
+      const contents = readFile(resolved);
+      if (Buffer.byteLength(contents) > 1 << 20) throw configurationError("Configuration file must be 1 MiB or smaller.");
+      configured = validateCentralConfiguration(JSON.parse(contents) as unknown);
+    } catch (error) {
+      if (error instanceof CrawlerJobError) throw error;
+      throw configurationError("Configuration file could not be read or decoded.", error);
+    }
+  }
+  const fileDataDirectory = resolveConfiguredPath(fileString(configured.data_directory, "/data", "crawler.data_directory"), configurationDirectory) ?? "/data";
+  const fileUploadDirectory = resolveConfiguredPath(fileString(configured.upload_directory, null, "crawler.upload_directory"), configurationDirectory);
+  const environmentDataDirectory = env.DOKOSOKO_DATA_DIR?.trim();
+  const environmentUploadDirectory = env.DOKOSOKO_CRAWLER_UPLOAD_DIR?.trim() || env.DOKOSOKO_UPLOAD_DIR?.trim();
+  return {
+    databaseURL: databaseURLSetting(env, configured.database_url, workingDirectory, configurationDirectory, readFile),
+    maxPages: positiveInteger(env.DOKOSOKO_CRAWLER_MAX_PAGES, filePositiveInteger(configured.max_pages, DEFAULT_MAX_PAGES, "crawler.max_pages"), "DOKOSOKO_CRAWLER_MAX_PAGES"),
+    maxBytes: positiveInteger(env.DOKOSOKO_CRAWLER_MAX_BYTES, filePositiveInteger(configured.max_bytes, DEFAULT_MAX_BYTES, "crawler.max_bytes"), "DOKOSOKO_CRAWLER_MAX_BYTES"),
+    dataDir: environmentDataDirectory ? path.resolve(workingDirectory, environmentDataDirectory) : fileDataDirectory,
+    uploadDir: environmentUploadDirectory ? path.resolve(workingDirectory, environmentUploadDirectory) : fileUploadDirectory,
+    allowLocalhostSubdomains: env.DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS?.trim()
+      ? booleanSetting(env.DOKOSOKO_CRAWLER_ALLOW_LOCALHOST_SUBDOMAINS)
+      : fileBoolean(configured.allow_localhost_subdomains, false, "crawler.allow_localhost_subdomains"),
+    localhostPorts: env.DOKOSOKO_CRAWLER_LOCALHOST_PORTS?.trim()
+      ? portSetting(env.DOKOSOKO_CRAWLER_LOCALHOST_PORTS)
+      : filePorts(configured.localhost_ports, new Set([80, 443])),
   };
 }
 

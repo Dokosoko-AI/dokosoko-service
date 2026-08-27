@@ -71,7 +71,12 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 		return model.AIProviderConnection{}, store.ErrConflict
 	}
 	if current.ManagedBy == "environment" {
-		return model.AIProviderConnection{}, errors.New("this provider is managed by environment variables")
+		if s.aiEnvironmentCredentials[input.Provider] != "" {
+			return model.AIProviderConnection{}, errors.New("this provider is managed by deployment configuration")
+		}
+		if input.Credential == "" {
+			return model.AIProviderConnection{}, errors.New("enter a new credential to take ownership of this provider from deployment configuration")
+		}
 	}
 	if input.IsBackup {
 		for _, value := range connections {
@@ -208,44 +213,96 @@ func (s *Service) SaveAIWorkloadProfile(ctx context.Context, input AIWorkloadPro
 }
 
 type AIEnvironmentConfig struct {
-	Provider string
-	APIKey   string
-	Endpoint string
-	Models   map[airuntime.Workload]string
+	Provider         string
+	APIKey           string
+	Endpoint         string
+	Models           map[airuntime.Workload]string
+	MaxInputTokens   *int
+	MaxOutputTokens  *int
+	DailyTokenBudget *int64
 }
 
 func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironmentConfig) error {
 	config.Provider = strings.ToLower(strings.TrimSpace(config.Provider))
 	config.APIKey = strings.TrimSpace(config.APIKey)
 	config.Endpoint = strings.TrimRight(strings.TrimSpace(config.Endpoint), "/")
-	if config.Provider == "" && config.APIKey == "" {
-		return nil
+	for provider := range s.aiEnvironmentCredentials {
+		delete(s.aiEnvironmentCredentials, provider)
 	}
-	if !supportedAIProviders[config.Provider] || config.APIKey == "" {
-		return errors.New("DOKOSOKO_AI_PROVIDER and DOKOSOKO_AI_API_KEY must name one supported provider")
+	configured := config.Provider != "" || config.APIKey != ""
+	if configured && (!supportedAIProviders[config.Provider] || config.APIKey == "") {
+		return errors.New("AI deployment configuration must name one supported provider and include its API key")
 	}
-	if config.Endpoint == "" {
+	if configured && config.Endpoint == "" {
 		config.Endpoint = aiProviderOrigin(config.Provider)
 	}
-	if config.Provider != "openai-compatible" && config.Endpoint != aiProviderOrigin(config.Provider) {
-		return errors.New("native environment-managed AI providers use their fixed origin")
+	if configured && config.Provider != "openai-compatible" && config.Endpoint != aiProviderOrigin(config.Provider) {
+		return errors.New("native deployment-managed AI providers use their fixed origin")
 	}
-	if !validHTTPSBaseOrigin(config.Endpoint) {
-		return errors.New("DOKOSOKO_AI_ENDPOINT must be a fixed HTTPS origin")
+	if configured && !validHTTPSBaseOrigin(config.Endpoint) {
+		return errors.New("AI deployment endpoint must be a fixed HTTPS origin")
+	}
+	if configured {
+		pending := config
+		pending.Models = make(map[airuntime.Workload]string, len(config.Models))
+		for workload, modelID := range config.Models {
+			pending.Models[workload] = modelID
+		}
+		s.pendingAIConfiguration = &pending
+	} else {
+		s.pendingAIConfiguration = nil
 	}
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
 		return err
 	}
 	connections, err := s.store.AIProviderConnections(ctx, deployment.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
+	managedConnectionIDs := make(map[string]bool)
 	var current model.AIProviderConnection
 	for _, value := range connections {
+		if value.ManagedBy == "environment" {
+			managedConnectionIDs[value.ID] = true
+		}
 		if value.Provider == config.Provider {
 			current = value
-			break
+		}
+	}
+	if !configured {
+		for _, connection := range connections {
+			if connection.ManagedBy != "environment" || !connection.Enabled {
+				continue
+			}
+			connection.Enabled = false
+			if _, err := s.store.SaveAIProviderConnection(ctx, connection, connection.Revision); err != nil {
+				return err
+			}
+		}
+		profile, profileErr := s.store.AIWorkloadProfile(ctx, deployment.ID, string(airuntime.WorkloadAnalysis))
+		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
+			return profileErr
+		}
+		if profile.ID != "" && profile.Enabled && managedConnectionIDs[profile.ProviderConnectionID] {
+			profile.Enabled = false
+			if _, err := s.store.SaveAIWorkloadProfile(ctx, profile, profile.Revision); err != nil {
+				return err
+			}
+		}
+		s.pendingAIConfiguration = nil
+		return nil
+	}
+	for _, connection := range connections {
+		if connection.ManagedBy != "environment" || connection.Provider == config.Provider || !connection.Enabled {
+			continue
+		}
+		connection.Enabled = false
+		if _, err := s.store.SaveAIProviderConnection(ctx, connection, connection.Revision); err != nil {
+			return err
 		}
 	}
 	connectionID := current.ID
@@ -272,12 +329,34 @@ func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironme
 		}
 	}
 	modelID := strings.TrimSpace(config.Models[airuntime.WorkloadAnalysis])
+	if modelID == "" && currentProfile.ProviderConnectionID == connection.ID {
+		modelID = currentProfile.Model
+	}
 	if modelID == "" {
 		modelID = aiDefaultModel(config.Provider)
 	}
-	if _, err = s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: profileID, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, Workload: string(airuntime.WorkloadAnalysis), ProviderConnectionID: connection.ID, Model: modelID, MaxInputTokens: 128000, MaxOutputTokens: 4096, DailyTokenBudget: 0, Enabled: true}, currentProfile.Revision); err != nil {
+	maxInputTokens := currentProfile.MaxInputTokens
+	if maxInputTokens == 0 {
+		maxInputTokens = 128000
+	}
+	if config.MaxInputTokens != nil {
+		maxInputTokens = *config.MaxInputTokens
+	}
+	maxOutputTokens := currentProfile.MaxOutputTokens
+	if maxOutputTokens == 0 {
+		maxOutputTokens = 4096
+	}
+	if config.MaxOutputTokens != nil {
+		maxOutputTokens = *config.MaxOutputTokens
+	}
+	dailyTokenBudget := currentProfile.DailyTokenBudget
+	if config.DailyTokenBudget != nil {
+		dailyTokenBudget = *config.DailyTokenBudget
+	}
+	if _, err = s.store.SaveAIWorkloadProfile(ctx, model.AIWorkloadProfile{ID: profileID, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, Workload: string(airuntime.WorkloadAnalysis), ProviderConnectionID: connection.ID, Model: modelID, MaxInputTokens: maxInputTokens, MaxOutputTokens: maxOutputTokens, DailyTokenBudget: dailyTokenBudget, Enabled: true}, currentProfile.Revision); err != nil {
 		return err
 	}
+	s.pendingAIConfiguration = nil
 	return nil
 }
 

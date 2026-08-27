@@ -16,7 +16,7 @@ export type Section =
 
 export type IntegrationTab = "overview" | "documentation" | "authorization" | "tools" | "test" | "history";
 export type IntegrationResourceTab = "documentation" | "contracts" | "sdks";
-export type SettingsTab = "overview" | "tenant" | "ai" | "root";
+export type SettingsTab = "overview" | "tenant" | "configuration" | "ai" | "root";
 export type IdentityTab = "sign-in" | "customer-accounts";
 
 export type RouteLabelKey =
@@ -31,6 +31,7 @@ export type RouteLabelKey =
   | "routes.sdks"
   | "routes.overview"
   | "routes.tenantSettings"
+  | "routes.configuration"
   | "routes.aiConfiguration"
   | "routes.rootAccess";
 
@@ -73,6 +74,7 @@ export const INTEGRATION_RESOURCE_TABS: Array<{ id: IntegrationResourceTab; labe
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: RouteLabelKey }> = [
   { id: "overview", label: "routes.overview" },
   { id: "tenant", label: "routes.tenantSettings" },
+  { id: "configuration", label: "routes.configuration" },
   { id: "ai", label: "routes.aiConfiguration" },
   { id: "root", label: "routes.rootAccess" },
 ];

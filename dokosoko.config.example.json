@@ -1,0 +1,55 @@
+{
+  "$schema": "./dokosoko.config.schema.json",
+  "version": 1,
+  "server": {
+    "listen": ":8080",
+    "public_url": "http://localhost:8080",
+    "ui_directory": "./dist/client"
+  },
+  "database": {
+    "url": { "env": "DOKOSOKO_DATABASE_URL" },
+    "migrations_directory": "./migrations"
+  },
+  "security": {
+    "master_key": { "file": "/run/secrets/dokosoko_master_key" },
+    "setup_token": { "env": "DOKOSOKO_SETUP_TOKEN" },
+    "dev_memory": false,
+    "allow_demo_tokens": false,
+    "allow_insecure_http": false
+  },
+  "uploads": {
+    "directory": "/uploads",
+    "max_bytes": 5000000
+  },
+  "tools": {
+    "localhost_hosts": []
+  },
+  "native_plugins": {
+    "required": [],
+    "disabled": []
+  },
+  "control_plane": {
+    "organisation": {
+      "name": "Example Organisation",
+      "slug": "example-organisation"
+    },
+    "deployment": {
+      "name": "Example Developer Platform",
+      "slug": "example-developer-platform",
+      "description": "Trusted API knowledge and tools for Example Organisation.",
+      "feedback_submission_url": "https://support.example.com/feedback",
+      "error_submission_url": "https://support.example.com/errors"
+    },
+    "environments": [
+      { "name": "Production", "slug": "production", "is_production": true },
+      { "name": "Staging", "slug": "staging", "is_production": false }
+    ]
+  },
+  "crawler": {
+    "max_pages": 500,
+    "max_bytes": 5000000,
+    "data_directory": "/data",
+    "allow_localhost_subdomains": false,
+    "localhost_ports": [80, 443]
+  }
+}

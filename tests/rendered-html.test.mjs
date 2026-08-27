@@ -931,7 +931,7 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   const testGuidance = identitySetup.match(/<h2[^>]*>Test sign-in<\/h2><p[^>]*>([^<]+)<\/p>/)?.[1] ?? "";
 
   assert.match(source, /eyebrow="Administration" title="Settings" action=/);
-  for (const tab of ["tenant", "ai", "root"]) {
+  for (const tab of ["tenant", "configuration", "ai", "root"]) {
     assert.match(source, new RegExp(`settingsPath\\("${tab}"\\)`));
   }
   assert.doesNotMatch(settingsTabs, /id: "storage"|databaseStorage/);
@@ -1088,6 +1088,9 @@ test("edits revision-safe tenant profile settings without duplicating delivery c
   assert.match(tenantSettings, /maxLength=\{2000\}/);
   assert.match(tenantSettings, /validSubmissionURL/);
   assert.match(tenantSettings, /maxLength=\{2048\}/);
+  assert.match(tenantSettings, /new Set\(product\.managed_fields \?\? \[\]\)/);
+  assert.match(tenantSettings, /disabled=\{managedFields\.has\("description"\)\}/);
+  assert.match(tenantSettings, /Managed by central configuration/);
   assert.doesNotMatch(tenantSettings, /Switch|publicMCPEnabled|onEnabledChange/);
 });
 

@@ -1018,6 +1018,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemDoctor'
+  /api/v1/system/configuration:
+    get:
+      tags: ["Catalog Administration"]
+      operationId: getSystemConfiguration
+      description: Returns the effective startup configuration with secret values redacted and each value's source identified.
+      responses:
+        '200':
+          description: Redacted effective startup configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemConfiguration'
   /api/v1/organisations:
     get:
       tags: ["Catalog Administration"]
@@ -5095,6 +5107,17 @@ components:
             updated_at:
               type: string
               format: date-time
+            managed_fields:
+              type: array
+              description: Tenant profile fields currently owned by central deployment configuration.
+              items:
+                type: string
+                enum:
+                  - name
+                  - slug
+                  - description
+                  - feedback_submission_url
+                  - error_submission_url
           required:
             - id
             - organisation_id
@@ -5104,6 +5127,7 @@ components:
             - revision
             - created_at
             - updated_at
+            - managed_fields
     CreateIntegrationRequest:
       type: object
       additionalProperties: false
@@ -10995,6 +11019,51 @@ components:
         - status
         - checks
         - generated_at
+    SystemConfiguration:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        configuration_file:
+          type: string
+        changes_require_restart:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SystemConfigurationItem'
+      required:
+        - version
+        - changes_require_restart
+        - items
+    SystemConfigurationItem:
+      type: object
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+        source:
+          type: string
+          enum:
+            - built_in
+            - configuration_file
+            - environment
+        value:
+          type: string
+        sensitive:
+          type: boolean
+        configured:
+          type: boolean
+        restart_required:
+          type: boolean
+      required:
+        - key
+        - source
+        - sensitive
+        - configured
+        - restart_required
     Visibility:
       type: string
       enum:

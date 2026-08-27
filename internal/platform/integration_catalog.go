@@ -65,6 +65,12 @@ func (s *Service) CreateDeployment(ctx context.Context, input DeploymentInput, a
 	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: value.ID, ActorID: actor.ID, Action: "deployment.created", TargetType: "deployment", TargetID: value.ID, Current: map[string]any{"name": value.Name, "slug": value.Slug, "feedback_submission_url": value.FeedbackSubmissionURL, "error_submission_url": value.ErrorSubmissionURL}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
 		return model.Deployment{}, err
 	}
+	if s.pendingAIConfiguration != nil {
+		configuration := *s.pendingAIConfiguration
+		if err := s.ConfigureEnvironmentAI(ctx, configuration); err != nil {
+			return model.Deployment{}, err
+		}
+	}
 	return value, nil
 }
 
@@ -72,6 +78,13 @@ func (s *Service) UpdateDeployment(ctx context.Context, input DeploymentInput, a
 	current, err := s.store.Deployment(ctx)
 	if err != nil {
 		return model.Deployment{}, err
+	}
+	if s.deploymentFieldManaged("name") && strings.TrimSpace(input.Name) != current.Name ||
+		s.deploymentFieldManaged("slug") && strings.TrimSpace(input.Slug) != current.Slug ||
+		s.deploymentFieldManaged("description") && strings.TrimSpace(input.Description) != current.Description ||
+		s.deploymentFieldManaged("feedback_submission_url") && input.FeedbackSubmissionURL != nil && normalizedDeploymentSubmissionURL(input.FeedbackSubmissionURL) != current.FeedbackSubmissionURL ||
+		s.deploymentFieldManaged("error_submission_url") && input.ErrorSubmissionURL != nil && normalizedDeploymentSubmissionURL(input.ErrorSubmissionURL) != current.ErrorSubmissionURL {
+		return model.Deployment{}, ErrManagedByConfiguration
 	}
 	input.Name, input.Slug, input.Description = strings.TrimSpace(input.Name), strings.TrimSpace(input.Slug), strings.TrimSpace(input.Description)
 	if validateNameSlug(input.Name, input.Slug) != nil || len(input.Description) > 2000 {
