@@ -31,6 +31,7 @@ func TestPostgresRecipeV2MigrationPreservesAndWithdrawsLegacyRevisions(t *testin
 		t.Skipf("PostgreSQL is unavailable: %v", err)
 	}
 	t.Cleanup(admin.Close)
+	ensurePostgresTestExtensions(ctx, t, admin)
 
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {
@@ -484,6 +485,7 @@ func TestPostgresDeleteLegacyRecipeIgnoresDeploymentCatalogMirrorDrift(t *testin
 		t.Skipf("PostgreSQL is unavailable: %v", err)
 	}
 	t.Cleanup(admin.Close)
+	ensurePostgresTestExtensions(ctx, t, admin)
 
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {

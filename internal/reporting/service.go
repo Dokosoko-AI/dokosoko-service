@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -22,6 +24,7 @@ const (
 var (
 	ErrInvalidReport    = errors.New("report is invalid")
 	ErrSensitiveContent = errors.New("report may contain a credential or secret")
+	ErrDeliveryDisabled = errors.New("support submission delivery is not configured")
 
 	toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,160}$`)
 	secretPatterns  = []*regexp.Regexp{
@@ -108,6 +111,9 @@ type SubmissionView struct {
 	ID                 string              `json:"id"`
 	Kind               string              `json:"kind"`
 	State              string              `json:"state"`
+	Attempts           int                 `json:"attempts"`
+	LastError          string              `json:"last_error,omitempty"`
+	DeliveredAt        *time.Time          `json:"delivered_at,omitempty"`
 	Summary            string              `json:"summary"`
 	Category           string              `json:"category,omitempty"`
 	Rating             *int                `json:"rating,omitempty"`
@@ -134,12 +140,18 @@ type SupportCapability struct {
 }
 
 type Service struct {
-	store store.Store
-	now   func() time.Time
+	store    store.Store
+	now      func() time.Time
+	resolver interface {
+		LookupIP(context.Context, string, string) ([]net.IP, error)
+	}
+	doer interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 func New(repository store.Store) *Service {
-	return &Service{store: repository, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{store: repository, now: func() time.Time { return time.Now().UTC() }, resolver: net.DefaultResolver}
 }
 
 func (s *Service) Capabilities(ctx context.Context, deploymentID string) ([]SupportCapability, error) {
@@ -147,7 +159,7 @@ func (s *Service) Capabilities(ctx context.Context, deploymentID string) ([]Supp
 	if err != nil || deployment.ID != deploymentID {
 		return nil, store.ErrNotFound
 	}
-	return []SupportCapability{{Scope: "deployment", BugReportsEnabled: true, FeedbackEnabled: true}}, nil
+	return []SupportCapability{{Scope: "deployment", BugReportsEnabled: deployment.ErrorSubmissionURL != "", FeedbackEnabled: deployment.FeedbackSubmissionURL != ""}}, nil
 }
 
 func randomUUID() (string, error) {

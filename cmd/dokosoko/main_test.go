@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 type blockingListener struct {
@@ -75,5 +76,12 @@ func TestSourceUploadConfigRejectsInvalidLimit(t *testing.T) {
 	t.Setenv("DOKOSOKO_UPLOAD_MAX_BYTES", "0")
 	if _, _, err := sourceUploadConfig(); err == nil {
 		t.Fatal("expected invalid upload limit error")
+	}
+}
+
+func TestHTTPWriteTimeoutCoversOneAIProviderFailover(t *testing.T) {
+	const twoProviderBudget = 2 * 45 * time.Second
+	if httpWriteTimeout <= twoProviderBudget {
+		t.Fatalf("HTTP write timeout %s must exceed the bounded primary and backup AI request budget %s", httpWriteTimeout, twoProviderBudget)
 	}
 }

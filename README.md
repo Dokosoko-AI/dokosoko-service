@@ -37,8 +37,10 @@ token. The inbound DokoSoko bearer token is never forwarded. Imported tools
 remain local reviewed definitions, and schema changes fail closed until
 reviewed.
 
-Support reports are consent-gated, schema-bounded plaintext records in a local
-`queued` outbox. DokoSoko does not encrypt, route, retry, or deliver them.
+Support reports are consent-gated, schema-bounded plaintext records in a durable
+outbox. Root settings provide separate feedback and error destinations. The
+service snapshots the selected destination, delivers without redirects, and
+uses bounded leases and retries; no support payload encryption layer is added.
 
 The embedded widget is not part of this service. A future separately deployed
 widget can use standard private OAuth and Private MCP; the discovery scaffold is
@@ -105,11 +107,13 @@ DOKOSOKO_DEV_PROXY=http://127.0.0.1:8080 pnpm dev
 
 ## Documentation ingestion
 
-The isolated crawler accepts `website`, `openapi`, `upload`, and `git` source
-kinds. Website and OpenAPI requests are credential-free, budgeted, redirect
+The supported documentation-ingestion paths are `website`, `openapi`, and
+`upload`. Website and OpenAPI requests are credential-free, budgeted, redirect
 checked, DNS-rebinding resistant, and restricted to allowed public destinations.
 Uploads are UTF-8, byte-bounded, path-contained, and read from the dedicated
-upload volume. Git currently fails with an explicit unsupported-source result.
+upload volume. The legacy `git` source kind remains reserved in the API for
+compatibility, returns an explicit unsupported-source result, and is not shown
+as an available option in the console.
 
 Administrators review crawl output and quarantine indicators before publishing
 an immutable source revision. A published API pins the exact reviewed source
@@ -182,3 +186,4 @@ migrations/             append-only checksummed schema history
 
 See [docs/FINAL_PLAN.md](docs/FINAL_PLAN.md) for the core invariants and
 [docs/INTEGRATION_SETUP.md](docs/INTEGRATION_SETUP.md) for the API workflow.
+Production operators should follow the [operations and launch runbook](docs/OPERATIONS.md).

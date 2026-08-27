@@ -2,7 +2,7 @@
 
 
 import { useTranslation } from "react-i18next";
-import { Check, FileUp, GitBranch, Globe2, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Check, FileUp, Globe2, LockKeyhole, ShieldCheck } from "lucide-react";
 
 import { Badge, Button, Dialog } from "../../core/control";
 import { Confirmation } from "../shared";
@@ -44,10 +44,9 @@ export function SourceDialogs({ workspace }: {
       <div className="auth-form compact-form source-form">
         <fieldset className="source-kind-selector">
           <legend>{t("sourceDialogs.type")}</legend>
-          <div className="source-kind-options">
+          <div className="source-kind-options documentation-source-kinds">
             {([
               { kind: "website" as const, icon: <Globe2 />, label: t("sourceDialogs.website") },
-              { kind: "git" as const, icon: <GitBranch />, label: t("sourceDialogs.gitRepository") },
               { kind: "upload" as const, icon: <FileUp />, label: t("sourceDialogs.uploadAFile") },
             ]).map((option) => <label className={sourceKind === option.kind ? "selected" : ""} key={option.kind}>
               <input type="radio" name="source-kind" value={option.kind} checked={sourceKind === option.kind} onChange={() => selectSourceKind(option.kind as SourceKind)} />
@@ -57,7 +56,7 @@ export function SourceDialogs({ workspace }: {
             </label>)}
           </div>
         </fieldset>
-        {sourceKind === "upload" ? <label className="auth-field"><span>{t("sourceDialogs.file")}</span><input ref={sourceFileInput} type="file" accept=".md,.mdx,.txt,.html,.htm,.json,.yaml,.yml,text/plain,text/markdown,text/html,application/json,application/yaml,text/yaml" aria-invalid={Boolean(sourceFileError)} aria-describedby={`source-upload-guidance${sourceFileError ? " source-upload-error" : ""}`} onChange={(event) => selectSourceFile(event.target.files?.[0] ?? null)} /><small id="source-upload-guidance">{t("sourceDialogs.utfN8MdMdxTxtHtmlHtmJsonYaml")}</small>{sourceFileError && <small id="source-upload-error" className="source-upload-error" role="alert">{sourceFileError}</small>}</label> : <label className="auth-field"><span>{t("sourceDialogs.location")}</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder={sourceKind === "git" ? t("sourceDialogs.httpsGithubComVendorDocs") : "https://example.com/docs"} aria-describedby={sourceKind === "website" ? "source-website-boundary" : undefined} />{sourceKind === "website" && <small id="source-website-boundary">{t("sourceDialogs.websitePathBoundary")}</small>}</label>}
+        {sourceKind === "upload" ? <label className="auth-field"><span>{t("sourceDialogs.file")}</span><input ref={sourceFileInput} type="file" accept=".md,.mdx,.txt,.html,.htm,.json,.yaml,.yml,text/plain,text/markdown,text/html,application/json,application/yaml,text/yaml" aria-invalid={Boolean(sourceFileError)} aria-describedby={`source-upload-guidance${sourceFileError ? " source-upload-error" : ""}`} onChange={(event) => selectSourceFile(event.target.files?.[0] ?? null)} /><small id="source-upload-guidance">{t("sourceDialogs.utfN8MdMdxTxtHtmlHtmJsonYaml")}</small>{sourceFileError && <small id="source-upload-error" className="source-upload-error" role="alert">{sourceFileError}</small>}</label> : <label className="auth-field"><span>{t("sourceDialogs.location")}</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder="https://example.com/docs" aria-describedby="source-website-boundary" /><small id="source-website-boundary">{t("sourceDialogs.websitePathBoundary")}</small></label>}
       </div>
     </Dialog>
 

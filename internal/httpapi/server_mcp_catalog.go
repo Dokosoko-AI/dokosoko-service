@@ -341,6 +341,8 @@ func reportingRPCError(w http.ResponseWriter, id any, err error) {
 		writeRPCError(w, id, -32602, "Potential credential or secret detected; redact it and ask the user to approve the revised report")
 	case errors.Is(err, reporting.ErrInvalidReport):
 		writeRPCError(w, id, -32602, err.Error())
+	case errors.Is(err, reporting.ErrDeliveryDisabled):
+		writeRPCError(w, id, -32601, "Support submission delivery is disabled")
 	default:
 		writeRPCError(w, id, -32603, "The report could not be queued safely")
 	}

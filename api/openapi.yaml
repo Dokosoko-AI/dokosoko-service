@@ -2296,8 +2296,8 @@ paths:
     get:
       tags: ["Support"]
       operationId: listSupportSubmissions
-      summary: List queued support submissions
-      description: Lists the consent-based plaintext outbox without including full report content.
+      summary: List support submissions
+      description: Lists the consent-based plaintext delivery outbox without including full report content.
       parameters:
         - name: limit
           in: query
@@ -2331,7 +2331,7 @@ paths:
     get:
       tags: ["Support"]
       operationId: getSupportSubmission
-      summary: Get one queued support submission
+      summary: Get one support submission
       responses:
         '200':
           description: Full schema-bounded plaintext report content and trusted context.
@@ -9063,7 +9063,20 @@ components:
             - feedback
         state:
           type: string
-          const: queued
+          enum:
+            - queued
+            - delivering
+            - delivered
+            - failed
+        attempts:
+          type: integer
+          minimum: 0
+        last_error:
+          type: string
+          description: Credential-free delivery failure category. Empty after successful delivery.
+        delivered_at:
+          type: string
+          format: date-time
         summary:
           type: string
         category:
@@ -9092,6 +9105,7 @@ components:
         - id
         - kind
         - state
+        - attempts
         - summary
         - created_at
         - expires_at

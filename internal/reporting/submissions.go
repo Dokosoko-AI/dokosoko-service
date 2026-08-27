@@ -131,6 +131,13 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	if deployment.ID != envelope.Product.ProductID {
 		return SubmissionView{}, fmt.Errorf("%w: product context is invalid", ErrInvalidReport)
 	}
+	deliveryURL := deployment.FeedbackSubmissionURL
+	if envelope.Kind == KindBug {
+		deliveryURL = deployment.ErrorSubmissionURL
+	}
+	if deliveryURL == "" {
+		return SubmissionView{}, ErrDeliveryDisabled
+	}
 	id, err := randomUUID()
 	if err != nil {
 		return SubmissionView{}, err
@@ -145,7 +152,7 @@ func (s *Service) submit(ctx context.Context, idempotencyKey string, envelope En
 	}
 	digest := sha256.Sum256([]byte(envelope.Product.ProductID + "\x00" + integrationID + "\x00" + actorPseudonym + "\x00" + envelope.Kind + "\x00" + idempotencyKey))
 	now := s.now()
-	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, IntegrationID: integrationID, Kind: envelope.Kind, State: "queued", ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], Payload: payload, ExpiresAt: now.AddDate(0, 0, 90)})
+	value, err := s.store.CreateReportSubmission(ctx, model.ReportSubmission{ID: id, OrganisationID: deployment.OrganisationID, ProductID: deployment.ID, IntegrationID: integrationID, Kind: envelope.Kind, State: "queued", DeliveryURL: deliveryURL, AvailableAt: now, ActorPseudonym: actorPseudonym, IdempotencyDigest: digest[:], Payload: payload, ExpiresAt: now.AddDate(0, 0, 90)})
 	if err != nil {
 		return SubmissionView{}, err
 	}
@@ -160,7 +167,7 @@ func (s *Service) view(value model.ReportSubmission) (SubmissionView, error) {
 	if err := json.Unmarshal(value.Payload, &envelope); err != nil {
 		return SubmissionView{}, err
 	}
-	view := SubmissionView{ID: value.ID, Kind: value.Kind, State: value.State, CreatedAt: value.CreatedAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
+	view := SubmissionView{ID: value.ID, Kind: value.Kind, State: value.State, Attempts: value.Attempts, LastError: value.LastError, DeliveredAt: value.DeliveredAt, CreatedAt: value.CreatedAt, ExpiresAt: value.ExpiresAt, TrustedContext: envelope.Product, TrustedIntegration: envelope.Integration}
 	if envelope.Bug != nil {
 		view.Summary, view.RelatedTool = envelope.Bug.Summary, envelope.Bug.RelatedTool
 		encoded, _ := json.Marshal(envelope.Bug)

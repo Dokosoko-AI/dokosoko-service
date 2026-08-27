@@ -34,6 +34,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const httpWriteTimeout = 2 * time.Minute
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -169,11 +171,14 @@ func run(ctx context.Context) error {
 	supervisor.Start("authorization-usage-delivery", func(ctx context.Context) error {
 		return toolProxy.RunAuthorizationUsageDelivery(ctx, time.Second)
 	})
+	supervisor.Start("support-submission-delivery", func(ctx context.Context) error {
+		return reportingService.RunDelivery(ctx, time.Second)
+	})
 	defer func() {
 		stopWorkers()
 		supervisor.Wait()
 	}()
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
 	log.Printf("DokoSoko listening on %s", listener.Addr())
 	return serve(ctx, server, listener)
 }

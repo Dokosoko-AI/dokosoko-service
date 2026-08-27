@@ -14,9 +14,11 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/ratelimit"
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -173,6 +175,21 @@ func staticConsole(directory string) http.Handler {
 			r.Header.Del("If-Modified-Since")
 			r.Header.Del("If-None-Match")
 		}
+		if r.Header.Get("Range") == "" && acceptsEncoding(r.Header.Get("Accept-Encoding"), "gzip") {
+			if info, err := os.Stat(candidate + ".gz"); err == nil && !info.IsDir() {
+				w.Header().Set("Content-Encoding", "gzip")
+				appendVary(w.Header(), "Accept-Encoding")
+				if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(cleaned))); contentType != "" {
+					w.Header().Set("Content-Type", contentType)
+				}
+				candidate += ".gz"
+				if serveRootHTML {
+					r.URL.Path = "/index.html.gz"
+				} else {
+					r.URL.Path += ".gz"
+				}
+			}
+		}
 		if strings.Contains(r.URL.Path, "/_next/static/") || strings.Contains(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else if extension := strings.ToLower(filepath.Ext(cleaned)); extension == ".html" || extension == ".rsc" {
@@ -182,6 +199,37 @@ func staticConsole(directory string) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+func acceptsEncoding(header, encoding string) bool {
+	for _, value := range strings.Split(header, ",") {
+		parts := strings.Split(strings.TrimSpace(value), ";")
+		if len(parts) == 0 || !strings.EqualFold(strings.TrimSpace(parts[0]), encoding) {
+			continue
+		}
+		for _, parameter := range parts[1:] {
+			parameter = strings.TrimSpace(parameter)
+			if strings.HasPrefix(strings.ToLower(parameter), "q=") {
+				quality, err := strconv.ParseFloat(strings.TrimSpace(parameter[2:]), 64)
+				if err != nil || quality <= 0 {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func appendVary(header http.Header, value string) {
+	for _, current := range header.Values("Vary") {
+		for _, token := range strings.Split(current, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), value) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", value)
 }
 
 func staticConsoleCSP(directory string) string {

@@ -2,10 +2,12 @@ package httpapi_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base32"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -377,6 +379,15 @@ func TestSupportReportingToolsRequireConsentQueuePlaintextReportsAndStayPrivate(
 	t.Parallel()
 	ctx := context.Background()
 	memory := store.NewMemory()
+	deployment, err := memory.Deployment(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.FeedbackSubmissionURL = "https://support.example.test/feedback"
+	deployment.ErrorSubmissionURL = "https://support.example.test/errors"
+	if _, err := memory.UpdateDeployment(ctx, deployment, deployment.Revision); err != nil {
+		t.Fatal(err)
+	}
 	reporter := reporting.New(memory)
 	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, Reporting: reporter})
 
@@ -441,6 +452,16 @@ func TestSupportReportingToolsRequireConsentQueuePlaintextReportsAndStayPrivate(
 	w = request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}`)
 	if strings.Contains(w.Body.String(), "support.report_bug") || strings.Contains(w.Body.String(), "support.submit_feedback") {
 		t.Fatalf("support reporting tools leaked to Public MCP: %s", w.Body.String())
+	}
+}
+
+func TestSupportReportingToolsAreAbsentWithoutRootDestinations(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	handler := httpapi.NewWithOptions(platform.New(memory), httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true, Reporting: reporting.New(memory)})
+	w := request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"name":"support.report_bug"`) || strings.Contains(w.Body.String(), `"name":"support.submit_feedback"`) {
+		t.Fatalf("disabled reporting tools leaked into discovery: status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -663,6 +684,17 @@ func TestGoServiceServesStaticConsoleWithoutShadowingAPI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "index.rsc"), []byte("0:{\"__route\":\"route:/\"}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	var compressed bytes.Buffer
+	compressor := gzip.NewWriter(&compressed)
+	if _, err := compressor.Write([]byte("<!doctype html><title>DokoSoko console</title><script>window.__dokosoko_bootstrap=true</script>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "index.html.gz"), compressed.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	handler := httpapi.NewWithUI(platform.New(store.NewMemory()), "https://dokosoko.example", directory)
 
 	w := request(t, handler, http.MethodGet, "/", "", "")
@@ -683,6 +715,25 @@ func TestGoServiceServesStaticConsoleWithoutShadowingAPI(t *testing.T) {
 	}
 	if !strings.Contains(w.Header().Get("Vary"), "RSC") || !strings.Contains(w.Header().Get("Vary"), "Accept") {
 		t.Fatalf("console HTML does not vary from RSC: %q", w.Header().Get("Vary"))
+	}
+	gzipRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	gzipRequest.Header.Set("Accept-Encoding", "br, gzip")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, gzipRequest)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Encoding") != "gzip" || !strings.Contains(strings.Join(w.Header().Values("Vary"), ","), "Accept-Encoding") || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("compressed console status=%d headers=%v", w.Code, w.Header())
+	}
+	reader, err := gzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reader.Close()
+	if !strings.Contains(string(decoded), "DokoSoko console") {
+		t.Fatalf("compressed console body=%q", decoded)
 	}
 
 	rscRequest := httptest.NewRequest(http.MethodGet, "/?__rsc=test", nil)

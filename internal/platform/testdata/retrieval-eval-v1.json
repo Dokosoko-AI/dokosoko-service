@@ -1,0 +1,24 @@
+{
+  "version": "retrieval-eval-v1",
+  "retrieval_profile_version": "hybrid-v1",
+  "cases": [
+    {
+      "name": "authentication",
+      "query": "configure API authentication credential",
+      "expected_evidence": "Send the API key in the Authorization header and load the credential from an environment variable.",
+      "forbidden_evidence": "Configure shipping address fields and parcel dimensions for checkout."
+    },
+    {
+      "name": "rate-limit-retry",
+      "query": "retry a request after an HTTP rate limit",
+      "expected_evidence": "After HTTP 429, honor Retry-After and retry with bounded exponential backoff.",
+      "forbidden_evidence": "Upload a profile avatar and select a dashboard color theme."
+    },
+    {
+      "name": "exact-sdk-installation",
+      "query": "install the exact Node SDK version",
+      "expected_evidence": "Install the exact package release with npm install @vendor/sdk@3.2.1.",
+      "forbidden_evidence": "Exchange an OAuth authorization code and validate the identity token."
+    }
+  ]
+}

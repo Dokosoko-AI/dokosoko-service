@@ -42,7 +42,7 @@ func TestPostgresSourcePublicationAtomicallyPersistsTypedReview(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO crawl_jobs(
 		id,organisation_id,product_id,source_id,state,discovered_count,fetched_count,changed_count,
 		failed_count,skipped_count,pipeline_version,diagnostics,queued_at,started_at,finished_at
-	) VALUES($1,$2,$3,$4,'review',2,2,2,0,0,'crawler-documentation-candidate/1','{}'::jsonb,$5,$5,$5)`,
+	) VALUES($1,$2,$3,$4,'running',2,2,2,0,0,'crawler-documentation-candidate/1','{}'::jsonb,$5,$5,NULL)`,
 		crawlID, deployment.OrganisationID, deployment.ID, sourceID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,11 @@ func TestPostgresSourcePublicationAtomicallyPersistsTypedReview(t *testing.T) {
 		) VALUES($1,$2,true,'validated',70,'[]'::jsonb)`, crawlID, legacyID); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Assessment rows are mutable only while their crawl is running. Move the
+	// job to review after all immutable review evidence has been captured.
+	if _, err := pool.Exec(ctx, `UPDATE crawl_jobs SET state='review', finished_at=$2 WHERE id=$1`, crawlID, now); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := postgres.CreateDeveloperAssetIngestionRun(ctx, model.DeveloperAssetIngestionRun{
 		ID: crawlID, DeploymentID: deployment.ID, OrganisationID: deployment.OrganisationID,

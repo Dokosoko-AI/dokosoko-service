@@ -13,6 +13,13 @@ type ReportSubmission struct {
 	IntegrationID     string          `json:"integration_id,omitempty"`
 	Kind              string          `json:"kind"`
 	State             string          `json:"state"`
+	DeliveryURL       string          `json:"-"`
+	Attempts          int             `json:"attempts"`
+	AvailableAt       time.Time       `json:"-"`
+	LeaseOwner        string          `json:"-"`
+	LeasedUntil       *time.Time      `json:"-"`
+	LastError         string          `json:"last_error,omitempty"`
+	DeliveredAt       *time.Time      `json:"delivered_at,omitempty"`
 	ActorPseudonym    string          `json:"actor_pseudonym"`
 	IdempotencyDigest []byte          `json:"-"`
 	Payload           json.RawMessage `json:"payload"`

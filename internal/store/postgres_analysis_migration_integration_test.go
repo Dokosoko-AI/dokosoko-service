@@ -44,6 +44,33 @@ func copyMigrationsThrough(t *testing.T, maximum int) string {
 	return destination
 }
 
+func ensurePostgresTestExtensions(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	// Migration-history tests use an isolated search_path. Install shared
+	// extensions in public first so a concurrent package cannot observe an
+	// extension registered in a temporary schema that is outside its path.
+	// Use the migration lock because Go packages execute in separate processes
+	// and PostgreSQL's CREATE EXTENSION IF NOT EXISTS is not race-free.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin PostgreSQL test extension setup: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(2811042026)`); err != nil {
+		t.Fatalf("lock PostgreSQL test extension setup: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+		CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;
+		CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+	`); err != nil {
+		t.Fatalf("install PostgreSQL test extensions: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit PostgreSQL test extension setup: %v", err)
+	}
+}
+
 func TestPostgresAnalysisOnlyMigrationPreservesAssistantOnlyConfiguration(t *testing.T) {
 	databaseURL := strings.TrimSpace(os.Getenv("DOKOSOKO_TEST_DATABASE_URL"))
 	if databaseURL == "" {
@@ -60,6 +87,7 @@ func TestPostgresAnalysisOnlyMigrationPreservesAssistantOnlyConfiguration(t *tes
 		t.Skipf("PostgreSQL is unavailable: %v", err)
 	}
 	t.Cleanup(admin.Close)
+	ensurePostgresTestExtensions(ctx, t, admin)
 
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {

@@ -3,8 +3,8 @@
 DokoSoko is one MCP connector for reviewed documentation, API contracts, exact
 SDK releases, runtime keys,
 recipes, and reviewed tools. The service is deliberately not a developer
-portal, provisioning platform, widget product, support-delivery system, or
-product-release orchestrator.
+portal, provisioning platform, widget product, support case-management product,
+or product-release orchestrator.
 
 ## Core resources
 
@@ -22,7 +22,7 @@ product-release orchestrator.
 - customer identity and OAuth artifacts for optional Private MCP;
 - upstream MCP connections using a service access token and optional signed
   user-identity forwarding;
-- consent-based plaintext queued support submissions;
+- consent-based plaintext support submissions in a root-routed durable outbox;
 - append-only audit plus bounded analytics needed for AI budgets and recipe
   popularity.
 
@@ -228,9 +228,12 @@ arbitrary recipe.
 
 The reporting tools show a bounded preview and require explicit user consent.
 Secret-like content is rejected. The accepted payload is stored as plaintext in
-one local `queued` outbox with trusted API and reporter context. No encryption,
-routing, delivery credentials, retry worker, or external receipt lifecycle is
-part of the service.
+one durable outbox with trusted API and reporter context. Separate deployment-
+root feedback and error URLs enable the corresponding tools; no per-API route or
+delivery credential exists. Delivery snapshots the selected URL, uses leases,
+bounded retries, idempotency keys, pinned DNS, and no redirects. DokoSoko does
+not add report encryption, ticket workflow, conversations, or an external
+receipt lifecycle.
 
 ## External extension boundary
 

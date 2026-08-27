@@ -13,6 +13,10 @@ import (
 
 func newReportingService() (*Service, *store.Memory) {
 	memory := store.NewMemory()
+	deployment, _ := memory.Deployment(context.Background())
+	deployment.FeedbackSubmissionURL = "https://support.example.test/feedback"
+	deployment.ErrorSubmissionURL = "https://support.example.test/errors"
+	_, _ = memory.UpdateDeployment(context.Background(), deployment, deployment.Revision)
 	return New(memory), memory
 }
 
@@ -108,5 +112,28 @@ func TestCapabilitiesAndPagination(t *testing.T) {
 	}
 	if _, _, err := service.Submissions(ctx, "prod_acme", "missing", 1); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cursor error=%v", err)
+	}
+}
+
+func TestCapabilitiesFollowRootDestinationsAndMissingDeliveryFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	memory := store.NewMemory()
+	service := New(memory)
+	capabilities, err := service.Capabilities(ctx, "prod_acme")
+	if err != nil || len(capabilities) != 1 || capabilities[0].BugReportsEnabled || capabilities[0].FeedbackEnabled {
+		t.Fatalf("disabled capabilities=%#v err=%v", capabilities, err)
+	}
+	if _, err := service.SubmitFeedback(ctx, FeedbackInput{Message: "Not configured", IdempotencyKey: "feedback-disabled-0001"}, submitContext()); !errors.Is(err, ErrDeliveryDisabled) {
+		t.Fatalf("disabled submission error=%v", err)
+	}
+	deployment, _ := memory.Deployment(ctx)
+	deployment.ErrorSubmissionURL = "https://support.example.test/errors"
+	if _, err := memory.UpdateDeployment(ctx, deployment, deployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err = service.Capabilities(ctx, "prod_acme")
+	if err != nil || !capabilities[0].BugReportsEnabled || capabilities[0].FeedbackEnabled {
+		t.Fatalf("partial capabilities=%#v err=%v", capabilities, err)
 	}
 }

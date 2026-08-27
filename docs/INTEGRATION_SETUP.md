@@ -87,7 +87,9 @@ list compact recipe metadata, resolve an exact title, slug, or outcome without
 fuzzy guessing, and read the selected product-integration recipe resource.
 
 Support tools require a user-approved preview and append a bounded plaintext
-record to the local queued outbox. They do not route or deliver it.
+record to the durable outbox. When the matching root-level feedback or error
+destination is configured, the service snapshots it and delivers with bounded
+leases and retries. No per-API route or support credential exists.
 
 An embedded widget is outside this service. A future external widget plugin
 uses the same OAuth and MCP surfaces as any other client.

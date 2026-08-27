@@ -12,6 +12,14 @@ import (
 func cloneReportSubmission(value model.ReportSubmission) model.ReportSubmission {
 	value.IdempotencyDigest = append([]byte(nil), value.IdempotencyDigest...)
 	value.Payload = append([]byte(nil), value.Payload...)
+	if value.LeasedUntil != nil {
+		leasedUntil := *value.LeasedUntil
+		value.LeasedUntil = &leasedUntil
+	}
+	if value.DeliveredAt != nil {
+		deliveredAt := *value.DeliveredAt
+		value.DeliveredAt = &deliveredAt
+	}
 	return value
 }
 
@@ -79,9 +87,115 @@ func (m *Memory) CreateReportSubmission(_ context.Context, value model.ReportSub
 		return model.ReportSubmission{}, ErrConflict
 	}
 	now := time.Now().UTC()
+	value.State = "queued"
+	value.Attempts = 0
+	if value.AvailableAt.IsZero() {
+		value.AvailableAt = now
+	}
 	value.CreatedAt, value.UpdatedAt = now, now
 	values[value.ID] = cloneReportSubmission(value)
 	return cloneReportSubmission(value), nil
+}
+
+func (m *Memory) ClaimReportSubmissions(_ context.Context, owner string, leaseUntil time.Time, limit int) ([]model.ReportSubmission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit < 1 || limit > 100 {
+		limit = 25
+	}
+	now := time.Now().UTC()
+	type candidate struct {
+		productID string
+		id        string
+		value     model.ReportSubmission
+	}
+	candidates := make([]candidate, 0)
+	for productID, submissions := range m.reportSubmissions {
+		for id, value := range submissions {
+			queued := value.State == "queued" && !value.AvailableAt.After(now)
+			abandoned := value.State == "delivering" && value.LeasedUntil != nil && value.LeasedUntil.Before(now)
+			if queued || abandoned {
+				candidates = append(candidates, candidate{productID: productID, id: id, value: value})
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].value.CreatedAt.Equal(candidates[j].value.CreatedAt) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].value.CreatedAt.Before(candidates[j].value.CreatedAt)
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	result := make([]model.ReportSubmission, 0, len(candidates))
+	for _, item := range candidates {
+		value := item.value
+		value.State, value.LeaseOwner, value.LeasedUntil = "delivering", owner, &leaseUntil
+		value.Attempts++
+		value.UpdatedAt = now
+		m.reportSubmissions[item.productID][item.id] = cloneReportSubmission(value)
+		result = append(result, cloneReportSubmission(value))
+	}
+	return result, nil
+}
+
+func (m *Memory) CompleteReportSubmission(_ context.Context, id, owner string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	productID, value, err := m.reportSubmissionByID(id)
+	if err != nil {
+		return err
+	}
+	if value.State != "delivering" || value.LeaseOwner != owner {
+		return ErrConflict
+	}
+	value.State, value.LeaseOwner, value.LeasedUntil, value.LastError = "delivered", "", nil, ""
+	value.DeliveredAt, value.UpdatedAt = &now, now
+	m.reportSubmissions[productID][id] = cloneReportSubmission(value)
+	return nil
+}
+
+func (m *Memory) RetryReportSubmission(_ context.Context, id, owner string, availableAt time.Time, lastError string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	productID, value, err := m.reportSubmissionByID(id)
+	if err != nil {
+		return err
+	}
+	if value.State != "delivering" || value.LeaseOwner != owner {
+		return ErrConflict
+	}
+	value.State, value.LeaseOwner, value.LeasedUntil = "queued", "", nil
+	value.AvailableAt, value.LastError, value.UpdatedAt = availableAt, lastError, time.Now().UTC()
+	m.reportSubmissions[productID][id] = cloneReportSubmission(value)
+	return nil
+}
+
+func (m *Memory) FailReportSubmission(_ context.Context, id, owner, lastError string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	productID, value, err := m.reportSubmissionByID(id)
+	if err != nil {
+		return err
+	}
+	if value.State != "delivering" || value.LeaseOwner != owner {
+		return ErrConflict
+	}
+	value.State, value.LeaseOwner, value.LeasedUntil, value.LastError = "failed", "", nil, lastError
+	value.UpdatedAt = time.Now().UTC()
+	m.reportSubmissions[productID][id] = cloneReportSubmission(value)
+	return nil
+}
+
+// reportSubmissionByID is called only while m.mu is held.
+func (m *Memory) reportSubmissionByID(id string) (string, model.ReportSubmission, error) {
+	for productID, submissions := range m.reportSubmissions {
+		if value, ok := submissions[id]; ok {
+			return productID, value, nil
+		}
+	}
+	return "", model.ReportSubmission{}, ErrNotFound
 }
 
 func cloneAuthorizationUsageEvent(value model.AuthorizationUsageEvent) model.AuthorizationUsageEvent {

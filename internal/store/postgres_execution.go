@@ -9,12 +9,12 @@ import (
 
 func scanReportSubmission(row interface{ Scan(...any) error }) (model.ReportSubmission, error) {
 	var value model.ReportSubmission
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.IntegrationID, &value.Kind, &value.State, &value.ActorPseudonym, &value.IdempotencyDigest, &value.Payload, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.IntegrationID, &value.Kind, &value.State, &value.DeliveryURL, &value.Attempts, &value.AvailableAt, &value.LeaseOwner, &value.LeasedUntil, &value.LastError, &value.DeliveredAt, &value.ActorPseudonym, &value.IdempotencyDigest, &value.Payload, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
-const reportSubmissionColumns = `id::text, organisation_id::text, product_id::text, coalesce(integration_id::text,''), kind, state, actor_pseudonym, idempotency_digest, payload, expires_at, created_at, updated_at`
-const reportSubmissionSelect = `SELECT ` + reportSubmissionColumns + ` FROM report_submissions`
+const reportSubmissionColumns = `submission.id::text, submission.organisation_id::text, submission.product_id::text, coalesce(submission.integration_id::text,''), submission.kind, submission.state, submission.delivery_url, submission.attempts, submission.available_at, submission.lease_owner, submission.leased_until, submission.last_error, submission.delivered_at, submission.actor_pseudonym, submission.idempotency_digest, submission.payload, submission.expires_at, submission.created_at, submission.updated_at`
+const reportSubmissionSelect = `SELECT ` + reportSubmissionColumns + ` FROM report_submissions submission`
 
 func (p *Postgres) ReportSubmissions(ctx context.Context, productID, startingAfter string, limit int) ([]model.ReportSubmission, bool, error) {
 	if limit <= 0 || limit > 500 {
@@ -58,10 +58,69 @@ func (p *Postgres) ReportSubmission(ctx context.Context, productID, id string) (
 }
 
 func (p *Postgres) CreateReportSubmission(ctx context.Context, value model.ReportSubmission) (model.ReportSubmission, error) {
-	return scanReportSubmission(p.pool.QueryRow(ctx, `INSERT INTO report_submissions(id,organisation_id,product_id,integration_id,kind,state,actor_pseudonym,idempotency_digest,payload,expires_at)
-		VALUES ($1,$2,$3,nullif($4,'')::uuid,$5,$6,$7,$8,$9,$10)
-		ON CONFLICT (product_id,actor_pseudonym,kind,idempotency_digest) DO UPDATE SET updated_at=report_submissions.updated_at
-		RETURNING `+reportSubmissionColumns, value.ID, value.OrganisationID, value.ProductID, value.IntegrationID, value.Kind, value.State, value.ActorPseudonym, value.IdempotencyDigest, value.Payload, value.ExpiresAt))
+	return scanReportSubmission(p.pool.QueryRow(ctx, `INSERT INTO report_submissions AS submission(id,organisation_id,product_id,integration_id,kind,state,delivery_url,available_at,actor_pseudonym,idempotency_digest,payload,expires_at)
+		VALUES ($1,$2,$3,nullif($4,'')::uuid,$5,'queued',$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (product_id,actor_pseudonym,kind,idempotency_digest) DO UPDATE SET updated_at=submission.updated_at
+		RETURNING `+reportSubmissionColumns, value.ID, value.OrganisationID, value.ProductID, value.IntegrationID, value.Kind, value.DeliveryURL, value.AvailableAt, value.ActorPseudonym, value.IdempotencyDigest, value.Payload, value.ExpiresAt))
+}
+
+func (p *Postgres) ClaimReportSubmissions(ctx context.Context, owner string, leaseUntil time.Time, limit int) ([]model.ReportSubmission, error) {
+	if limit < 1 || limit > 100 {
+		limit = 25
+	}
+	rows, err := p.pool.Query(ctx, `WITH candidates AS (
+		SELECT id FROM report_submissions
+		WHERE (state='queued' AND available_at<=now()) OR (state='delivering' AND leased_until<now())
+		ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1
+	) UPDATE report_submissions submission
+	SET state='delivering',lease_owner=$2,leased_until=$3,attempts=attempts+1,updated_at=now()
+	FROM candidates WHERE submission.id=candidates.id RETURNING `+reportSubmissionColumns, limit, owner, leaseUntil)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.ReportSubmission, 0)
+	for rows.Next() {
+		value, scanErr := scanReportSubmission(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, databaseError(rows.Err())
+}
+
+func (p *Postgres) CompleteReportSubmission(ctx context.Context, id, owner string, now time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE report_submissions SET state='delivered',lease_owner='',leased_until=NULL,last_error='',delivered_at=$3,updated_at=$3 WHERE id=$1 AND state='delivering' AND lease_owner=$2`, id, owner, now)
+	if err != nil {
+		return databaseError(err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (p *Postgres) RetryReportSubmission(ctx context.Context, id, owner string, availableAt time.Time, lastError string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE report_submissions SET state='queued',lease_owner='',leased_until=NULL,available_at=$3,last_error=$4,updated_at=now() WHERE id=$1 AND state='delivering' AND lease_owner=$2`, id, owner, availableAt, lastError)
+	if err != nil {
+		return databaseError(err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (p *Postgres) FailReportSubmission(ctx context.Context, id, owner, lastError string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE report_submissions SET state='failed',lease_owner='',leased_until=NULL,last_error=$3,updated_at=now() WHERE id=$1 AND state='delivering' AND lease_owner=$2`, id, owner, lastError)
+	if err != nil {
+		return databaseError(err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
 }
 
 const authorizationUsageEventColumns = `event.id::text,event.organisation_id::text,event.product_id::text,event.integration_id::text,event.authorization_id::text,event.url,event.authentication_type,event.header_name,event.auth_config,event.credential_version_id::text,event.credential_secret_id::text,event.credential_fingerprint,event.payload,event.state,event.attempts,event.available_at,coalesce(event.lease_owner,''),event.leased_until,event.last_error,event.created_at,event.updated_at`

@@ -177,6 +177,7 @@ func TestPostgresDeveloperAssetFoundationMigratesOnlyUnambiguousLegacySDKs(t *te
 		t.Skipf("PostgreSQL is unavailable: %v", err)
 	}
 	t.Cleanup(admin.Close)
+	ensurePostgresTestExtensions(ctx, t, admin)
 	schema := "developer_assets_" + strings.ReplaceAll(storeTestUUID(t), "-", "")
 	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
 		t.Skipf("cannot create isolated PostgreSQL schema: %v", err)
@@ -287,6 +288,13 @@ func TestPostgresDeveloperAssetFoundationMigratesOnlyUnambiguousLegacySDKs(t *te
 	}
 	if canonicalCoordinate != "acme-sdk" {
 		t.Fatalf("canonical PyPI coordinate = %q, want acme-sdk", canonicalCoordinate)
+	}
+	// The remaining assertions cover the explicit sample-validation evidence
+	// added after the foundation migration. Advance the isolated schema before
+	// exercising that contract; keeping it at 0057 would only test an obsolete
+	// validation-status constraint and a table without review_evidence.
+	if err := Migrate(ctx, pool, copyMigrationsThrough(t, 61)); err != nil {
+		t.Fatalf("apply SDK sample validation evidence: %v", err)
 	}
 
 	var releaseID string
