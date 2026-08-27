@@ -17,6 +17,7 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/identity"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/runtimeauth"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
@@ -112,17 +113,17 @@ func stripIrrelevantToolBuilderAuth(auth ToolUpstreamAuth) ToolUpstreamAuth {
 	case "delegated_oauth", "none":
 		return ToolUpstreamAuth{Type: auth.Type}
 	case "bearer":
-		return ToolUpstreamAuth{Type: auth.Type, Prefix: auth.Prefix}
+		return ToolUpstreamAuth{Type: auth.Type, Prefix: auth.Prefix, Headers: auth.Headers}
 	case "authorization_scheme":
-		return ToolUpstreamAuth{Type: auth.Type, Scheme: auth.Scheme}
+		return ToolUpstreamAuth{Type: auth.Type, Scheme: auth.Scheme, Headers: auth.Headers}
 	case "api_key_header", "custom_header":
-		return ToolUpstreamAuth{Type: auth.Type, HeaderName: auth.HeaderName, Prefix: auth.Prefix}
+		return ToolUpstreamAuth{Type: auth.Type, HeaderName: auth.HeaderName, Prefix: auth.Prefix, Headers: auth.Headers}
 	case "api_key_query":
-		return ToolUpstreamAuth{Type: auth.Type, QueryName: auth.QueryName}
+		return ToolUpstreamAuth{Type: auth.Type, QueryName: auth.QueryName, Headers: auth.Headers}
 	case "basic":
-		return ToolUpstreamAuth{Type: auth.Type, Username: auth.Username}
+		return ToolUpstreamAuth{Type: auth.Type, Username: auth.Username, Headers: auth.Headers}
 	case "oauth_client_credentials":
-		return ToolUpstreamAuth{Type: auth.Type, ClientID: auth.ClientID, TokenURL: auth.TokenURL, TokenEndpointAuthMethod: auth.TokenEndpointAuthMethod, Scopes: auth.Scopes, Audience: auth.Audience, Resource: auth.Resource}
+		return ToolUpstreamAuth{Type: auth.Type, ClientID: auth.ClientID, TokenURL: auth.TokenURL, TokenEndpointAuthMethod: auth.TokenEndpointAuthMethod, Scopes: auth.Scopes, Audience: auth.Audience, Resource: auth.Resource, Headers: auth.Headers}
 	default:
 		return ToolUpstreamAuth{Type: "none"}
 	}
@@ -147,6 +148,18 @@ func sanitizePartialToolBuilderAuth(auth ToolUpstreamAuth) ToolUpstreamAuth {
 	if len(auth.Prefix) > 64 || strings.ContainsAny(auth.Prefix, "\r\n\x00") {
 		auth.Prefix = ""
 	}
+	seenHeaders := map[string]bool{}
+	headers := make([]string, 0, min(len(auth.Headers), runtimeauth.MaxHeaders))
+	for _, name := range auth.Headers {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if !safeCustomHeader(name) || seenHeaders[key] || len(headers) >= runtimeauth.MaxHeaders {
+			continue
+		}
+		seenHeaders[key] = true
+		headers = append(headers, name)
+	}
+	auth.Headers = headers
 	if len(auth.Username) > 255 || strings.ContainsAny(auth.Username, ":\r\n\x00") {
 		auth.Username = ""
 	}
@@ -270,10 +283,11 @@ func normalizeToolBuilderDraft(draft ToolDraft) (ToolDraft, []ToolDraftFinding) 
 	if endpointChanged {
 		findings = append(findings, toolBuilderFinding("error", "token_url_must_be_credential_free", "upstream_auth.token_url", "OAuth token URL user information, query values, or fragments are not allowed and were removed."))
 	}
-	if containsToolBuilderSecretText(draft.UpstreamAuth.Type) || containsToolBuilderSecretText(draft.UpstreamAuth.Scheme) || containsToolBuilderSecretText(draft.UpstreamAuth.HeaderName) || containsToolBuilderSecretText(draft.UpstreamAuth.QueryName) || containsToolBuilderSecretText(draft.UpstreamAuth.Prefix) || containsToolBuilderSecretText(draft.UpstreamAuth.Username) || containsToolBuilderSecretText(draft.UpstreamAuth.ClientID) || containsToolBuilderSecretText(draft.UpstreamAuth.TokenEndpointAuthMethod) || containsToolBuilderSecretText(draft.UpstreamAuth.Audience) || containsToolBuilderSecretText(draft.UpstreamAuth.Resource) || containsToolBuilderSecretText(strings.Join(draft.UpstreamAuth.Scopes, " ")) {
+	if containsToolBuilderSecretText(draft.UpstreamAuth.Type) || containsToolBuilderSecretText(draft.UpstreamAuth.Scheme) || containsToolBuilderSecretText(draft.UpstreamAuth.HeaderName) || containsToolBuilderSecretText(draft.UpstreamAuth.QueryName) || containsToolBuilderSecretText(draft.UpstreamAuth.Prefix) || containsToolBuilderSecretText(draft.UpstreamAuth.Username) || containsToolBuilderSecretText(draft.UpstreamAuth.ClientID) || containsToolBuilderSecretText(draft.UpstreamAuth.TokenEndpointAuthMethod) || containsToolBuilderSecretText(draft.UpstreamAuth.Audience) || containsToolBuilderSecretText(draft.UpstreamAuth.Resource) || containsToolBuilderSecretText(strings.Join(draft.UpstreamAuth.Scopes, " ")) || containsToolBuilderSecretText(strings.Join(draft.UpstreamAuth.Headers, " ")) {
 		draft.UpstreamAuth.Type, draft.UpstreamAuth.Scheme, draft.UpstreamAuth.HeaderName, draft.UpstreamAuth.QueryName, draft.UpstreamAuth.Prefix = "none", "", "", "", ""
 		draft.UpstreamAuth.Username, draft.UpstreamAuth.ClientID, draft.UpstreamAuth.TokenEndpointAuthMethod, draft.UpstreamAuth.Audience, draft.UpstreamAuth.Resource = "", "", "", "", ""
 		draft.UpstreamAuth.Scopes = nil
+		draft.UpstreamAuth.Headers = nil
 		findings = append(findings, toolBuilderFinding("error", "credential_material_removed", "upstream_auth", "Credential-like material was removed from authentication configuration."))
 	}
 	allowedAuth := map[string]bool{"delegated_oauth": true, "none": true, "bearer": true, "authorization_scheme": true, "api_key_header": true, "api_key_query": true, "basic": true, "oauth_client_credentials": true, "custom_header": true}

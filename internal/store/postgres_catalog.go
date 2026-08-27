@@ -7,11 +7,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const deploymentSelect = `SELECT id::text,organisation_id::text,name,slug,description,public_mcp_enabled,catalog_revision,revision,created_at,updated_at FROM deployments`
+const deploymentSelect = `SELECT id::text,organisation_id::text,name,slug,description,feedback_submission_url,error_submission_url,public_mcp_enabled,catalog_revision,revision,created_at,updated_at FROM deployments`
 
 func scanDeployment(row pgx.Row) (model.Deployment, error) {
 	var value model.Deployment
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.PublicMCPEnabled, &value.CatalogRevision, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Slug, &value.Description, &value.FeedbackSubmissionURL, &value.ErrorSubmissionURL, &value.PublicMCPEnabled, &value.CatalogRevision, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
 	return value, databaseError(err)
 }
 
@@ -25,7 +25,7 @@ func (p *Postgres) CreateDeployment(ctx context.Context, value model.Deployment)
 		return model.Deployment{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	created, err := scanDeployment(tx.QueryRow(ctx, `INSERT INTO deployments(id,organisation_id,name,slug,description,public_mcp_enabled) VALUES($1,$2,$3,$4,$5,$6) RETURNING `+deploymentSelect[len("SELECT "):len(deploymentSelect)-len(" FROM deployments")], value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.PublicMCPEnabled))
+	created, err := scanDeployment(tx.QueryRow(ctx, `INSERT INTO deployments(id,organisation_id,name,slug,description,feedback_submission_url,error_submission_url,public_mcp_enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+deploymentSelect[len("SELECT "):len(deploymentSelect)-len(" FROM deployments")], value.ID, value.OrganisationID, value.Name, value.Slug, value.Description, value.FeedbackSubmissionURL, value.ErrorSubmissionURL, value.PublicMCPEnabled))
 	if err != nil {
 		return model.Deployment{}, err
 	}
@@ -41,7 +41,7 @@ func (p *Postgres) UpdateDeployment(ctx context.Context, value model.Deployment,
 		return model.Deployment{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	updated, err := scanDeployment(tx.QueryRow(ctx, `UPDATE deployments SET name=$2,slug=$3,description=$4,public_mcp_enabled=$5,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$6 RETURNING `+deploymentSelect[len("SELECT "):len(deploymentSelect)-len(" FROM deployments")], value.ID, value.Name, value.Slug, value.Description, value.PublicMCPEnabled, expected))
+	updated, err := scanDeployment(tx.QueryRow(ctx, `UPDATE deployments SET name=$2,slug=$3,description=$4,feedback_submission_url=$5,error_submission_url=$6,public_mcp_enabled=$7,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$8 RETURNING `+deploymentSelect[len("SELECT "):len(deploymentSelect)-len(" FROM deployments")], value.ID, value.Name, value.Slug, value.Description, value.FeedbackSubmissionURL, value.ErrorSubmissionURL, value.PublicMCPEnabled, expected))
 	if err != nil {
 		return model.Deployment{}, err
 	}

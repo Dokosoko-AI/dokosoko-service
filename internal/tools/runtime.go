@@ -38,6 +38,10 @@ type Store interface {
 	AuthorizationPoint(context.Context, string, string) (model.AuthorizationPoint, error)
 	GrantDefinitions(context.Context, string) ([]model.GrantDefinition, error)
 	AppendAudit(context.Context, model.AuditEvent) error
+	CreateAuthorizationUsageEvent(context.Context, model.AuthorizationUsageEvent) (model.AuthorizationUsageEvent, error)
+	ClaimAuthorizationUsageEvents(context.Context, string, time.Time, int) ([]model.AuthorizationUsageEvent, error)
+	CompleteAuthorizationUsageEvent(context.Context, string, string, time.Time) error
+	RetryAuthorizationUsageEvent(context.Context, string, string, time.Time, string) error
 }
 
 type Principal struct {
@@ -81,6 +85,7 @@ type upstreamAuth struct {
 	Scopes                  []string `json:"scopes,omitempty"`
 	Audience                string   `json:"audience,omitempty"`
 	Resource                string   `json:"resource,omitempty"`
+	Headers                 []string `json:"headers,omitempty"`
 }
 
 type requestMapping struct {

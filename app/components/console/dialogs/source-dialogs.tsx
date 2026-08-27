@@ -14,7 +14,6 @@ export function SourceDialogs({ workspace }: {
   const { t } = useTranslation();
   const {
     addSourceOpen,
-    sourceName, setSourceName,
     sourceKind,
     sourceLocation, setSourceLocation,
     sourceFile,
@@ -40,7 +39,7 @@ export function SourceDialogs({ workspace }: {
       onClose={closeSourceDialog}
       title={t("sourceDialogs.addKnowledgeSource")}
       description={t("sourceDialogs.addAURLBackedSourceOrUploadOneText")}
-      actions={<><Button outline disabled={sourceBusy} onClick={() => closeSourceDialog(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={sourceBusy || !sourceName.trim() || (sourceKind === "upload" ? !sourceFile || Boolean(sourceFileError) : !sourceLocation.trim())} onClick={createSource}>{sourceBusy ? t("sourceDialogs.adding") : sourceKind === "upload" ? t("sourceDialogs.uploadSource") : t("sourceDialogs.addSource")}</Button></>}
+      actions={<><Button outline disabled={sourceBusy} onClick={() => closeSourceDialog(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={sourceBusy || (sourceKind === "upload" ? !sourceFile || Boolean(sourceFileError) : !sourceLocation.trim())} onClick={createSource}>{sourceBusy ? t("sourceDialogs.adding") : sourceKind === "upload" ? t("sourceDialogs.uploadSource") : t("sourceDialogs.addSource")}</Button></>}
     >
       <div className="auth-form compact-form source-form">
         <fieldset className="source-kind-selector">
@@ -58,7 +57,6 @@ export function SourceDialogs({ workspace }: {
             </label>)}
           </div>
         </fieldset>
-        <label className="auth-field"><span>{t("sourceDialogs.name")}</span><input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder={t("sourceDialogs.developerDocumentation")} /></label>
         {sourceKind === "upload" ? <label className="auth-field"><span>{t("sourceDialogs.file")}</span><input ref={sourceFileInput} type="file" accept=".md,.mdx,.txt,.html,.htm,.json,.yaml,.yml,text/plain,text/markdown,text/html,application/json,application/yaml,text/yaml" aria-invalid={Boolean(sourceFileError)} aria-describedby={`source-upload-guidance${sourceFileError ? " source-upload-error" : ""}`} onChange={(event) => selectSourceFile(event.target.files?.[0] ?? null)} /><small id="source-upload-guidance">{t("sourceDialogs.utfN8MdMdxTxtHtmlHtmJsonYaml")}</small>{sourceFileError && <small id="source-upload-error" className="source-upload-error" role="alert">{sourceFileError}</small>}</label> : <label className="auth-field"><span>{t("sourceDialogs.location")}</span><input type="url" value={sourceLocation} onChange={(event) => setSourceLocation(event.target.value)} placeholder={sourceKind === "git" ? t("sourceDialogs.httpsGithubComVendorDocs") : "https://example.com/docs"} aria-describedby={sourceKind === "website" ? "source-website-boundary" : undefined} />{sourceKind === "website" && <small id="source-website-boundary">{t("sourceDialogs.websitePathBoundary")}</small>}</label>}
       </div>
     </Dialog>

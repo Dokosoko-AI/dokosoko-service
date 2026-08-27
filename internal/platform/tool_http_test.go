@@ -129,6 +129,20 @@ func TestCreateStaticHTTPToolDerivesTenantAndEncryptsCredential(t *testing.T) {
 	}
 }
 
+func TestCreateStaticHTTPToolRejectsReusableAuthorizationHeaders(t *testing.T) {
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x4b}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewWithVault(memory, vault)
+	input := staticToolInput()
+	input.UpstreamAuth = json.RawMessage(`{"type":"bearer","headers":["X-Tenant-Key"]}`)
+	if _, err := service.CreateTool(context.Background(), input, Actor{ID: "root"}); err == nil || !strings.Contains(err.Error(), "reusable Authorizations") {
+		t.Fatalf("additional header error = %v", err)
+	}
+}
+
 func TestCreateHTTPToolRejectsEndpointSecretsAndInvalidMappings(t *testing.T) {
 	memory := store.NewMemory()
 	service := New(memory)

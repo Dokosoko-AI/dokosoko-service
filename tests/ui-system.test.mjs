@@ -145,21 +145,24 @@ test("keeps desktop workspaces focused without constraining builders", async () 
   assert.doesNotMatch(source, /section === "identity"[\s\S]{0,80}?"workspace-compact"/);
   assert.match(source, /<main id="main-content" className=\{workspaceClass\}/);
   assert.match(source, /<header className="topbar">\s*<div className="topbar-inner">/);
-  assert.match(styles, /\.developer-document-columns\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 128px 76px/);
-  assert.match(styles, /\.developer-document-columns\.table-head > :nth-child\(2\)\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(styles, /\.documentation-file-tree\s*\{[^}]*overflow-y:\s*auto[^}]*max-height:\s*min\(720px, calc\(100vh - 270px\)\)/);
+  assert.match(styles, /\.documentation-file-row\s*\{[^}]*grid-template-columns:\s*auto minmax\(0, 1fr\)/);
+  assert.match(styles, /\.documentation-set-row\s*\{[^}]*padding-left:\s*28px/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.content\s*\{[^}]*padding:\s*24px 16px 48px/);
 });
 
 test("keeps the Recipes authoring workflow inside the same global route stack", async () => {
-  const source = await consoleSource();
+  const source = await readFile(appFile("app/components/console/catalog-settings-views.tsx"), "utf8");
   const styles = await stylesSource();
 
   assert.doesNotMatch(source, /workflow-frame|recipe-workspace/);
   assert.match(source, /title="Recipes"/);
   assert.match(source, /Generate from evidence/);
   assert.match(source, /Create recipe/);
-  assert.match(source, /visibleRecipes\.map\(renderRecipe\)/);
-  assert.match(source, /unscopedOrInvalidRecipes\.map\(renderRecipe\)/);
+  assert.match(source, /Recipe catalog/);
+  assert.match(source, /recipes\.map\(renderRecipe\)/);
+  assert.doesNotMatch(source, /recipe-scope-body|activeIntegrationID|visibleRecipes/);
+  assert.doesNotMatch(source, /unscopedOrInvalidRecipes|Deployment-wide and scope exceptions|Coding-agent implementation recipes/);
   assert.doesNotMatch(styles, /--workflow-width|\.workflow-frame/);
   assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-input/);
 });

@@ -2,7 +2,7 @@
 
 
 import { useTranslation } from "react-i18next";
-import { Box, Code2, FileCode2, GitBranch, History, PackagePlus, Pencil, Plus, Search, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
+import { Box, Code2, FileCode2, GitBranch, History, PackageSearch, Pencil, Plus, Search, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { APIIntegration } from "../../../lib/api";
@@ -23,6 +23,7 @@ import { ConsoleLink } from "../console-link";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
 import { developerAssetError, enumLabel, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordID, recordString, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
 import { sdkUsages, type SDKUsage } from "./developer-asset-usage";
+import { SDKPackageImportDialog } from "./sdk-package-import-dialog";
 import { decisionPayload, decisionsComplete, maxSDKIngestionFileBytes, maxSDKIngestionFiles, maxSDKIngestionTotalBytes, sampleValidated, sdkBufferLooksText, sdkExplorerRecordMatches, sdkLanguageForPath, sdkNormalizedLocalPath, sdkTextBytes, type SDKDecisionState } from "./sdk-catalog-helpers";
 
 type SDKTab = "files" | "symbols" | "samples" | "map" | "diagnostics" | "used-by";
@@ -45,6 +46,7 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
   const [loading, setLoading] = useState(live);
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [packageOpen, setPackageOpen] = useState(false);
   const [editingPackage, setEditingPackage] = useState<SDKPackage | null>(null);
   const [releaseOpen, setReleaseOpen] = useState(false);
@@ -186,21 +188,21 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
     return () => { cancelled = true; };
   }, [integrations, live, selectedPackageID]);
 
-  function openPackageEditor(value?: SDKPackage) {
-    setEditingPackage(value ?? null);
-    setEcosystem(value?.ecosystem ?? "npm");
-    setCoordinate(value?.display_coordinate ?? "");
-    setPackageName(value?.name ?? "");
-    setPackageDescription(value?.description ?? "");
-    setLanguage(value?.language ?? "");
-    setPackageVisibility(value?.visibility ?? "private");
-    setPackageLifecycle(value?.lifecycle ?? "draft");
+  function openPackageEditor(value: SDKPackage) {
+    setEditingPackage(value);
+    setEcosystem(value.ecosystem);
+    setCoordinate(value.display_coordinate);
+    setPackageName(value.name);
+    setPackageDescription(value.description);
+    setLanguage(value.language ?? "");
+    setPackageVisibility(value.visibility);
+    setPackageLifecycle(value.lifecycle);
     setPackageAcknowledged(false);
     setPackageOpen(true);
   }
 
   async function savePackage() {
-    if (!coordinate.trim() || !packageName.trim() || !ecosystem.trim()) return;
+    if (!editingPackage || !coordinate.trim() || !packageName.trim() || !ecosystem.trim()) return;
     setBusy(true);
     try {
       const input = {
@@ -211,21 +213,19 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
         language: language.trim(),
         visibility: packageVisibility,
         lifecycle: packageLifecycle,
-        ...(editingPackage?.registry_url ? { registry_url: editingPackage.registry_url } : {}),
-        ...(editingPackage?.source_url ? { source_url: editingPackage.source_url } : {}),
-        ...(editingPackage?.platform ? { platform: editingPackage.platform } : {}),
-        ...(editingPackage?.replacement_sdk_package_id ? { replacement_sdk_package_id: editingPackage.replacement_sdk_package_id } : {}),
-        ...(editingPackage?.deprecation_message ? { deprecation_message: editingPackage.deprecation_message } : {}),
+        ...(editingPackage.registry_url ? { registry_url: editingPackage.registry_url } : {}),
+        ...(editingPackage.source_url ? { source_url: editingPackage.source_url } : {}),
+        ...(editingPackage.platform ? { platform: editingPackage.platform } : {}),
+        ...(editingPackage.replacement_sdk_package_id ? { replacement_sdk_package_id: editingPackage.replacement_sdk_package_id } : {}),
+        ...(editingPackage.deprecation_message ? { deprecation_message: editingPackage.deprecation_message } : {}),
       };
-      const saved = editingPackage
-        ? await developerAssetsApi.updateSDKPackage(editingPackage.id, { ...input, revision: editingPackage.revision })
-        : await developerAssetsApi.createSDKPackage(input);
+      const saved = await developerAssetsApi.updateSDKPackage(editingPackage.id, { ...input, revision: editingPackage.revision });
       setPackageOpen(false);
       await load();
       setSelectedPackageID(saved.id);
-      onMessage(editingPackage ? t("sdkCatalog.sdkPackageRootUpdatedExactReleasesAndAPIAttachment") : t("sdkCatalog.deploymentOwnedSDKPackageCreatedAddAnExactImmutable"));
+      onMessage(t("sdkCatalog.sdkPackageRootUpdatedExactReleasesAndAPIAttachment"));
     } catch (error) {
-      onMessage(developerAssetError(error, t("sdkCatalog.sdkPackageCouldNotBe", { value1: String(editingPackage ? "updated" : "created") })));
+      onMessage(developerAssetError(error, t("sdkCatalog.sdkPackageCouldNotBe", { value1: "updated" })));
     } finally { setBusy(false); }
   }
 
@@ -407,7 +407,7 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
   const ingestionSizeInvalid = pastedFileBytes > maxSDKIngestionFileBytes || queuedFileBytes + pastedFileBytes > maxSDKIngestionTotalBytes || queuedFiles.length + (pendingPastedFile ? 1 : 0) > maxSDKIngestionFiles;
 
   return <>
-    <PageHeader eyebrow={t("sdkCatalog.sdksAndPackages")} title={t("navigation.packages")} action={<Button onClick={() => openPackageEditor()}><PackagePlus data-slot="icon" />{t("sdkCatalog.createPackage")}</Button>} />
+    <PageHeader eyebrow={t("sdkCatalog.sdksAndPackages")} title={t("navigation.packages")} action={<Button onClick={() => setImportOpen(true)}><PackageSearch data-slot="icon" />{t("sdkImport.importPackage")}</Button>} />
     {loading ? <LoadingPanel label={t("sdkCatalog.loadingSDKPackages")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
       <DataTable label={t("sdkCatalog.sdkPackageCatalog")} className="developer-asset-directory">
         <DataTableHeader className="developer-sdk-columns"><span>{t("sdkCatalog.package")}</span><span>{t("sdkCatalog.ecosystem")}</span><span>{t("sdkCatalog.lifecycle")}</span></DataTableHeader>
@@ -442,7 +442,8 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
         </> : <div className="developer-asset-inspector-empty"><Box /><strong>{t("sdkCatalog.selectAnSDKPackage")}</strong><small>{t("sdkCatalog.exactReleasesFilesSymbolsSamplesMapsReviewHistoryAnd")}</small></div>}
       </section>
     </div>}
-    <Dialog open={packageOpen} onClose={setPackageOpen} title={editingPackage ? t("sdkCatalog.editSDKPackage") : t("sdkCatalog.createSDKPackage")} description={editingPackage ? t("sdkCatalog.updatePackageRootMetadataAndLifecycleExistingExactReleases") : t("sdkCatalog.createAReusablePackageIdentityItDoesNotImply")} actions={<><Button outline onClick={() => setPackageOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !ecosystem.trim() || !coordinate.trim() || !packageName.trim() || Boolean(editingPackage && !packageAcknowledged)} onClick={() => void savePackage()}>{busy ? t("common.saving") : editingPackage ? t("sdkCatalog.savePackageRoot") : t("sdkCatalog.createPackage")}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>{t("sdkCatalog.ecosystem")}</span><input value={ecosystem} onChange={(event) => setEcosystem(event.target.value)} placeholder="npm" /></label><label className="auth-field"><span>{t("sdkCatalog.coordinate")}</span><input value={coordinate} onChange={(event) => setCoordinate(event.target.value)} placeholder="@acme/payments" /></label></div><label className="auth-field"><span>{t("sdkCatalog.name")}</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} /></label><label className="auth-field"><span>{t("sdkCatalog.description")}</span><textarea value={packageDescription} onChange={(event) => setPackageDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>{t("sdkCatalog.language")}</span><input value={language} onChange={(event) => setLanguage(event.target.value)} /></label><label className="auth-field"><span>{t("sdkCatalog.visibility")}</span><select value={packageVisibility} onChange={(event) => setPackageVisibility(event.target.value as SDKPackage["visibility"])}><option value="private">{t("sdkCatalog.private")}</option><option value="public">{t("sdkCatalog.public")}</option></select></label></div><label className="auth-field"><span>{t("sdkCatalog.lifecycle")}</span><select value={packageLifecycle} onChange={(event) => setPackageLifecycle(event.target.value as SDKPackage["lifecycle"])}><option value="draft">{t("sdkCatalog.draft")}</option><option value="active">{t("sdkCatalog.active")}</option><option value="deprecated">{t("sdkCatalog.deprecated")}</option><option value="archived">{t("sdkCatalog.archived")}</option></select><small>{t("sdkCatalog.archivePreservesExactReleasesContentPublicationsAttachmentsAndAudit")}</small></label>{editingPackage && <><div className="notice"><GitBranch /><span><strong>{usedBy.length} {t("sdkCatalog.affectedAPIAttachment")}{usedBy.length === 1 ? "" : t("sdkCatalog.s")}.</strong> {t("sdkCatalog.reviewThemBeforeChangingVisibilityOrLifecycleTheirExact")}</span></div><label className="compact-check"><input type="checkbox" checked={packageAcknowledged} onChange={(event) => setPackageAcknowledged(event.target.checked)} /><span>{t("sdkCatalog.iReviewedTheAffectedAPIsAndThisPackageRoot")}</span></label></>}</div></Dialog>
+    <SDKPackageImportDialog open={importOpen} onClose={setImportOpen} onMessage={onMessage} onImported={async (result) => { await load(); setSelectedPackageID(result.package.id); await loadReleases(result.package.id); setSelectedReleaseID(result.release.id); }} />
+    <Dialog open={packageOpen} onClose={setPackageOpen} title={t("sdkCatalog.editSDKPackage")} description={t("sdkCatalog.updatePackageRootMetadataAndLifecycleExistingExactReleases")} actions={<><Button outline onClick={() => setPackageOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !editingPackage || !ecosystem.trim() || !coordinate.trim() || !packageName.trim() || !packageAcknowledged} onClick={() => void savePackage()}>{busy ? t("common.saving") : t("sdkCatalog.savePackageRoot")}</Button></>}><div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>{t("sdkCatalog.ecosystem")}</span><input value={ecosystem} disabled /></label><label className="auth-field"><span>{t("sdkCatalog.coordinate")}</span><input value={coordinate} disabled /></label></div><label className="auth-field"><span>{t("sdkCatalog.name")}</span><input value={packageName} onChange={(event) => setPackageName(event.target.value)} /></label><label className="auth-field"><span>{t("sdkCatalog.description")}</span><textarea value={packageDescription} onChange={(event) => setPackageDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>{t("sdkCatalog.language")}</span><input value={language} onChange={(event) => setLanguage(event.target.value)} /></label><label className="auth-field"><span>{t("sdkCatalog.visibility")}</span><select value={packageVisibility} onChange={(event) => setPackageVisibility(event.target.value as SDKPackage["visibility"])}><option value="private">{t("sdkCatalog.private")}</option><option value="public">{t("sdkCatalog.public")}</option></select></label></div><label className="auth-field"><span>{t("sdkCatalog.lifecycle")}</span><select value={packageLifecycle} onChange={(event) => setPackageLifecycle(event.target.value as SDKPackage["lifecycle"])}><option value="draft">{t("sdkCatalog.draft")}</option><option value="active">{t("sdkCatalog.active")}</option><option value="deprecated">{t("sdkCatalog.deprecated")}</option><option value="archived">{t("sdkCatalog.archived")}</option></select><small>{t("sdkCatalog.archivePreservesExactReleasesContentPublicationsAttachmentsAndAudit")}</small></label><div className="notice"><GitBranch /><span><strong>{usedBy.length} {t("sdkCatalog.affectedAPIAttachment")}{usedBy.length === 1 ? "" : t("sdkCatalog.s")}.</strong> {t("sdkCatalog.reviewThemBeforeChangingVisibilityOrLifecycleTheirExact")}</span></div><label className="compact-check"><input type="checkbox" checked={packageAcknowledged} onChange={(event) => setPackageAcknowledged(event.target.checked)} /><span>{t("sdkCatalog.iReviewedTheAffectedAPIsAndThisPackageRoot")}</span></label></div></Dialog>
     <Dialog open={releaseOpen} onClose={setReleaseOpen} title={t("sdkCatalog.addExactReleaseTo", { value1: String(selectedPackage?.name ?? "SDK package") })} description={t("sdkCatalog.rangesAndLatestTagsAreRejectedThisReleaseIdentity")} actions={<><Button outline onClick={() => setReleaseOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !exactVersion.trim() || exactVersion.trim().toLowerCase() === "latest"} onClick={() => void createRelease()}>{busy ? t("common.creating") : t("sdkCatalog.createExactRelease")}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>{t("sdkCatalog.exactVersion")}</span><input value={exactVersion} onChange={(event) => setExactVersion(event.target.value)} placeholder="1.4.0" /></label><label className="auth-field"><span>{t("sdkCatalog.canonicalInstallCommand")}</span><input value={installCommand} onChange={(event) => setInstallCommand(event.target.value)} placeholder={t("sdkCatalog.leaveBlankForTheServerCanonicalCommand")} /><small>{t("sdkCatalog.packageManagersUseDifferentCanonicalSyntaxEnterAVerified")}</small></label><label className="auth-field"><span>{t("sdkCatalog.resolvedSourceURL")}</span><input type="url" value={sourceURL} onChange={(event) => setSourceURL(event.target.value)} placeholder="https://…" /></label><label className="auth-field"><span>{t("sdkCatalog.resolvedSourceRevision")}</span><input value={sourceRevision} onChange={(event) => setSourceRevision(event.target.value)} placeholder={t("sdkCatalog.commitOrImmutableTag")} /></label><div className="notice"><GitBranch /><span><strong>{usedBy.length} {t("sdkCatalog.apiAttachment")}{usedBy.length === 1 ? "" : t("sdkCatalog.s")} {t("sdkCatalog.currentlyUseThisPackage")}</strong> {t("sdkCatalog.creatingAnotherExactReleaseDoesNotChangeAnyAttachment")}</span></div></div></Dialog>
     <Dialog open={lifecycleOpen} onClose={setLifecycleOpen} title={t("sdkCatalog.recordLifecycleEventFor", { value1: String(selectedRelease?.exact_version ?? "exact release") })} description={t("sdkCatalog.appendAReviewedObservationTheImmutableReleaseIdentityAnd")} actions={<><Button outline onClick={() => setLifecycleOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !lifecycleReason.trim() || lifecycleSourceInvalid || lifecycleObservedInvalid} onClick={() => void appendLifecycleEvent()}>{busy ? t("sdkCatalog.recording") : t("sdkCatalog.recordAppendOnlyEvent")}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>{t("sdkCatalog.observedLifecycle")}</span><select value={lifecycleValue} onChange={(event) => setLifecycleValue(event.target.value as SDKRelease["lifecycle"])}><option value="active">{t("sdkCatalog.active")}</option><option value="deprecated">{t("sdkCatalog.deprecated")}</option><option value="yanked">{t("sdkCatalog.yanked")}</option><option value="archived">{t("sdkCatalog.archived")}</option></select></label><label className="auth-field"><span>{t("sdkCatalog.requiredReviewedReason")}</span><textarea maxLength={2000} value={lifecycleReason} onChange={(event) => setLifecycleReason(event.target.value)} placeholder={t("sdkCatalog.describeTheRegistryOrAdministrativeEvidenceForThisState")} /></label><label className="auth-field"><span>{t("sdkCatalog.publicHTTPSObservationURIOptional")}</span><input type="url" inputMode="url" aria-invalid={lifecycleSourceInvalid} value={lifecycleSourceURI} onChange={(event) => setLifecycleSourceURI(event.target.value)} placeholder="https://registry.example/package/version" /><small>{lifecycleSourceInvalid ? t("sdkCatalog.onlyAPublicHTTPSEvidenceURIIsAccepted") : t("sdkCatalog.secretsAndPrivateEvidenceURLsMustNotBeEntered")}</small></label><label className="auth-field"><span>{t("sdkCatalog.observedAtOptional")}</span><input type="datetime-local" max={new Date().toISOString().slice(0, 16)} aria-invalid={lifecycleObservedInvalid} value={lifecycleObservedAt} onChange={(event) => setLifecycleObservedAt(event.target.value)} /><small>{lifecycleObservedInvalid ? t("sdkCatalog.observationTimeCannotBeInTheFuture") : t("sdkCatalog.leaveBlankToUseTheServerTime")}</small></label><div className="notice"><TriangleAlert /><span><strong>{t("sdkCatalog.yankedAndArchivedBlockNewSelections")}</strong> {t("sdkCatalog.historicalAPIPublicationsRemainReadableAndNoBindingIs")}</span></div></div></Dialog>
     <Dialog open={ingestOpen} onClose={setIngestOpen} title={t("sdkCatalog.ingestContentFor", { value1: String(selectedRelease?.exact_version ?? "exact release") })} description={t("sdkCatalog.onlySuppliedBoundedUTFN8TextFilesAreNormalized")} actions={<><Button outline onClick={() => setIngestOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || filePickerBusy || ingestionSizeInvalid || (queuedFiles.length === 0 && !pendingPastedFile)} onClick={() => void ingestContent()}>{busy ? t("sdkCatalog.normalizing") : t("sdkCatalog.normalizeWithoutExecuting")}</Button></>}>

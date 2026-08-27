@@ -41,7 +41,6 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 }) {
   const { t } = useTranslation();
   const [addSourceOpen, setAddSourceOpen] = useState(false);
-  const [sourceName, setSourceName] = useState("");
   const [sourceKind, setSourceKind] = useState<SourceKind>("website");
   const [sourceLocation, setSourceLocation] = useState("");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
@@ -62,7 +61,6 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   };
 
   function resetSourceForm() {
-    setSourceName("");
     setSourceKind("website");
     setSourceLocation("");
     setSourceFile(null);
@@ -88,7 +86,6 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   function selectSourceFile(file: File | null) {
     setSourceFile(file);
     setSourceFileError(file ? uploadValidationMessage(file) : t("sourceWorkflow.chooseAFileToUpload"));
-    if (file && !sourceName.trim()) setSourceName(file.name.replace(/\.[^.]+$/, ""));
   }
 
   async function createSource() {
@@ -113,9 +110,9 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
       }
       const created = apiConnected
         ? sourceKind === "upload" && sourceFile
-          ? await api.uploadSource(product.id, product.organisation_id, sourceName.trim(), sourceFile)
-          : await api.createSource(product.id, product.organisation_id, sourceName.trim(), sourceKind, sourceLocation.trim())
-        : { id: `src_${Date.now()}`, name: sourceName.trim(), kind: sourceKind, location: sourceKind === "upload" ? sourceFile?.name ?? t("sourceWorkflow.uploadedFile") : sourceLocation.trim(), visibility: "private" as const, published: false, quarantined: false, revision: 1 };
+          ? await api.uploadSource(product.id, product.organisation_id, sourceFile)
+          : await api.createSource(product.id, product.organisation_id, sourceKind, sourceLocation.trim())
+        : { id: `src_${Date.now()}`, name: sourceKind === "upload" ? sourceFile?.name ?? t("sourceWorkflow.uploadedFile") : sourceLocation.trim(), kind: sourceKind, location: sourceKind === "upload" ? sourceFile?.name ?? t("sourceWorkflow.uploadedFile") : sourceLocation.trim(), visibility: "private" as const, published: false, quarantined: false, revision: 1 };
       setSources((items) => [...items, { id: created.id, name: created.name, kind: created.kind, location: created.location, visibility: created.visibility, published: created.published, quarantined: created.quarantined, crawlState: "draft", pages: 0, lastCrawl: "not-crawled", revision: created.revision }]);
       setAddSourceOpen(false);
       resetSourceForm();
@@ -254,7 +251,6 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 
   return {
     addSourceOpen, setAddSourceOpen,
-    sourceName, setSourceName,
     sourceKind,
     sourceLocation, setSourceLocation,
     sourceFile,

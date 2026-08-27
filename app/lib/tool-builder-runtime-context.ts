@@ -39,8 +39,8 @@ export function runtimeLockForConnection(
 ): APIToolBuilderRuntimeLock | null {
   const revision = runtimeConnectionPreview(setup, connection);
   if (!connection || !revision) return null;
-  const credential = revision.credential_set_id
-    ? setup.credential_sets.find((candidate) => candidate.id === revision.credential_set_id)
+  const credential = revision.authorization_id
+    ? setup.authorizations.find((candidate) => candidate.id === revision.authorization_id)
     : undefined;
   const config = revision.auth_config ?? {};
   const upstreamAuth: APIToolUpstreamAuth = {

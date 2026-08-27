@@ -63,6 +63,8 @@ func (s *Server) developerAssetError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "confirmation_required", err.Error(), nil)
 	case errors.Is(err, platform.ErrSDKReleaseUnavailable):
 		writeError(w, http.StatusConflict, "sdk_release_unavailable", err.Error(), nil)
+	case errors.Is(err, platform.ErrSDKImportConflict):
+		writeError(w, http.StatusConflict, "sdk_import_conflict", err.Error(), nil)
 	case errors.Is(err, platform.ErrInvalidVisibility):
 		writeError(w, http.StatusBadRequest, "invalid_visibility", err.Error(), nil)
 	default:

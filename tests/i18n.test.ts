@@ -107,6 +107,8 @@ test("representative UI keys resolve in every supported locale without key echoe
     const instance = await translator(locale);
     assert.equal(instance.resolvedLanguage, locale);
     assert.equal(instance.t("settings.title"), expectedSettingsTitles[locale]);
+    assert.notEqual(instance.t("sdkImport.importPackage"), "sdkImport.importPackage");
+    assert.notEqual(instance.t("sdkImport.exactReleaseImported", { version: "1.2.3" }), "sdkImport.exactReleaseImported");
     assert.notEqual(instance.t("navigation.settings"), "navigation.settings");
     assert.notEqual(instance.t("tools.confirmMutationLiveTest", { method: "POST", name: "create", revision: 3 }), "tools.confirmMutationLiveTest");
   }

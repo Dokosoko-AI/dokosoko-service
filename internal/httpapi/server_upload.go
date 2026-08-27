@@ -68,11 +68,11 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 	r.Body = http.MaxBytesReader(w, r.Body, requestLimit)
 	reader, err := r.MultipartReader()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_source_upload", "Use multipart/form-data with organisation_id, name, and file fields.", nil)
+		writeError(w, http.StatusBadRequest, "invalid_source_upload", "Use multipart/form-data with organisation_id and file fields; name is optional for older clients.", nil)
 		return
 	}
 
-	var organisationID, name, location string
+	var organisationID, name, location, uploadFilename string
 	seen := make(map[string]bool)
 	keepFile := false
 	defer func() {
@@ -122,6 +122,7 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 				writeError(w, http.StatusBadRequest, "invalid_source_upload", "The file field must include a filename.", nil)
 				return
 			}
+			uploadFilename = sourceUploadDisplayName(part.FileName())
 			location, err = s.storeSourceUpload(part)
 			_ = part.Close()
 			if err != nil {
@@ -130,14 +131,17 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 			}
 		default:
 			_ = part.Close()
-			writeError(w, http.StatusBadRequest, "invalid_source_upload", "Only organisation_id, name, and file fields are accepted.", nil)
+			writeError(w, http.StatusBadRequest, "invalid_source_upload", "Only organisation_id, optional name, and file fields are accepted.", nil)
 			return
 		}
 	}
 
-	if organisationID == "" || name == "" || location == "" {
-		writeError(w, http.StatusBadRequest, "invalid_source_upload", "organisation_id, name, and file are required.", nil)
+	if organisationID == "" || location == "" {
+		writeError(w, http.StatusBadRequest, "invalid_source_upload", "organisation_id and file are required.", nil)
 		return
+	}
+	if name == "" {
+		name = uploadFilename
 	}
 	if organisationID != product.OrganisationID {
 		writeError(w, http.StatusBadRequest, "source_upload_organisation_mismatch", "The organisation does not own the selected product.", nil)
@@ -154,6 +158,19 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 	}
 	keepFile = true
 	writeJSON(w, http.StatusCreated, value)
+}
+
+func sourceUploadDisplayName(filename string) string {
+	name := filepath.Base(strings.ReplaceAll(strings.TrimSpace(filename), "\\", "/"))
+	name = strings.ToValidUTF8(name, "�")
+	if name == "" || name == "." {
+		return "Uploaded document"
+	}
+	runes := []rune(name)
+	if len(runes) > 120 {
+		runes = runes[:120]
+	}
+	return string(runes)
 }
 
 func (s *Server) writeSourceUploadError(w http.ResponseWriter, err error) {

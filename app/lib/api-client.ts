@@ -32,10 +32,7 @@ import type {
   APIRecipeRevision,
   APIResourceSet,
   APIRuntimeCredentialSet,
-  APIRuntimeCredentialSetInput,
   APIRuntimeServiceConnection,
-  APIRuntimeServiceConnectionInput,
-  APIRuntimeServiceConnectionReadiness,
   APIRuntimeSetup,
   APIRuntimeSetupInput,
   APISource,
@@ -164,16 +161,14 @@ export const api = {
   createDeploymentEnvironment: (organisationID: string, name: string, slug: string, isProduction: boolean) => request<APIEnvironment>("/api/v1/environments", { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, slug, is_production: isProduction }) }),
   integrations: async () => (await request<{ items: APIIntegration[] }>("/api/v1/integrations")).items,
   integration: (integrationID: string) => request<APIIntegrationDetail>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`),
-  integrationRuntimeSetup: (integrationID: string) => request<APIRuntimeSetup>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-setup`),
-  configureIntegrationRuntimeSetup: (integrationID: string, input: APIRuntimeSetupInput) => request<APIRuntimeSetup>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-setup`, { method: "PUT", body: JSON.stringify(input) }),
-  integrationRuntimeConnections: async (integrationID: string) => (await request<{ items: APIRuntimeServiceConnection[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-connections`)).items,
-  createIntegrationRuntimeConnection: (integrationID: string, input: APIRuntimeServiceConnectionInput) => request<APIRuntimeServiceConnection>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-connections`, { method: "POST", body: JSON.stringify(input) }),
-  checkRuntimeServiceConnection: (connectionID: string) => request<APIRuntimeServiceConnectionReadiness>(`/api/v1/runtime-service-connections/${encodeURIComponent(connectionID)}/check`, { method: "POST" }),
-  createIntegrationRuntimeCredentialSet: (integrationID: string, input: APIRuntimeCredentialSetInput) => request<APIRuntimeCredentialSet>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/runtime-credential-sets`, { method: "POST", body: JSON.stringify(input) }),
-  runtimeCredentialSet: (credentialSetID: string) => request<APIRuntimeCredentialSet>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}`),
-  runtimeCredentialUsage: (credentialSetID: string) => request<{ items: APIRuntimeServiceConnection[]; count: number }>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}/usage`),
-  rotateRuntimeCredential: (credentialSetID: string, credential: string, expiresAt?: string) => request<APIRuntimeCredentialSet>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}/rotate`, { method: "POST", body: JSON.stringify({ credential, ...(expiresAt ? { expires_at: expiresAt } : {}) }) }),
-  revokeRuntimeCredentialVersion: (credentialSetID: string, versionID: string) => request<APIRuntimeCredentialSet>(`/api/v1/runtime-credential-sets/${encodeURIComponent(credentialSetID)}/versions/${encodeURIComponent(versionID)}/revoke`, { method: "POST" }),
+  integrationAuthorization: (integrationID: string) => request<APIRuntimeSetup>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization`),
+  authorizations: async () => (await request<{ items: APIRuntimeCredentialSet[] }>("/api/v1/authorizations")).items,
+  authorization: (authorizationID: string) => request<APIRuntimeCredentialSet>(`/api/v1/authorizations/${encodeURIComponent(authorizationID)}`),
+  configureIntegrationAuthorization: (integrationID: string, input: APIRuntimeSetupInput) => request<APIRuntimeSetup>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/authorization`, { method: "PUT", body: JSON.stringify(input) }),
+  updateAuthorization: (authorizationID: string, input: Pick<APIRuntimeCredentialSet, "environment_variable" | "header_name" | "auth_config" | "key_management_url" | "access_evaluation_url" | "usage_url" | "state" | "revision"> & { credential?: string; additional_headers?: Array<{ name: string; value: string }> }) => request<APIRuntimeCredentialSet>(`/api/v1/authorizations/${encodeURIComponent(authorizationID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  authorizationUsage: (authorizationID: string) => request<{ items: APIRuntimeServiceConnection[]; count: number }>(`/api/v1/authorizations/${encodeURIComponent(authorizationID)}/usage`),
+  rotateAuthorizationCredential: (authorizationID: string, credential: string, expiresAt?: string) => request<APIRuntimeCredentialSet>(`/api/v1/authorizations/${encodeURIComponent(authorizationID)}/rotate`, { method: "POST", body: JSON.stringify({ credential, ...(expiresAt ? { expires_at: expiresAt } : {}) }) }),
+  revokeAuthorizationCredentialVersion: (authorizationID: string, versionID: string) => request<APIRuntimeCredentialSet>(`/api/v1/authorizations/${encodeURIComponent(authorizationID)}/versions/${encodeURIComponent(versionID)}/revoke`, { method: "POST" }),
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; visibility?: APIVisibility; acknowledge_public?: boolean; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "visibility" | "lifecycle" | "revision"> & { acknowledge_public?: boolean; replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PUT", body: JSON.stringify(input) }),
   preflightIntegration: (integrationID: string) => request<APIIntegrationPreflight>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/preflight`, { method: "POST", body: JSON.stringify({}) }),
@@ -232,11 +227,11 @@ export const api = {
   publishRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/publish`, { method: "POST", body: JSON.stringify({ revision, current_revision_id: currentRevisionID }) }),
   aiUsage: (productID: string, days = 30) => request<{ workloads: APIAIWorkloadUsage[]; providers: APIAIProviderUsage[] }>(`${productPath(productID)}/ai-usage?days=${days}`),
   sources: async (productID: string) => (await request<{ items: APISource[] }>(`${productPath(productID)}/sources`)).items,
-  createSource: (productID: string, organisationID: string, name: string, kind: string, location: string) => request<APISource>(`${productPath(productID)}/sources`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, name, kind, location }) }),
-  uploadSource: (productID: string, organisationID: string, name: string, file: File) => {
+  createSource: (productID: string, organisationID: string, kind: string, location: string, name?: string) => request<APISource>(`${productPath(productID)}/sources`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, ...(name?.trim() ? { name: name.trim() } : {}), kind, location }) }),
+  uploadSource: (productID: string, organisationID: string, file: File, name?: string) => {
     const body = new FormData();
     body.append("organisation_id", organisationID);
-    body.append("name", name);
+    if (name?.trim()) body.append("name", name.trim());
     body.append("file", file, file.name);
     return request<APISource>(`${productPath(productID)}/sources/upload`, { method: "POST", body });
   },

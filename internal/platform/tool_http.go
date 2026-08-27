@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/runtimeauth"
 	secretvault "github.com/dokosoko/dokosoko-service/internal/secrets"
 	toolruntime "github.com/dokosoko/dokosoko-service/internal/tools"
 )
@@ -38,6 +39,7 @@ type ToolUpstreamAuth struct {
 	Scopes                  []string `json:"scopes,omitempty"`
 	Audience                string   `json:"audience,omitempty"`
 	Resource                string   `json:"resource,omitempty"`
+	Headers                 []string `json:"headers,omitempty"`
 }
 
 type ToolRequestMapping struct {
@@ -122,15 +124,7 @@ func validAuthorizationScheme(value string) bool {
 }
 
 func safeCustomHeader(value string) bool {
-	if !validHTTPHeaderName(value) {
-		return false
-	}
-	switch strings.ToLower(value) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "host", "content-length", "transfer-encoding", "connection", "upgrade", "te", "trailer", "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-uri", "x-http-method", "x-http-method-override", "x-method-override", "x-original-url", "x-original-uri", "x-rewrite-url", "x-envoy-original-path":
-		return false
-	default:
-		return true
-	}
+	return runtimeauth.SafeHeaderName(value)
 }
 
 func credentialRequired(authType string) bool {
@@ -215,6 +209,24 @@ func normalizeToolUpstreamAuth(raw json.RawMessage, currentRaw json.RawMessage, 
 			return nil, ToolUpstreamAuth{}, false, errors.New("OAuth resource is invalid")
 		}
 	}
+	seenHeaders := make(map[string]bool, len(auth.Headers))
+	headers := make([]string, 0, len(auth.Headers))
+	for _, name := range auth.Headers {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if !safeCustomHeader(name) {
+			return nil, ToolUpstreamAuth{}, false, errors.New("choose safe additional authentication header names")
+		}
+		if seenHeaders[key] {
+			return nil, ToolUpstreamAuth{}, false, errors.New("additional authentication header names must be unique")
+		}
+		seenHeaders[key] = true
+		headers = append(headers, name)
+	}
+	if len(headers) > runtimeauth.MaxHeaders {
+		return nil, ToolUpstreamAuth{}, false, fmt.Errorf("at most %d additional authentication headers are allowed", runtimeauth.MaxHeaders)
+	}
+	auth.Headers = headers
 	seenScopes := map[string]bool{}
 	scopes := make([]string, 0, len(auth.Scopes))
 	for _, scope := range auth.Scopes {
@@ -267,6 +279,9 @@ func normalizeToolUpstreamAuth(raw json.RawMessage, currentRaw json.RawMessage, 
 	}
 	if !credentialRequired(auth.Type) && credentialChanged {
 		return nil, ToolUpstreamAuth{}, false, errors.New("this authentication type does not accept a stored credential")
+	}
+	if !credentialRequired(auth.Type) && len(auth.Headers) > 0 {
+		return nil, ToolUpstreamAuth{}, false, errors.New("additional authentication headers require a stored credential")
 	}
 	if credentialRequired(auth.Type) && !credentialChanged && (existingCredentialID == "" || current.Type != auth.Type) {
 		return nil, ToolUpstreamAuth{}, false, errors.New("an encrypted upstream credential is required for this authentication type")

@@ -98,7 +98,7 @@ test("browser-held tool credentials remain bound to one origin and exact auth co
 });
 
 test("primary console sections have canonical, round-trippable URLs", () => {
-  for (const section of ["product", "sources", "documents", "collections", "contracts", "sdks", "query-lab", "identity", "recipes", "tools", "connections", "mcp-preview", "distribution", "reporting", "settings"] as const) {
+  for (const section of ["product", "sources", "documents", "contracts", "sdks", "query-lab", "identity", "recipes", "tools", "connections", "mcp-preview", "distribution", "reporting", "settings"] as const) {
     const path = SECTION_PATHS[section];
     assert.equal(sectionPath(section as keyof typeof SECTION_PATHS), path);
     assert.deepEqual(parseConsolePath(path), { kind: "section", section, path });
@@ -117,6 +117,7 @@ test("primary console sections have canonical, round-trippable URLs", () => {
   assert.equal(parseConsolePath("/identity/sign-in").kind, "not-found");
   assert.equal(parseConsolePath("/identity/auth0").kind, "not-found");
   assert.equal(parseConsolePath("/identity/authorization").kind, "not-found");
+  assert.equal(parseConsolePath("/developer-assets/documentation/collections").kind, "not-found");
 });
 
 test("tools have canonical catalog, connection, preview, and detail URLs", () => {
@@ -215,7 +216,7 @@ test("API workspaces expose the task-oriented setup tabs with stable, round-trip
   assert.deepEqual(INTEGRATION_TABS, [
     { id: "overview", label: "routes.quickStart" },
     { id: "documentation", label: "routes.resources" },
-    { id: "access", label: "routes.keysAccess" },
+    { id: "authorization", label: "routes.keysAccess" },
     { id: "tools", label: "routes.tools" },
     { id: "test", label: "routes.test" },
     { id: "history", label: "routes.history" },
@@ -223,7 +224,7 @@ test("API workspaces expose the task-oriented setup tabs with stable, round-trip
   assert.deepEqual(INTEGRATION_PRIMARY_TABS, [
     { id: "overview", label: "routes.quickStart" },
     { id: "documentation", label: "routes.resources" },
-    { id: "access", label: "routes.keysAccess" },
+    { id: "authorization", label: "routes.keysAccess" },
     { id: "tools", label: "routes.tools" },
     { id: "test", label: "routes.test" },
   ], "History remains routable but lives behind the API More menu");
@@ -263,8 +264,8 @@ test("API resource workspaces have stable nested sub-tab URLs", () => {
 test("API validation findings open the matching local setup area", () => {
   const uid = "voice-api";
   assert.equal(integrationValidationPath(uid, "resources"), `/integration/${uid}/documentation`);
-  assert.equal(integrationValidationPath(uid, "authorization"), `/integration/${uid}/access`);
-  assert.equal(integrationValidationPath(uid, "access"), `/integration/${uid}/access`);
+  assert.equal(integrationValidationPath(uid, "authorization"), `/integration/${uid}/authorization`);
+  assert.equal(integrationValidationPath(uid, "access"), `/integration/${uid}`);
   assert.equal(integrationValidationPath(uid, "tools"), `/integration/${uid}/tools`);
   assert.equal(integrationValidationPath(uid, "recipes"), "/recipes");
   assert.equal(integrationValidationPath(uid, "delivery"), "/agent-access");
@@ -303,7 +304,7 @@ test("recipes have one stable product-level workspace", () => {
 
 test("unknown API tabs do not create compatibility aliases", () => {
   const uid = "voice-api";
-  for (const tab of ["authorization", "resources", "recipes", "delivery", "usage", "support", "revisions"]) {
+  for (const tab of ["access", "resources", "recipes", "delivery", "usage", "support", "revisions"]) {
     assert.equal(parseConsolePath(`/integration/${uid}/${tab}`).kind, "not-found");
   }
   assert.equal(parseConsolePath(`/integration/${uid}/tools/packages`).kind, "not-found");

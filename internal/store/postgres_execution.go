@@ -63,3 +63,65 @@ func (p *Postgres) CreateReportSubmission(ctx context.Context, value model.Repor
 		ON CONFLICT (product_id,actor_pseudonym,kind,idempotency_digest) DO UPDATE SET updated_at=report_submissions.updated_at
 		RETURNING `+reportSubmissionColumns, value.ID, value.OrganisationID, value.ProductID, value.IntegrationID, value.Kind, value.State, value.ActorPseudonym, value.IdempotencyDigest, value.Payload, value.ExpiresAt))
 }
+
+const authorizationUsageEventColumns = `event.id::text,event.organisation_id::text,event.product_id::text,event.integration_id::text,event.authorization_id::text,event.url,event.authentication_type,event.header_name,event.auth_config,event.credential_version_id::text,event.credential_secret_id::text,event.credential_fingerprint,event.payload,event.state,event.attempts,event.available_at,coalesce(event.lease_owner,''),event.leased_until,event.last_error,event.created_at,event.updated_at`
+
+func scanAuthorizationUsageEvent(row interface{ Scan(...any) error }) (model.AuthorizationUsageEvent, error) {
+	var value model.AuthorizationUsageEvent
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ProductID, &value.IntegrationID, &value.AuthorizationID, &value.URL, &value.AuthenticationType, &value.HeaderName, &value.AuthConfig, &value.CredentialVersionID, &value.CredentialSecretID, &value.CredentialFingerprint, &value.Payload, &value.State, &value.Attempts, &value.AvailableAt, &value.LeaseOwner, &value.LeasedUntil, &value.LastError, &value.CreatedAt, &value.UpdatedAt)
+	return value, databaseError(err)
+}
+
+func (p *Postgres) CreateAuthorizationUsageEvent(ctx context.Context, value model.AuthorizationUsageEvent) (model.AuthorizationUsageEvent, error) {
+	return scanAuthorizationUsageEvent(p.pool.QueryRow(ctx, `INSERT INTO authorization_usage_events AS event(id,organisation_id,product_id,integration_id,authorization_id,url,authentication_type,header_name,auth_config,credential_version_id,credential_secret_id,credential_fingerprint,payload,state,available_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued',$14)
+		RETURNING `+authorizationUsageEventColumns, value.ID, value.OrganisationID, value.ProductID, value.IntegrationID, value.AuthorizationID, value.URL, value.AuthenticationType, value.HeaderName, value.AuthConfig, value.CredentialVersionID, value.CredentialSecretID, value.CredentialFingerprint, value.Payload, value.AvailableAt))
+}
+
+func (p *Postgres) ClaimAuthorizationUsageEvents(ctx context.Context, owner string, leaseUntil time.Time, limit int) ([]model.AuthorizationUsageEvent, error) {
+	if limit < 1 || limit > 100 {
+		limit = 25
+	}
+	rows, err := p.pool.Query(ctx, `WITH candidates AS (
+		SELECT id FROM authorization_usage_events
+		WHERE (state='queued' AND available_at<=now()) OR (state='delivering' AND leased_until<now())
+		ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1
+	) UPDATE authorization_usage_events event
+	SET state='delivering',lease_owner=$2,leased_until=$3,attempts=attempts+1,updated_at=now()
+	FROM candidates WHERE event.id=candidates.id RETURNING `+authorizationUsageEventColumns, limit, owner, leaseUntil)
+	if err != nil {
+		return nil, databaseError(err)
+	}
+	defer rows.Close()
+	values := make([]model.AuthorizationUsageEvent, 0)
+	for rows.Next() {
+		value, scanErr := scanAuthorizationUsageEvent(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, databaseError(rows.Err())
+}
+
+func (p *Postgres) CompleteAuthorizationUsageEvent(ctx context.Context, id, owner string, now time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE authorization_usage_events SET state='delivered',lease_owner='',leased_until=NULL,last_error='',updated_at=$3 WHERE id=$1 AND state='delivering' AND lease_owner=$2`, id, owner, now)
+	if err != nil {
+		return databaseError(err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (p *Postgres) RetryAuthorizationUsageEvent(ctx context.Context, id, owner string, availableAt time.Time, lastError string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE authorization_usage_events SET state='queued',lease_owner='',leased_until=NULL,available_at=$3,last_error=$4,updated_at=now() WHERE id=$1 AND state='delivering' AND lease_owner=$2`, id, owner, availableAt, lastError)
+	if err != nil {
+		return databaseError(err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
+}

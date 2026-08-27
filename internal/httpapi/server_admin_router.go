@@ -154,6 +154,10 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.deploymentEnvironments(w, r)
 	case len(parts) == 3 && parts[2] == "integrations":
 		s.integrations(w, r)
+	case len(parts) == 3 && parts[2] == "authorizations" && r.Method == http.MethodGet:
+		s.authorizations(w, r)
+	case len(parts) == 4 && parts[2] == "authorizations":
+		s.authorization(w, r, parts[3])
 	case len(parts) == 4 && parts[2] == "integrations":
 		s.integration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "resources":
@@ -178,22 +182,14 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.publishIntegration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "preflight" && r.Method == http.MethodPost:
 		s.preflightIntegration(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "runtime-setup":
-		s.integrationRuntimeSetup(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "runtime-connections":
-		s.integrationRuntimeConnections(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "runtime-credential-sets" && r.Method == http.MethodPost:
-		s.createIntegrationRuntimeCredentialSet(w, r, parts[3])
-	case len(parts) == 4 && parts[2] == "runtime-credential-sets" && r.Method == http.MethodGet:
-		s.runtimeCredentialSet(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "runtime-credential-sets" && parts[4] == "usage" && r.Method == http.MethodGet:
-		s.runtimeCredentialUsage(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "runtime-credential-sets" && parts[4] == "rotate" && r.Method == http.MethodPost:
-		s.rotateRuntimeCredential(w, r, parts[3])
-	case len(parts) == 5 && parts[2] == "runtime-service-connections" && parts[4] == "check" && r.Method == http.MethodPost:
-		s.checkRuntimeServiceConnection(w, r, parts[3])
-	case len(parts) == 7 && parts[2] == "runtime-credential-sets" && parts[4] == "versions" && parts[6] == "revoke" && r.Method == http.MethodPost:
-		s.revokeRuntimeCredential(w, r, parts[3], parts[5])
+	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "authorization":
+		s.integrationAuthorization(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "authorizations" && parts[4] == "usage" && r.Method == http.MethodGet:
+		s.authorizationUsage(w, r, parts[3])
+	case len(parts) == 5 && parts[2] == "authorizations" && parts[4] == "rotate" && r.Method == http.MethodPost:
+		s.rotateAuthorizationCredential(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "authorizations" && parts[4] == "versions" && parts[6] == "revoke" && r.Method == http.MethodPost:
+		s.revokeAuthorizationCredential(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "authorization-points":
 		s.authorizationPoints(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "integrations" && parts[4] == "authorization-points":
@@ -252,6 +248,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiContractRevision(w, r, parts[4], parts[6])
 	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "sdk-packages":
 		s.sdkPackages(w, r)
+	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "sdk-package-imports":
+		s.sdkPackageImports(w, r)
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "sdk-packages":
 		s.sdkPackage(w, r, parts[4])
 	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "sdk-packages" && parts[5] == "releases":

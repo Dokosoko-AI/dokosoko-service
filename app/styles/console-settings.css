@@ -12,6 +12,11 @@
 .settings-card-detail { color: var(--muted); font-size: var(--text-caption); }
 .tenant-settings-panel { overflow: hidden; }
 .tenant-settings-form { gap: 18px; padding: 18px; border-top: 1px solid var(--line); }
+.tenant-settings-subsection { display: grid; gap: 14px; padding-top: 18px; border-top: 1px solid var(--line); }
+.tenant-settings-subsection > header { display: grid; gap: 4px; }
+.tenant-settings-subsection h3, .tenant-settings-subsection p { margin: 0; }
+.tenant-settings-subsection h3 { color: var(--text-strong); font-size: var(--text-body); }
+.tenant-settings-subsection p { color: var(--muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .tenant-settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .tenant-settings-actions > small { color: var(--muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .dialog-panel:has(.ai-model-form) { width: min(680px, 100%); }

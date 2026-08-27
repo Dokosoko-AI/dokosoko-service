@@ -41,7 +41,7 @@ func validHTTPSBaseOrigin(raw string) bool {
 func validHTTPSURI(raw string) bool {
 	parsed, err := url.Parse(raw)
 	local := err == nil && identity.IsLocalDevelopmentHostname(parsed.Hostname())
-	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http" && local) && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func validOIDCIssuer(raw string) bool {

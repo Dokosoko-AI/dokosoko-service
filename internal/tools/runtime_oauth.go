@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/runtimeauth"
 )
 
 func auditID() string {
@@ -55,6 +56,19 @@ func toolUpstreamAuth(tool model.Tool) (upstreamAuth, error) {
 			return upstreamAuth{}, ErrDenied
 		}
 		value.Prefix = strings.TrimSpace(value.Prefix)
+	}
+	if len(value.Headers) > runtimeauth.MaxHeaders {
+		return upstreamAuth{}, ErrDenied
+	}
+	seenHeaders := make(map[string]bool, len(value.Headers))
+	for index, name := range value.Headers {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if !runtimeauth.SafeHeaderName(name) || seenHeaders[key] {
+			return upstreamAuth{}, ErrDenied
+		}
+		seenHeaders[key] = true
+		value.Headers[index] = name
 	}
 	return value, nil
 }
@@ -108,16 +122,73 @@ func wipe(value []byte) {
 	}
 }
 
-func (r *Runtime) toolCredential(ctx context.Context, tool model.Tool) ([]byte, error) {
+type toolCredentialMaterial struct {
+	primary []byte
+	headers []runtimeauth.Header
+}
+
+func wipeCredentialMaterial(value *toolCredentialMaterial) {
+	if value == nil {
+		return
+	}
+	wipe(value.primary)
+	for index := range value.headers {
+		wipe(value.headers[index].Value)
+	}
+}
+
+func (r *Runtime) toolCredentialMaterial(ctx context.Context, tool model.Tool) (toolCredentialMaterial, error) {
 	if r.credentials == nil || tool.CredentialID == "" {
-		return nil, ErrDenied
+		return toolCredentialMaterial{}, ErrDenied
 	}
 	value, err := r.credentials.ResolveToolCredential(ctx, tool)
 	if err != nil || len(value) == 0 {
 		wipe(value)
-		return nil, ErrDenied
+		return toolCredentialMaterial{}, ErrDenied
 	}
-	return value, nil
+	primary, headers, _, err := runtimeauth.Decode(value)
+	wipe(value)
+	if err != nil {
+		wipe(primary)
+		for index := range headers {
+			wipe(headers[index].Value)
+		}
+		return toolCredentialMaterial{}, ErrDenied
+	}
+	return toolCredentialMaterial{primary: primary, headers: headers}, nil
+}
+
+func authorizationHeaderNamesMatch(expected []string, actual []runtimeauth.Header) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for index := range expected {
+		if !strings.EqualFold(expected[index], actual[index].Name) {
+			return false
+		}
+	}
+	return true
+}
+
+func applyAdditionalAuthorizationHeaders(header http.Header, expected []string, actual []runtimeauth.Header) error {
+	if !authorizationHeaderNamesMatch(expected, actual) {
+		return ErrDenied
+	}
+	for _, value := range actual {
+		header.Set(value.Name, string(value.Value))
+	}
+	return nil
+}
+
+func (r *Runtime) toolCredential(ctx context.Context, tool model.Tool) ([]byte, error) {
+	material, err := r.toolCredentialMaterial(ctx, tool)
+	if err != nil {
+		return nil, err
+	}
+	for index := range material.headers {
+		wipe(material.headers[index].Value)
+	}
+	return material.primary, nil
 }
 
 func (r *Runtime) purgeExpiredOAuthTokensLocked(now time.Time) {

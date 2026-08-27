@@ -39,6 +39,7 @@ type Service struct {
 	aiRuntime                airuntime.Runtime
 	aiEnvironmentCredentials map[string]string
 	nativeTools              NativeToolCatalog
+	sdkImportDoer            SDKImportDoer
 	now                      func() time.Time
 }
 

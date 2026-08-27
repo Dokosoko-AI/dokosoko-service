@@ -191,7 +191,28 @@ func (r *Runtime) ExecuteBound(ctx context.Context, productID, fullName string, 
 	if err := r.authorizeBound(ctx, tool, binding, principal, true); err != nil {
 		return nil, err
 	}
-	return r.executeAuthorized(ctx, productID, fullName, tool, arguments, principal)
+	decisionID := ""
+	if tool.RuntimeServiceConnectionID != "" {
+		prepared, prepareErr := prepareRuntimeTool(tool, principal.EnvironmentID)
+		if prepareErr != nil {
+			return nil, ErrDenied
+		}
+		decisionID, err = r.evaluateAuthorization(ctx, productID, fullName, prepared, principal, binding)
+		if err != nil {
+			return nil, ErrDenied
+		}
+	}
+	result, err := r.executeAuthorized(ctx, productID, fullName, tool, arguments, principal)
+	if err != nil {
+		return nil, err
+	}
+	if tool.RuntimeServiceConnectionID != "" {
+		prepared, prepareErr := prepareRuntimeTool(tool, principal.EnvironmentID)
+		if prepareErr == nil {
+			r.enqueueAuthorizationUsage(ctx, fullName, decisionID, prepared, principal, binding)
+		}
+	}
+	return result, nil
 }
 
 func sameOrigin(left, right string) bool {

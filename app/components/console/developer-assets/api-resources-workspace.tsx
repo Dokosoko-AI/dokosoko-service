@@ -25,6 +25,7 @@ import { PanelHeader } from "../../core/layout";
 import { ConsoleLink } from "../console-link";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
 import { developerAssetError, LoadingPanel, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
+import { SDKPackageImportDialog } from "./sdk-package-import-dialog";
 
 type ResourceKind = "documentation" | "contract" | "sdk";
 type ResourceBinding = APIDocumentationBinding | APIContractBinding | APISDKBinding;
@@ -50,6 +51,7 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
   const [busy, setBusy] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [sdkImportOpen, setSDKImportOpen] = useState(false);
   const [detachTarget, setDetachTarget] = useState<{ kind: ResourceKind; binding: ResourceBinding; label: string } | null>(null);
   const [kind, setKind] = useState<ResourceKind>("documentation");
   const [editing, setEditing] = useState<ResourceBinding | null>(null);
@@ -62,10 +64,6 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
   const [resourceName, setResourceName] = useState("");
   const [resourceSlug, setResourceSlug] = useState("");
   const [memberID, setMemberID] = useState("");
-  const [ecosystem, setEcosystem] = useState("npm");
-  const [coordinate, setCoordinate] = useState("");
-  const [exactVersion, setExactVersion] = useState("");
-  const [installCommand, setInstallCommand] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
 
   const load = useCallback(async () => {
@@ -173,13 +171,13 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
 
   function openCreate(nextKind: ResourceKind) {
     setKind(nextKind);
+    if (nextKind === "sdk") {
+      setSDKImportOpen(true);
+      return;
+    }
     setResourceName("");
     setResourceSlug("");
     setMemberID("");
-    setEcosystem("npm");
-    setCoordinate("");
-    setExactVersion("");
-    setInstallCommand("");
     setAcknowledged(false);
     setCreateOpen(true);
   }
@@ -221,7 +219,7 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
   }
 
   async function createResource() {
-    if (!resourceName.trim() || !acknowledged) return;
+    if (kind === "sdk" || !resourceName.trim() || !acknowledged) return;
     setBusy(true);
     try {
       if (kind === "documentation") {
@@ -232,18 +230,6 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
         if (!exact) throw new Error(t("apiResources.theReviewedCollectionRevisionWasNotReturned"));
         await developerAssetsApi.attachAPIDocumentation(integration.id, { documentation_collection_id: collection.id, pinned_revision_id: exact.id, selector: {}, visibility: "private" });
         onMessage(t("apiResources.reviewedCollectionCreatedAndItsExactFirstRevisionAttached"));
-      } else if (kind === "sdk") {
-        if (!coordinate.trim() || !exactVersion.trim() || exactVersion.trim().toLowerCase() === "latest") return;
-        const sdkPackage = await developerAssetsApi.createSDKPackage({ ecosystem: ecosystem.trim(), coordinate: coordinate.trim(), name: resourceName.trim(), visibility: "private", lifecycle: "draft" });
-        const release = await developerAssetsApi.createSDKRelease(sdkPackage.id, {
-          exact_version: exactVersion.trim(),
-          ...(installCommand.trim() ? { install_command: installCommand.trim() } : {}),
-          identity_assurance: "metadata_only",
-          visibility: "private",
-          lifecycle: "active",
-        });
-        await developerAssetsApi.attachAPISDK(integration.id, { sdk_package_id: sdkPackage.id, sdk_release_id: release.id, state: "draft", coverage: "unknown", assurance: "related", applicable_modules: [], applicable_capabilities: [], applicable_operation_keys: [], selector: {}, visibility: "private" });
-        onMessage(t("apiResources.sdkPackageAndExactReleaseCreatedAndAttachedAs", { exact_version: String(release.exact_version) }));
       } else {
         if (!resourceSlug.trim()) return;
         await developerAssetsApi.createAPIContract({ name: resourceName.trim(), slug: resourceSlug.trim(), description: t("apiResources.createdContractDescription"), visibility: "private", lifecycle: "active" });
@@ -281,7 +267,7 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
   }), [catalog]);
 
   function resourcePanel(panelKind: ResourceKind, title: string, description: string, rows: ResourceBinding[]) {
-    const catalogSection = panelKind === "documentation" ? "collections" : panelKind === "contract" ? "contracts" : "sdks";
+    const catalogSection = panelKind === "documentation" ? "documents" : panelKind === "contract" ? "contracts" : "sdks";
     return <section className="panel api-resource-panel"><PanelHeader title={title} description={description} action={<span className="heading-actions"><ConsoleLink path={sectionPath(catalogSection)} onNavigate={onNavigate} className="entity-back-link"><ExternalLink />{t("apiResources.openCatalog")}</ConsoleLink><Button outline onClick={() => openCreate(panelKind)}><Plus data-slot="icon" />{panelKind === "contract" ? t("apiResources.createInCatalog") : t("apiResources.createAttach")}</Button><Button onClick={() => void openAttach(panelKind)}><Link2 data-slot="icon" />{t("apiResources.attachExisting")}</Button></span>} />
       <div className="api-resource-list">{rows.map((binding) => {
         const label = panelKind === "documentation" ? labels.documentation.get((binding as APIDocumentationBinding).documentation_collection_id) : panelKind === "contract" ? labels.contracts.get((binding as APIContractBinding).api_contract_id) : labels.sdks.get((binding as APISDKBinding).sdk_package_id);
@@ -310,11 +296,32 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
     {resourcePanel("documentation", t("apiResources.documentationTitle"), t("apiResources.documentationDescription"), bindings.documentation)}
     {resourcePanel("contract", t("apiResources.apiContractsTitle"), t("apiResources.apiContractsDescription"), bindings.contracts)}
     {resourcePanel("sdk", t("apiResources.sdkReleasesTitle"), t("apiResources.sdkReleasesDescription"), bindings.sdks)}
+    <SDKPackageImportDialog
+      open={sdkImportOpen}
+      onClose={setSDKImportOpen}
+      onMessage={() => undefined}
+      onImported={async (result) => {
+        await developerAssetsApi.attachAPISDK(integration.id, {
+          sdk_package_id: result.package.id,
+          sdk_release_id: result.release.id,
+          state: "draft",
+          coverage: "unknown",
+          assurance: "related",
+          applicable_modules: [],
+          applicable_capabilities: [],
+          applicable_operation_keys: [],
+          selector: {},
+          visibility: "private",
+        });
+        await load();
+        onMessage(t("apiResources.sdkImportedAndAttachedAsDraft", { exact_version: String(result.release.exact_version) }));
+      }}
+    />
     <Dialog open={attachOpen} onClose={setAttachOpen} title={kind === "documentation" ? editing ? t("apiResources.changeDocumentation") : t("apiResources.attachDocumentation") : kind === "contract" ? editing ? t("apiResources.changeAPIContract") : t("apiResources.attachAPIContract") : editing ? t("apiResources.changeSDKRelease") : t("apiResources.attachSDKRelease")} description={kind === "sdk" ? t("apiResources.selectExactReviewedVersion") : t("apiResources.selectExactReviewedRevision")} actions={<><Button outline onClick={() => setAttachOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !assetID || !exactID} onClick={() => void saveAttachment()}>{busy ? t("common.saving") : editing ? kind === "sdk" ? t("apiResources.changeExactVersion") : t("apiResources.changeExactRevision") : t("apiResources.attachExactResource")}</Button></>}>
       <div className="auth-form compact-form"><label className="auth-field"><span>{t("apiResources.catalog")} {kind === "sdk" ? t("apiResources.package") : kind === "contract" ? t("apiResources.contract") : t("apiResources.collection")}</span><select disabled={Boolean(editing)} value={assetID} onChange={(event) => void chooseAsset(event.target.value)}><option value="">{t("apiResources.selectFromCatalog")}</option>{availableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label><label className="auth-field"><span>{t("apiResources.exact")} {kind === "sdk" ? t("apiResources.release") : t("apiResources.reviewedRevision")}</span><select value={exactID} onChange={(event) => { setExactID(event.target.value); setContentPublicationID(""); }}><option value="">{t("apiResources.selectExact")} {kind === "sdk" ? t("apiResources.release") : t("apiResources.revision")}</option>{exactOptions.map((option) => <option key={option.id} value={option.id}>{kind === "sdk" ? (option as SDKRelease).exact_version : t("apiResources.r", { revision: String((option as DocumentationCollectionRevision | APIContractRevision).revision) })} · {option.id}</option>)}</select>{kind === "sdk" && selectedSDKRelease && <small><code>{selectedSDKRelease.release_hash}</code></small>}</label>{kind === "contract" && <label className="compact-check"><input type="checkbox" checked={primary} onChange={(event) => setPrimary(event.target.checked)} /><span>{t("apiResources.useAsThisAPISPrimaryContract")}</span></label>}{kind === "sdk" && <><label className="auth-field"><span>{t("apiResources.reviewedContentPublication")}</span><select value={contentPublicationID} onChange={(event) => setContentPublicationID(event.target.value)}><option value="">{t("apiResources.noneKeepAttachmentInDraft")}</option>{contentPublications.map((publication) => <option key={publication.id} value={publication.id}>r{publication.revision} · {publication.content_hash}</option>)}</select></label><div className="two-fields"><label className="auth-field"><span>{t("apiResources.coverage")}</span><select value={coverage} onChange={(event) => setCoverage(event.target.value as APISDKBinding["coverage"])}><option value="unknown">{t("apiResources.unknown")}</option><option value="partial">{t("apiResources.partial")}</option><option value="full">{t("apiResources.full")}</option></select></label><label className="auth-field"><span>{t("apiResources.assurance")}</span><select value={assurance} onChange={(event) => setAssurance(event.target.value as APISDKBinding["assurance"])}><option value="related">{t("apiResources.related")}</option><option value="documented">{t("apiResources.documented")}</option><option value="reviewed">{t("apiResources.reviewed")}</option><option value="tested">{t("apiResources.tested")}</option><option value="verified">{t("apiResources.verified")}</option></select></label></div></>}</div>
     </Dialog>
-    <Dialog open={createOpen} onClose={setCreateOpen} title={kind === "documentation" ? t("apiResources.createDocumentationCollection") : kind === "contract" ? t("apiResources.createAPIContractInCatalog") : t("apiResources.createSDKPackageAndRelease")} description={kind === "contract" ? t("apiResources.thisCreatesOnlyTheReusableContractRootItDoes") : kind === "sdk" ? t("apiResources.createSDKDescription") : t("apiResources.createDocumentationDescription")} actions={<><Button outline onClick={() => setCreateOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !resourceName.trim() || !acknowledged || (kind === "documentation" && (!resourceSlug.trim() || !memberID.trim())) || (kind === "contract" && !resourceSlug.trim()) || (kind === "sdk" && (!ecosystem.trim() || !coordinate.trim() || !exactVersion.trim() || exactVersion.trim().toLowerCase() === "latest"))} onClick={() => void createResource()}>{busy ? t("common.creating") : kind === "contract" ? t("apiResources.createInCatalog") : t("apiResources.createAttachExactResource")}</Button></>}>
-      <div className="auth-form compact-form">{kind === "contract" && <div className="notice"><FileCode2 /><span><strong>{t("apiResources.nextStepsHappenInCatalog")}</strong> {t("apiResources.attachAnOpenAPISourceIngestAndValidateTheNormalized")}</span></div>}<label className="auth-field"><span>{t("apiResources.name")}</span><input value={resourceName} onChange={(event) => { setResourceName(event.target.value); if (kind !== "sdk") setResourceSlug(slugify(event.target.value)); }} /></label>{kind !== "sdk" && <label className="auth-field"><span>{t("apiResources.slug")}</span><input value={resourceSlug} onChange={(event) => setResourceSlug(slugify(event.target.value))} /></label>}{kind === "documentation" && <label className="auth-field"><span>{t("apiResources.exactReviewedSourcePublicationID")}</span><input value={memberID} onChange={(event) => setMemberID(event.target.value)} /><small>{t("apiResources.thisCreatesAnImmutableCollectionRevisionFromReviewedEvidence")}</small></label>}{kind === "sdk" && <><div className="two-fields"><label className="auth-field"><span>{t("apiResources.ecosystem")}</span><input value={ecosystem} onChange={(event) => setEcosystem(event.target.value)} /></label><label className="auth-field"><span>{t("apiResources.coordinate")}</span><input value={coordinate} onChange={(event) => setCoordinate(event.target.value)} /></label></div><label className="auth-field"><span>{t("apiResources.exactVersion")}</span><input value={exactVersion} onChange={(event) => setExactVersion(event.target.value)} /></label><label className="auth-field"><span>{t("apiResources.canonicalInstallCommand")}</span><input value={installCommand} onChange={(event) => setInstallCommand(event.target.value)} placeholder={t("apiResources.leaveBlankForTheServerCanonicalCommand")} /><small>{t("apiResources.enterOnlyAVerifiedEcosystemSpecificCommand")}</small></label></>}<label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{kind === "contract" ? t("apiResources.iUnderstandCreationDoesNotApprovePublishOrAttach") : t("apiResources.iReviewedTheExactIdentityAndUnderstandFutureCatalog")}</span></label></div>
+    <Dialog open={createOpen} onClose={setCreateOpen} title={kind === "documentation" ? t("apiResources.createDocumentationCollection") : t("apiResources.createAPIContractInCatalog")} description={kind === "contract" ? t("apiResources.thisCreatesOnlyTheReusableContractRootItDoes") : t("apiResources.createDocumentationDescription")} actions={<><Button outline onClick={() => setCreateOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !resourceName.trim() || !acknowledged || (kind === "documentation" && (!resourceSlug.trim() || !memberID.trim())) || (kind === "contract" && !resourceSlug.trim())} onClick={() => void createResource()}>{busy ? t("common.creating") : kind === "contract" ? t("apiResources.createInCatalog") : t("apiResources.createAttachExactResource")}</Button></>}>
+      <div className="auth-form compact-form">{kind === "contract" && <div className="notice"><FileCode2 /><span><strong>{t("apiResources.nextStepsHappenInCatalog")}</strong> {t("apiResources.attachAnOpenAPISourceIngestAndValidateTheNormalized")}</span></div>}<label className="auth-field"><span>{t("apiResources.name")}</span><input value={resourceName} onChange={(event) => { setResourceName(event.target.value); setResourceSlug(slugify(event.target.value)); }} /></label><label className="auth-field"><span>{t("apiResources.slug")}</span><input value={resourceSlug} onChange={(event) => setResourceSlug(slugify(event.target.value))} /></label>{kind === "documentation" && <label className="auth-field"><span>{t("apiResources.exactReviewedSourcePublicationID")}</span><input value={memberID} onChange={(event) => setMemberID(event.target.value)} /><small>{t("apiResources.thisCreatesAnImmutableCollectionRevisionFromReviewedEvidence")}</small></label>}<label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{kind === "contract" ? t("apiResources.iUnderstandCreationDoesNotApprovePublishOrAttach") : t("apiResources.iReviewedTheExactIdentityAndUnderstandFutureCatalog")}</span></label></div>
     </Dialog>
     <Dialog open={Boolean(detachTarget)} onClose={(open) => { if (!open) setDetachTarget(null); }} title={t("apiResources.detach2", { value1: String(detachTarget?.label ?? "resource") })} description={t("apiResources.thisRemovesTheResourceFromFutureAPIPublicationsThe")} actions={<><Button outline onClick={() => setDetachTarget(null)}>{t("common.cancel")}</Button><Button color="red" disabled={busy} onClick={() => void detach()}>{busy ? t("apiResources.detaching") : t("apiResources.detachResource")}</Button></>}><div className="notice"><Unlink /><span><strong>{t("apiResources.noCatalogContentWillBeDeleted")}</strong> {t("apiResources.thisActionAffectsOnlyTheExplicitAttachmentTo")} {integration.display_name}.</span></div></Dialog>
   </>;

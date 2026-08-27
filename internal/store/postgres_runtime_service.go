@@ -180,13 +180,15 @@ func (p *Postgres) CreateRuntimeServiceConnectionRevision(ctx context.Context, v
 	return created, tx.Commit(ctx)
 }
 
-const runtimeCredentialSetSelect = `SELECT credential.id::text,credential.deployment_id::text,credential.organisation_id::text,credential.environment_id::text,credential.scope,coalesce(credential.owner_integration_id::text,''),credential.name,credential.environment_variable,credential.authentication_type,credential.header_name,credential.state,(active.id IS NOT NULL),coalesce(active.fingerprint,''),credential.revision,credential.created_at,credential.updated_at
+const runtimeCredentialSetSelect = `SELECT credential.id::text,credential.deployment_id::text,credential.organisation_id::text,credential.environment_id::text,credential.scope,coalesce(credential.owner_integration_id::text,''),credential.name,credential.environment_variable,credential.authentication_type,credential.header_name,credential.auth_config,credential.key_management_url,credential.access_evaluation_url,credential.usage_url,credential.state,(active.id IS NOT NULL),coalesce(active.fingerprint,''),credential.revision,credential.created_at,credential.updated_at
 	FROM runtime_credential_sets credential
 	LEFT JOIN LATERAL (SELECT id,fingerprint FROM runtime_credential_versions WHERE credential_set_id=credential.id AND state='active' LIMIT 1) active ON true`
 
 func scanRuntimeCredentialSet(row interface{ Scan(...any) error }) (model.RuntimeCredentialSet, error) {
 	var value model.RuntimeCredentialSet
-	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.EnvironmentID, &value.Scope, &value.OwnerIntegrationID, &value.Name, &value.EnvironmentVariable, &value.AuthenticationType, &value.HeaderName, &value.State, &value.CredentialPresent, &value.ActiveFingerprint, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	var authConfig []byte
+	err := row.Scan(&value.ID, &value.DeploymentID, &value.OrganisationID, &value.EnvironmentID, &value.Scope, &value.OwnerIntegrationID, &value.Name, &value.EnvironmentVariable, &value.AuthenticationType, &value.HeaderName, &authConfig, &value.KeyManagementURL, &value.AccessEvaluationURL, &value.UsageURL, &value.State, &value.CredentialPresent, &value.ActiveFingerprint, &value.Revision, &value.CreatedAt, &value.UpdatedAt)
+	value.AuthConfig = append(json.RawMessage(nil), authConfig...)
 	return value, databaseError(err)
 }
 
@@ -195,7 +197,7 @@ const runtimeCredentialVersionSelect = `SELECT id::text,credential_set_id::text,
 func scanToolRuntimeTarget(row interface{ Scan(...any) error }) (model.ToolRuntimeTarget, error) {
 	var value model.ToolRuntimeTarget
 	var authConfig []byte
-	err := row.Scan(&value.EnvironmentID, &value.RuntimeServiceConnectionID, &value.ConnectionRevisionID, &value.BaseURL, &value.AuthenticationType, &value.CredentialSetID, &authConfig, &value.CredentialVersionID, &value.CredentialSecretID, &value.CredentialFingerprint, &value.HeaderName)
+	err := row.Scan(&value.EnvironmentID, &value.RuntimeServiceConnectionID, &value.ConnectionRevisionID, &value.BaseURL, &value.AuthenticationType, &value.CredentialSetID, &authConfig, &value.CredentialVersionID, &value.CredentialSecretID, &value.CredentialFingerprint, &value.HeaderName, &value.AccessEvaluationURL, &value.UsageURL)
 	value.AuthConfig = append(json.RawMessage(nil), authConfig...)
 	return value, databaseError(err)
 }
@@ -207,7 +209,7 @@ func (p *Postgres) enrichToolRuntimeTargets(ctx context.Context, value model.Too
 	if value.RuntimeServiceConnectionID == "" {
 		return value, nil
 	}
-	selectColumns := `SELECT revision.environment_id::text,revision.connection_id::text,revision.id::text,revision.base_url,revision.authentication_type,coalesce(revision.credential_set_id::text,''),revision.auth_config,coalesce(active.id::text,''),coalesce(active.secret_id::text,''),coalesce(active.fingerprint,''),coalesce(credential.header_name,'') `
+	selectColumns := `SELECT revision.environment_id::text,revision.connection_id::text,revision.id::text,revision.base_url,revision.authentication_type,coalesce(revision.credential_set_id::text,''),CASE WHEN credential.id IS NULL THEN revision.auth_config ELSE credential.auth_config END,coalesce(active.id::text,''),coalesce(active.secret_id::text,''),coalesce(active.fingerprint,''),coalesce(credential.header_name,''),coalesce(credential.access_evaluation_url,''),coalesce(credential.usage_url,'') `
 	joins := ` LEFT JOIN runtime_credential_sets credential ON credential.id=revision.credential_set_id LEFT JOIN LATERAL (SELECT version.id,version.secret_id,version.fingerprint FROM runtime_credential_versions version WHERE version.credential_set_id=credential.id AND version.state='active' AND (version.expires_at IS NULL OR version.expires_at>now()) LIMIT 1) active ON true `
 	query := ""
 	args := []any{value.ID, value.Revision}
@@ -300,23 +302,23 @@ func (p *Postgres) RuntimeCredentialSet(ctx context.Context, deploymentID, id st
 
 func (p *Postgres) CreateRuntimeCredentialSet(ctx context.Context, value model.RuntimeCredentialSet) (model.RuntimeCredentialSet, error) {
 	created, err := scanRuntimeCredentialSet(p.pool.QueryRow(ctx, `WITH inserted AS (
-		INSERT INTO runtime_credential_sets(id,deployment_id,organisation_id,environment_id,scope,owner_integration_id,name,environment_variable,authentication_type,header_name,state)
-		SELECT $1,$2,$3,environment.id,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11
+		INSERT INTO runtime_credential_sets(id,deployment_id,organisation_id,environment_id,scope,owner_integration_id,name,environment_variable,authentication_type,header_name,auth_config,key_management_url,access_evaluation_url,usage_url,state)
+		SELECT $1,$2,$3,environment.id,$5,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,$13,$14,$15
 		FROM environments environment
 		WHERE environment.id=$4 AND environment.product_id=$2 AND environment.organisation_id=$3
 		RETURNING *
-	) SELECT inserted.id::text,inserted.deployment_id::text,inserted.organisation_id::text,inserted.environment_id::text,inserted.scope,coalesce(inserted.owner_integration_id::text,''),inserted.name,inserted.environment_variable,inserted.authentication_type,inserted.header_name,inserted.state,false,'',inserted.revision,inserted.created_at,inserted.updated_at FROM inserted`, value.ID, value.DeploymentID, value.OrganisationID, value.EnvironmentID, value.Scope, value.OwnerIntegrationID, value.Name, value.EnvironmentVariable, value.AuthenticationType, value.HeaderName, value.State))
+	) SELECT inserted.id::text,inserted.deployment_id::text,inserted.organisation_id::text,inserted.environment_id::text,inserted.scope,coalesce(inserted.owner_integration_id::text,''),inserted.name,inserted.environment_variable,inserted.authentication_type,inserted.header_name,inserted.auth_config,inserted.key_management_url,inserted.access_evaluation_url,inserted.usage_url,inserted.state,false,'',inserted.revision,inserted.created_at,inserted.updated_at FROM inserted`, value.ID, value.DeploymentID, value.OrganisationID, value.EnvironmentID, value.Scope, value.OwnerIntegrationID, value.Name, value.EnvironmentVariable, value.AuthenticationType, value.HeaderName, value.AuthConfig, value.KeyManagementURL, value.AccessEvaluationURL, value.UsageURL, value.State))
 	return created, err
 }
 
 func (p *Postgres) UpdateRuntimeCredentialSet(ctx context.Context, value model.RuntimeCredentialSet, expected int64) (model.RuntimeCredentialSet, error) {
 	updated, err := scanRuntimeCredentialSet(p.pool.QueryRow(ctx, `WITH updated AS (
-		UPDATE runtime_credential_sets SET name=$3,environment_variable=$4,header_name=$5,state=$6,revision=revision+1,updated_at=now()
-		WHERE deployment_id=$1 AND id=$2 AND environment_id=$7 AND scope=$8 AND coalesce(owner_integration_id::text,'')=$9 AND authentication_type=$10 AND revision=$11
+		UPDATE runtime_credential_sets SET name=$3,environment_variable=$4,header_name=$5,auth_config=$6,key_management_url=$7,access_evaluation_url=$8,usage_url=$9,state=$10,revision=revision+1,updated_at=now()
+		WHERE deployment_id=$1 AND id=$2 AND environment_id=$11 AND scope=$12 AND coalesce(owner_integration_id::text,'')=$13 AND authentication_type=$14 AND revision=$15
 		RETURNING *
-	) SELECT updated.id::text,updated.deployment_id::text,updated.organisation_id::text,updated.environment_id::text,updated.scope,coalesce(updated.owner_integration_id::text,''),updated.name,updated.environment_variable,updated.authentication_type,updated.header_name,updated.state,
+	) SELECT updated.id::text,updated.deployment_id::text,updated.organisation_id::text,updated.environment_id::text,updated.scope,coalesce(updated.owner_integration_id::text,''),updated.name,updated.environment_variable,updated.authentication_type,updated.header_name,updated.auth_config,updated.key_management_url,updated.access_evaluation_url,updated.usage_url,updated.state,
 		EXISTS(SELECT 1 FROM runtime_credential_versions WHERE credential_set_id=updated.id AND state='active'),
-		coalesce((SELECT fingerprint FROM runtime_credential_versions WHERE credential_set_id=updated.id AND state='active' LIMIT 1),''),updated.revision,updated.created_at,updated.updated_at FROM updated`, value.DeploymentID, value.ID, value.Name, value.EnvironmentVariable, value.HeaderName, value.State, value.EnvironmentID, value.Scope, value.OwnerIntegrationID, value.AuthenticationType, expected))
+		coalesce((SELECT fingerprint FROM runtime_credential_versions WHERE credential_set_id=updated.id AND state='active' LIMIT 1),''),updated.revision,updated.created_at,updated.updated_at FROM updated`, value.DeploymentID, value.ID, value.Name, value.EnvironmentVariable, value.HeaderName, value.AuthConfig, value.KeyManagementURL, value.AccessEvaluationURL, value.UsageURL, value.State, value.EnvironmentID, value.Scope, value.OwnerIntegrationID, value.AuthenticationType, expected))
 	if errors.Is(err, ErrNotFound) {
 		if _, lookupErr := p.RuntimeCredentialSet(ctx, value.DeploymentID, value.ID); lookupErr == nil {
 			return model.RuntimeCredentialSet{}, ErrConflict

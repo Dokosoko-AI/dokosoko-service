@@ -115,6 +115,9 @@ func (s *Service) CreateTool(ctx context.Context, input ToolInput, actor Actor) 
 		if err != nil {
 			return model.Tool{}, err
 		}
+		if len(auth.Headers) > 0 {
+			return model.Tool{}, errors.New("additional fixed headers are managed by reusable Authorizations")
+		}
 		input.UpstreamAuth = upstreamAuth
 	}
 	if auth.Type == "delegated_oauth" {

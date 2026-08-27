@@ -26,17 +26,19 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.deploymentResponse(value))
 	case http.MethodPost:
 		var input struct {
-			OrganisationID   string `json:"organisation_id"`
-			Name             string `json:"name"`
-			Slug             string `json:"slug"`
-			Description      string `json:"description"`
-			PublicMCPEnabled bool   `json:"public_mcp_enabled"`
+			OrganisationID        string  `json:"organisation_id"`
+			Name                  string  `json:"name"`
+			Slug                  string  `json:"slug"`
+			Description           string  `json:"description"`
+			FeedbackSubmissionURL *string `json:"feedback_submission_url"`
+			ErrorSubmissionURL    *string `json:"error_submission_url"`
+			PublicMCPEnabled      bool    `json:"public_mcp_enabled"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.CreateDeployment(r.Context(), platform.DeploymentInput{OrganisationID: input.OrganisationID, Name: input.Name, Slug: input.Slug, Description: input.Description, PublicMCPEnabled: input.PublicMCPEnabled}, actor(r))
+		value, err := s.service.CreateDeployment(r.Context(), platform.DeploymentInput{OrganisationID: input.OrganisationID, Name: input.Name, Slug: input.Slug, Description: input.Description, FeedbackSubmissionURL: input.FeedbackSubmissionURL, ErrorSubmissionURL: input.ErrorSubmissionURL, PublicMCPEnabled: input.PublicMCPEnabled}, actor(r))
 		if err != nil {
 			s.creationError(w, err)
 			return
@@ -44,17 +46,19 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, s.deploymentResponse(value))
 	case http.MethodPatch:
 		var input struct {
-			Name             string `json:"name"`
-			Slug             string `json:"slug"`
-			Description      string `json:"description"`
-			PublicMCPEnabled bool   `json:"public_mcp_enabled"`
-			Revision         int64  `json:"revision"`
+			Name                  string  `json:"name"`
+			Slug                  string  `json:"slug"`
+			Description           string  `json:"description"`
+			FeedbackSubmissionURL *string `json:"feedback_submission_url"`
+			ErrorSubmissionURL    *string `json:"error_submission_url"`
+			PublicMCPEnabled      bool    `json:"public_mcp_enabled"`
+			Revision              int64   `json:"revision"`
 		}
 		if err := decodeJSON(r.Body, &input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.UpdateDeployment(r.Context(), platform.DeploymentInput{Name: input.Name, Slug: input.Slug, Description: input.Description, PublicMCPEnabled: input.PublicMCPEnabled, Revision: input.Revision}, actor(r))
+		value, err := s.service.UpdateDeployment(r.Context(), platform.DeploymentInput{Name: input.Name, Slug: input.Slug, Description: input.Description, FeedbackSubmissionURL: input.FeedbackSubmissionURL, ErrorSubmissionURL: input.ErrorSubmissionURL, PublicMCPEnabled: input.PublicMCPEnabled, Revision: input.Revision}, actor(r))
 		if err != nil {
 			s.productCatalogError(w, err)
 			return

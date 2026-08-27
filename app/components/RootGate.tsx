@@ -113,12 +113,57 @@ export function RootGate() {
     }
   }
 
-  if (gate === "loading") return <AuthShell icon={<ShieldCheck />} title={t("auth.openingDokoSoko")} description={t("auth.loadingTheAuthenticatedDeployment")} />;
+  if (gate === "loading") return <ConsoleLoadingShell />;
   if (gate === "setup") return <SetupScreen onComplete={openWorkspace} />;
   if (gate === "login") return <LoginScreen onComplete={openWorkspace} />;
   if (gate === "onboarding") return <WorkspaceSetup existingOrganisation={onboardingOrganisation} onComplete={(value) => { setDeployment(value); setGate("console"); }} />;
   if (gate === "error") return <AuthShell icon={<TriangleAlert />} title={t("auth.deploymentNeedsAttention")} description={problem || t("auth.authenticationIsNotConfiguredCheckTheSetupTokenMaster")} />;
   return <ConsoleApp key={deployment?.id ?? "fixture-preview"} mode={consoleMode} fixtures={consoleFixtures} currentUser={user} currentDeployment={deployment} onLogout={user ? logout : undefined} />;
+}
+
+function ConsoleLoadingShell() {
+  return (
+    <div className="app-shell console-loading-shell" aria-hidden="true">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark">D</span>
+          <span className="console-loading-line console-loading-brand" />
+        </div>
+        <nav>
+          {Array.from({ length: 7 }, (_, index) => (
+            <span className="console-loading-nav-row" key={index}>
+              <i />
+              <b />
+            </span>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          <span className="console-loading-preferences" />
+          <span className="console-loading-account" />
+        </div>
+      </aside>
+      <div className="console-loading-workspace">
+        <header className="topbar">
+          <div className="topbar-inner">
+            <span className="console-loading-product" />
+          </div>
+        </header>
+        <main>
+          <div className="content">
+            <div className="console-loading-heading">
+              <span />
+              <strong />
+            </div>
+            <div className="console-loading-panel" />
+            <div className="console-loading-grid">
+              <span />
+              <span />
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
 }
 
 function slugify(value: string): string {

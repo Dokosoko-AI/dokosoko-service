@@ -2,9 +2,16 @@ import type * as Contract from "./control-plane.generated";
 
 export type APIVisibility = Contract.Visibility;
 
-export type APIProduct = Omit<Contract.Product, "created_at" | "updated_at">;
+export type APIProduct = Omit<Contract.Product, "created_at" | "updated_at"> & {
+  feedback_submission_url?: string;
+  error_submission_url?: string;
+};
 
-export type APIDeployment = Omit<Contract.Deployment, "description" | "created_at" | "updated_at"> & { description: string };
+export type APIDeployment = Omit<Contract.Deployment, "description" | "feedback_submission_url" | "error_submission_url" | "created_at" | "updated_at"> & {
+  description: string;
+  feedback_submission_url: string;
+  error_submission_url: string;
+};
 
 export type APIResourceSetRevision = Omit<Contract.ResourceSetRevision, "manifest"> & { manifest: Array<Record<string, unknown>> };
 
@@ -70,7 +77,7 @@ export type APIRuntimeServiceConnectionRevision = {
   environment_id: string;
   base_url: string;
   authentication_type: APIRuntimeAuthenticationType;
-  credential_set_id?: string;
+  authorization_id?: string;
   auth_config?: Record<string, unknown>;
   content_hash: string;
   revision: number;
@@ -109,7 +116,7 @@ export type APIRuntimeServiceConnectionReadiness = {
 // The backing vault identifier and secret value are never part of this client contract.
 export type APIRuntimeCredentialVersion = {
   id: string;
-  credential_set_id: string;
+  authorization_id: string;
   fingerprint: string;
   state: string;
   created_by?: string;
@@ -125,12 +132,14 @@ export type APIRuntimeCredentialSet = {
   deployment_id: string;
   organisation_id: string;
   environment_id: string;
-  scope: "dedicated" | "shared";
-  owner_integration_id?: string;
   name: string;
   environment_variable: string;
   authentication_type: APIRuntimeAuthenticationType;
   header_name?: string;
+  auth_config: Record<string, unknown>;
+  key_management_url?: string;
+  access_evaluation_url: string;
+  usage_url: string;
   state: string;
   credential_present: boolean;
   active_fingerprint?: string;
@@ -143,8 +152,13 @@ export type APIRuntimeCredentialSet = {
 export type APIRuntimeSetup = {
   integration: APIIntegration;
   environments: APIEnvironment[];
-  service_connections: APIRuntimeServiceConnection[];
-  credential_sets: APIRuntimeCredentialSet[];
+  endpoint_bindings: APIRuntimeServiceConnection[];
+  authorizations: APIRuntimeCredentialSet[];
+};
+
+export type APIRuntimeAuthorizationHeaderInput = {
+  name: string;
+  value: string;
 };
 
 export type APIRuntimeSetupInput = {
@@ -154,12 +168,14 @@ export type APIRuntimeSetupInput = {
   base_url: string;
   authentication_type: APIRuntimeAuthenticationType;
   auth_config?: Record<string, unknown>;
-  existing_credential_set_id?: string;
-  credential_scope?: "dedicated" | "shared";
-  credential_name?: string;
+  authorization_id?: string;
   environment_variable?: string;
   header_name?: string;
+  key_management_url?: string;
+  access_evaluation_url?: string;
+  usage_url?: string;
   credential?: string;
+  additional_headers?: APIRuntimeAuthorizationHeaderInput[];
   credential_expires_at?: string;
 };
 
@@ -176,11 +192,14 @@ export type APIRuntimeServiceConnectionInput = {
 
 export type APIRuntimeCredentialSetInput = {
   environment_id: string;
-  scope: "dedicated" | "shared";
   name?: string;
   environment_variable?: string;
   authentication_type: Exclude<APIRuntimeAuthenticationType, "none" | "delegated_oauth">;
   header_name?: string;
+  auth_config?: Record<string, unknown>;
+  key_management_url?: string;
+  access_evaluation_url?: string;
+  usage_url?: string;
   credential: string;
   expires_at?: string;
 };

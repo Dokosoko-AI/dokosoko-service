@@ -93,8 +93,8 @@ func (s *Service) CreateEnvironment(ctx context.Context, organisationID, product
 
 func (s *Service) CreateSource(ctx context.Context, organisationID, productID, name, kind, location string, actor Actor) (model.Source, error) {
 	name, kind, location = strings.TrimSpace(name), strings.ToLower(strings.TrimSpace(kind)), strings.TrimSpace(location)
-	if name == "" || len(name) > 120 || location == "" || len(location) > 2048 {
-		return model.Source{}, errors.New("source name and location are required")
+	if location == "" || len(location) > 2048 {
+		return model.Source{}, errors.New("source location is required and must not exceed 2048 bytes")
 	}
 	allowedKinds := map[string]bool{"website": true, "openapi": true, "git": true, "upload": true}
 	if !allowedKinds[kind] {
@@ -106,6 +106,12 @@ func (s *Service) CreateSource(ctx context.Context, organisationID, productID, n
 			return model.Source{}, errors.New("web source must use an absolute http(s) URL without embedded credentials")
 		}
 	}
+	if name == "" {
+		name = sourceNameFromLocation(kind, location)
+	}
+	if name == "" || len([]rune(name)) > 120 {
+		return model.Source{}, errors.New("source name must not exceed 120 characters")
+	}
 	id, err := randomUUID()
 	if err != nil {
 		return model.Source{}, err
@@ -116,6 +122,35 @@ func (s *Service) CreateSource(ctx context.Context, organisationID, productID, n
 	}
 	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: organisationID, ProductID: productID, ActorID: actor.ID, Action: "source.created", TargetType: "source", TargetID: value.ID, Current: map[string]any{"name": value.Name, "kind": value.Kind, "visibility": model.VisibilityPrivate}, RequestID: actor.RequestID, CreatedAt: s.now()})
 	return value, err
+}
+
+func sourceNameFromLocation(kind, location string) string {
+	name := strings.TrimSpace(location)
+	parsed, err := url.Parse(location)
+	if err == nil && parsed.Host != "" {
+		path := strings.Trim(parsed.Path, "/")
+		if decoded, decodeErr := url.PathUnescape(path); decodeErr == nil {
+			path = decoded
+		}
+		if kind == "git" && path != "" {
+			parts := strings.Split(path, "/")
+			parts[len(parts)-1] = strings.TrimSuffix(parts[len(parts)-1], ".git")
+			if len(parts) > 1 {
+				name = parts[len(parts)-2] + "/" + parts[len(parts)-1]
+			} else {
+				name = parts[0]
+			}
+		} else if path != "" {
+			name = parsed.Host + "/" + path
+		} else {
+			name = parsed.Host
+		}
+	}
+	runes := []rune(strings.TrimSpace(name))
+	if len(runes) > 120 {
+		runes = runes[:120]
+	}
+	return string(runes)
 }
 
 func (s *Service) QueueCrawl(ctx context.Context, productID, sourceID string, actor Actor) (model.CrawlJob, error) {

@@ -24,7 +24,7 @@ import { createRecipeApprovalReview, type RecipeApprovalReview } from "./dialogs
 import {
   type AIWorkload, ConsoleLink, EntityLink, SettingsCard, aiModelDefaults,
   aiModelOptions, aiProviderDescription, aiProviderLabel, aiProviders, aiWorkloadDescription, aiWorkloadName, aiWorkloads, analysisMatchesIntegration,
-  recipeHasScopeDependencyMismatch, recipeMatchesIntegration, recipeScopeIDs, toolPolicy, toolStateLabel,
+  recipeHasScopeDependencyMismatch, recipeScopeIDs, toolPolicy, toolStateLabel,
 } from "./shared";
 
 function ToolsWorkspaceTabs({ active, onNavigate }: { active: "catalog" | "connections" | "preview"; onNavigate: (path: string) => void }) {
@@ -166,24 +166,16 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
   onPublish: (recipe: APIRecipe) => void;
 }) {
   const { t } = useTranslation();
-  const [selectedIntegrationID, setSelectedIntegrationID] = useState("");
+  const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
+  const [generationIntegrationID, setGenerationIntegrationID] = useState("");
   const [approvalReview, setApprovalReview] = useState<RecipeApprovalReview | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<APIRecipe | null>(null);
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
-  const activeIntegrationID = integrations.some((integration) => integration.id === selectedIntegrationID) ? selectedIntegrationID : "";
-  const selectedAnalysis = activeIntegrationID
+  const selectedAnalysis = generationIntegrationID
     ? analyses
-      .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, activeIntegrationID))
+      .filter((analysis) => analysis.state === "review" && analysisMatchesIntegration(analysis, generationIntegrationID))
       .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]
     : undefined;
-  const unscopedOrInvalidRecipes = recipes.filter((recipe) => {
-    const scopeIDs = recipeScopeIDs(recipe);
-    return recipeHasScopeDependencyMismatch(recipe) || scopeIDs.length === 0 || scopeIDs.some((id) => !integrations.some((integration) => integration.id === id));
-  });
-  const invalidRecipeIDs = new Set(unscopedOrInvalidRecipes.map((recipe) => recipe.id));
-  const visibleRecipes = activeIntegrationID
-    ? recipes.filter((recipe) => !invalidRecipeIDs.has(recipe.id) && recipeMatchesIntegration(recipe, activeIntegrationID))
-    : recipes.filter((recipe) => !invalidRecipeIDs.has(recipe.id));
 
   function renderRecipe(recipe: APIRecipe) {
     const scopeIDs = recipeScopeIDs(recipe);
@@ -223,26 +215,27 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       eyebrow={t("settings.authoring")}
       title={t("navigation.recipes")}
       action={<span className="heading-actions">
-        <Button outline disabled={busy || !activeIntegrationID} onClick={() => onGenerate(activeIntegrationID)}><Sparkles data-slot="icon" />{t("settings.generateFromEvidence")}</Button>
+        <Button outline disabled={busy || integrations.length === 0} onClick={() => setGenerateDialogOpen(true)}><Sparkles data-slot="icon" />{t("settings.generateFromEvidence")}</Button>
         <Button disabled={busy} onClick={onCreate}><Plus data-slot="icon" />{t("settings.createRecipe")}</Button>
       </span>}
     />
     <section className="panel">
-      <PanelHeader title={t("settings.recipeScope")} description={t("settings.eachRecipeImplementsOneTangibleProductCapabilityAndIs")} />
-      <div className="recipe-scope-body">
-        <label className="auth-field"><span>API</span><Select aria-label={t("settings.recipeAPI")} value={activeIntegrationID} onChange={(event) => setSelectedIntegrationID(event.target.value)}><option value="">{t("integrations.allAPIs")}</option>{integrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name} · {integration.version_key}</option>)}</Select></label>
+      <PanelHeader title={t("settings.recipeCatalog")} description={t("settings.recipeCatalogDescription")} />
+      {recipes.map(renderRecipe)}
+      {recipes.length === 0 && <div className="empty-row">{t("settings.noRecipesYet")}</div>}
+    </section>
+    <Dialog
+      open={generateDialogOpen}
+      onClose={(open) => { if (!open && !busy) setGenerateDialogOpen(false); }}
+      title={t("settings.generateFromEvidence")}
+      description={t("settings.generateFromEvidenceDescription")}
+      actions={<><Button outline disabled={busy} onClick={() => setGenerateDialogOpen(false)}>{t("common.cancel")}</Button><Button disabled={busy || !generationIntegrationID} onClick={() => { const integrationID = generationIntegrationID; setGenerateDialogOpen(false); setGenerationIntegrationID(""); onGenerate(integrationID); }}>{t("settings.generateFromEvidence")}</Button></>}
+    >
+      <div className="auth-form compact-form recipe-generation-dialog">
+        <label className="auth-field"><span>{t("settings.recipeAPI")}</span><Select aria-label={t("settings.recipeAPI")} value={generationIntegrationID} onChange={(event) => setGenerationIntegrationID(event.target.value)}><option value="">{t("settings.chooseAnAPI")}</option>{integrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name} · {integration.version_key}</option>)}</Select></label>
         <IntegrationEvidenceGaps unknowns={selectedAnalysis?.unknowns ?? []} />
       </div>
-    </section>
-    <section className="panel">
-      <PanelHeader title={t("settings.codingAgentImplementationRecipes")} description={t("settings.minimalProductIntegrationStepsDeliveredAfterTheCodingAgent")} />
-      {visibleRecipes.map(renderRecipe)}
-      {visibleRecipes.length === 0 && <div className="empty-row">{activeIntegrationID ? t("settings.noRecipesForThisAPIYet") : t("settings.noRecipesYet")}</div>}
-    </section>
-    {unscopedOrInvalidRecipes.length > 0 && <section className="panel">
-      <PanelHeader title={t("settings.deploymentWideAndScopeExceptions")} description={t("settings.legacyDeploymentWideRecipesAndRecordsWithAnInvalid")} />
-      {unscopedOrInvalidRecipes.map(renderRecipe)}
-    </section>}
+    </Dialog>
     <RecipeApprovalDialog review={approvalReview} busy={busy} onClose={() => setApprovalReview(null)} onApprove={onApprove} />
     <Dialog
       open={Boolean(deleteTarget)}

@@ -131,6 +131,10 @@ type ReportingStore interface {
 	ReportSubmissions(context.Context, string, string, int) ([]model.ReportSubmission, bool, error)
 	ReportSubmission(context.Context, string, string) (model.ReportSubmission, error)
 	CreateReportSubmission(context.Context, model.ReportSubmission) (model.ReportSubmission, error)
+	CreateAuthorizationUsageEvent(context.Context, model.AuthorizationUsageEvent) (model.AuthorizationUsageEvent, error)
+	ClaimAuthorizationUsageEvents(context.Context, string, time.Time, int) ([]model.AuthorizationUsageEvent, error)
+	CompleteAuthorizationUsageEvent(context.Context, string, string, time.Time) error
+	RetryAuthorizationUsageEvent(context.Context, string, string, time.Time, string) error
 }
 
 // AIRecipeStore owns persistence operations for one cohesive application domain.

@@ -28,15 +28,17 @@ function componentSource(source, startName, endName) {
   return source.slice(start, end);
 }
 
-test("server-renders an authentication-safe loading shell", async () => {
+test("server-renders an authentication-neutral console shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>DokoSoko — Agent delivery control plane<\/title>/i);
-  assert.match(html, /Opening DokoSoko/);
-  assert.match(html, /Loading the authenticated deployment/);
+  assert.match(html, /class="app-shell console-loading-shell"/);
+  assert.match(html, /class="sidebar"/);
+  assert.match(html, /class="topbar"/);
+  assert.doesNotMatch(html, /Opening DokoSoko|Loading the authenticated deployment/);
   assert.doesNotMatch(html, /Acme Platform|prod_acme|org_acme/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
@@ -74,6 +76,21 @@ test("keeps the rendered navigation destinations backed by canonical routes", as
   assert.match(styles, /\.entity-detail-grid/);
   assert.match(styles, /\.agent-setup-grid/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: var\(--space-section\); \}/);
+});
+
+test("keeps documents and saved documentation sets in one navigable workspace", async () => {
+  const source = await consoleSource();
+  const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
+  const styles = await stylesSource();
+
+  assert.match(source, /className="panel documentation-file-navigator"/);
+  assert.match(source, /documentGroups\.map/);
+  assert.match(source, /Save selection as set/);
+  assert.match(source, /Documentation sets/);
+  assert.match(source, /<DocumentationCollectionsView[\s\S]*?embedded/);
+  assert.doesNotMatch(routes, /collections:\s*"\/developer-assets\/documentation\/collections"/);
+  assert.match(styles, /\.documentation-file-tree/);
+  assert.match(styles, /\.documentation-sets-pane/);
 });
 
 test("keeps each MCP endpoint and its controls inside the matching delivery card", async () => {
@@ -213,6 +230,7 @@ test("keeps the Settings overview free of deployment metadata", async () => {
 
 test("ships one evidence-to-recipe review workflow", async () => {
   const source = await consoleSource();
+  const recipesView = componentSource(source, "RecipesView", "OutboxView");
   const recipeDialog = await readFile(new URL("../app/components/console/dialogs/recipe-dialogs.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /Turn verified integration evidence into implementation guides/);
   const styles = await stylesSource();
@@ -221,21 +239,23 @@ test("ships one evidence-to-recipe review workflow", async () => {
   const api = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
 
   assert.match(routes, /recipes: "\/recipes"/);
-  for (const label of ["Create recipe", "Generate from evidence", "Coding-agent implementation recipes", "Approve", "Publish", "Rework", "Delete recipe"]) assert.match(source, new RegExp(label));
+  for (const label of ["Create recipe", "Generate from evidence", "Recipe catalog", "Approve", "Publish", "Rework", "Delete recipe"]) assert.match(source, new RegExp(label));
   assert.match(source, /Describe one concrete workflow\. The generator detects every required API/);
-  assert.match(source, /<PanelHeader title="Recipe scope"/);
-  assert.match(source, /aria-label="Recipe API"/);
-  assert.match(source, /integrations\.some\(\(integration\) => integration\.id === selectedIntegrationID\)/);
+  assert.doesNotMatch(recipesView, /<PanelHeader title="Recipe scope"|recipe-scope-body|All APIs/);
+  assert.match(recipesView, /aria-label="Recipe API"/);
+  assert.match(recipesView, /open=\{generateDialogOpen\}/);
+  assert.match(recipesView, /Choose an API to analyze its reviewed evidence and generate draft recipes/);
   assert.doesNotMatch(source, /disabled=\{busy \|\| analyses\.length/);
-  assert.match(source, /disabled=\{busy \|\| !activeIntegrationID\}/);
-  assert.match(source, /visibleRecipes = activeIntegrationID[\s\S]*recipeMatchesIntegration\(recipe, activeIntegrationID\)/);
-  assert.match(source, /unscopedOrInvalidRecipes\.map\(renderRecipe\)/);
+  assert.match(source, /disabled=\{busy \|\| integrations\.length === 0\}/);
+  assert.match(recipesView, /recipes\.map\(renderRecipe\)/);
+  assert.doesNotMatch(recipesView, /activeIntegrationID|visibleRecipes|recipeMatchesIntegration/);
+  assert.doesNotMatch(source, /unscopedOrInvalidRecipes|Deployment-wide and scope exceptions|Coding-agent implementation recipes/);
   assert.match(source, /disabled=\{busy \|\| invalidScope\} onClick=\{\(\) => on(?:Edit|Rework|Publish)/);
   assert.match(source, /const approvalCandidate = createRecipeApprovalReview\(recipe, integrations\)/);
   assert.match(source, /setApprovalReview\(approvalCandidate\)/);
   assert.doesNotMatch(source, /onClick=\{[^}]*onApprove/);
-  assert.match(source, /Minimal product-integration steps delivered after the coding agent connects through MCP/);
-  assert.match(source, /Recipes are deployment-level assets\. Filter by API here/);
+  assert.match(source, /Product-integration workflows grounded in exact API revision evidence/);
+  assert.doesNotMatch(source, /Filter by API\. Multi-API recipes appear under every attached API/);
   assert.match(source, /Describe the specific product-integration step/);
   assert.match(source, /Reviewed reference IDs \(JSON\)/);
   assert.match(source, /parseRecipeSpecEditor/);
@@ -305,7 +325,7 @@ test("refreshes scoped evidence before recipe generation without duplicating act
   const domain = await readFile(new URL("../app/lib/console-domain.ts", import.meta.url), "utf8");
   assert.match(source, /recipeAnalysisIsFreshlyRunning\(latestAnalysis\)/);
   assert.match(source, /const analysis = await api\.analyseIntegration\(product\.id, integrationID\)/);
-  assert.match(source, /analysis\.state === "review" && analysisMatchesIntegration\(analysis, activeIntegrationID\)/);
+  assert.match(source, /analysis\.state === "review" && analysisMatchesIntegration\(analysis, generationIntegrationID\)/);
   assert.match(domain, /analysis\?\.state !== "running"/);
   assert.match(domain, /scopes\.length === 1 && scopes\[0\]\.resource_id === integrationID/);
 });
@@ -316,14 +336,14 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   const routes = await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8");
   const integrationNavigation = await readFile(new URL("../app/components/integrations/IntegrationNavigation.tsx", import.meta.url), "utf8");
   const quickStart = await readFile(new URL("../app/components/integrations/IntegrationQuickStart.tsx", import.meta.url), "utf8");
-  const runtimeAccess = await readFile(new URL("../app/components/integrations/IntegrationRuntimeAccess.tsx", import.meta.url), "utf8");
+  const authorization = await readFile(new URL("../app/components/integrations/IntegrationAuthorization.tsx", import.meta.url), "utf8");
   const client = await clientSource();
   const directory = componentSource(source, "IntegrationDirectoryView", "IntegrationWorkspaceView");
   const workspace = componentSource(source, "IntegrationWorkspaceView", "AuthorizationPolicyWorkspace");
   const integrationTabs = routes.slice(routes.indexOf("export const INTEGRATION_TABS"), routes.indexOf("export const INTEGRATION_RESOURCE_TABS"));
 
-  assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "routes\.quickStart" \},\s*\{ id: "documentation", label: "routes\.resources" \},\s*\{ id: "access", label: "routes\.keysAccess" \},\s*\{ id: "tools", label: "routes\.tools" \},\s*\{ id: "test", label: "routes\.test" \},\s*\{ id: "history", label: "routes\.history" \},\s*\];/);
-  for (const removed of ["authorization", "recipes", "delivery", "resources"]) {
+  assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "routes\.quickStart" \},\s*\{ id: "documentation", label: "routes\.resources" \},\s*\{ id: "authorization", label: "routes\.keysAccess" \},\s*\{ id: "tools", label: "routes\.tools" \},\s*\{ id: "test", label: "routes\.test" \},\s*\{ id: "history", label: "routes\.history" \},\s*\];/);
+  for (const removed of ["access", "recipes", "delivery", "resources"]) {
     assert.ok(!integrationTabs.includes(`id: "${removed}"`), `${removed} should not remain an API tab`);
     assert.doesNotMatch(workspace, new RegExp(`activeTab === "${removed}"`));
     assert.doesNotMatch(workspace, new RegExp(`integrationPath\\(integration\\.id,\\s*"${removed}"`));
@@ -339,7 +359,7 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.match(quickStart, /Get your API ready/);
   assert.match(quickStart, /Optional setup and API details/);
   assert.match(quickStart, /const nextStep = steps\.findIndex/);
-  assert.match(source, /label: "Configure runtime access"[^\n]*path: integrationPath\(integration\.id, "access"\)/);
+  assert.match(source, /label: "Connect Authorization"[^\n]*path: integrationPath\(integration\.id, "authorization"\)/);
   assert.match(source, /label: "Expose tools"[^\n]*path: integrationPath\(integration\.id, "tools"\)/);
   assert.match(source, /IntegrationDirectoryView/);
   assert.match(source, /IntegrationWorkspaceView/);
@@ -354,7 +374,10 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.doesNotMatch(source, /Ingest → crawl → review → publish → attach\./);
   assert.doesNotMatch(source, /Only unresolved actions appear here/);
   assert.match(source, /Customer identity/);
-  assert.match(runtimeAccess, /Credential lifecycle and connection metadata — Advanced/);
+  assert.match(authorization, /One reusable Authorization owns the authentication method, secret, API_KEY_ENV, and provider hooks/);
+  assert.match(authorization, /Access evaluation URL/);
+  assert.match(authorization, /Usage URL/);
+  assert.doesNotMatch(authorization, /Feedback submission URL|Error submission URL/);
   assert.doesNotMatch(directory, /No changes|Filter by API family|Filter by setup state|integration-family-heading|groupedIntegrations/);
   assert.match(styles, /\.integration-directory-columns/);
   assert.doesNotMatch(styles, /\.integration-family-heading/);
@@ -373,12 +396,16 @@ test("keeps SDK package and release ownership in Catalog with exact API attachme
   const source = await consoleSource();
   const client = await clientSource();
   const openapi = await readFile(new URL("../api/openapi.yaml", import.meta.url), "utf8");
+  const catalog = await readFile(new URL("../app/components/console/developer-assets/sdk-catalog-view.tsx", import.meta.url), "utf8");
+  const importer = await readFile(new URL("../app/components/console/developer-assets/sdk-package-import-dialog.tsx", import.meta.url), "utf8");
+  const apiResources = await readFile(new URL("../app/components/console/developer-assets/api-resources-workspace.tsx", import.meta.url), "utf8");
 
   assert.doesNotMatch(source, /Legacy SDK attachment projection/);
   assert.doesNotMatch(source, /Exact API-owned SDK references/);
   assert.doesNotMatch(source, /There is no global package catalogue or release workflow/);
   assert.match(source, /Ranges and latest tags are rejected/);
   assert.match(client, /sdkPackages/);
+  assert.match(client, /importSDKPackage/);
   assert.match(client, /createSDKPackage/);
   assert.match(client, /createSDKRelease/);
   assert.match(client, /ingestSDKContent/);
@@ -387,6 +414,17 @@ test("keeps SDK package and release ownership in Catalog with exact API attachme
   assert.match(client, /changeAPISDK/);
   assert.match(client, /detachAPISDK/);
   assert.match(openapi, /\/api\/v1\/developer-assets\/sdk-packages:/);
+  assert.match(openapi, /\/api\/v1\/developer-assets\/sdk-package-imports:/);
+  assert.match(openapi, /credential:[\s\S]*?writeOnly: true/);
+  assert.match(openapi, /never installs[\s\S]*?executes package code/);
+  assert.match(catalog, /setImportOpen\(true\)[\s\S]*?Import package/);
+  assert.doesNotMatch(catalog, /openPackageEditor\(\)/);
+  for (const ecosystem of ['"npm"', '"pypi"', '"go"', '"cargo"']) assert.ok(importer.includes(ecosystem), `${ecosystem} should be an import option`);
+  assert.match(importer, /privateSource[\s\S]*?bearer[\s\S]*?basic/);
+  assert.match(importer, /type="password"[\s\S]*?autoComplete="new-password"/);
+  assert.match(importer, /credential is sent only for this import[\s\S]*?never stored/);
+  assert.match(apiResources, /SDKPackageImportDialog[\s\S]*?attachAPISDK/);
+  assert.doesNotMatch(apiResources, /createSDKPackage|createSDKRelease/);
   assert.match(openapi, /\/api\/v1\/integrations\/\{integration_id\}\/resources\/sdks:/);
   // Legacy server endpoints remain a compatibility projection during the
   // migration window, but no active frontend can write through that path.
@@ -448,7 +486,7 @@ test("uses a focused deployment tool catalog and token-based MCP connections", a
   assert.match(source, /\{section === "mcp-preview" && <MCPPreviewView/);
 });
 
-test("keeps API authorization policy authoring in API Access and out of root Tools and Identity", async () => {
+test("keeps API action policy authoring in the API Tools workspace and out of root Tools and Identity", async () => {
   const source = await consoleSource();
   const client = await clientSource();
   const identitySetup = await readFile(new URL("../app/components/OIDCIdentitySetup.tsx", import.meta.url), "utf8");
@@ -466,9 +504,9 @@ test("keeps API authorization policy authoring in API Access and out of root Too
   assert.match(source, /\{section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup/);
   assert.match(source, /\{section === "tools" && <ToolsView/);
   assert.doesNotMatch(toolsView, /AuthorizationPolicyWorkspace|API action policies|Grant registry/);
-  assert.match(integrationWorkspace, /activeTab === "access"[\s\S]*<AuthorizationPolicyWorkspace integration=\{integration\} onMessage=\{onMessage\} \/>/);
+  assert.match(integrationWorkspace, /activeTab === "tools"[\s\S]*<IntegrationToolsWorkspace[\s\S]*<AuthorizationPolicyWorkspace integration=\{integration\} onMessage=\{onMessage\} \/>/);
   for (const label of ["Action policies", "Grant registry", "API action policies"]) {
-    assert.ok(policyWorkspace.includes(label), `${label} should be present in the API Access policy workspace`);
+    assert.ok(policyWorkspace.includes(label), `${label} should be present in the API Tools policy workspace`);
   }
   assert.match(policyWorkspace, /Deployment grant registry — Advanced/);
   assert.match(policyWorkspace, /api\.grantDefinitions\(\)/);
@@ -478,9 +516,9 @@ test("keeps API authorization policy authoring in API Access and out of root Too
   assert.doesNotMatch(policyWorkspace, /API policy scope|selectedIntegration/);
   assert.doesNotMatch(policyWorkspace, /Policy simulator|Simulation only|simulateAuthorizationPoint/);
   assert.doesNotMatch(identitySetup, /grantDefinitions|authorizationPoints|Grant registry|API action policies|Policy simulator|simulateAuthorizationPoint|\bcustomerAccounts\b|APICustomerAccount/);
-  assert.match(source, /label: "Configure customer access"[^\n]*path: integrationPath\(integration\.id, "access"\)/);
+  assert.match(source, /label: "Configure customer access"[^\n]*path: integrationPath\(integration\.id, "tools"\)/);
   assert.match(source, /integrationValidationPath\(integration\.id, tab\)/);
-  assert.match(await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8"), /case "authorization":[\s\S]*case "access": return integrationPath\(uid, "access"\)/);
+  assert.match(await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8"), /case "authorization": return integrationPath\(uid, "authorization"\)/);
   assert.match(source, /publishValidationCodes\.has\("authorization_missing"\)/);
 });
 
@@ -675,14 +713,15 @@ test("splits API tools into built-ins, API-owned definitions, and attached commo
   assert.match(source, /publishValidationCodes\.has\("tools_missing"\)/);
 });
 
-test("uploads local knowledge files with a browser-managed multipart request", async () => {
+test("uploads local knowledge files without asking for duplicate source names", async () => {
   const source = await consoleSource();
   const styles = await stylesSource();
   const client = await clientSource();
 
-  assert.match(client, /uploadSource: \(productID: string, organisationID: string, name: string, file: File\)/);
+  assert.match(client, /uploadSource: \(productID: string, organisationID: string, file: File, name\?: string\)/);
   assert.match(client, /const body = new FormData\(\)/);
-  for (const field of ["organisation_id", "name", "file"]) assert.match(client, new RegExp(`body\\.append\\("${field}"`));
+  for (const field of ["organisation_id", "file"]) assert.match(client, new RegExp(`body\\.append\\("${field}"`));
+  assert.match(client, /if \(name\?\.trim\(\)\) body\.append\("name", name\.trim\(\)\)/);
   assert.match(client, /\/sources\/upload`/);
   assert.match(client, /const multipartBody = typeof FormData !== "undefined" && init\?\.body instanceof FormData/);
   assert.match(client, /init\?\.body && !multipartBody \? \{ "Content-Type": "application\/json" \} : \{\}/);
@@ -696,6 +735,7 @@ test("uploads local knowledge files with a browser-managed multipart request", a
   for (const option of ["Crawl website", "Git repository", "Add file"]) assert.ok(source.includes(option));
   for (const kind of ["website", "git", "upload"]) assert.match(source, new RegExp(`kind: "${kind}"`));
   assert.match(source, /className="source-kind-options"/);
+  assert.doesNotMatch(source, /sourceDialogs\.name|\bsourceName\b|\bsetSourceName\b/);
   assert.doesNotMatch(source, /<option value="openapi">/);
   assert.match(source, /https:\/\/example\.com\/docs/);
   assert.match(source, /only follows pages at that exact path or below it/i);
@@ -803,9 +843,9 @@ test("keeps live customer suspension controls under Identity and fails closed wh
 test("keeps page and panel headings concise across the console", async () => {
   const source = await consoleSource();
   const identitySetup = await readFile(new URL("../app/components/OIDCIdentitySetup.tsx", import.meta.url), "utf8");
-  const runtimeAccess = await readFile(new URL("../app/components/integrations/IntegrationRuntimeAccess.tsx", import.meta.url), "utf8");
+  const authorization = await readFile(new URL("../app/components/integrations/IntegrationAuthorization.tsx", import.meta.url), "utf8");
   const englishCatalog = await readFile(new URL("../app/i18n/locales/ui/en.ts", import.meta.url), "utf8");
-  const uiSource = `${source}\n${identitySetup}\n${runtimeAccess}\n${englishCatalog}`;
+  const uiSource = `${source}\n${identitySetup}\n${authorization}\n${englishCatalog}`;
 
   for (const removed of [
     "Authenticated assistants embedded in your customers' applications.",
@@ -845,7 +885,15 @@ test("creates private APIs without retaining the Product Definition builder", as
   const client = await clientSource();
 
   assert.match(source, /Add API/);
-  assert.match(source, /Create a private draft/);
+  assert.match(source, /OpenAPI file/);
+  assert.match(source, /Import existing/);
+  assert.match(source, /Configure new/);
+  assert.match(source, /Key management URL/);
+  assert.match(source, /API_KEY_ENV/);
+  assert.match(source, /api\.uploadSource/);
+  assert.match(source, /developerAssetsApi\.createAPIContract/);
+  assert.match(source, /developerAssetsApi\.attachAPIContractSource/);
+  assert.match(source, /api\.configureIntegrationAuthorization/);
   assert.match(source, /<span>API name<\/span>/);
   assert.match(source, /apiFamilyKeyFromName\(displayName\)/);
   assert.doesNotMatch(source, /Auto-magic|title="Product definition"|Build product automatically/);
@@ -889,7 +937,6 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   assert.doesNotMatch(settings, /Customer identity|OIDCIdentitySetup|onConfigureIdentity/);
   assert.doesNotMatch(source, /settingsPath\("identity"\)|function CustomerIdentitySettingsView|function IdentityContractPanel|\bidentityOpen\b|\bsetIdentityOpen\b|title="Customer identity integration"/);
   assert.match(source, /\{section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup/);
-  assert.match(source, /className="integration-identity-summary"/);
   assert.equal(styles.match(/\.identity-summary\s*\{/g)?.length, 1, "the OIDC summary layout should not be overridden by another workspace");
   assert.doesNotMatch(`${identitySetup}\n${styles}`, /identity-setup-steps|OIDC setup progress/);
   assert.match(styles, /\.identity-verification-grid\s*\{[^}]*grid-template-columns:\s*1fr/);
@@ -1030,13 +1077,15 @@ test("edits revision-safe tenant profile settings without duplicating delivery c
   assert.match(source, /setProduct\(deploymentAsProduct\(updated\)\)/);
   assert.match(tenantSettings, /title="Tenant settings"/);
   assert.match(tenantSettings, /<SettingsTabs active="tenant"/);
-  for (const label of ["Tenant name", "Tenant slug", "Description", "Tenant ID", "Organisation ID", "Catalog revision", "Configuration revision"]) {
+  for (const label of ["Tenant name", "Tenant slug", "Description", "Submission endpoints", "Feedback submission URL", "Error submission URL", "Tenant ID", "Organisation ID", "Catalog revision", "Configuration revision"]) {
     assert.ok(tenantSettings.includes(label), `${label} should be present in Tenant settings`);
   }
   assert.match(tenantSettings, /tenantSlugPattern\.test\(trimmedSlug\)/);
   assert.match(tenantSettings, /maxLength=\{120\}/);
   assert.match(tenantSettings, /maxLength=\{63\}/);
   assert.match(tenantSettings, /maxLength=\{2000\}/);
+  assert.match(tenantSettings, /validSubmissionURL/);
+  assert.match(tenantSettings, /maxLength=\{2048\}/);
   assert.doesNotMatch(tenantSettings, /Switch|publicMCPEnabled|onEnabledChange/);
 });
 
@@ -1053,61 +1102,73 @@ test("ships a local support outbox without an introductory notice", async () => 
   assert.doesNotMatch(client, /backendConnections|createSupportRoute|replaceSupportRoute|createSupportDeliveryAttempt/);
 });
 
-test("ships first-class API, reusable resource, and runtime service management", async () => {
+test("ships first-class API, reusable resource, and reusable Authorization management", async () => {
   const source = await consoleSource();
   const client = await clientSource();
-  const runtimeAccess = await readFile(new URL("../app/components/integrations/IntegrationRuntimeAccess.tsx", import.meta.url), "utf8");
+  const authorization = await readFile(new URL("../app/components/integrations/IntegrationAuthorization.tsx", import.meta.url), "utf8");
 
   assert.match(source, /Add API/);
   assert.match(source, /Create reusable resource set/);
   assert.match(source, /Duplicate resource set/);
   assert.match(source, /Pin the current revision instead of following latest/);
-  assert.match(runtimeAccess, /Connect service/);
-  assert.match(runtimeAccess, /Credential lifecycle and connection metadata/);
-  assert.match(source, /Create a private draft/);
+  assert.match(authorization, /Connect Authorization/);
+  assert.match(authorization, /Create new/);
+  assert.doesNotMatch(authorization, /Authorization name/);
+  assert.match(authorization, /The new version becomes active for every API using this Authorization/);
   assert.match(source, /<span>API name<\/span>/);
-  assert.match(source, /editingIntegration \? "Save changes" : "Create API"/);
   assert.match(source, /apiFamilyKeyFromName\(displayName\)/);
   assert.doesNotMatch(source, /Each API record represents one family and one version/);
   assert.match(client, /createIntegration/);
   assert.match(client, /updateIntegration/);
   assert.match(client, /duplicateResourceSet/);
-  assert.match(client, /createIntegrationRuntimeConnection/);
+  assert.match(client, /configureIntegrationAuthorization/);
+  assert.match(client, /updateAuthorization/);
   assert.doesNotMatch(client, /updateAccessDefinition|createAccessDefinition|createAccessConnection|createProvider:|projects:\s*async/);
 });
 
-test("uses the real masked runtime-service model for API-local Access", async () => {
+test("uses the real masked reusable Authorization model for each API", async () => {
   const source = await consoleSource();
-  const access = await readFile(new URL("../app/components/integrations/IntegrationRuntimeAccess.tsx", import.meta.url), "utf8");
+  const authorization = await readFile(new URL("../app/components/integrations/IntegrationAuthorization.tsx", import.meta.url), "utf8");
+  const headerManager = await readFile(new URL("../app/components/integrations/AuthorizationHeaderManager.tsx", import.meta.url), "utf8");
   const client = await clientSource();
   const styles = await stylesSource();
   const runtimeTypes = client.slice(client.indexOf("export type APIRuntimeAuthenticationType"), client.indexOf("export type APISource"));
+  const authorizationSection = authorization.indexOf('id="runtime-authorization-section"');
+  const envSection = authorization.indexOf('id="runtime-env-section"');
+  const urlsSection = authorization.indexOf('id="runtime-urls-section"');
 
-  assert.match(source, /<IntegrationRuntimeAccess integration=\{integration\}[\s\S]{0,80}onMessage=\{onMessage\}/);
-  assert.match(access, /api\.integrationRuntimeSetup\(integration\.id\)/);
-  assert.match(access, /api\.configureIntegrationRuntimeSetup\(integration\.id/);
-  assert.match(access, /Only this API/);
-  assert.match(access, /Share across APIs/);
-  assert.match(access, /Use existing/);
-  assert.match(access, /SERVICE_API_KEY/);
-  assert.match(access, /type="password"/);
-  assert.match(access, /placeholder=\{selectedCurrentCredential\?\.credential_present \? "••••••••••••"/);
-  assert.match(access, /Credential lifecycle and connection metadata — Advanced/);
-  assert.match(access, /api\.rotateRuntimeCredential/);
-  assert.match(access, /api\.revokeRuntimeCredentialVersion/);
-  assert.match(access, /Check configuration/);
-  assert.match(access, /metadata only\. Live upstream behavior is tested from an attached tool/);
-  assert.doesNotMatch(access, /fetch\(/);
+  assert.match(source, /<IntegrationAuthorization integration=\{integration\}[\s\S]{0,100}onMessage=\{onMessage\}/);
+  assert.match(authorization, /api\.integrationAuthorization\(integration\.id\)/);
+  assert.match(authorization, /api\.configureIntegrationAuthorization\(integration\.id/);
+  assert.match(authorization, /Create new/);
+  assert.match(authorization, /Key management URL/);
+  assert.match(authorization, /Access evaluation URL/);
+  assert.match(authorization, /Usage URL/);
+  assert.match(client, /authorizations:/);
+  assert.match(authorization, /Use existing/);
+  assert.match(authorization, /API_KEY_ENV/);
+  assert.match(authorization, /type="password"/);
+  assert.match(authorization, /placeholder="\*\*\*\*\*\*\*\*\*\*\*\*"/);
+  assert.match(authorization, /<AuthorizationHeaderManager/);
+  assert.match(authorization, /additional_headers:/);
+  assert.match(headerManager, />Add header</);
+  assert.match(headerManager, />Delete</);
+  assert.match(headerManager, /<span>Header<\/span>/);
+  assert.match(headerManager, /<span>Value<\/span><input[^>]*type="password"/);
+  assert.match(authorization, /api\.rotateAuthorizationCredential/);
+  assert.match(authorization, /api\.revokeAuthorizationCredentialVersion/);
+  assert.doesNotMatch(authorization, /fetch\(/);
+  assert.ok(authorizationSection >= 0 && authorizationSection < envSection && envSection < urlsSection, "Authorization, ENV, and URLs sections must render in order");
 
-  assert.match(client, /integrationRuntimeSetup:[\s\S]*\/runtime-setup`/);
-  assert.match(client, /configureIntegrationRuntimeSetup:[\s\S]*method: "PUT"/);
-  assert.match(client, /runtimeCredentialUsage:[\s\S]*\/usage`/);
-  assert.match(client, /rotateRuntimeCredential:[\s\S]*\/rotate`/);
-  assert.match(client, /revokeRuntimeCredentialVersion:[\s\S]*\/versions\/\$\{encodeURIComponent\(versionID\)\}\/revoke`/);
-  assert.match(client, /checkRuntimeServiceConnection:[\s\S]*\/runtime-service-connections\/\$\{encodeURIComponent\(connectionID\)\}\/check`/);
+  assert.match(client, /integrationAuthorization:[\s\S]*\/authorization`/);
+  assert.match(client, /configureIntegrationAuthorization:[\s\S]*method: "PUT"/);
+  assert.match(client, /authorizationUsage:[\s\S]*\/usage`/);
+  assert.match(client, /rotateAuthorizationCredential:[\s\S]*\/rotate`/);
+  assert.match(client, /revokeAuthorizationCredentialVersion:[\s\S]*\/versions\/\$\{encodeURIComponent\(versionID\)\}\/revoke`/);
+  assert.doesNotMatch(client, /runtime-service-connections\/|runtime-credential-sets\/|runtime-setup`/);
   assert.doesNotMatch(runtimeTypes, /secret_id|SecretID|credential:\s*string;[\s\S]*APIRuntimeCredentialVersion/);
-  assert.match(styles, /\.runtime-choice-grid/);
-  assert.match(styles, /\.runtime-configuration-check/);
+  assert.match(styles, /\.runtime-access-form/);
+  assert.match(styles, /\.runtime-form-section/);
   assert.match(styles, /\.runtime-credential-management/);
 });
 

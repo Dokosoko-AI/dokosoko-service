@@ -49,6 +49,7 @@ type Memory struct {
 	toolTestRuns                     []model.ToolTestRun
 	mcpConnections                   map[string]map[string]model.MCPConnection
 	reportSubmissions                map[string]map[string]model.ReportSubmission
+	authorizationUsageEvents         map[string]model.AuthorizationUsageEvent
 	aiProviderConnections            map[string]map[string]model.AIProviderConnection
 	aiWorkloadProfiles               map[string]map[string]model.AIWorkloadProfile
 	aiPromptStates                   map[string]map[string]model.AIPromptState
@@ -131,6 +132,7 @@ func NewMemory() *Memory {
 		managedOperationConfirmationUses: make(map[string]time.Time),
 		mcpConnections:                   map[string]map[string]model.MCPConnection{product.ID: {}},
 		reportSubmissions:                map[string]map[string]model.ReportSubmission{product.ID: {}},
+		authorizationUsageEvents:         make(map[string]model.AuthorizationUsageEvent),
 		aiProviderConnections:            map[string]map[string]model.AIProviderConnection{product.ID: {}},
 		aiWorkloadProfiles:               map[string]map[string]model.AIWorkloadProfile{product.ID: {}},
 		aiPromptStates:                   map[string]map[string]model.AIPromptState{product.ID: {}},

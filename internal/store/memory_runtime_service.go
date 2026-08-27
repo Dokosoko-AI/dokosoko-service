@@ -52,6 +52,9 @@ func (m *Memory) enrichToolRuntimeTargetsLocked(value model.Tool) model.Tool {
 			continue
 		}
 		target.HeaderName = credentialSet.HeaderName
+		target.AuthConfig = append(json.RawMessage(nil), credentialSet.AuthConfig...)
+		target.AccessEvaluationURL = credentialSet.AccessEvaluationURL
+		target.UsageURL = credentialSet.UsageURL
 		found := false
 		for _, version := range m.runtimeCredentialHistory[credentialSet.ID] {
 			if version.State != "active" || version.ExpiresAt != nil && !version.ExpiresAt.After(now) {
@@ -235,6 +238,7 @@ func (m *Memory) CreateRuntimeServiceConnectionRevision(_ context.Context, value
 }
 
 func (m *Memory) enrichRuntimeCredentialSetLocked(value model.RuntimeCredentialSet) model.RuntimeCredentialSet {
+	value.AuthConfig = append(json.RawMessage(nil), value.AuthConfig...)
 	value.Versions = nil
 	value.CredentialPresent = false
 	value.ActiveFingerprint = ""
@@ -296,6 +300,7 @@ func (m *Memory) CreateRuntimeCredentialSet(_ context.Context, value model.Runti
 	value.Revision = 1
 	value.CreatedAt, value.UpdatedAt = now, now
 	value.Versions = nil
+	value.AuthConfig = append(json.RawMessage(nil), value.AuthConfig...)
 	m.runtimeCredentialSets[value.ID] = value
 	return value, nil
 }
@@ -322,6 +327,7 @@ func (m *Memory) UpdateRuntimeCredentialSet(_ context.Context, value model.Runti
 	value.CreatedAt = current.CreatedAt
 	value.UpdatedAt = time.Now().UTC()
 	value.Versions = nil
+	value.AuthConfig = append(json.RawMessage(nil), value.AuthConfig...)
 	m.runtimeCredentialSets[value.ID] = value
 	return m.enrichRuntimeCredentialSetLocked(value), nil
 }

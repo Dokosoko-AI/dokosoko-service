@@ -29,7 +29,7 @@ func TestRuntimeSetupHTTPShortestPathMasksCredential(t *testing.T) {
 	}
 	handler := httpapi.New(service, "http://localhost:8080")
 	const credential = "must-never-appear-in-a-response"
-	configured := request(t, handler, http.MethodPut, "/api/v1/integrations/"+integration.ID+"/runtime-setup", "doko_admin_demo", `{"environment_id":"env_prod","base_url":"http://voice.complicatedauth.localhost:38080","authentication_type":"api_key_header","credential_scope":"dedicated","credential":"`+credential+`"}`)
+	configured := request(t, handler, http.MethodPut, "/api/v1/integrations/"+integration.ID+"/authorization", "doko_admin_demo", `{"environment_id":"env_prod","base_url":"http://voice.complicatedauth.localhost:38080","authentication_type":"api_key_header","environment_variable":"VOICE_API_KEY","key_management_url":"https://dashboard.example.test/keys","access_evaluation_url":"https://hooks.example.test/access","usage_url":"https://hooks.example.test/usage","credential":"`+credential+`"}`)
 	if configured.Code != http.StatusOK {
 		t.Fatalf("configure status=%d body=%s", configured.Code, configured.Body.String())
 	}
@@ -37,31 +37,51 @@ func TestRuntimeSetupHTTPShortestPathMasksCredential(t *testing.T) {
 		t.Fatalf("configure response leaked secret material: %s", configured.Body.String())
 	}
 	var setup struct {
-		CredentialSets []model.RuntimeCredentialSet     `json:"credential_sets"`
-		Connections    []model.RuntimeServiceConnection `json:"service_connections"`
+		CredentialSets []model.RuntimeCredentialSet     `json:"authorizations"`
+		Connections    []model.RuntimeServiceConnection `json:"endpoint_bindings"`
 	}
 	if err := json.Unmarshal(configured.Body.Bytes(), &setup); err != nil {
 		t.Fatal(err)
 	}
-	if len(setup.CredentialSets) != 1 || setup.CredentialSets[0].EnvironmentVariable != "VOICE_API_KEY" || !setup.CredentialSets[0].CredentialPresent {
+	if len(setup.CredentialSets) != 1 || setup.CredentialSets[0].Name != integration.DisplayName || setup.CredentialSets[0].EnvironmentVariable != "VOICE_API_KEY" || !setup.CredentialSets[0].CredentialPresent {
 		t.Fatalf("credential setup = %#v", setup.CredentialSets)
 	}
 	if len(setup.Connections) != 1 || setup.Connections[0].CurrentRevisions[0].BaseURL != "http://voice.complicatedauth.localhost:38080" {
 		t.Fatalf("service connection = %#v", setup.Connections)
 	}
 
-	read := request(t, handler, http.MethodGet, "/api/v1/integrations/"+integration.ID+"/runtime-setup", "doko_admin_demo", "")
+	read := request(t, handler, http.MethodGet, "/api/v1/integrations/"+integration.ID+"/authorization", "doko_admin_demo", "")
 	if read.Code != http.StatusOK || strings.Contains(read.Body.String(), credential) || strings.Contains(read.Body.String(), "secret_id") {
 		t.Fatalf("read status=%d body=%s", read.Code, read.Body.String())
 	}
 
-	usage := request(t, handler, http.MethodGet, "/api/v1/runtime-credential-sets/"+setup.CredentialSets[0].ID+"/usage", "doko_admin_demo", "")
+	usage := request(t, handler, http.MethodGet, "/api/v1/authorizations/"+setup.CredentialSets[0].ID+"/usage", "doko_admin_demo", "")
 	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `"count":1`) {
 		t.Fatalf("usage status=%d body=%s", usage.Code, usage.Body.String())
 	}
-	check := request(t, handler, http.MethodPost, "/api/v1/runtime-service-connections/"+setup.Connections[0].ID+"/check", "doko_admin_demo", `{}`)
-	if check.Code != http.StatusOK || !strings.Contains(check.Body.String(), `"ready":true`) {
-		t.Fatalf("check status=%d body=%s", check.Code, check.Body.String())
+}
+
+func TestRuntimeAuthorizationProfilesHTTPReturnsOnlySharedRedactedProfiles(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	vault, err := secrets.New(bytes.Repeat([]byte{0x61}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := platform.NewWithVault(memory, vault)
+	integration, err := service.CreateIntegration(context.Background(), platform.IntegrationInput{FamilyKey: "profiles", VersionKey: "v1", DisplayName: "Profiles API", Lifecycle: "active"}, platform.Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const credential = "shared-profile-secret"
+	profile, err := service.CreateRuntimeCredentialSet(context.Background(), integration.ID, platform.RuntimeCredentialSetInput{EnvironmentID: "env_prod", Scope: "shared", Name: "Shared Authorization", EnvironmentVariable: "SHARED_API_KEY", AuthenticationType: "api_key_header", HeaderName: "X-Service-Key", KeyManagementURL: "https://dashboard.example.test/keys", AccessEvaluationURL: "https://hooks.example.test/access", UsageURL: "https://hooks.example.test/usage", Credential: credential}, platform.Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(service, "http://localhost:8080")
+	response := request(t, handler, http.MethodGet, "/api/v1/authorizations", "doko_admin_demo", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), profile.ID) || !strings.Contains(response.Body.String(), `"key_management_url":"https://dashboard.example.test/keys"`) || strings.Contains(response.Body.String(), credential) || strings.Contains(response.Body.String(), "secret_id") {
+		t.Fatalf("profiles status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -80,15 +100,19 @@ func TestRuntimeAccessHTTPCredentialLifecycleContract(t *testing.T) {
 	handler := httpapi.New(service, "http://localhost:8080")
 
 	const initialCredential = "initial-runtime-credential-must-stay-private"
-	created := request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/runtime-credential-sets", "doko_admin_demo", `{"environment_id":"env_prod","scope":"dedicated","name":"Face API credential","environment_variable":"FACE_API_KEY","authentication_type":"api_key_header","header_name":"X-Face-API-Key","credential":"`+initialCredential+`"}`)
-	if created.Code != http.StatusCreated {
+	created := request(t, handler, http.MethodPut, "/api/v1/integrations/"+integration.ID+"/authorization", "doko_admin_demo", `{"environment_id":"env_prod","base_url":"http://face.complicatedauth.localhost:38080","authentication_type":"api_key_header","environment_variable":"FACE_API_KEY","header_name":"X-Face-API-Key","key_management_url":"https://dashboard.example.test/keys","access_evaluation_url":"https://hooks.example.test/access","usage_url":"https://hooks.example.test/usage","credential":"`+initialCredential+`"}`)
+	if created.Code != http.StatusOK {
 		t.Fatalf("create credential status=%d body=%s", created.Code, created.Body.String())
 	}
 	assertRuntimeAccessResponseRedacted(t, created.Body.String(), initialCredential)
-	var credentialSet model.RuntimeCredentialSet
-	if err := json.Unmarshal(created.Body.Bytes(), &credentialSet); err != nil {
+	var setup model.RuntimeSetup
+	if err := json.Unmarshal(created.Body.Bytes(), &setup); err != nil {
 		t.Fatal(err)
 	}
+	if len(setup.CredentialSets) != 1 || len(setup.Connections) != 1 {
+		t.Fatalf("Authorization setup = %#v", setup)
+	}
+	credentialSet := setup.CredentialSets[0]
 	if credentialSet.ID == "" || !credentialSet.CredentialPresent || len(credentialSet.Versions) != 1 {
 		t.Fatalf("created credential set = %#v", credentialSet)
 	}
@@ -97,39 +121,29 @@ func TestRuntimeAccessHTTPCredentialLifecycleContract(t *testing.T) {
 	}
 	initialVersionID := credentialSet.Versions[0].ID
 
-	read := request(t, handler, http.MethodGet, "/api/v1/runtime-credential-sets/"+credentialSet.ID, "doko_admin_demo", "")
+	read := request(t, handler, http.MethodGet, "/api/v1/authorizations/"+credentialSet.ID, "doko_admin_demo", "")
 	if read.Code != http.StatusOK {
 		t.Fatalf("read credential status=%d body=%s", read.Code, read.Body.String())
 	}
 	assertRuntimeAccessResponseRedacted(t, read.Body.String(), initialCredential)
+	rename := request(t, handler, http.MethodPatch, "/api/v1/authorizations/"+credentialSet.ID, "doko_admin_demo", `{"name":"Renamed Authorization"}`)
+	if rename.Code != http.StatusBadRequest {
+		t.Fatalf("Authorization name must be immutable, status=%d body=%s", rename.Code, rename.Body.String())
+	}
 
-	connection := request(t, handler, http.MethodPost, "/api/v1/integrations/"+integration.ID+"/runtime-connections", "doko_admin_demo", `{"name":"Primary","description":"Face production service","environment_id":"env_prod","base_url":"http://face.complicatedauth.localhost:38080","authentication_type":"api_key_header","credential_set_id":"`+credentialSet.ID+`","auth_config":{},"state":"active"}`)
-	if connection.Code != http.StatusCreated {
-		t.Fatalf("create connection status=%d body=%s", connection.Code, connection.Body.String())
-	}
-	assertRuntimeAccessResponseRedacted(t, connection.Body.String(), initialCredential)
-	var serviceConnection model.RuntimeServiceConnection
-	if err := json.Unmarshal(connection.Body.Bytes(), &serviceConnection); err != nil {
-		t.Fatal(err)
-	}
+	serviceConnection := setup.Connections[0]
 	if serviceConnection.ID == "" || len(serviceConnection.CurrentRevisions) != 1 || serviceConnection.CurrentRevisions[0].CredentialSetID != credentialSet.ID {
 		t.Fatalf("created service connection = %#v", serviceConnection)
 	}
 
-	connections := request(t, handler, http.MethodGet, "/api/v1/integrations/"+integration.ID+"/runtime-connections", "doko_admin_demo", "")
-	if connections.Code != http.StatusOK || !strings.Contains(connections.Body.String(), `"items":[`) {
-		t.Fatalf("list connections status=%d body=%s", connections.Code, connections.Body.String())
-	}
-	assertRuntimeAccessResponseRedacted(t, connections.Body.String(), initialCredential)
-
-	usage := request(t, handler, http.MethodGet, "/api/v1/runtime-credential-sets/"+credentialSet.ID+"/usage", "doko_admin_demo", "")
+	usage := request(t, handler, http.MethodGet, "/api/v1/authorizations/"+credentialSet.ID+"/usage", "doko_admin_demo", "")
 	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `"count":1`) || !strings.Contains(usage.Body.String(), serviceConnection.ID) {
 		t.Fatalf("credential usage status=%d body=%s", usage.Code, usage.Body.String())
 	}
 	assertRuntimeAccessResponseRedacted(t, usage.Body.String(), initialCredential)
 
 	const replacementCredential = "replacement-runtime-credential-must-stay-private"
-	rotated := request(t, handler, http.MethodPost, "/api/v1/runtime-credential-sets/"+credentialSet.ID+"/rotate", "doko_admin_demo", `{"credential":"`+replacementCredential+`"}`)
+	rotated := request(t, handler, http.MethodPost, "/api/v1/authorizations/"+credentialSet.ID+"/rotate", "doko_admin_demo", `{"credential":"`+replacementCredential+`"}`)
 	if rotated.Code != http.StatusOK {
 		t.Fatalf("rotate credential status=%d body=%s", rotated.Code, rotated.Body.String())
 	}
@@ -154,7 +168,7 @@ func TestRuntimeAccessHTTPCredentialLifecycleContract(t *testing.T) {
 		t.Fatalf("initial version state after rotation = %q", initialState)
 	}
 
-	revoked := request(t, handler, http.MethodPost, "/api/v1/runtime-credential-sets/"+credentialSet.ID+"/versions/"+initialVersionID+"/revoke", "doko_admin_demo", "")
+	revoked := request(t, handler, http.MethodPost, "/api/v1/authorizations/"+credentialSet.ID+"/versions/"+initialVersionID+"/revoke", "doko_admin_demo", "")
 	if revoked.Code != http.StatusOK {
 		t.Fatalf("revoke credential status=%d body=%s", revoked.Code, revoked.Body.String())
 	}

@@ -2,7 +2,6 @@ export type Section =
   | "product"
   | "sources"
   | "documents"
-  | "collections"
   | "contracts"
   | "sdks"
   | "query-lab"
@@ -15,7 +14,7 @@ export type Section =
   | "reporting"
   | "settings";
 
-export type IntegrationTab = "overview" | "documentation" | "access" | "tools" | "test" | "history";
+export type IntegrationTab = "overview" | "documentation" | "authorization" | "tools" | "test" | "history";
 export type IntegrationResourceTab = "documentation" | "contracts" | "sdks";
 export type SettingsTab = "overview" | "tenant" | "ai" | "root";
 export type IdentityTab = "sign-in" | "customer-accounts";
@@ -55,7 +54,7 @@ export type ConsoleRoute =
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: RouteLabelKey }> = [
   { id: "overview", label: "routes.quickStart" },
   { id: "documentation", label: "routes.resources" },
-  { id: "access", label: "routes.keysAccess" },
+  { id: "authorization", label: "routes.keysAccess" },
   { id: "tools", label: "routes.tools" },
   { id: "test", label: "routes.test" },
   { id: "history", label: "routes.history" },
@@ -86,7 +85,6 @@ export const IDENTITY_TABS: Array<{ id: IdentityTab; label: "navigation.customer
 export const SECTION_PATHS: Record<Section, string> = {
   product: "/integrations",
   documents: "/developer-assets/documentation/documents",
-  collections: "/developer-assets/documentation/collections",
   contracts: "/developer-assets/api-contracts",
   sdks: "/developer-assets/sdk-packages",
   "query-lab": "/developer-assets/query-lab",
@@ -154,8 +152,7 @@ export function integrationPath(uid: string, tab: IntegrationTab = "overview", r
 export function integrationValidationPath(uid: string, tab: string): string {
   switch (tab) {
     case "resources": return integrationPath(uid, "documentation");
-    case "authorization":
-    case "access": return integrationPath(uid, "access");
+    case "authorization": return integrationPath(uid, "authorization");
     case "tools": return integrationPath(uid, "tools");
     case "recipes": return sectionPath("recipes");
     case "delivery": return sectionPath("distribution");

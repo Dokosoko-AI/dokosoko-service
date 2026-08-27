@@ -13,32 +13,56 @@ import (
 var integrationVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 type DeploymentInput struct {
-	OrganisationID   string
-	Name             string
-	Slug             string
-	Description      string
-	PublicMCPEnabled bool
-	Revision         int64
+	OrganisationID        string
+	Name                  string
+	Slug                  string
+	Description           string
+	FeedbackSubmissionURL *string
+	ErrorSubmissionURL    *string
+	PublicMCPEnabled      bool
+	Revision              int64
+}
+
+func validateDeploymentSubmissionURL(label, value string) error {
+	if len(value) > 2048 || value != "" && !validOutboundHookURI(value) {
+		return errors.New(label + " must be a credential-free HTTPS URL or localhost HTTP URL")
+	}
+	return nil
+}
+
+func normalizedDeploymentSubmissionURL(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (s *Service) CreateDeployment(ctx context.Context, input DeploymentInput, actor Actor) (model.Deployment, error) {
 	input.OrganisationID, input.Name, input.Slug = strings.TrimSpace(input.OrganisationID), strings.TrimSpace(input.Name), strings.TrimSpace(input.Slug)
 	input.Description = strings.TrimSpace(input.Description)
+	feedbackSubmissionURL := normalizedDeploymentSubmissionURL(input.FeedbackSubmissionURL)
+	errorSubmissionURL := normalizedDeploymentSubmissionURL(input.ErrorSubmissionURL)
 	if input.OrganisationID == "" || validateNameSlug(input.Name, input.Slug) != nil {
 		return model.Deployment{}, errors.New("organisation, deployment name, and a valid slug are required")
 	}
 	if len(input.Description) > 2000 {
 		return model.Deployment{}, errors.New("deployment description must be no more than 2000 characters")
 	}
+	if err := validateDeploymentSubmissionURL("feedback submission URL", feedbackSubmissionURL); err != nil {
+		return model.Deployment{}, err
+	}
+	if err := validateDeploymentSubmissionURL("error submission URL", errorSubmissionURL); err != nil {
+		return model.Deployment{}, err
+	}
 	id, err := randomUUID()
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	value, err := s.store.CreateDeployment(ctx, model.Deployment{ID: id, OrganisationID: input.OrganisationID, Name: input.Name, Slug: input.Slug, Description: input.Description, PublicMCPEnabled: input.PublicMCPEnabled})
+	value, err := s.store.CreateDeployment(ctx, model.Deployment{ID: id, OrganisationID: input.OrganisationID, Name: input.Name, Slug: input.Slug, Description: input.Description, FeedbackSubmissionURL: feedbackSubmissionURL, ErrorSubmissionURL: errorSubmissionURL, PublicMCPEnabled: input.PublicMCPEnabled})
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: value.ID, ActorID: actor.ID, Action: "deployment.created", TargetType: "deployment", TargetID: value.ID, Current: map[string]any{"name": value.Name, "slug": value.Slug}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: value.OrganisationID, ProductID: value.ID, ActorID: actor.ID, Action: "deployment.created", TargetType: "deployment", TargetID: value.ID, Current: map[string]any{"name": value.Name, "slug": value.Slug, "feedback_submission_url": value.FeedbackSubmissionURL, "error_submission_url": value.ErrorSubmissionURL}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
 		return model.Deployment{}, err
 	}
 	return value, nil
@@ -53,13 +77,28 @@ func (s *Service) UpdateDeployment(ctx context.Context, input DeploymentInput, a
 	if validateNameSlug(input.Name, input.Slug) != nil || len(input.Description) > 2000 {
 		return model.Deployment{}, errors.New("deployment name, slug, or description is invalid")
 	}
+	previous := current
+	if input.FeedbackSubmissionURL != nil {
+		value := normalizedDeploymentSubmissionURL(input.FeedbackSubmissionURL)
+		if err := validateDeploymentSubmissionURL("feedback submission URL", value); err != nil {
+			return model.Deployment{}, err
+		}
+		current.FeedbackSubmissionURL = value
+	}
+	if input.ErrorSubmissionURL != nil {
+		value := normalizedDeploymentSubmissionURL(input.ErrorSubmissionURL)
+		if err := validateDeploymentSubmissionURL("error submission URL", value); err != nil {
+			return model.Deployment{}, err
+		}
+		current.ErrorSubmissionURL = value
+	}
 	current.Name, current.Slug, current.Description = input.Name, input.Slug, input.Description
 	current.PublicMCPEnabled = input.PublicMCPEnabled
 	updated, err := s.store.UpdateDeployment(ctx, current, input.Revision)
 	if err != nil {
 		return model.Deployment{}, err
 	}
-	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ID, ActorID: actor.ID, Action: "deployment.updated", TargetType: "deployment", TargetID: updated.ID, Current: map[string]any{"name": updated.Name, "slug": updated.Slug}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
+	if err := s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: updated.ID, ActorID: actor.ID, Action: "deployment.updated", TargetType: "deployment", TargetID: updated.ID, Prior: map[string]any{"name": previous.Name, "slug": previous.Slug, "feedback_submission_url": previous.FeedbackSubmissionURL, "error_submission_url": previous.ErrorSubmissionURL}, Current: map[string]any{"name": updated.Name, "slug": updated.Slug, "feedback_submission_url": updated.FeedbackSubmissionURL, "error_submission_url": updated.ErrorSubmissionURL}, RequestID: actor.RequestID, CreatedAt: s.now()}); err != nil {
 		return model.Deployment{}, err
 	}
 	return updated, nil

@@ -52,14 +52,16 @@ type Product struct {
 // Deployment is the singleton identity of a DokoSoko installation. Product is
 // retained above only while legacy product-scoped clients are migrated.
 type Deployment struct {
-	ID               string    `json:"id"`
-	OrganisationID   string    `json:"organisation_id"`
-	Name             string    `json:"name"`
-	Slug             string    `json:"slug"`
-	Description      string    `json:"description"`
-	PublicMCPEnabled bool      `json:"public_mcp_enabled"`
-	CatalogRevision  int64     `json:"catalog_revision"`
-	Revision         int64     `json:"revision"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                    string    `json:"id"`
+	OrganisationID        string    `json:"organisation_id"`
+	Name                  string    `json:"name"`
+	Slug                  string    `json:"slug"`
+	Description           string    `json:"description"`
+	FeedbackSubmissionURL string    `json:"feedback_submission_url"`
+	ErrorSubmissionURL    string    `json:"error_submission_url"`
+	PublicMCPEnabled      bool      `json:"public_mcp_enabled"`
+	CatalogRevision       int64     `json:"catalog_revision"`
+	Revision              int64     `json:"revision"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }

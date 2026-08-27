@@ -27,7 +27,31 @@ function slugify(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-export function DocumentationCollectionsView({ live, integrations, onMessage, onNavigate }: { live: boolean; integrations: APIIntegration[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+export function DocumentationCollectionsView({
+  live,
+  integrations,
+  onMessage,
+  onNavigate,
+  embedded = false,
+  selectedCollectionID,
+  startCreate = false,
+  initialMembers = [],
+  onCollectionsChange,
+  onSelectedCollectionChange,
+  onCreateStarted,
+}: {
+  live: boolean;
+  integrations: APIIntegration[];
+  onMessage: (message: string) => void;
+  onNavigate: (path: string) => void;
+  embedded?: boolean;
+  selectedCollectionID?: string;
+  startCreate?: boolean;
+  initialMembers?: DocumentationCollectionMemberInput[];
+  onCollectionsChange?: (collections: DocumentationCollection[]) => void;
+  onSelectedCollectionChange?: (collectionID: string) => void;
+  onCreateStarted?: () => void;
+}) {
   const { t } = useTranslation();
   const [collections, setCollections] = useState<DocumentationCollection[]>([]);
   const [selectedID, setSelectedID] = useState("");
@@ -44,7 +68,7 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
   const [revisionTab, setRevisionTab] = useState<RevisionTab>("members");
   const [loading, setLoading] = useState(live);
   const [problem, setProblem] = useState("");
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(startCreate);
   const [editing, setEditing] = useState<DocumentationCollection | null>(null);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
@@ -55,7 +79,7 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
   const [memberKind, setMemberKind] = useState<DocumentationCollectionMemberInput["kind"]>("source_publication");
   const [memberID, setMemberID] = useState("");
   const [includeDescendants, setIncludeDescendants] = useState(true);
-  const [collectionMembers, setCollectionMembers] = useState<DocumentationCollectionMemberInput[]>([]);
+  const [collectionMembers, setCollectionMembers] = useState<DocumentationCollectionMemberInput[]>(startCreate ? initialMembers : []);
   const [acknowledged, setAcknowledged] = useState(false);
 
   const load = useCallback(async () => {
@@ -65,60 +89,71 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
     try {
       const [values, publicationValues] = await Promise.all([developerAssetsApi.documentationCollections(), developerAssetsApi.documentationPublications()]);
       setCollections(values);
+      onCollectionsChange?.(values);
       setPublications([...publicationValues].sort((left, right) => right.revision - left.revision));
-      setSelectedID((current) => values.some((item) => item.id === current) ? current : values[0]?.id ?? "");
+      if (!embedded) setSelectedID((current) => values.some((item) => item.id === current) ? current : values[0]?.id ?? "");
     } catch (error) {
       setProblem(developerAssetError(error, t("documentationCollections.documentationCollectionsCouldNotBeLoaded")));
     } finally {
       setLoading(false);
     }
-  }, [live, t]);
+  }, [embedded, live, onCollectionsChange, t]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timeout);
   }, [load]);
 
-  const selected = useMemo(() => collections.find((item) => item.id === selectedID) ?? null, [collections, selectedID]);
+  useEffect(() => {
+    if (startCreate) onCreateStarted?.();
+  }, [onCreateStarted, startCreate]);
+
+  const activeSelectedID = selectedCollectionID ?? selectedID;
+  const selected = useMemo(() => collections.find((item) => item.id === activeSelectedID) ?? null, [activeSelectedID, collections]);
+
+  function selectCollection(collectionID: string) {
+    if (selectedCollectionID === undefined) setSelectedID(collectionID);
+    onSelectedCollectionChange?.(collectionID);
+  }
 
   useEffect(() => {
     let cancelled = false;
-    if (!live || !selectedID) {
+    if (!live || !activeSelectedID) {
       queueMicrotask(() => {
         if (!cancelled) { setRevisions([]); setRevisionRecord(null); }
       });
       return () => { cancelled = true; };
     }
-    developerAssetsApi.documentationCollectionRevisions(selectedID).then((values) => {
+    developerAssetsApi.documentationCollectionRevisions(activeSelectedID).then((values) => {
       if (cancelled) return;
       const sorted = [...values].sort((left, right) => right.revision - left.revision);
       setRevisions(sorted);
       setSelectedRevisionID((current) => sorted.some((item) => item.id === current) ? current : sorted[0]?.id ?? "");
     }).catch((error) => { if (!cancelled) onMessage(developerAssetError(error, t("documentationCollections.collectionRevisionsCouldNotBeLoaded"))); });
     return () => { cancelled = true; };
-  }, [live, onMessage, selectedID, t]);
+  }, [activeSelectedID, live, onMessage, t]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!live || !selectedID || !selectedRevisionID) {
+    if (!live || !activeSelectedID || !selectedRevisionID) {
       queueMicrotask(() => { if (!cancelled) setRevisionRecord(null); });
       return () => { cancelled = true; };
     }
-    developerAssetsApi.documentationCollectionRevision(selectedID, selectedRevisionID).then((value) => { if (!cancelled) setRevisionRecord(value); }).catch((error) => { if (!cancelled) { setRevisionRecord(null); onMessage(developerAssetError(error, t("documentationCollections.theExactCollectionRevisionCouldNotBeRead"))); } });
+    developerAssetsApi.documentationCollectionRevision(activeSelectedID, selectedRevisionID).then((value) => { if (!cancelled) setRevisionRecord(value); }).catch((error) => { if (!cancelled) { setRevisionRecord(null); onMessage(developerAssetError(error, t("documentationCollections.theExactCollectionRevisionCouldNotBeRead"))); } });
     return () => { cancelled = true; };
-  }, [live, onMessage, selectedID, selectedRevisionID, t]);
+  }, [activeSelectedID, live, onMessage, selectedRevisionID, t]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!live || !selectedID || integrations.length === 0) {
+    if (!live || !activeSelectedID || integrations.length === 0) {
       queueMicrotask(() => { if (!cancelled) setUsedBy([]); });
       return () => { cancelled = true; };
     }
     developerAssetsApi.usage()
-      .then((value) => { if (!cancelled) setUsedBy(documentationUsages(value, integrations, selectedID)); })
+      .then((value) => { if (!cancelled) setUsedBy(documentationUsages(value, integrations, activeSelectedID)); })
       .catch(() => { if (!cancelled) setUsedBy([]); });
     return () => { cancelled = true; };
-  }, [integrations, live, selectedID]);
+  }, [activeSelectedID, integrations, live]);
 
   function openEditor(value?: DocumentationCollection, nextLifecycle?: DocumentationCollection["lifecycle"]) {
     const existingMembers = value ? (revisionRecord?.members ?? []).map((member) => ({
@@ -158,7 +193,7 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
         : await developerAssetsApi.createDocumentationCollection(input);
       setDialogOpen(false);
       await load();
-      setSelectedID(saved.id);
+      selectCollection(saved.id);
       onMessage(editing ? collectionLifecycle === "archived" ? t("documentationCollections.documentationCollectionArchivedInANewImmutableReviewedRevision") : t("documentationCollections.aNewImmutableDocumentationRevisionWasCreated") : t("documentationCollections.reviewedDocumentationCollectionCreated"));
     } catch (error) {
       onMessage(developerAssetError(error, t("documentationCollections.documentationCollectionCouldNotBeSaved")));
@@ -204,21 +239,21 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
     } finally { setBusy(false); }
   }
 
-  const active: Section = "collections";
-  return <>
-    <PageHeader eyebrow={t("navigation.docs")} title={t("navigation.collections")} action={<Button onClick={() => openEditor()}><Plus data-slot="icon" />{t("documentationCollections.createCollection")}</Button>} />
-    <DocumentationNavigation active={active} onNavigate={onNavigate} />
-    <section className="panel developer-global-publication"><PanelHeader title={t("documentationCollections.globalDocumentationPublication")} description={t("documentationCollections.queryLabGlobalScopeResolvesThisImmutableDeploymentSnapshot")} action={<Button onClick={() => void openPublication()}><Radio data-slot="icon" />{t("documentationCollections.publishSnapshot")}</Button>} />{publications[0] ? <div className="developer-global-active"><span><Badge color="green">{t("documentationCollections.activeSnapshot")}</Badge><strong>{t("documentationCollections.revision")} {publications[0].revision}</strong><code>{publications[0].id}</code></span><span><small>{publications[0].members.length} {t("documentationCollections.exactCollectionRevision")}{publications[0].members.length === 1 ? "" : t("documentationCollections.s")}</small><code>{publications[0].snapshot_hash}</code></span></div> : <p className="empty-row">{t("documentationCollections.noGlobalDocumentationSnapshotIsPublishedGlobalQueryLab")}</p>}<details className="advanced-details"><summary>{t("documentationCollections.immutablePublicationHistory")}</summary><div className="developer-asset-publication-history">{publications.map((publication) => <div key={publication.id}><span><strong>{t("documentationCollections.revision")} {publication.revision}</strong><small>{t("format.dateTime", { value: new Date(publication.published_at) })} · {publication.visibility}</small></span><span><code>{publication.snapshot_hash}</code><small>{t("documentationCollections.members", { count: publication.members.length })}</small></span></div>)}{publications.length === 0 && <small>{t("documentationCollections.noPublicationHistory")}</small>}</div></details></section>
-    {loading ? <LoadingPanel label={t("documentationCollections.loadingDocumentationCollections")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
-      <DataTable label={t("documentationCollections.documentationCollections")} className="developer-asset-directory">
+  const active: Section = "documents";
+  return <div className={embedded ? "documentation-sets-pane" : "documentation-collections-workspace"}>
+    {!embedded && <PageHeader eyebrow={t("navigation.docs")} title={t("documentationExplorer.documentationSets")} action={<Button onClick={() => openEditor()}><Plus data-slot="icon" />{t("documentationCollections.createCollection")}</Button>} />}
+    {!embedded && <DocumentationNavigation active={active} onNavigate={onNavigate} />}
+    <section className="panel developer-global-publication"><PanelHeader title={t("documentationCollections.globalDocumentationPublication")} description={t("documentationCollections.queryLabGlobalScopeResolvesThisImmutableDeploymentSnapshot")} action={<span className="heading-actions">{embedded && <Button outline onClick={() => openEditor()}><Plus data-slot="icon" />{t("documentationCollections.createCollection")}</Button>}<Button onClick={() => void openPublication()}><Radio data-slot="icon" />{t("documentationCollections.publishSnapshot")}</Button></span>} />{publications[0] ? <div className="developer-global-active"><span><Badge color="green">{t("documentationCollections.activeSnapshot")}</Badge><strong>{t("documentationCollections.revision")} {publications[0].revision}</strong><code>{publications[0].id}</code></span><span><small>{publications[0].members.length} {t("documentationCollections.exactCollectionRevision")}{publications[0].members.length === 1 ? "" : t("documentationCollections.s")}</small><code>{publications[0].snapshot_hash}</code></span></div> : <p className="empty-row">{t("documentationCollections.noGlobalDocumentationSnapshotIsPublishedGlobalQueryLab")}</p>}<details className="advanced-details"><summary>{t("documentationCollections.immutablePublicationHistory")}</summary><div className="developer-asset-publication-history">{publications.map((publication) => <div key={publication.id}><span><strong>{t("documentationCollections.revision")} {publication.revision}</strong><small>{t("format.dateTime", { value: new Date(publication.published_at) })} · {publication.visibility}</small></span><span><code>{publication.snapshot_hash}</code><small>{t("documentationCollections.members", { count: publication.members.length })}</small></span></div>)}{publications.length === 0 && <small>{t("documentationCollections.noPublicationHistory")}</small>}</div></details></section>
+    {loading ? <LoadingPanel label={t("documentationCollections.loadingDocumentationCollections")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className={embedded ? "documentation-set-detail" : "developer-asset-explorer"}>
+      {!embedded && <DataTable label={t("documentationCollections.documentationCollections")} className="developer-asset-directory">
         <DataTableHeader className="developer-collection-columns"><span>{t("documentationCollections.collection")}</span><span>{t("documentationCollections.revision")}</span><span>{t("documentationCollections.state")}</span></DataTableHeader>
-        {collections.map((collection) => <DataTableRow className={`developer-collection-columns developer-asset-selectable ${collection.id === selectedID ? "selected" : ""}`} key={collection.id}>
-          <button type="button" className="developer-asset-record-button" onClick={() => setSelectedID(collection.id)}><span className="resource-icon"><BookOpen /></span><span><strong>{collection.name}</strong><small>{collection.slug}</small></span></button>
+        {collections.map((collection) => <DataTableRow className={`developer-collection-columns developer-asset-selectable ${collection.id === activeSelectedID ? "selected" : ""}`} key={collection.id}>
+          <button type="button" className="developer-asset-record-button" onClick={() => selectCollection(collection.id)}><span className="resource-icon"><BookOpen /></span><span><strong>{collection.name}</strong><small>{collection.slug}</small></span></button>
           <span><strong className="cell-value">r{collection.revision}</strong><small className="cell-note">{t("documentationCollections.rootHead")}</small></span>
           <span><ReviewStateBadge state={collection.lifecycle} /></span>
         </DataTableRow>)}
         {collections.length === 0 && <DataTableEmpty columns={3}>{t("documentationCollections.noReviewedDocumentationCollectionExistsYet")}</DataTableEmpty>}
-      </DataTable>
+      </DataTable>}
       <section className="panel developer-asset-inspector">
         {selected ? <>
           <PanelHeader title={selected.name} description={selected.description || t("documentationCollections.reusableReviewedDocumentation")} action={<span className="heading-actions"><Button outline onClick={() => openEditor(selected, "active")}><GitBranch data-slot="icon" />{t("documentationCollections.createRevision")}</Button>{selected.lifecycle !== "archived" && <Button outline onClick={() => openEditor(selected, "archived")}><Archive data-slot="icon" />{t("documentationCollections.archive")}</Button>}</span>} />
@@ -245,5 +280,5 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
       <div className="auth-form compact-form"><div className="two-fields"><label className="auth-field"><span>{t("documentationCollections.name")}</span><input value={name} onChange={(event) => { setName(event.target.value); if (!editing) setSlug(slugify(event.target.value)); }} /></label><label className="auth-field"><span>{t("documentationCollections.slug")}</span><input value={slug} onChange={(event) => setSlug(slugify(event.target.value))} /></label></div><label className="auth-field"><span>{t("documentationCollections.description")}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="two-fields"><label className="auth-field"><span>{t("documentationCollections.visibility")}</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as "private" | "public")}><option value="private">{t("documentationCollections.private")}</option><option value="public">{t("documentationCollections.public")}</option></select></label><label className="auth-field"><span>{t("documentationCollections.lifecycle")}</span><select value={collectionLifecycle} onChange={(event) => setCollectionLifecycle(event.target.value as DocumentationCollection["lifecycle"])}><option value="active">{t("documentationCollections.active")}</option><option value="archived">{t("documentationCollections.archived")}</option></select></label></div>{collectionMembers.length > 0 && <div className="developer-member-queue"><strong>{collectionMembers.length} {t("documentationCollections.exactMember")}{collectionMembers.length === 1 ? "" : t("documentationCollections.s")}</strong>{collectionMembers.map((member, index) => <div key={`${member.kind}-${member.id}-${index}`}><span><Badge>{enumLabel(t, member.kind)}</Badge><code>{member.id}</code></span><Button outline onClick={() => setCollectionMembers((current) => current.filter((_, itemIndex) => itemIndex !== index))}>{t("documentationCollections.remove")}</Button></div>)}</div>}<label className="auth-field"><span>{t("documentationCollections.memberKind")}</span><select value={memberKind} onChange={(event) => setMemberKind(event.target.value as DocumentationCollectionMemberInput["kind"])}><option value="source_publication">{t("documentationCollections.sourcePublication")}</option><option value="document">{t("documentationCollections.document")}</option><option value="section">{t("documentationCollections.section")}</option></select></label><label className="auth-field"><span>{t("documentationCollections.exactReviewedEvidenceID")}</span><input value={memberID} onChange={(event) => setMemberID(event.target.value)} placeholder={t("documentationCollections.sourcePublication2")} /><small>{t("documentationCollections.useAnImmutablePublicationNormalizedDocumentOrSectionID")}</small></label><label className="compact-check"><input type="checkbox" checked={includeDescendants} onChange={(event) => setIncludeDescendants(event.target.checked)} /><span>{t("documentationCollections.includeReviewedDescendantsSelectedByThisMember")}</span></label><Button type="button" outline disabled={!memberID.trim()} onClick={queueMember}><Plus data-slot="icon" />{t("documentationCollections.queueAnotherMember")}</Button>{editing && <div className="notice"><GitBranch /><span><strong>{usedBy.length} {t("documentationCollections.affectedAPIAttachment")}{usedBy.length === 1 ? "" : t("documentationCollections.s")}.</strong> {t("documentationCollections.exactPinsWillRemainUnchangedAnyDeliberateChangeMust")}</span></div>}<label className="compact-check"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{t("documentationCollections.iReviewedThisExactEvidenceSelectionVisibilityLifecycleAnd")}</span></label></div>
     </Dialog>
     <Dialog open={publicationOpen} onClose={setPublicationOpen} title={t("documentationCollections.publishGlobalDocumentationSnapshot")} description={t("documentationCollections.selectExactReviewedCollectionRevisionsTheNewDeploymentGlobal")} actions={<><Button outline onClick={() => setPublicationOpen(false)}>{t("common.cancel")}</Button><Button color="indigo" disabled={busy || !publicationAcknowledged || selectedPublicationRevisionIDs.length === 0} onClick={() => void publishGlobalDocumentation()}>{busy ? t("documentationCollections.publishing") : t("documentationCollections.publishImmutableSnapshot")}</Button></>}><div className="auth-form compact-form"><label className="auth-field"><span>{t("documentationCollections.visibility")}</span><select value={publicationVisibility} onChange={(event) => setPublicationVisibility(event.target.value as "private" | "public")}><option value="private">{t("documentationCollections.private")}</option><option value="public">{t("documentationCollections.public")}</option></select></label><div className="auth-field"><span>{t("documentationCollections.exactCollectionRevisions")}</span><div className="developer-publication-options">{publicationOptions.map((revision) => { const collection = collections.find((item) => item.id === revision.documentation_collection_id); const checked = selectedPublicationRevisionIDs.includes(revision.id); return <label aria-label={t("documentationCollections.selectExactCollectionRevision")} key={revision.id}><input type="checkbox" checked={checked} onChange={(event) => setSelectedPublicationRevisionIDs((current) => event.target.checked ? [...current, revision.id] : current.filter((id) => id !== revision.id))} /><span><strong>{collection?.name ?? revision.documentation_collection_id} {t("documentationCollections.r")}{revision.revision}</strong><small><code>{revision.id}</code> · {revision.content_hash}</small></span></label>; })}{publicationOptions.length === 0 && <p className="empty-row">{t("documentationCollections.noReviewedCollectionRevisionsAreAvailable")}</p>}</div></div><label className="compact-check"><input type="checkbox" checked={publicationAcknowledged} onChange={(event) => setPublicationAcknowledged(event.target.checked)} /><span>{t("documentationCollections.iReviewedEveryExactMemberHashVisibilityAndGap")}</span></label></div></Dialog>
-  </>;
+  </div>;
 }

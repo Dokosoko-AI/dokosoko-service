@@ -22,6 +22,8 @@ type Tool struct {
 	RuntimeConnectionRevisionID string              `json:"-"`
 	RuntimeCredentialSetID      string              `json:"-"`
 	RuntimeCredentialVersionID  string              `json:"-"`
+	AccessEvaluationURL         string              `json:"-"`
+	UsageURL                    string              `json:"-"`
 	Namespace                   string              `json:"namespace"`
 	Name                        string              `json:"name"`
 	Description                 string              `json:"description"`

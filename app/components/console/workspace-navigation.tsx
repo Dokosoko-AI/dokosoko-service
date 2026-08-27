@@ -31,8 +31,7 @@ type NavigationLabelKey =
   | "navigation.agentAccess"
   | "navigation.supportOutbox"
   | "navigation.sources"
-  | "navigation.allFiles"
-  | "navigation.collections"
+  | "navigation.documents"
   | "navigation.apiContracts"
   | "navigation.queryLab"
   | "navigation.packages"
@@ -63,8 +62,7 @@ export const navigation: Array<{
     defaultSection: "sources",
     sections: [
       { id: "sources", labelKey: "navigation.sources" },
-      { id: "documents", labelKey: "navigation.allFiles" },
-      { id: "collections", labelKey: "navigation.collections" },
+      { id: "documents", labelKey: "navigation.documents" },
       { id: "contracts", labelKey: "navigation.apiContracts" },
       { id: "query-lab", labelKey: "navigation.queryLab" },
     ],

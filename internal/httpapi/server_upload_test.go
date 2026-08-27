@@ -120,6 +120,24 @@ func TestReviewedSourceUploadCreatesPrivateDraftWithoutQueueingCrawl(t *testing.
 	}
 }
 
+func TestReviewedSourceUploadDerivesNameFromOriginalFilename(t *testing.T) {
+	directory := t.TempDir()
+	handler, _ := sourceUploadServer(directory, 1024)
+	response := sourceUploadRequest(t, handler, "prod_acme", "developer-guide.md", []byte("# Guide"), map[string]string{
+		"organisation_id": "org_acme",
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var source model.Source
+	if err := json.Unmarshal(response.Body.Bytes(), &source); err != nil {
+		t.Fatal(err)
+	}
+	if source.Name != "developer-guide.md" {
+		t.Fatalf("source name = %q, want original filename", source.Name)
+	}
+}
+
 func TestReviewedSourceUploadRejectsOversizedFileAndCleansStorage(t *testing.T) {
 	directory := t.TempDir()
 	handler, _ := sourceUploadServer(directory, 4)
@@ -204,9 +222,7 @@ func TestReviewedSourceUploadRejectsInvalidUTF8AndCleansIncompleteForm(t *testin
 	t.Run("missing metadata", func(t *testing.T) {
 		directory := t.TempDir()
 		handler, _ := sourceUploadServer(directory, 1024)
-		response := sourceUploadRequest(t, handler, "prod_acme", "guide.md", []byte("# Guide"), map[string]string{
-			"organisation_id": "org_acme",
-		})
+		response := sourceUploadRequest(t, handler, "prod_acme", "guide.md", []byte("# Guide"), map[string]string{})
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_source_upload") {
 			t.Fatalf("incomplete upload status = %d, body = %s", response.Code, response.Body.String())
 		}

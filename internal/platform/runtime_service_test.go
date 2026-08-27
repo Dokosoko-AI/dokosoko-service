@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dokosoko/dokosoko-service/internal/runtimeauth"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
@@ -31,16 +32,22 @@ func createRuntimeTestIntegration(t *testing.T, service *Service, family, displa
 	return value.ID
 }
 
-func TestRuntimeSetupCreatesDedicatedCredentialAndImmutableConnectionRevision(t *testing.T) {
+const (
+	testKeyManagementURL    = "https://dashboard.example.test/credentials"
+	testAccessEvaluationURL = "https://hooks.example.test/access"
+	testUsageURL            = "https://hooks.example.test/usage"
+)
+
+func TestRuntimeSetupCreatesReusableAuthorizationAndImmutableEndpointBinding(t *testing.T) {
 	t.Parallel()
 	service, memory := newRuntimeServiceTest(t)
 	integrationID := createRuntimeTestIntegration(t, service, "voice-api", "Voice API")
 
-	configured, err := service.ConfigureRuntimeSetup(context.Background(), integrationID, RuntimeSetupInput{EnvironmentID: "env_prod", BaseURL: "https://voice.example.test", AuthenticationType: "api_key_header", CredentialScope: "dedicated", Credential: "voice-secret-value"}, Actor{ID: "root-test", RequestID: "request-voice"})
+	configured, err := service.ConfigureRuntimeSetup(context.Background(), integrationID, RuntimeSetupInput{EnvironmentID: "env_prod", BaseURL: "https://voice.example.test", AuthenticationType: "api_key_header", EnvironmentVariable: "VOICE_API_KEY", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "voice-secret-value"}, Actor{ID: "root-test", RequestID: "request-voice"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(configured.CredentialSets) != 1 || configured.CredentialSets[0].EnvironmentVariable != "VOICE_API_KEY" || configured.CredentialSets[0].Scope != "dedicated" || configured.CredentialSets[0].OwnerIntegrationID != integrationID {
+	if len(configured.CredentialSets) != 1 || configured.CredentialSets[0].EnvironmentVariable != "VOICE_API_KEY" || configured.CredentialSets[0].Scope != "shared" || configured.CredentialSets[0].OwnerIntegrationID != "" {
 		t.Fatalf("credential set = %#v", configured.CredentialSets)
 	}
 	if !configured.CredentialSets[0].CredentialPresent || configured.CredentialSets[0].ActiveFingerprint == "" {
@@ -71,7 +78,7 @@ func TestRuntimeSetupCreatesDedicatedCredentialAndImmutableConnectionRevision(t 
 		t.Fatalf("encrypted credential round trip failed: value=%q err=%v", plaintext, err)
 	}
 
-	again, err := service.ConfigureRuntimeSetup(context.Background(), integrationID, RuntimeSetupInput{EnvironmentID: "env_prod", ConnectionName: "Default", BaseURL: "https://voice.example.test", AuthenticationType: "api_key_header", ExistingCredentialSetID: configured.CredentialSets[0].ID}, Actor{ID: "root-test"})
+	again, err := service.ConfigureRuntimeSetup(context.Background(), integrationID, RuntimeSetupInput{EnvironmentID: "env_prod", ConnectionName: "Default", BaseURL: "https://voice.example.test", AuthenticationType: "api_key_header", AuthorizationID: configured.CredentialSets[0].ID}, Actor{ID: "root-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,13 +103,86 @@ func TestRuntimeSetupCreatesDedicatedCredentialAndImmutableConnectionRevision(t 
 	}
 }
 
+func TestRuntimeAuthorizationAdditionalHeadersAreEncryptedAndMutableByName(t *testing.T) {
+	t.Parallel()
+	service, _ := newRuntimeServiceTest(t)
+	integrationID := createRuntimeTestIntegration(t, service, "header-api", "Header API")
+	headers := []RuntimeAuthorizationHeaderInput{{Name: "X-Tenant-Key", Value: "tenant-one"}, {Name: "X-Region", Value: "nz"}}
+	profile, err := service.CreateRuntimeCredentialSet(context.Background(), integrationID, RuntimeCredentialSetInput{
+		EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", EnvironmentVariable: "HEADER_API_KEY",
+		KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL,
+		Credential: "primary-one", AdditionalHeaders: &headers,
+	}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil || bytes.Contains(encoded, []byte("tenant-one")) || bytes.Contains(encoded, []byte(`"value"`)) || !bytes.Contains(encoded, []byte("X-Tenant-Key")) {
+		t.Fatalf("redacted profile = %s err=%v", encoded, err)
+	}
+
+	updatedHeaders := []RuntimeAuthorizationHeaderInput{{Name: "X-Tenant-Key", Value: ""}, {Name: "X-Trace-Key", Value: "trace-two"}}
+	updated, err := service.UpdateRuntimeAuthorization(context.Background(), profile.ID, RuntimeAuthorizationUpdateInput{
+		EnvironmentVariable: profile.EnvironmentVariable, AuthConfig: profile.AuthConfig,
+		KeyManagementURL: profile.KeyManagementURL, AccessEvaluationURL: profile.AccessEvaluationURL, UsageURL: profile.UsageURL,
+		State: profile.State, Revision: profile.Revision, AdditionalHeaders: &updatedHeaders,
+	}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := service.runtimeCredentialMaterial(context.Background(), updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, storedHeaders, bundled, err := runtimeauth.Decode(material)
+	if err != nil || !bundled || string(primary) != "primary-one" || len(storedHeaders) != 2 || storedHeaders[0].Name != "X-Tenant-Key" || string(storedHeaders[0].Value) != "tenant-one" || storedHeaders[1].Name != "X-Trace-Key" || string(storedHeaders[1].Value) != "trace-two" {
+		t.Fatalf("material = primary=%q headers=%#v bundled=%t err=%v", primary, storedHeaders, bundled, err)
+	}
+	if bytes.Contains(updated.AuthConfig, []byte("X-Region")) || !bytes.Contains(updated.AuthConfig, []byte("X-Trace-Key")) {
+		t.Fatalf("auth config = %s", updated.AuthConfig)
+	}
+}
+
+func TestRuntimeAuthorizationPromotesStoredHeaderValueWhenPrimaryIsDeleted(t *testing.T) {
+	t.Parallel()
+	service, _ := newRuntimeServiceTest(t)
+	integrationID := createRuntimeTestIntegration(t, service, "promoted-header-api", "Promoted Header API")
+	headers := []RuntimeAuthorizationHeaderInput{{Name: "X-Tenant-Key", Value: "tenant-secret"}}
+	profile, err := service.CreateRuntimeCredentialSet(context.Background(), integrationID, RuntimeCredentialSetInput{
+		EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "api_key_header", EnvironmentVariable: "PROMOTED_HEADER_API_KEY",
+		HeaderName: "X-API-Key", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL,
+		Credential: "primary-secret", AdditionalHeaders: &headers,
+	}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	remainingHeaders := []RuntimeAuthorizationHeaderInput{}
+	updated, err := service.UpdateRuntimeAuthorization(context.Background(), profile.ID, RuntimeAuthorizationUpdateInput{
+		EnvironmentVariable: profile.EnvironmentVariable, HeaderName: "X-Tenant-Key", AuthConfig: profile.AuthConfig,
+		KeyManagementURL: profile.KeyManagementURL, AccessEvaluationURL: profile.AccessEvaluationURL, UsageURL: profile.UsageURL,
+		State: profile.State, Revision: profile.Revision, AdditionalHeaders: &remainingHeaders,
+	}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := service.runtimeCredentialMaterial(context.Background(), updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, storedHeaders, _, err := runtimeauth.Decode(material)
+	if err != nil || updated.HeaderName != "X-Tenant-Key" || string(primary) != "tenant-secret" || len(storedHeaders) != 0 {
+		t.Fatalf("updated=%#v primary=%q headers=%#v err=%v", updated, primary, storedHeaders, err)
+	}
+}
+
 func TestRuntimeSharedCredentialCanServeTwoAPIsAndRotatesWithoutRepublishingConnections(t *testing.T) {
 	t.Parallel()
 	service, memory := newRuntimeServiceTest(t)
 	voiceID := createRuntimeTestIntegration(t, service, "voice", "Voice API")
 	faceID := createRuntimeTestIntegration(t, service, "face", "Face API")
 
-	shared, err := service.CreateRuntimeCredentialSet(context.Background(), voiceID, RuntimeCredentialSetInput{EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", Credential: "service-key-one"}, Actor{ID: "root-test"})
+	shared, err := service.CreateRuntimeCredentialSet(context.Background(), voiceID, RuntimeCredentialSetInput{EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "service-key-one"}, Actor{ID: "root-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +224,78 @@ func TestRuntimeSharedCredentialCanServeTwoAPIsAndRotatesWithoutRepublishingConn
 	faceAfter, _ := memory.RuntimeServiceConnection(context.Background(), "prod_acme", face.ID)
 	if voiceAfter.CurrentRevisions[0].ContentHash != voiceHash || faceAfter.CurrentRevisions[0].ContentHash != faceHash {
 		t.Fatal("credential rotation rewrote pinned connection configuration")
+	}
+}
+
+func TestRuntimeAuthorizationProfileOwnsReusableConfiguration(t *testing.T) {
+	t.Parallel()
+	service, _ := newRuntimeServiceTest(t)
+	voiceID := createRuntimeTestIntegration(t, service, "voice-auth-profile", "Voice Authorization API")
+	faceID := createRuntimeTestIntegration(t, service, "face-auth-profile", "Face Authorization API")
+	profile, err := service.CreateRuntimeCredentialSet(context.Background(), voiceID, RuntimeCredentialSetInput{
+		EnvironmentID:       "env_prod",
+		Scope:               "shared",
+		Name:                "Vendor production Authorization",
+		EnvironmentVariable: "VENDOR_API_KEY",
+		AuthenticationType:  "oauth_client_credentials",
+		AuthConfig:          json.RawMessage(`{"client_id":"client-one","token_url":"https://identity.example.test/oauth/token","scopes":["records.read"]}`),
+		KeyManagementURL:    "https://dashboard.example.test/credentials",
+		AccessEvaluationURL: testAccessEvaluationURL,
+		UsageURL:            testUsageURL,
+		Credential:          "client-secret-one",
+	}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.KeyManagementURL != "https://dashboard.example.test/credentials" || profile.EnvironmentVariable != "VENDOR_API_KEY" || !bytes.Contains(profile.AuthConfig, []byte(`"client_id":"client-one"`)) {
+		t.Fatalf("authorization profile = %#v", profile)
+	}
+	profiles, err := service.RuntimeAuthorizationProfiles(context.Background())
+	if err != nil || len(profiles) != 1 || profiles[0].ID != profile.ID {
+		t.Fatalf("reusable profiles = %#v err=%v", profiles, err)
+	}
+	configured, err := service.ConfigureRuntimeSetup(context.Background(), faceID, RuntimeSetupInput{
+		EnvironmentID:      "env_prod",
+		BaseURL:            "https://face.example.test",
+		AuthenticationType: "bearer",
+		AuthConfig:         json.RawMessage(`{"unexpected":"caller-copy"}`),
+		AuthorizationID:    profile.ID,
+	}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := configured.Connections[0].CurrentRevisions[0]
+	if revision.AuthenticationType != profile.AuthenticationType || !bytes.Equal(revision.AuthConfig, profile.AuthConfig) {
+		t.Fatalf("connection did not inherit the exact profile: revision=%#v profile=%#v", revision, profile)
+	}
+
+	dedicated, err := service.CreateRuntimeCredentialSet(context.Background(), voiceID, RuntimeCredentialSetInput{EnvironmentID: "env_prod", Scope: "dedicated", EnvironmentVariable: "VOICE_ONLY_KEY", AuthenticationType: "bearer", Credential: "voice-only"}, Actor{ID: "root-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err = service.RuntimeAuthorizationProfiles(context.Background())
+	if err != nil || len(profiles) != 1 || profiles[0].ID == dedicated.ID {
+		t.Fatalf("dedicated credential leaked into reusable profiles: %#v err=%v", profiles, err)
+	}
+}
+
+func TestRuntimeAuthorizationProfileRejectsUnsafeMetadata(t *testing.T) {
+	t.Parallel()
+	service, _ := newRuntimeServiceTest(t)
+	integrationID := createRuntimeTestIntegration(t, service, "unsafe-profile", "Unsafe Profile API")
+	for name, input := range map[string]RuntimeCredentialSetInput{
+		"missing management URL":       {EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", Credential: "secret"},
+		"private management URL":       {EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", KeyManagementURL: "http://10.0.0.1/keys", AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "secret"},
+		"queried access hook":          {EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL + "?tenant=one", UsageURL: testUsageURL, Credential: "secret"},
+		"nonstandard remote hook port": {EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: "https://hooks.example.test:8443/access", UsageURL: testUsageURL, Credential: "secret"},
+		"unsafe header":                {EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "custom_header", HeaderName: "Cookie", KeyManagementURL: "https://dashboard.example.test/keys", AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "secret"},
+		"header injection":             {EnvironmentID: "env_prod", Scope: "shared", AuthenticationType: "bearer", KeyManagementURL: "https://dashboard.example.test/keys", AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "secret\r\nX-Evil: injected"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.CreateRuntimeCredentialSet(context.Background(), integrationID, input, Actor{ID: "root-test"}); err == nil {
+				t.Fatal("unsafe Authorization profile was accepted")
+			}
+		})
 	}
 }
 
@@ -200,7 +352,7 @@ func TestRuntimeToolMakesServiceAccessRequiredAndPublishesExactRedactedConnectio
 		t.Fatalf("service access without a runtime tool = %#v", serviceAccess)
 	}
 
-	setup, err := service.ConfigureRuntimeSetup(ctx, integrationID, RuntimeSetupInput{EnvironmentID: "env_prod", BaseURL: "https://voice-one.example.test", AuthenticationType: "bearer", CredentialScope: "dedicated", Credential: "publication-secret"}, actor)
+	setup, err := service.ConfigureRuntimeSetup(ctx, integrationID, RuntimeSetupInput{EnvironmentID: "env_prod", BaseURL: "https://voice-one.example.test", AuthenticationType: "bearer", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "publication-secret"}, actor)
 	if err != nil {
 		t.Fatal(err)
 	}

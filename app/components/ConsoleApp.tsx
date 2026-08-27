@@ -33,7 +33,6 @@ import {
   ToolsView,
 } from "./console/catalog-settings-views";
 import { APIContractsView } from "./console/developer-assets/api-contracts-view";
-import { DocumentationCollectionsView } from "./console/developer-assets/documentation-collections-view";
 import { DocumentationExplorerView } from "./console/developer-assets/documentation-explorer-view";
 import { DocumentationNavigation } from "./console/developer-assets/developer-asset-navigation";
 import { QueryLabView } from "./console/developer-assets/query-lab-view";
@@ -64,6 +63,8 @@ function deploymentAsProduct(value: APIDeployment): APIProduct {
     name: value.name,
     slug: value.slug,
     description: value.description,
+    feedback_submission_url: value.feedback_submission_url,
+    error_submission_url: value.error_submission_url,
     catalog_revision: value.catalog_revision,
     public_mcp_enabled: value.public_mcp_enabled,
     revision: value.revision,
@@ -266,7 +267,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     }
   }
 
-  async function updateTenantSettings(input: { name: string; slug: string; description: string }): Promise<boolean> {
+  async function updateTenantSettings(input: { name: string; slug: string; description: string; feedback_submission_url: string; error_submission_url: string }): Promise<boolean> {
     if (fixturePreview) {
       setProduct((current) => ({ ...current, ...input, revision: current.revision + 1 }));
       showToast(t("tenantSettings.saved"));
@@ -354,7 +355,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useEntityDetail({ consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, reportSubmissions, auditEvents, rootUsers });
   const workspaceClass = consoleRoute.kind === "tool-builder" ? "workspace-wide" : section === "settings" ? "workspace-compact" : "workspace-default";
-  const integrationViewProps = { live: apiConnected, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
+  const integrationViewProps = { live: apiConnected, product, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
 
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">{t("console.skipToContent")}</a>
@@ -374,8 +375,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
             : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} />
             : <>
               {section === "product" && <IntegrationsView {...integrationViewProps} />}
-              {section === "documents" && <DocumentationExplorerView live={apiConnected} sources={sources} onNavigate={navigateToPath} />}
-              {section === "collections" && <DocumentationCollectionsView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
+              {section === "documents" && <DocumentationExplorerView live={apiConnected} sources={sources} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "contracts" && <APIContractsView live={apiConnected} integrations={integrations} sources={sources} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "sdks" && <SDKCatalogView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "query-lab" && <QueryLabView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}

@@ -9,6 +9,28 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
+func (s *Server) sdkPackageImports(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		developerAssetMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var input platform.SDKPackageImportInput
+	if err := decodeDeveloperAssetJSON(r.Body, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.ImportSDKPackage(r.Context(), input, actor(r))
+	if err != nil {
+		s.developerAssetError(w, err)
+		return
+	}
+	status := http.StatusCreated
+	if value.AlreadyImported {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, value)
+}
+
 type sdkPackageRequest struct {
 	Ecosystem               string           `json:"ecosystem"`
 	Coordinate              string           `json:"coordinate"`

@@ -166,6 +166,9 @@ func run(ctx context.Context) error {
 	supervisor.Start("developer-asset-retrieval-retention", func(ctx context.Context) error {
 		return platformService.RunDeveloperAssetRetrievalRetentionJanitor(ctx, platform.DefaultDeveloperAssetRetrievalRetentionInterval)
 	})
+	supervisor.Start("authorization-usage-delivery", func(ctx context.Context) error {
+		return toolProxy.RunAuthorizationUsageDelivery(ctx, time.Second)
+	})
 	defer func() {
 		stopWorkers()
 		supervisor.Wait()

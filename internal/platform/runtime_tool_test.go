@@ -30,7 +30,7 @@ func selectRuntimeCredential(tool model.Tool, target model.ToolRuntimeTarget) mo
 func TestPublishedRuntimeToolPinsConfigurationAndFollowsCredentialRotation(t *testing.T) {
 	service, memory := newRuntimeServiceTest(t)
 	voiceID := createRuntimeTestIntegration(t, service, "voice", "Voice API")
-	setup, err := service.ConfigureRuntimeSetup(context.Background(), voiceID, RuntimeSetupInput{EnvironmentID: "env_prod", ConnectionName: "Default", BaseURL: "https://voice-one.example.test", AuthenticationType: "bearer", CredentialScope: "dedicated", Credential: "voice-key-one"}, Actor{ID: "root-test"})
+	setup, err := service.ConfigureRuntimeSetup(context.Background(), voiceID, RuntimeSetupInput{EnvironmentID: "env_prod", ConnectionName: "Default", BaseURL: "https://voice-one.example.test", AuthenticationType: "bearer", KeyManagementURL: testKeyManagementURL, AccessEvaluationURL: testAccessEvaluationURL, UsageURL: testUsageURL, Credential: "voice-key-one"}, Actor{ID: "root-test"})
 	if err != nil {
 		t.Fatal(err)
 	}

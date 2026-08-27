@@ -25,18 +25,19 @@ test("promotes APIs, Docs, and SDKs and packages to the primary navigation", () 
   assert.equal(SECTION_PATHS.product, "/integrations");
   assert.equal(SECTION_PATHS.sources, "/integrations/documentation");
   assert.equal(SECTION_PATHS.documents, "/developer-assets/documentation/documents");
-  assert.equal(SECTION_PATHS.collections, "/developer-assets/documentation/collections");
   assert.equal(SECTION_PATHS.contracts, "/developer-assets/api-contracts");
   assert.equal(SECTION_PATHS.sdks, "/developer-assets/sdk-packages");
   assert.equal(SECTION_PATHS["query-lab"], "/developer-assets/query-lab");
   assert.deepEqual(INTEGRATION_TABS.find((tab) => tab.id === "documentation"), { id: "documentation", label: "routes.resources" });
   assert.equal(integrationPath("api-payments-v1", "documentation"), "/integration/api-payments-v1/documentation");
-  for (const section of ["product", "sources", "documents", "collections", "contracts", "sdks", "query-lab"] as const) {
+  for (const section of ["product", "sources", "documents", "contracts", "sdks", "query-lab"] as const) {
     assert.equal(parseConsolePath(SECTION_PATHS[section]).section, section);
   }
+  assert.equal(parseConsolePath("/developer-assets/documentation/collections").kind, "not-found");
 
   const documentation = render(createElement(DocumentationNavigation, { active: "contracts", onNavigate: noop }));
-  for (const label of ["Sources", "All files", "Collections", "API contracts", "Query Lab"]) assert.match(documentation, new RegExp(`>${label}</a>`));
+  for (const label of ["Sources", "Documents", "API contracts", "Query Lab"]) assert.match(documentation, new RegExp(`>${label}</a>`));
+  assert.doesNotMatch(documentation, />Collections<|>All files</);
   assert.match(documentation, /href="\/developer-assets\/query-lab" class="page-tab docs-query-lab-tab">Query Lab<\/a>/);
 
   const sidebar = render(createElement(ConsoleSidebar, { section: "contracts", activeNavigationID: "docs", onNavigate: noop }));

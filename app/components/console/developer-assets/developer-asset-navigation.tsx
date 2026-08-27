@@ -11,8 +11,7 @@ export function DocumentationNavigation({ active, onNavigate }: { active: Sectio
   const { t } = useTranslation();
   const items: Array<{ label: string; section: Section }> = [
     { label: t("navigation.sources"), section: "sources" },
-    { label: t("navigation.allFiles"), section: "documents" },
-    { label: t("navigation.collections"), section: "collections" },
+    { label: t("navigation.documents"), section: "documents" },
     { label: t("navigation.apiContracts"), section: "contracts" },
     { label: t("navigation.queryLab"), section: "query-lab" },
   ];

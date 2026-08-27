@@ -14,10 +14,17 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
+	"github.com/dokosoko/dokosoko-service/internal/runtimeauth"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
 	"github.com/dokosoko/dokosoko-service/internal/tools"
 )
+
+type fixedRuntimeCredentialResolver struct{ value []byte }
+
+func (resolver fixedRuntimeCredentialResolver) ResolveToolCredential(context.Context, model.Tool) ([]byte, error) {
+	return bytes.Clone(resolver.value), nil
+}
 
 func publishStaticTool(t *testing.T, service *platform.Service, input platform.ToolInput) string {
 	t.Helper()
@@ -50,6 +57,34 @@ func upstreamToolInput(name, method, endpoint string, auth any, credential strin
 	}
 }
 
+// publishAuthorizationHeaderFixture stores the internal execution shape used
+// after a reusable Authorization has been resolved. Public direct-tool APIs do
+// not accept additional fixed headers or their bundled credential material.
+func publishAuthorizationHeaderFixture(t *testing.T, memory *store.Memory, name string, auth platform.ToolUpstreamAuth) string {
+	t.Helper()
+	authJSON, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := memory.CreateTool(context.Background(), model.Tool{
+		ID: "tool_" + name, OrganisationID: "org_acme", ProductID: "prod_acme", Scope: model.ToolScopeCommon,
+		Namespace: "upstream", Name: name, Description: "Runtime Authorization header fixture.",
+		InputSchema:     json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
+		OutputSchema:    json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"]}`),
+		APIConnectionID: "connection_" + name, BaseURL: "https://api.example.test/status", HTTPMethod: http.MethodGet,
+		UpstreamAuth: authJSON, CredentialID: "runtime-credential", CredentialPresent: true,
+		AuthorizationPolicy: json.RawMessage(`{"required_grants":[],"confirmation_required":false,"risk":"low"}`), TimeoutMS: 5000, BackendKind: "http",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := memory.PublishTool(context.Background(), created.ProductID, created.ID, created.Revision, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return published.Namespace + "." + published.Name
+}
+
 func TestRuntimeAppliesEncryptedBearerCredential(t *testing.T) {
 	memory := store.NewMemory()
 	vault, err := secrets.New(bytes.Repeat([]byte{0x64}, 32))
@@ -67,6 +102,46 @@ func TestRuntimeAppliesEncryptedBearerCredential(t *testing.T) {
 	runtime.SetCredentialResolver(service)
 	if _, err := runtime.Execute(context.Background(), "prod_acme", fullName, map[string]any{}, tools.Principal{Subject: "root-test", Grants: map[string]bool{}, RequestID: "execute"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeAppliesEncryptedAdditionalAuthorizationHeaders(t *testing.T) {
+	memory := store.NewMemory()
+	auth := platform.ToolUpstreamAuth{Type: "bearer", Headers: []string{"X-Tenant-Key", "X-Region"}}
+	fullName := publishAuthorizationHeaderFixture(t, memory, "additionalheaders", auth)
+	bundle, err := runtimeauth.Encode([]byte("server-side-token"), []runtimeauth.Header{{Name: "X-Tenant-Key", Value: []byte("tenant-secret")}, {Name: "X-Region", Value: []byte("nz")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := tools.NewRuntime(memory, runtimeResolver{address: net.ParseIP("8.8.8.8")}, runtimeDoer(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("Authorization") != "Bearer server-side-token" || request.Header.Get("X-Tenant-Key") != "tenant-secret" || request.Header.Get("X-Region") != "nz" {
+			t.Fatalf("headers = %#v", request.Header)
+		}
+		return &http.Response{StatusCode: 200, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	}))
+	runtime.SetCredentialResolver(fixedRuntimeCredentialResolver{value: bundle})
+	if _, err := runtime.Execute(context.Background(), "prod_acme", fullName, map[string]any{}, tools.Principal{Subject: "root-test", Grants: map[string]bool{}, RequestID: "execute"}); err != nil {
+		published, _ := memory.Tools(context.Background(), "prod_acme", true)
+		t.Fatalf("%v auth=%s", err, published[0].UpstreamAuth)
+	}
+}
+
+func TestRuntimeDeniesMismatchedAuthorizationHeaderBundle(t *testing.T) {
+	memory := store.NewMemory()
+	auth := platform.ToolUpstreamAuth{Type: "bearer", Headers: []string{"X-Tenant-Key"}}
+	fullName := publishAuthorizationHeaderFixture(t, memory, "mismatchedheaders", auth)
+	bundle, err := runtimeauth.Encode([]byte("server-side-token"), []runtimeauth.Header{{Name: "X-Other-Key", Value: []byte("secret")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	runtime := tools.NewRuntime(memory, runtimeResolver{address: net.ParseIP("8.8.8.8")}, runtimeDoer(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("must not call upstream")
+	}))
+	runtime.SetCredentialResolver(fixedRuntimeCredentialResolver{value: bundle})
+	if _, err := runtime.Execute(context.Background(), "prod_acme", fullName, map[string]any{}, tools.Principal{Subject: "root-test", Grants: map[string]bool{}, RequestID: "execute"}); !errors.Is(err, tools.ErrDenied) || called {
+		t.Fatalf("err=%v called=%t", err, called)
 	}
 }
 

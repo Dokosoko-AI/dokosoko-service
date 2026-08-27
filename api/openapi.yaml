@@ -353,7 +353,7 @@ paths:
                 $ref: '#/components/schemas/IntegrationPreflight'
         '404':
           $ref: '#/components/responses/Error'
-  /api/v1/integrations/{integration_id}/runtime-setup:
+  /api/v1/integrations/{integration_id}/authorization:
     parameters:
       - name: integration_id
         in: path
@@ -362,13 +362,12 @@ paths:
           type: string
     get:
       tags: ["Runtime"]
-      operationId: getIntegrationRuntimeSetup
+      operationId: getIntegrationAuthorization
       description: >-
-        Returns the shortest-path runtime Access setup for one API, including environments, service connections, and credential metadata. Credential values and internal vault
-        identifiers are never returned.
+        Returns the API endpoint binding and reusable Authorization metadata for one API. Credential values and internal vault identifiers are never returned.
       responses:
         '200':
-          description: Runtime Access setup with credential-redacted metadata.
+          description: API Authorization binding with credential-redacted metadata.
           content:
             application/json:
               schema:
@@ -377,10 +376,9 @@ paths:
           $ref: '#/components/responses/Error'
     put:
       tags: ["Runtime"]
-      operationId: configureIntegrationRuntimeSetup
+      operationId: configureIntegrationAuthorization
       description: >-
-        Configures one environment-specific service connection and either selects an existing eligible credential set or creates a dedicated/shared credential set in the same
-        shortest-path request. Credential input is write-only and is never returned.
+        Binds one existing Authorization or creates and binds a reusable Authorization for the API endpoint. Credential input is write-only and is never returned.
       requestBody:
         required: true
         content:
@@ -389,7 +387,7 @@ paths:
               $ref: '#/components/schemas/RuntimeSetupRequest'
       responses:
         '200':
-          description: Updated runtime Access setup with credential-redacted metadata.
+          description: Updated API Authorization binding with credential-redacted metadata.
           content:
             application/json:
               schema:
@@ -400,93 +398,51 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
-  /api/v1/integrations/{integration_id}/runtime-connections:
+  /api/v1/authorizations:
+    get:
+      tags: ["Runtime"]
+      operationId: listAuthorizations
+      description: Lists active shared Authorization profiles that may be reused by any API in the deployment. Secret values and vault identifiers are never returned.
+      responses:
+        '200':
+          description: Reusable, credential-redacted Authorization profiles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeAuthorizationProfileList'
+  /api/v1/authorizations/{authorization_id}:
     parameters:
-      - name: integration_id
+      - name: authorization_id
         in: path
         required: true
         schema:
           type: string
     get:
       tags: ["Runtime"]
-      operationId: listIntegrationRuntimeServiceConnections
-      description: Lists the API-owned upstream service connections and their current immutable environment revisions.
+      operationId: getAuthorization
+      description: Returns one reusable Authorization and its credential-redacted version metadata.
       responses:
         '200':
-          description: Runtime service connections.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RuntimeServiceConnectionList'
-        '404':
-          $ref: '#/components/responses/Error'
-    post:
-      tags: ["Runtime"]
-      operationId: createIntegrationRuntimeServiceConnection
-      description: >-
-        Creates or revises a named API-owned service connection. The destination is a credential-free HTTPS origin or localhost HTTP origin; secret material is referenced only
-        through an eligible credential-set identifier.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RuntimeServiceConnectionRequest'
-      responses:
-        '201':
-          description: Created or revised runtime service connection.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RuntimeServiceConnection'
-        '400':
-          $ref: '#/components/responses/Error'
-        '404':
-          $ref: '#/components/responses/Error'
-        '409':
-          $ref: '#/components/responses/Error'
-  /api/v1/runtime-service-connections/{connection_id}/check:
-    parameters:
-      - name: connection_id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      tags: ["Runtime"]
-      operationId: checkRuntimeServiceConnection
-      description: Performs a deterministic, value-free configuration check for one API-owned service connection. This does not send an unspecified network probe to the upstream service.
-      responses:
-        '200':
-          description: Credential-redacted service-connection readiness.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RuntimeServiceConnectionReadiness'
-        '404':
-          $ref: '#/components/responses/Error'
-  /api/v1/integrations/{integration_id}/runtime-credential-sets:
-    parameters:
-      - name: integration_id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      tags: ["Runtime"]
-      operationId: createIntegrationRuntimeCredentialSet
-      description: >-
-        Creates an encrypted dedicated or deliberately shared runtime credential set. The credential is accepted only through the write-only request field; responses expose
-        lifecycle and fingerprint metadata only.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RuntimeCredentialSetRequest'
-      responses:
-        '201':
           description: Credential-redacted runtime credential set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeCredentialSet'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: ["Runtime"]
+      operationId: updateAuthorization
+      description: Updates non-secret Authorization metadata and hook configuration using optimistic concurrency. The authentication method is immutable; create a new Authorization to change it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAuthorizationRequest'
+      responses:
+        '200':
+          description: Updated credential-redacted Authorization.
           content:
             application/json:
               schema:
@@ -497,56 +453,36 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
-  /api/v1/runtime-credential-sets/{credential_set_id}:
+  /api/v1/authorizations/{authorization_id}/usage:
     parameters:
-      - name: credential_set_id
+      - name: authorization_id
         in: path
         required: true
         schema:
           type: string
     get:
       tags: ["Runtime"]
-      operationId: getRuntimeCredentialSet
-      description: Returns lifecycle, scope, usage-safe fingerprint, and version metadata for one credential set. Credential values and internal vault identifiers are never returned.
+      operationId: getAuthorizationUsage
+      description: Lists every API endpoint binding whose current environment revision references this Authorization.
       responses:
         '200':
-          description: Credential-redacted runtime credential set.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RuntimeCredentialSet'
-        '404':
-          $ref: '#/components/responses/Error'
-  /api/v1/runtime-credential-sets/{credential_set_id}/usage:
-    parameters:
-      - name: credential_set_id
-        in: path
-        required: true
-        schema:
-          type: string
-    get:
-      tags: ["Runtime"]
-      operationId: getRuntimeCredentialUsage
-      description: Lists every service connection in the deployment whose current environment revision references this credential set.
-      responses:
-        '200':
-          description: Credential-set usage by runtime service connections.
+          description: Authorization usage by API endpoint bindings.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RuntimeCredentialUsage'
         '404':
           $ref: '#/components/responses/Error'
-  /api/v1/runtime-credential-sets/{credential_set_id}/rotate:
+  /api/v1/authorizations/{authorization_id}/rotate:
     parameters:
-      - name: credential_set_id
+      - name: authorization_id
         in: path
         required: true
         schema:
           type: string
     post:
       tags: ["Runtime"]
-      operationId: rotateRuntimeCredential
+      operationId: rotateAuthorizationCredential
       description: Stores and activates a new encrypted credential version while moving the prior active version into retiring state. The credential is write-only and is never returned.
       requestBody:
         required: true
@@ -567,9 +503,9 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
-  /api/v1/runtime-credential-sets/{credential_set_id}/versions/{version_id}/revoke:
+  /api/v1/authorizations/{authorization_id}/versions/{version_id}/revoke:
     parameters:
-      - name: credential_set_id
+      - name: authorization_id
         in: path
         required: true
         schema:
@@ -581,7 +517,7 @@ paths:
           type: string
     post:
       tags: ["Runtime"]
-      operationId: revokeRuntimeCredentialVersion
+      operationId: revokeAuthorizationCredentialVersion
       description: Revokes one exact credential version and returns only the credential set's updated redacted metadata. Repeating a completed revoke is idempotent.
       responses:
         '200':
@@ -1396,7 +1332,8 @@ paths:
       operationId: createSource
       description: >-
         Creates a private, unpublished website, OpenAPI, or Git source. A website URL is also its crawl boundary: only that exact path and descendants may be fetched as pages.
-        File uploads must use the reviewed multipart upload endpoint instead of supplying a client-selected storage location here.
+        The display name is derived from the source location when omitted. File uploads must use the reviewed multipart upload endpoint instead of supplying a client-selected
+        storage location here.
       requestBody:
         required: true
         content:
@@ -1436,13 +1373,13 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 120
+                  description: Optional legacy display label. When omitted, the original filename becomes the source name.
                 file:
                   type: string
                   format: binary
                   description: Non-empty valid UTF-8 documentation file using one of the accepted extensions documented on this operation.
               required:
                 - organisation_id
-                - name
                 - file
       responses:
         '201':
@@ -3900,6 +3837,37 @@ paths:
                 $ref: '#/components/schemas/APIContractRevision'
         '404':
           $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/sdk-package-imports:
+    post:
+      operationId: importSDKPackage
+      tags: ["SDK Catalog"]
+      description: >-
+        Resolves one exact SDK package release from a supported registry metadata endpoint or a GitHub/GitLab HTTPS repository. Optional package authorization is write-only,
+        used for this request only, and never persisted or returned. The importer reads bounded metadata, pins an exact version and, when available, an upstream digest or Git commit, and never installs
+        or executes package code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SDKPackageImportInput'
+      responses:
+        '200':
+          description: The exact package release had already been imported and matched the resolved identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKPackageImportResult'
+        '201':
+          description: Imported package root and immutable exact release.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SDKPackageImportResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/v1/developer-assets/sdk-packages:
     get:
       operationId: listSDKPackages
@@ -5088,6 +5056,12 @@ components:
         description:
           type: string
           maxLength: 2000
+        feedback_submission_url:
+          $ref: '#/components/schemas/OptionalRuntimeOutboundURI'
+          description: Optional deployment-wide destination for feedback submissions. Empty disables delivery.
+        error_submission_url:
+          $ref: '#/components/schemas/OptionalRuntimeOutboundURI'
+          description: Optional deployment-wide destination for error submissions. Empty disables delivery.
         public_mcp_enabled:
           type: boolean
           default: false
@@ -5124,6 +5098,8 @@ components:
           required:
             - id
             - organisation_id
+            - feedback_submission_url
+            - error_submission_url
             - catalog_revision
             - revision
             - created_at
@@ -5718,6 +5694,19 @@ components:
       description: >-
         HTTPS URI without userinfo, a query, or a fragment. HTTP is accepted only for localhost, localhost subdomains, 127.0.0.1, or ::1 local-development hosts. These common
         credential channels are rejected, but the path is not secret-scanned and must not contain credentials.
+    RuntimeOutboundURI:
+      type: string
+      format: uri
+      maxLength: 2048
+      pattern: ^(?:https://[^/?#@:]+(?::443)?|http://(?:(?:[A-Za-z0-9-]+\.)*[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?)(?:/[^?#]*)?$
+      description: >-
+        Credential-free outbound destination without a query or fragment. Remote destinations require HTTPS on the default port; HTTP is accepted only for explicitly allowed
+        local-development hosts.
+    OptionalRuntimeOutboundURI:
+      type: string
+      maxLength: 2048
+      pattern: ^$|^(?:https://[^/?#@:]+(?::443)?|http://(?:(?:[A-Za-z0-9-]+\.)*[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?)(?:/[^?#]*)?$
+      description: Empty disables delivery; non-empty values follow the runtime outbound URI policy.
     RuntimeAuthenticationType:
       type: string
       enum:
@@ -5766,7 +5755,7 @@ components:
           minLength: 1
           maxLength: 500
         token_url:
-          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
+          $ref: '#/components/schemas/RuntimeOutboundURI'
         token_endpoint_auth_method:
           type: string
           enum:
@@ -5791,6 +5780,33 @@ components:
         prefix:
           type: string
           maxLength: 120
+        headers:
+          type: array
+          description: Ordered names of additional encrypted Authorization headers. Values are never returned.
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 100
+    RuntimeAuthorizationHeaderInput:
+      type: object
+      additionalProperties: false
+      description: Write-only value for one additional fixed Authorization header.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        value:
+          type: string
+          format: password
+          maxLength: 16384
+          writeOnly: true
+          description: Required when creating or adding a header. Leave blank on update to preserve the stored value for the same name.
+      required:
+        - name
+        - value
     RuntimeServiceConnectionRevision:
       type: object
       additionalProperties: false
@@ -5803,10 +5819,10 @@ components:
         environment_id:
           type: string
         base_url:
-          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
+          $ref: '#/components/schemas/RuntimeOutboundURI'
         authentication_type:
           $ref: '#/components/schemas/RuntimeAuthenticationType'
-        credential_set_id:
+        authorization_id:
           type: string
         auth_config:
           $ref: '#/components/schemas/RuntimeAuthenticationConfiguration'
@@ -5884,58 +5900,6 @@ components:
         - revision
         - created_at
         - updated_at
-    RuntimeServiceConnectionList:
-      type: object
-      additionalProperties: false
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/RuntimeServiceConnection'
-      required:
-        - items
-    RuntimeServiceConnectionCheck:
-      type: object
-      additionalProperties: false
-      description: One non-secret deterministic readiness result for a connection or environment revision.
-      properties:
-        key:
-          type: string
-        label:
-          type: string
-        ready:
-          type: boolean
-        message:
-          type: string
-        evidence:
-          type: array
-          description: Exact immutable product evidence selected for this server-rendered finding.
-          items:
-            $ref: '#/components/schemas/RecipeEvidenceRef'
-        environment_id:
-          type: string
-      required:
-        - key
-        - label
-        - ready
-        - message
-    RuntimeServiceConnectionReadiness:
-      type: object
-      additionalProperties: false
-      description: Value-free readiness summary; it exposes neither credentials nor internal vault identifiers.
-      properties:
-        connection_id:
-          type: string
-        ready:
-          type: boolean
-        checks:
-          type: array
-          items:
-            $ref: '#/components/schemas/RuntimeServiceConnectionCheck'
-      required:
-        - connection_id
-        - ready
-        - checks
     RuntimeCredentialVersion:
       type: object
       additionalProperties: false
@@ -5943,7 +5907,7 @@ components:
       properties:
         id:
           type: string
-        credential_set_id:
+        authorization_id:
           type: string
         fingerprint:
           type: string
@@ -5975,14 +5939,14 @@ components:
           format: date-time
       required:
         - id
-        - credential_set_id
+        - authorization_id
         - fingerprint
         - state
         - created_at
     RuntimeCredentialSet:
       type: object
       additionalProperties: false
-      description: Stable, credential-redacted metadata for a dedicated API credential or a deliberately shared service credential.
+      description: Stable, reusable, credential-redacted Authorization metadata.
       properties:
         id:
           type: string
@@ -5992,14 +5956,6 @@ components:
           type: string
         environment_id:
           type: string
-        scope:
-          type: string
-          enum:
-            - dedicated
-            - shared
-        owner_integration_id:
-          type: string
-          description: Present for dedicated credentials and absent for shared credentials.
         name:
           type: string
           minLength: 1
@@ -6012,6 +5968,17 @@ components:
         header_name:
           type: string
           maxLength: 120
+        auth_config:
+          $ref: '#/components/schemas/RuntimeAuthenticationConfiguration'
+        key_management_url:
+          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
+          description: Operator-facing credential-management URL. DokoSoko stores this as metadata and never fetches it.
+        access_evaluation_url:
+          $ref: '#/components/schemas/RuntimeOutboundURI'
+          description: Synchronous fail-closed access decision hook owned by this Authorization.
+        usage_url:
+          $ref: '#/components/schemas/RuntimeOutboundURI'
+          description: Asynchronous usage event hook owned by this Authorization.
         state:
           type: string
           enum:
@@ -6041,15 +6008,27 @@ components:
         - deployment_id
         - organisation_id
         - environment_id
-        - scope
         - name
         - environment_variable
         - authentication_type
+        - auth_config
+        - access_evaluation_url
+        - usage_url
         - state
         - credential_present
         - revision
         - created_at
         - updated_at
+    RuntimeAuthorizationProfileList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeCredentialSet'
+      required:
+        - items
     RuntimeCredentialUsage:
       type: object
       additionalProperties: false
@@ -6067,7 +6046,7 @@ components:
     RuntimeSetup:
       type: object
       additionalProperties: false
-      description: API-local runtime Access read model. Credential sets contain redacted lifecycle metadata only.
+      description: API-local Authorization read model. Authorizations contain redacted lifecycle metadata only.
       properties:
         integration:
           $ref: '#/components/schemas/Integration'
@@ -6075,25 +6054,23 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Environment'
-        service_connections:
+        endpoint_bindings:
           type: array
           items:
             $ref: '#/components/schemas/RuntimeServiceConnection'
-        credential_sets:
+        authorizations:
           type: array
           items:
             $ref: '#/components/schemas/RuntimeCredentialSet'
       required:
         - integration
         - environments
-        - service_connections
-        - credential_sets
+        - endpoint_bindings
+        - authorizations
     RuntimeSetupRequest:
       type: object
       additionalProperties: false
-      description: >-
-        Shortest-path setup request. Secret-bearing modes require exactly one eligible existing_credential_set_id or a new credential value; none and delegated_oauth reject
-        credential selection.
+      description: Binds one existing reusable Authorization or creates and binds a new one. Credential input is write-only.
       properties:
         environment_id:
           type: string
@@ -6106,35 +6083,39 @@ components:
           type: string
           maxLength: 500
         base_url:
-          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
+          $ref: '#/components/schemas/RuntimeOutboundURI'
         authentication_type:
           $ref: '#/components/schemas/RuntimeAuthenticationType'
         auth_config:
           $ref: '#/components/schemas/RuntimeAuthenticationConfiguration'
-        existing_credential_set_id:
+        authorization_id:
           type: string
-        credential_scope:
-          type: string
-          enum:
-            - dedicated
-            - shared
-          default: dedicated
-        credential_name:
-          type: string
-          minLength: 1
-          maxLength: 120
         environment_variable:
           type: string
           pattern: ^[A-Z][A-Z0-9_]{0,127}$
         header_name:
           type: string
           maxLength: 120
+        key_management_url:
+          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
+          description: Operator-facing credential-management URL owned by the reusable Authorization profile.
+        access_evaluation_url:
+          $ref: '#/components/schemas/RuntimeOutboundURI'
+          description: Synchronous fail-closed access decision hook owned by the Authorization.
+        usage_url:
+          $ref: '#/components/schemas/RuntimeOutboundURI'
+          description: Asynchronous usage event hook owned by the Authorization.
         credential:
           type: string
           format: password
           minLength: 1
           writeOnly: true
           description: Plaintext credential accepted for immediate encryption and never returned.
+        additional_headers:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/RuntimeAuthorizationHeaderInput'
         credential_expires_at:
           type: string
           format: date-time
@@ -6142,77 +6123,53 @@ components:
         - environment_id
         - base_url
         - authentication_type
-    RuntimeServiceConnectionRequest:
+    UpdateAuthorizationRequest:
       type: object
       additionalProperties: false
       properties:
-        name:
+        environment_variable:
           type: string
-          minLength: 1
+          pattern: ^[A-Z][A-Z0-9_]{0,127}$
+        header_name:
+          type: string
           maxLength: 120
-          default: Default
-        description:
-          type: string
-          maxLength: 500
-        environment_id:
-          type: string
-        base_url:
-          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
-        authentication_type:
-          $ref: '#/components/schemas/RuntimeAuthenticationType'
-        credential_set_id:
-          type: string
-          description: Required for secret-bearing authentication types and forbidden for none or delegated_oauth.
         auth_config:
           $ref: '#/components/schemas/RuntimeAuthenticationConfiguration'
+        key_management_url:
+          $ref: '#/components/schemas/CredentialFreeHTTPSOrLocalhostHTTPURI'
+        access_evaluation_url:
+          $ref: '#/components/schemas/RuntimeOutboundURI'
+        usage_url:
+          $ref: '#/components/schemas/RuntimeOutboundURI'
+        credential:
+          type: string
+          format: password
+          maxLength: 16384
+          writeOnly: true
+          description: Optional replacement primary credential. Leave blank to preserve its current encrypted value.
+        additional_headers:
+          type: array
+          maxItems: 16
+          description: Complete ordered additional-header set. Omit to preserve the set; send an empty array to delete all additional headers.
+          items:
+            $ref: '#/components/schemas/RuntimeAuthorizationHeaderInput'
         state:
           type: string
           enum:
             - active
             - disabled
-          default: active
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
       required:
-        - environment_id
-        - base_url
-        - authentication_type
-    RuntimeCredentialSetRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        environment_id:
-          type: string
-        scope:
-          type: string
-          enum:
-            - dedicated
-            - shared
-          default: dedicated
-          description: Omit for the safe API-dedicated default; shared must be selected explicitly.
-        name:
-          type: string
-          minLength: 1
-          maxLength: 120
-        environment_variable:
-          type: string
-          pattern: ^[A-Z][A-Z0-9_]{0,127}$
-        authentication_type:
-          $ref: '#/components/schemas/RuntimeCredentialAuthenticationType'
-        header_name:
-          type: string
-          maxLength: 120
-        credential:
-          type: string
-          format: password
-          minLength: 1
-          writeOnly: true
-          description: Plaintext credential accepted for immediate encryption and never returned.
-        expires_at:
-          type: string
-          format: date-time
-      required:
-        - environment_id
-        - authentication_type
-        - credential
+        - environment_variable
+        - auth_config
+        - key_management_url
+        - access_evaluation_url
+        - usage_url
+        - state
+        - revision
     RotateRuntimeCredentialRequest:
       type: object
       additionalProperties: false
@@ -6707,6 +6664,7 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+          description: Optional legacy display label. When omitted, the server derives a stable name from the source location.
         kind:
           type: string
           enum:
@@ -6720,7 +6678,6 @@ components:
           description: Absolute HTTP(S) URL for website and OpenAPI sources; source-specific locator otherwise. For a website, the URL path is an enforced crawl boundary, so https://example.com/docs permits /docs and descendants but not another same-origin directory.
       required:
         - organisation_id
-        - name
         - kind
         - location
     CrawlJob:
@@ -12563,6 +12520,95 @@ components:
       required:
         - contract
         - revision
+    SDKImportAuthenticationInput:
+      type: object
+      additionalProperties: false
+      description: Per-import, write-only source authorization. Credentials are never persisted or returned.
+      properties:
+        type:
+          type: string
+          enum:
+            - none
+            - bearer
+            - basic
+          default: none
+        username:
+          type: string
+          maxLength: 500
+          description: Non-secret username used only for basic authentication.
+        credential:
+          type: string
+          maxLength: 16384
+          writeOnly: true
+          description: PAT, bearer token, password, or registry token used only during this import request.
+      required:
+        - type
+    SDKPackageImportInput:
+      type: object
+      additionalProperties: false
+      properties:
+        ecosystem:
+          type: string
+          enum:
+            - npm
+            - pypi
+            - go
+            - cargo
+        source_kind:
+          type: string
+          enum:
+            - registry
+            - git
+        source_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Credential-free registry metadata/base URL or GitHub/GitLab HTTPS repository URL. Query strings and fragments are rejected.
+        coordinate:
+          type: string
+          minLength: 1
+          maxLength: 500
+        exact_version:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: One exact immutable version. Floating ranges and latest are rejected.
+        source_ref:
+          type: string
+          maxLength: 200
+          description: Git tag, branch, or commit to resolve to an immutable commit. Defaults to exact_version and is forbidden for registry imports.
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        authentication:
+          $ref: '#/components/schemas/SDKImportAuthenticationInput'
+      required:
+        - ecosystem
+        - source_kind
+        - source_url
+        - coordinate
+        - exact_version
+        - visibility
+        - authentication
+    SDKPackageImportResult:
+      type: object
+      additionalProperties: false
+      properties:
+        package:
+          $ref: '#/components/schemas/SDKPackage'
+        release:
+          $ref: '#/components/schemas/SDKRelease'
+        source_kind:
+          type: string
+          enum:
+            - registry
+            - git
+        already_imported:
+          type: boolean
+      required:
+        - package
+        - release
+        - source_kind
+        - already_imported
     SDKPackageInput:
       type: object
       additionalProperties: false

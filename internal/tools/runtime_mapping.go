@@ -188,6 +188,8 @@ func prepareRuntimeTool(tool model.Tool, environmentID string) (model.Tool, erro
 	tool.RuntimeConnectionRevisionID = selected.ConnectionRevisionID
 	tool.RuntimeCredentialSetID = selected.CredentialSetID
 	tool.RuntimeCredentialVersionID = selected.CredentialVersionID
+	tool.AccessEvaluationURL = selected.AccessEvaluationURL
+	tool.UsageURL = selected.UsageURL
 	return tool, nil
 }
 

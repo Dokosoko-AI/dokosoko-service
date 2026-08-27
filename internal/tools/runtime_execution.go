@@ -118,6 +118,14 @@ func (r *Runtime) executeHTTPAuthorizedTraced(ctx context.Context, productID, fu
 	if err != nil {
 		return nil, err
 	}
+	var credentialMaterial toolCredentialMaterial
+	if auth.Type != "delegated_oauth" && auth.Type != "none" {
+		credentialMaterial, err = r.toolCredentialMaterial(ctx, tool)
+		if err != nil {
+			return nil, err
+		}
+		defer wipeCredentialMaterial(&credentialMaterial)
+	}
 	mapping, err := toolRequestMapping(tool)
 	if err != nil {
 		return nil, err
@@ -176,14 +184,9 @@ func (r *Runtime) executeHTTPAuthorizedTraced(ctx context.Context, productID, fu
 		body = bytes.NewReader(encoded)
 	}
 	if auth.Type == "api_key_query" {
-		credential, credentialErr := r.toolCredential(ctx, tool)
-		if credentialErr != nil {
-			return nil, credentialErr
-		}
 		query := parsed.Query()
-		query.Set(auth.QueryName, string(credential))
+		query.Set(auth.QueryName, string(credentialMaterial.primary))
 		parsed.RawQuery = query.Encode()
-		wipe(credential)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, parsed.String(), body)
 	if err != nil {
@@ -208,23 +211,18 @@ func (r *Runtime) executeHTTPAuthorizedTraced(ctx context.Context, productID, fu
 		request.Header.Set("Authorization", "Bearer "+principal.DelegatedAccessToken)
 	case "none":
 	case "bearer", "authorization_scheme", "api_key_header", "basic", "custom_header":
-		credential, credentialErr := r.toolCredential(ctx, tool)
-		if credentialErr != nil {
-			return nil, credentialErr
-		}
 		switch auth.Type {
 		case "bearer":
-			request.Header.Set("Authorization", "Bearer "+string(credential))
+			request.Header.Set("Authorization", "Bearer "+string(credentialMaterial.primary))
 		case "authorization_scheme":
-			request.Header.Set("Authorization", auth.Scheme+" "+string(credential))
+			request.Header.Set("Authorization", auth.Scheme+" "+string(credentialMaterial.primary))
 		case "api_key_header":
-			request.Header.Set(auth.HeaderName, prefixedCredential(auth.Prefix, credential))
+			request.Header.Set(auth.HeaderName, prefixedCredential(auth.Prefix, credentialMaterial.primary))
 		case "basic":
-			request.SetBasicAuth(auth.Username, string(credential))
+			request.SetBasicAuth(auth.Username, string(credentialMaterial.primary))
 		case "custom_header":
-			request.Header.Set(auth.HeaderName, prefixedCredential(auth.Prefix, credential))
+			request.Header.Set(auth.HeaderName, prefixedCredential(auth.Prefix, credentialMaterial.primary))
 		}
-		wipe(credential)
 	case "api_key_query":
 	case "oauth_client_credentials":
 		if trace != nil {
@@ -237,6 +235,11 @@ func (r *Runtime) executeHTTPAuthorizedTraced(ctx context.Context, productID, fu
 		request.Header.Set("Authorization", tokenType+" "+token)
 	default:
 		return nil, ErrDenied
+	}
+	if auth.Type != "delegated_oauth" && auth.Type != "none" {
+		if err := applyAdditionalAuthorizationHeaders(request.Header, auth.Headers, credentialMaterial.headers); err != nil {
+			return nil, err
+		}
 	}
 	if method != http.MethodGet && policy.IdempotencyRequired {
 		request.Header.Set("Idempotency-Key", upstreamIdempotencyKey(productID, tool, principal))

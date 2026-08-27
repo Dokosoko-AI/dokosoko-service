@@ -20,3 +20,30 @@ type ReportSubmission struct {
 	UpdatedAt         time.Time       `json:"updated_at"`
 	ExpiresAt         time.Time       `json:"expires_at"`
 }
+
+// AuthorizationUsageEvent is a durable, value-free delivery record. It pins
+// the Authorization version used for the execution without retaining tool
+// arguments, tool results, tokens, or plaintext credentials.
+type AuthorizationUsageEvent struct {
+	ID                    string          `json:"id"`
+	OrganisationID        string          `json:"-"`
+	ProductID             string          `json:"-"`
+	IntegrationID         string          `json:"-"`
+	AuthorizationID       string          `json:"authorization_id"`
+	URL                   string          `json:"-"`
+	AuthenticationType    string          `json:"-"`
+	HeaderName            string          `json:"-"`
+	AuthConfig            json.RawMessage `json:"-"`
+	CredentialVersionID   string          `json:"-"`
+	CredentialSecretID    string          `json:"-"`
+	CredentialFingerprint string          `json:"-"`
+	Payload               json.RawMessage `json:"-"`
+	State                 string          `json:"state"`
+	Attempts              int             `json:"attempts"`
+	AvailableAt           time.Time       `json:"available_at"`
+	LeaseOwner            string          `json:"-"`
+	LeasedUntil           *time.Time      `json:"-"`
+	LastError             string          `json:"-"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+}

@@ -192,6 +192,9 @@ func normalizeToolEditorInput(ctx context.Context, service *Service, current mod
 			if err != nil {
 				return input, err
 			}
+			if len(auth.Headers) > 0 {
+				return input, errors.New("additional fixed headers are managed by reusable Authorizations")
+			}
 			if credentialRequired(auth.Type) && input.Credential == "" && !toolCredentialCanBeReused(current.BaseURL, input.Endpoint, current.UpstreamAuth, auth) {
 				return input, errors.New("re-enter the upstream credential after changing its destination or authentication configuration")
 			}
@@ -541,6 +544,9 @@ func (s *Service) CloneTool(ctx context.Context, productID, toolID string, input
 		copy.UpstreamAuth, auth, _, err = normalizeToolUpstreamAuth(copy.UpstreamAuth, nil, "", input.Credential)
 		if err != nil {
 			return model.Tool{}, err
+		}
+		if len(auth.Headers) > 0 {
+			return model.Tool{}, errors.New("additional fixed headers are managed by reusable Authorizations")
 		}
 		if credentialRequired(auth.Type) {
 			copy.CredentialID, copy.CredentialFingerprint, err = s.saveToolCredential(ctx, copy.OrganisationID, copy.APIConnectionID, input.Credential)

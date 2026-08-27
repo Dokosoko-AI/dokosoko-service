@@ -90,14 +90,16 @@ func (s *Service) validateRuntimeToolConnection(ctx context.Context, product mod
 			return "", nil, composeErr
 		}
 		headerName := ""
+		authConfig := revision.AuthConfig
 		if runtimeAuthenticationNeedsCredential(revision.AuthenticationType) {
 			credentialSet, credentialErr := s.store.RuntimeCredentialSet(ctx, product.ID, revision.CredentialSetID)
 			if credentialErr != nil || credentialSet.State != "active" || credentialSet.EnvironmentID != revision.EnvironmentID || credentialSet.AuthenticationType != revision.AuthenticationType || credentialSet.Scope == "dedicated" && credentialSet.OwnerIntegrationID != connection.IntegrationID || credentialSet.Scope == "shared" && credentialSet.OwnerIntegrationID != "" || !credentialSet.CredentialPresent {
 				return "", nil, errors.New("runtime service credential is not active or eligible for this API and environment")
 			}
 			headerName = credentialSet.HeaderName
+			authConfig = credentialSet.AuthConfig
 		}
-		authRaw, _, authErr := runtimeTargetAuth(revision.AuthenticationType, revision.AuthConfig, headerName)
+		authRaw, _, authErr := runtimeTargetAuth(revision.AuthenticationType, authConfig, headerName)
 		if authErr != nil {
 			return "", nil, fmt.Errorf("runtime service authentication: %w", authErr)
 		}

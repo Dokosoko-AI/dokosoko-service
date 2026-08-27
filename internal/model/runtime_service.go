@@ -30,7 +30,7 @@ type RuntimeServiceConnectionRevision struct {
 	EnvironmentID      string          `json:"environment_id"`
 	BaseURL            string          `json:"base_url"`
 	AuthenticationType string          `json:"authentication_type"`
-	CredentialSetID    string          `json:"credential_set_id,omitempty"`
+	CredentialSetID    string          `json:"authorization_id,omitempty"`
 	AuthConfig         json.RawMessage `json:"auth_config,omitempty"`
 	ContentHash        string          `json:"content_hash"`
 	Revision           int64           `json:"revision"`
@@ -47,12 +47,16 @@ type RuntimeCredentialSet struct {
 	DeploymentID        string                     `json:"deployment_id"`
 	OrganisationID      string                     `json:"organisation_id"`
 	EnvironmentID       string                     `json:"environment_id"`
-	Scope               string                     `json:"scope"`
-	OwnerIntegrationID  string                     `json:"owner_integration_id,omitempty"`
+	Scope               string                     `json:"-"`
+	OwnerIntegrationID  string                     `json:"-"`
 	Name                string                     `json:"name"`
 	EnvironmentVariable string                     `json:"environment_variable"`
 	AuthenticationType  string                     `json:"authentication_type"`
 	HeaderName          string                     `json:"header_name,omitempty"`
+	AuthConfig          json.RawMessage            `json:"auth_config"`
+	KeyManagementURL    string                     `json:"key_management_url,omitempty"`
+	AccessEvaluationURL string                     `json:"access_evaluation_url"`
+	UsageURL            string                     `json:"usage_url"`
 	State               string                     `json:"state"`
 	CredentialPresent   bool                       `json:"credential_present"`
 	ActiveFingerprint   string                     `json:"active_fingerprint,omitempty"`
@@ -66,7 +70,7 @@ type RuntimeCredentialSet struct {
 // SecretID is never serialized or exposed by the administration API.
 type RuntimeCredentialVersion struct {
 	ID              string     `json:"id"`
-	CredentialSetID string     `json:"credential_set_id"`
+	CredentialSetID string     `json:"authorization_id"`
 	SecretID        string     `json:"-"`
 	Fingerprint     string     `json:"fingerprint"`
 	State           string     `json:"state"`
@@ -78,12 +82,14 @@ type RuntimeCredentialVersion struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
-// RuntimeSetup is the read model used by the API-local Access screen.
+// RuntimeSetup is the API-local Authorization read model. Runtime service
+// connections remain an internal execution detail and are exposed only as
+// endpoint-binding metadata.
 type RuntimeSetup struct {
 	Integration    Integration                `json:"integration"`
 	Environments   []Environment              `json:"environments"`
-	Connections    []RuntimeServiceConnection `json:"service_connections"`
-	CredentialSets []RuntimeCredentialSet     `json:"credential_sets"`
+	Connections    []RuntimeServiceConnection `json:"endpoint_bindings"`
+	CredentialSets []RuntimeCredentialSet     `json:"authorizations"`
 }
 
 type RuntimeServiceConnectionCheck struct {
@@ -116,4 +122,6 @@ type ToolRuntimeTarget struct {
 	CredentialSecretID         string          `json:"-"`
 	CredentialFingerprint      string          `json:"-"`
 	HeaderName                 string          `json:"-"`
+	AccessEvaluationURL        string          `json:"-"`
+	UsageURL                   string          `json:"-"`
 }

@@ -47,7 +47,7 @@ export function IntegrationToolBuilderRoute({
 
   useEffect(() => {
     let cancelled = false;
-    void api.integrationRuntimeSetup(integration.id).then((value) => {
+    void api.integrationAuthorization(integration.id).then((value) => {
       if (!cancelled) setSetup(value);
     }).catch((loadError: unknown) => {
       if (!cancelled) setError(loadError instanceof Error ? loadError.message : t("integrationToolBuilder.apiServiceAccessCouldNotBeLoaded"));
@@ -56,10 +56,10 @@ export function IntegrationToolBuilderRoute({
   }, [attempt, integration.id, t]);
 
   if (!setup && !error) return <section className="panel entity-missing" aria-live="polite"><span className="entity-missing-icon"><RefreshCw /></span><div><h1>{t("integrationToolBuilder.loadingAPIToolContext")}</h1><p>{t("integrationToolBuilder.loadingTheAPIOwnedServiceConnectionAndMaskedAuthentication")}</p></div></section>;
-  if (!setup) return <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>{t("integrationToolBuilder.apiToolContextUnavailable")}</h1><p>{error}</p></div><span className="heading-actions"><Button outline onClick={() => { setError(""); setAttempt((value) => value + 1); }}>{t("common.retry")}</Button><Button onClick={() => onNavigate(integrationPath(integration.id, "access"))}>{t("integrationToolBuilder.openAccess")}</Button></span></section>;
+  if (!setup) return <section className="panel entity-missing" role="alert"><span className="entity-missing-icon"><TriangleAlert /></span><div><h1>{t("integrationToolBuilder.apiToolContextUnavailable")}</h1><p>{error}</p></div><span className="heading-actions"><Button outline onClick={() => { setError(""); setAttempt((value) => value + 1); }}>{t("common.retry")}</Button><Button onClick={() => onNavigate(integrationPath(integration.id, "authorization"))}>Open Authorization</Button></span></section>;
 
   return <ToolBuilderView
-    key={`${integration.id}:${tool?.id ?? "new"}:${tool?.revision ?? 0}:${setup.service_connections.map((connection) => connection.revision).join("-")}`}
+    key={`${integration.id}:${tool?.id ?? "new"}:${tool?.revision ?? 0}:${setup.endpoint_bindings.map((connection) => connection.revision).join("-")}`}
     product={product}
     grants={grants}
     tool={tool}
