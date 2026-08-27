@@ -112,9 +112,12 @@ test("keeps desktop workspaces focused without constraining builders", async () 
   assert.match(styles, /main\.workspace-wide\s*\{[^}]*var\(--workspace-wide\)/);
   assert.match(styles, /\.content\s*\{[^}]*width:\s*100%[^}]*max-width:\s*var\(--workspace-max\)[^}]*margin-inline:\s*auto[^}]*padding:\s*var\(--page-block\) var\(--page-gutter\)/);
   assert.match(styles, /\.topbar-inner\s*\{[^}]*max-width:\s*var\(--workspace-max\)[^}]*margin-inline:\s*auto[^}]*padding-inline:\s*var\(--page-gutter\)/);
-  assert.match(source, /consoleRoute\.kind === "tool-builder"[\s\S]*?"workspace-wide"[\s\S]*?section === "identity" \|\| section === "settings"[\s\S]*?"workspace-compact"/);
+  assert.match(source, /consoleRoute\.kind === "tool-builder"[\s\S]*?"workspace-wide"[\s\S]*?section === "settings"[\s\S]*?"workspace-compact"/);
+  assert.doesNotMatch(source, /section === "identity"[\s\S]{0,80}?"workspace-compact"/);
   assert.match(source, /<main id="main-content" className=\{workspaceClass\}/);
   assert.match(source, /<header className="topbar">\s*<div className="topbar-inner">/);
+  assert.match(styles, /\.developer-document-columns\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 128px 76px/);
+  assert.match(styles, /\.developer-document-columns\.table-head > :nth-child\(2\)\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.content\s*\{[^}]*padding:\s*24px 16px 48px/);
 });
 
@@ -137,7 +140,7 @@ test("keeps API Resources attachment-only and pinned to reviewed exact versions"
   const resources = await readFile(appFile("app/components/console/developer-assets/api-resources-workspace.tsx"), "utf8");
 
   assert.match(source, /activeTab === "documentation"[\s\S]*<APIResourcesWorkspace/);
-  assert.match(resources, /This page contains attachment records only/);
+  assert.doesNotMatch(resources, /ExactVersionNotice|This page contains attachment records only/);
   assert.match(resources, /Open catalog/);
   assert.match(resources, /panelKind === "contract" \? "Create in Catalog" : "Create & attach"/);
   assert.match(resources, /kind === "contract" \? "Create in Catalog" : "Create & attach exact resource"/);
@@ -145,7 +148,6 @@ test("keeps API Resources attachment-only and pinned to reviewed exact versions"
   assert.match(resources, /Attach existing/);
   assert.match(resources, /Change exact/);
   assert.match(resources, /Detach resource/);
-  assert.match(resources, /no attachment upgrades automatically/);
   assert.match(resources, /apiResourcePublications/);
   assert.doesNotMatch(resources, /crawlSource|Crawl source|Documentation ingestion/);
 });
@@ -230,6 +232,7 @@ test("keeps interactive controls semantic inside shared data tables", async () =
   const source = await consoleSource();
   const layout = await readFile(appFile("app/components/core/layout.tsx"), "utf8");
   const table = await readFile(appFile("app/components/core/table.tsx"), "utf8");
+  const coreUI = await readFile(appFile("app/styles/core-ui.css"), "utf8");
   const styles = await stylesSource();
 
   assert.match(layout, /role="table"/);
@@ -254,6 +257,8 @@ test("keeps interactive controls semantic inside shared data tables", async () =
   assert.match(styles, /\.row-arrow[^{]*\{[^}]*width:\s*32px[^}]*height:\s*32px/);
   assert.match(styles, /\.core-switch\s*\{[^}]*width:\s*40px[^}]*height:\s*24px/);
   assert.match(styles, /\.entity-link\s*\{[^}]*min-height:\s*24px/);
+  assert.match(coreUI, /\.source-columns\s*\{[^}]*minmax\(220px, 1\.4fr\)[^}]*300px/);
+  assert.doesNotMatch(coreUI, /\.source-columns\s*\{[^}]*minmax\(30px, auto\)/);
 });
 
 test("keeps application colors inside the semantic light and dark token schemes", async () => {

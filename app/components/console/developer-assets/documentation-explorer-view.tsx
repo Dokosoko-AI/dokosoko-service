@@ -13,9 +13,9 @@ import {
 } from "../../../lib/developer-assets-api";
 import { Badge, Button } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
-import { CatalogNavigation, DocumentationNavigation } from "./developer-asset-navigation";
+import { DocumentationNavigation } from "./developer-asset-navigation";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
-import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
+import { developerAssetError, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
 
 type InspectorTab = "detail" | "sections" | "map" | "diagnostics" | "run";
 
@@ -144,10 +144,8 @@ export function DocumentationExplorerView({ live, sources, onNavigate }: { live:
   const active: Section = "documents";
 
   return <>
-    <PageHeader eyebrow="Catalog · Documentation" title="All files" description="Inspect every normalized document before it is selected into a reviewed collection revision." />
-    <CatalogNavigation active={active} onNavigate={onNavigate} />
+    <PageHeader eyebrow="Docs" title="All files" />
     <DocumentationNavigation active={active} onNavigate={onNavigate} />
-    <ExactVersionNotice>Normalized files are inspectable candidates, not trusted publications. Review status and exact ingestion provenance remain visible here.</ExactVersionNotice>
     <form className="toolbar developer-asset-search" onSubmit={submitSearch}>
       <div className="search-field"><Search /><input aria-label="Search all normalized files" placeholder="Search paths, titles, and content…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
       <Button type="submit" outline>Search</Button>

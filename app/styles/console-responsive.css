@@ -7,6 +7,7 @@
   .brand > span:last-child, .nav-item { font-size: 0; }
   .brand-copy { display: none; }
   .nav-item { justify-content: center; padding: 0; }
+  .nav-subsections { display: none; }
   .sidebar-bottom > .theme-toggle { margin-inline: auto; }
   .nav-symbol { font-size: var(--text-heading); }
   .account > span:nth-child(2) { display: none; }
@@ -141,9 +142,6 @@
   .integration-directory-columns { grid-template-columns: minmax(0, 1fr) 32px; }
   .integration-directory-columns > span:nth-child(2), .integration-directory-columns > span:nth-child(3), .integration-directory-columns > span:nth-child(4) { display: none; }
   .integration-directory-columns > .table-open-cell { display: flex; grid-column: 2; grid-row: 1; }
-  .integration-workspace-switcher { justify-content: stretch; margin-top: 0; }
-  .integration-workspace-switcher { display: grid; }
-  .integration-switcher-input { width: 100%; min-width: 0; }
   .integration-health-check:nth-child(odd) { border-right: 0; }
   .publish-diff { grid-template-columns: 1fr; }
   .publish-diff > svg { display: none; }

@@ -17,8 +17,8 @@ import {
 import { Badge, Button, Dialog } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
 import type { Source } from "../shared";
-import { CatalogNavigation, DocumentationNavigation } from "./developer-asset-navigation";
-import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
+import { DocumentationNavigation } from "./developer-asset-navigation";
+import { developerAssetError, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
 import { contractUsages, type ContractUsage } from "./developer-asset-usage";
 
 type CandidateTab = "summary" | "operations" | "schemas" | "examples" | "map" | "contract" | "diagnostics";
@@ -202,10 +202,8 @@ export function APIContractsView({ live, integrations, sources, onMessage, onNav
   const active: Section = "contracts";
 
   return <>
-    <PageHeader eyebrow="Catalog · Documentation" title="API contracts" description="Review normalized OpenAPI candidates and publish immutable revisions that any API can attach." action={<Button onClick={() => openRootEditor()}><Plus data-slot="icon" />Create contract</Button>} />
-    <CatalogNavigation active={active} onNavigate={onNavigate} />
+    <PageHeader eyebrow="Docs" title="API contracts" action={<Button onClick={() => openRootEditor()}><Plus data-slot="icon" />Create contract</Button>} />
     <DocumentationNavigation active={active} onNavigate={onNavigate} />
-    <ExactVersionNotice>Validation is deterministic, but publication still requires human review. APIs attach reviewed contract revisions; roots and candidates are never copied into an API.</ExactVersionNotice>
     {loading ? <LoadingPanel label="Loading API contracts" /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
       <DataTable label="API contract catalog" className="developer-asset-directory">
         <DataTableHeader className="developer-contract-columns"><span>Contract</span><span>Candidates</span><span>Published</span></DataTableHeader>

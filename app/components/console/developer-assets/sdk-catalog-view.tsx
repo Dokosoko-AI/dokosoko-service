@@ -4,7 +4,6 @@ import { Box, Code2, FileCode2, GitBranch, History, PackagePlus, Pencil, Plus, S
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { APIIntegration } from "../../../lib/api";
-import type { Section } from "../../../lib/console-routes";
 import {
   developerAssetsApi,
   type DeveloperAssetRecord,
@@ -20,8 +19,7 @@ import { Badge, Button, Dialog } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
 import { ConsoleLink } from "../console-link";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
-import { CatalogNavigation } from "./developer-asset-navigation";
-import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordID, recordString, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
+import { developerAssetError, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordID, recordString, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
 import { sdkUsages, type SDKUsage } from "./developer-asset-usage";
 import { decisionPayload, decisionsComplete, maxSDKIngestionFileBytes, maxSDKIngestionFiles, maxSDKIngestionTotalBytes, sampleValidated, sdkBufferLooksText, sdkExplorerRecordMatches, sdkLanguageForPath, sdkNormalizedLocalPath, sdkTextBytes, type SDKDecisionState } from "./sdk-catalog-helpers";
 
@@ -397,7 +395,6 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
     })}</div>;
   }
 
-  const active: Section = "sdks";
   const reviewComplete = Boolean(candidateRecord && decisionsComplete(candidateRecord.files, fileDecisions, "file") && decisionsComplete(candidateRecord.samples, sampleDecisions, "sample"));
   const lifecycleSourceInvalid = Boolean(lifecycleSourceURI.trim() && !/^https:\/\//i.test(lifecycleSourceURI.trim()));
   const lifecycleObservedInvalid = Boolean(lifecycleObservedAt && (!Number.isFinite(new Date(lifecycleObservedAt).getTime()) || new Date(lifecycleObservedAt).getTime() > Date.now()));
@@ -407,9 +404,7 @@ export function SDKCatalogView({ live, integrations, onMessage, onNavigate }: { 
   const ingestionSizeInvalid = pastedFileBytes > maxSDKIngestionFileBytes || queuedFileBytes + pastedFileBytes > maxSDKIngestionTotalBytes || queuedFiles.length + (pendingPastedFile ? 1 : 0) > maxSDKIngestionFiles;
 
   return <>
-    <PageHeader eyebrow="Catalog" title="SDKs" description="Manage reusable package identities, exact immutable releases, and human-reviewed content publications." action={<Button onClick={() => openPackageEditor()}><PackagePlus data-slot="icon" />Create package</Button>} />
-    <CatalogNavigation active={active} onNavigate={onNavigate} />
-    <ExactVersionNotice>Packages have no implicit current version. Content ingestion is text-only and never executes package code; APIs bind one exact release by explicit action.</ExactVersionNotice>
+    <PageHeader eyebrow="SDKs and packages" title="Packages" action={<Button onClick={() => openPackageEditor()}><PackagePlus data-slot="icon" />Create package</Button>} />
     {loading ? <LoadingPanel label="Loading SDK packages" /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
       <DataTable label="SDK package catalog" className="developer-asset-directory">
         <DataTableHeader className="developer-sdk-columns"><span>Package</span><span>Ecosystem</span><span>Lifecycle</span></DataTableHeader>

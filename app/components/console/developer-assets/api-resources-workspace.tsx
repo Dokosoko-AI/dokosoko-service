@@ -22,7 +22,7 @@ import { Badge, Button, Dialog } from "../../core/control";
 import { PanelHeader } from "../../core/layout";
 import { ConsoleLink } from "../console-link";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
-import { developerAssetError, ExactVersionNotice, LoadingPanel, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
+import { developerAssetError, LoadingPanel, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
 
 type ResourceKind = "documentation" | "contract" | "sdk";
 type ResourceBinding = APIDocumentationBinding | APIContractBinding | APISDKBinding;
@@ -303,7 +303,6 @@ export function APIResourcesWorkspace({ integration, live, onMessage, onNavigate
   if (problem) return <ProblemPanel message={problem} onRetry={() => void load()} />;
 
   return <>
-    <ExactVersionNotice>This page contains attachment records only. Sources, collections, contracts, packages, and releases remain deployment-owned in Catalog; no attachment upgrades automatically.</ExactVersionNotice>
     <section className="panel api-resource-publications"><PanelHeader title="Published resource history" description="Every API publication freezes the exact developer-asset snapshot used by retrieval and recipe evidence." />{resourcePublications[0] ? <div className="developer-global-active"><span><Badge color="green">latest publication</Badge><code>{resourcePublications[0].id}</code><small>API revision {resourcePublications[0].api_revision_id}</small></span><span><code>{resourcePublications[0].snapshot_hash}</code><small>{resourcePublications[0].documentation.length} documentation · {resourcePublications[0].contracts.length} contracts · {resourcePublications[0].sdks.length} SDKs</small></span></div> : <p className="empty-row">No immutable resource snapshot has been published for this API.</p>}<details className="advanced-details"><summary>Exact publication IDs and hashes</summary><div className="developer-asset-publication-history">{resourcePublications.map((publication) => <div key={publication.id}><span><strong>{new Date(publication.published_at).toLocaleString()}</strong><code>{publication.id}</code></span><span><code>{publication.snapshot_hash}</code><small>{publication.snapshot_schema_version}</small></span></div>)}{resourcePublications.length === 0 && <small>No publication history.</small>}</div></details></section>
     {resourcePanel("documentation", "Documentation", "Reviewed collection revisions available to this API.", bindings.documentation)}
     {resourcePanel("contract", "API contracts", "Attach an exact reviewed revision. New contract roots must first complete source attachment, ingestion, validation, review, and publication in Catalog.", bindings.contracts)}

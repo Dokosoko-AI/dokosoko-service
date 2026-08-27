@@ -60,7 +60,3 @@ export function ReviewStateBadge({ state }: { state: string }) {
           : "zinc";
   return <Badge color={color}>{state.replaceAll("_", " ")}</Badge>;
 }
-
-export function ExactVersionNotice({ children }: { children?: ReactNode }) {
-  return <div className="notice developer-asset-policy"><TriangleAlert /><span><strong>Exact evidence only.</strong>{children ?? " Review and attach an immutable revision or exact release. Catalog changes never upgrade an API automatically."}</span></div>;
-}

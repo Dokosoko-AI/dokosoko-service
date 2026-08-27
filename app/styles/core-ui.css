@@ -63,7 +63,7 @@
 .segmented-control button.active { color: var(--text-strong); background: var(--surface); box-shadow: var(--shadow-sm); }
 .segmented-control button span { color: var(--subtle); font-size: var(--text-caption); }
 .resource-columns { grid-template-columns: minmax(260px, 1.5fr) minmax(130px, .8fr) minmax(210px, .85fr) 30px; }
-.source-columns { grid-template-columns: minmax(250px, 1.4fr) minmax(140px, .8fr) minmax(90px, .5fr) minmax(190px, .8fr) minmax(30px, auto); }
+.source-columns { grid-template-columns: minmax(220px, 1.4fr) minmax(120px, .8fr) minmax(72px, .45fr) minmax(140px, .75fr) 300px; }
 .table-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .table-actions .button { min-height: 28px; padding-inline: 9px; font-size: var(--text-caption); }
 .empty-row { display: grid; place-items: center; min-height: 110px; color: var(--subtle); font-size: var(--text-body); }

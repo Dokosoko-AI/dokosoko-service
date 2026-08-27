@@ -370,12 +370,12 @@ export function OIDCIdentitySetup({ identity, loading, loadError, onChanged, onM
     <Button color="red" disabled={operation !== null} onClick={() => setConfirmingDisable(true)}>Disable</Button>
   </span> : undefined;
 
-  if (loading) return <><PageHeader eyebrow="Identity" title="Customer sign-in" description="Connect one OIDC provider for all private MCP clients." /><section className="panel identity-loading"><RefreshCw /><span><strong>Loading identity settings</strong><small>Getting the exact callback URL and current OIDC connection.</small></span></section></>;
+  if (loading) return <><PageHeader eyebrow="Identity" title="Customer sign-in" /><section className="panel identity-loading"><RefreshCw /><span><strong>Loading identity settings</strong><small>Getting the exact callback URL and current OIDC connection.</small></span></section></>;
 
-  if (!identity || loadError) return <><PageHeader eyebrow="Identity" title="Customer sign-in" description="Connect one OIDC provider for all private MCP clients." /><section className="panel identity-load-error"><TriangleAlert /><span><strong>Identity settings are unavailable</strong><small>{loadError || "The server did not return identity setup metadata."}</small></span></section></>;
+  if (!identity || loadError) return <><PageHeader eyebrow="Identity" title="Customer sign-in" /><section className="panel identity-load-error"><TriangleAlert /><span><strong>Identity settings are unavailable</strong><small>{loadError || "The server did not return identity setup metadata."}</small></span></section></>;
 
   return <>
-    <PageHeader eyebrow="Identity" title="Customer sign-in" description="Connect an OIDC provider, verify a real customer login, then activate customer sign-in." action={pageActions} />
+    <PageHeader eyebrow="Identity" title="Customer sign-in" action={pageActions} />
 
     {(error || loadError) && <div className="identity-error" role="alert"><XCircle /><span>{error || loadError}</span></div>}
 

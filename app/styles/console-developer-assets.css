@@ -6,7 +6,6 @@
 .nav-subsection:hover, .nav-subsection.active { color: var(--sidebar-text-active); background: var(--sidebar-hover); }
 .nav-subsection:focus-visible { outline: 2px solid var(--accent-highlight); outline-offset: 2px; }
 
-.developer-asset-policy { align-items: flex-start; }
 .developer-asset-state { min-height: 112px; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--muted); }
 .developer-asset-state > svg { width: 20px; height: 20px; }
 .developer-asset-state > span { display: grid; gap: 3px; }
@@ -20,7 +19,8 @@
 .developer-asset-search .search-field { flex: 1 1 320px; }
 .developer-asset-explorer { min-width: 0; display: grid; grid-template-columns: minmax(300px, .72fr) minmax(520px, 1.28fr); align-items: start; gap: var(--space-section); }
 .developer-asset-directory { min-width: 0; overflow: hidden; }
-.developer-document-columns { grid-template-columns: minmax(0, 1fr) minmax(110px, .42fr) 76px; }
+.developer-document-columns { grid-template-columns: minmax(0, 1fr) 128px 76px; }
+.developer-document-columns.table-head > :nth-child(2) { white-space: nowrap; }
 .developer-collection-columns, .developer-contract-columns { grid-template-columns: minmax(0, 1fr) 88px 112px; }
 .developer-sdk-columns { grid-template-columns: minmax(0, 1fr) minmax(110px, .42fr) 100px; }
 .developer-asset-selectable.selected { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
@@ -266,8 +266,8 @@
 }
 
 @media (max-width: 720px) {
-  .nav-subsections { display: none; }
   .developer-document-columns, .developer-collection-columns, .developer-contract-columns, .developer-sdk-columns { grid-template-columns: minmax(0, 1fr) 92px; }
+  .developer-document-columns.table-head > :nth-child(2) { white-space: normal; }
   .developer-document-columns > :nth-child(3), .developer-collection-columns > :nth-child(3), .developer-contract-columns > :nth-child(3), .developer-sdk-columns > :nth-child(3) { display: none; }
   .developer-asset-revision-layout { grid-template-columns: minmax(0, 1fr); }
   .developer-asset-revisions { grid-auto-flow: column; grid-auto-columns: minmax(150px, 1fr); overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }

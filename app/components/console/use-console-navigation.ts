@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type ConsoleRoute,
@@ -54,7 +54,7 @@ export function useConsoleNavigation({
     }
     window.scrollTo({ top: 0, behavior: "auto" });
     consoleRouteRef.current = next;
-    setConsoleRoute(next);
+    startTransition(() => setConsoleRoute(next));
     requestAnimationFrame(() => document.getElementById("main-content")?.focus());
   }, [confirmToolBuilderNavigation, onLeaveToolBuilder]);
 
@@ -89,7 +89,7 @@ export function useConsoleNavigation({
       }
       if (next.kind !== "tool-builder") onLeaveToolBuilder();
       consoleRouteRef.current = next;
-      setConsoleRoute(next);
+      startTransition(() => setConsoleRoute(next));
     };
 
     syncRoute();

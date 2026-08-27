@@ -28,7 +28,7 @@ import { IntegrationToolsWorkspace } from "./integrations/tools-workspace";
 import { APIResourcesWorkspace } from "./developer-assets/api-resources-workspace";
 import { APIResourcePublicationHistory } from "./developer-assets/api-resource-publication-history";
 
-function IntegrationDirectoryView({ integrations, query, navigation, onQueryChange, onCreate, onNavigate }: { integrations: APIIntegration[]; query: string; navigation?: React.ReactNode; onQueryChange: (query: string) => void; onCreate: () => void; onNavigate: (path: string) => void }) {
+function IntegrationDirectoryView({ integrations, query, onQueryChange, onCreate, onNavigate }: { integrations: APIIntegration[]; query: string; onQueryChange: (query: string) => void; onCreate: () => void; onNavigate: (path: string) => void }) {
   const [showRetired, setShowRetired] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();
   const retiredCount = integrations.filter((integration) => integration.lifecycle === "retired").length;
@@ -39,8 +39,7 @@ function IntegrationDirectoryView({ integrations, query, navigation, onQueryChan
     .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.version_key.localeCompare(right.version_key, undefined, { numeric: true }));
 
   return <>
-    <PageHeading eyebrow="Catalog" title="APIs" action={<Button onClick={onCreate}><Plus data-slot="icon" />Add API</Button>} />
-    {navigation}
+    <PageHeading eyebrow="APIs" title="API directory" action={<Button onClick={onCreate}><Plus data-slot="icon" />Add API</Button>} />
     <div className="toolbar integration-toolbar">
       <div className="search-field"><Search /><input aria-label="Search APIs" placeholder="Search APIs…" value={query} onChange={(event) => onQueryChange(event.target.value)} /></div>
       <span className="toolbar-count">{filteredIntegrations.length} API{filteredIntegrations.length === 1 ? "" : "s"}</span>
@@ -62,23 +61,8 @@ function IntegrationDirectoryView({ integrations, query, navigation, onQueryChan
   </>;
 }
 
-function IntegrationSwitcher({ integrations, integration, activeTab, onNavigate }: { integrations: APIIntegration[]; integration: APIIntegration; activeTab: IntegrationTab; onNavigate: (path: string) => void }) {
-  const optionLabel = (value: APIIntegration) => `${value.display_name} · ${value.version_key} · ${value.family_key}`;
-  const [value, setValue] = useState(optionLabel(integration));
-
-  function selectIntegration(nextValue: string) {
-    setValue(nextValue);
-    const selected = integrations.find((candidate) => candidate.id === nextValue || optionLabel(candidate) === nextValue);
-    if (selected && selected.id !== integration.id) onNavigate(integrationPath(selected.id, activeTab));
-  }
-
-  if (integrations.length <= 1) return null;
-  return <div className="integration-workspace-switcher"><label htmlFor="integration-switcher">Switch API</label><div className="integration-switcher-input"><Search /><input id="integration-switcher" list="integration-switcher-options" value={value} onChange={(event) => selectIntegration(event.target.value)} onBlur={() => { if (!integrations.some((candidate) => optionLabel(candidate) === value)) setValue(optionLabel(integration)); }} /><datalist id="integration-switcher-options">{[...integrations].sort((left, right) => left.family_key.localeCompare(right.family_key) || left.version_key.localeCompare(right.version_key, undefined, { numeric: true })).map((candidate) => <option key={candidate.id} value={optionLabel(candidate)} />)}</datalist></div></div>;
-}
-
 type IntegrationWorkspaceViewProps = {
   integration: APIIntegration | null;
-  integrations: APIIntegration[];
   analyses: APIIntegrationAnalysis[];
   tools: APITool[];
   activeTab: IntegrationTab;
@@ -110,7 +94,7 @@ type IntegrationWorkspaceViewProps = {
   onNavigate: (path: string) => void;
 };
 
-function IntegrationWorkspaceView({ integration, integrations, tools, activeTab, loading, revisions, publishStatus, identity, distribution, busy, onEdit, onPublish, onInspectRevision, onRuntimeChanged, onMessage, onNavigate, live }: IntegrationWorkspaceViewProps) {
+function IntegrationWorkspaceView({ integration, tools, activeTab, loading, revisions, publishStatus, identity, distribution, busy, onEdit, onPublish, onInspectRevision, onRuntimeChanged, onMessage, onNavigate, live }: IntegrationWorkspaceViewProps) {
   if (loading && !integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><RefreshCw /></span><div><p className="eyebrow">API</p><h1>Loading API…</h1><p>Retrieving its configuration and published history.</p></div></section>;
   if (!integration) return <section className="panel entity-missing"><span className="entity-missing-icon"><Search /></span><div><p className="eyebrow">API</p><h1>API unavailable</h1><p>This API is not available in the current deployment.</p></div><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />Return to APIs</ConsoleLink></section>;
 
@@ -135,7 +119,6 @@ function IntegrationWorkspaceView({ integration, integrations, tools, activeTab,
   const validationPath = (tab: string) => integrationValidationPath(integration.id, tab);
   return <>
     <div className="entity-breadcrumb"><ConsoleLink path={sectionPath("product")} onNavigate={onNavigate} className="entity-back-link"><ArrowLeft />All APIs</ConsoleLink></div>
-    <IntegrationSwitcher key={integration.id} integrations={integrations} integration={integration} activeTab={activeTab} onNavigate={onNavigate} />
     <PageHeading eyebrow={`${integration.family_key} · ${integration.version_key}`} title={integration.display_name} action={<span className="heading-actions"><Button outline onClick={() => onEdit(integration)}>Edit</Button>{!publishStatus ? <span className="published-state checking"><RefreshCw />Checking…</span> : canPublish ? <Button color="indigo" disabled={busy} onClick={() => onPublish(integration)}><GitBranch data-slot="icon" />Publish</Button> : hasChanges && !publishStatus.ready ? <Badge color="amber">Setup required</Badge> : <span className="published-state"><CheckCircle2 />Published</span>}</span>} />
     <IntegrationNavigation integrationID={integration.id} integrationName={integration.display_name} activeTab={activeTab} onNavigate={onNavigate} />
 
@@ -173,7 +156,6 @@ function IntegrationWorkspaceView({ integration, integrations, tools, activeTab,
 
 type IntegrationsViewProps = {
   live?: boolean;
-  navigation?: React.ReactNode;
   integrations: APIIntegration[];
   analyses: APIIntegrationAnalysis[];
   tools: APITool[];
@@ -194,7 +176,7 @@ type IntegrationsViewProps = {
   onNavigate: (path: string) => void;
 };
 
-export function IntegrationsView({ live = true, navigation, integrations, analyses, tools, resourceSets, sources, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
+export function IntegrationsView({ live = true, integrations, analyses, tools, resourceSets, sources, identity, distribution, selectedIntegrationID, activeTab = "overview", activeResourceTab = "documentation", onAddSource, onCrawlSource, onPublishSource, onAttachPublishedSource, onGenerateSetupGuide, onChanged, onMessage, onNavigate }: IntegrationsViewProps) {
   const [query, setQuery] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<APIIntegration | null>(null);
   const [selectedRevisions, setSelectedRevisions] = useState<APIIntegrationRevision[]>([]);
@@ -379,7 +361,7 @@ export function IntegrationsView({ live = true, navigation, integrations, analys
   ].map((entry) => [String(entry.source_publication_id), entry])).values());
 
   return <>
-    {selectedIntegrationID ? <IntegrationWorkspaceView live={live} integration={selectedIntegration} integrations={integrations} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateSetupGuide={onGenerateSetupGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} query={query} navigation={navigation} onQueryChange={setQuery} onCreate={() => openIntegration()} onNavigate={onNavigate} />}
+    {selectedIntegrationID ? <IntegrationWorkspaceView live={live} integration={selectedIntegration} analyses={analyses} tools={tools} activeTab={activeTab} activeResourceTab={activeResourceTab} loading={selectedLoading} revisions={selectedRevisions} publishStatus={selectedPublishStatus} identity={identity} resourceSets={resourceSets} sources={sources} distribution={distribution} busy={busy} onEdit={openIntegration} onPublish={setPublishCandidate} onAttach={openAttachDialog} onCreateResource={() => openResource()} onAddSource={onAddSource} onCrawlSource={onCrawlSource} onPublishSource={onPublishSource} onAttachPublishedSource={attachPublishedSource} onGenerateSetupGuide={onGenerateSetupGuide} onEditResource={openResource} onDuplicateResource={(set) => { setDuplicateSet(set); setDuplicateName(`${set.name} copy`); }} onDetachResource={detachResource} onInspectRevision={setInspectedRevision} onRuntimeChanged={async () => { await onChanged(); await refreshSelectedIntegration(selectedIntegrationID); }} onMessage={onMessage} onNavigate={onNavigate} /> : <IntegrationDirectoryView integrations={integrations} query={query} onQueryChange={setQuery} onCreate={() => openIntegration()} onNavigate={onNavigate} />}
 
     <Dialog
       open={integrationOpen}

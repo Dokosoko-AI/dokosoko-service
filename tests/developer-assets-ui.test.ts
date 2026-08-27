@@ -4,7 +4,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { CatalogNavigation, DocumentationNavigation } from "../app/components/console/developer-assets/developer-asset-navigation";
+import { DocumentationNavigation } from "../app/components/console/developer-assets/developer-asset-navigation";
 import { decisionPayload, decisionsComplete, sampleValidated, sdkBufferLooksText, sdkNormalizedLocalPath } from "../app/components/console/developer-assets/sdk-catalog-helpers";
 import { ConsoleSidebar } from "../app/components/console/workspace-navigation";
 import { INTEGRATION_TABS, SECTION_PATHS, integrationPath, parseConsolePath } from "../app/lib/console-routes";
@@ -12,7 +12,7 @@ import type { DeveloperAssetRecord } from "../app/lib/developer-assets-api";
 
 const noop = () => {};
 
-test("root Catalog routes render APIs, Documentation, API contracts, SDKs, and Query Lab", () => {
+test("promotes APIs, Docs, and SDKs and packages to the primary navigation", () => {
   assert.equal(SECTION_PATHS.product, "/integrations");
   assert.equal(SECTION_PATHS.sources, "/integrations/documentation");
   assert.equal(SECTION_PATHS.documents, "/developer-assets/documentation/documents");
@@ -26,14 +26,14 @@ test("root Catalog routes render APIs, Documentation, API contracts, SDKs, and Q
     assert.equal(parseConsolePath(SECTION_PATHS[section]).section, section);
   }
 
-  const catalog = renderToStaticMarkup(createElement(CatalogNavigation, { active: "contracts", onNavigate: noop }));
-  for (const label of ["APIs", "Documentation", "SDKs", "Query Lab"]) assert.match(catalog, new RegExp(`>${label}</a>`));
   const documentation = renderToStaticMarkup(createElement(DocumentationNavigation, { active: "contracts", onNavigate: noop }));
-  for (const label of ["Sources", "All files", "Collections", "API contracts"]) assert.match(documentation, new RegExp(`>${label}</a>`));
+  for (const label of ["Sources", "All files", "Collections", "API contracts", "Query Lab"]) assert.match(documentation, new RegExp(`>${label}</a>`));
 
-  const sidebar = renderToStaticMarkup(createElement(ConsoleSidebar, { section: "contracts", activeNavigationID: "catalog", onNavigate: noop }));
-  assert.match(sidebar, /aria-label="Catalog sections"/);
-  for (const label of ["APIs", "Sources", "All files", "Collections", "API contracts", "SDKs", "Query Lab"]) assert.match(sidebar, new RegExp(`>${label}</a>`));
+  const sidebar = renderToStaticMarkup(createElement(ConsoleSidebar, { section: "contracts", activeNavigationID: "docs", onNavigate: noop }));
+  for (const [label, path] of [["APIs", "/integrations"], ["Docs", "/integrations/documentation"], ["SDKs and packages", "/developer-assets/sdk-packages"]]) {
+    assert.match(sidebar, new RegExp(`href="${path}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
+  }
+  assert.doesNotMatch(sidebar, /Catalog sections|Docs sections|nav-subsections/);
 });
 
 test("SDK review helpers require evidence and reject unsafe local files", () => {

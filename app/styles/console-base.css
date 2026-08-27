@@ -1,8 +1,5 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-.console-loading-boundary { min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); background: var(--surface-subtle); }
-.console-loading-boundary svg { width: 18px; height: 18px; }
-
 :root {
   color-scheme: light;
   --font-ui: var(--font-geist), Geist, ui-sans-serif, system-ui, sans-serif;

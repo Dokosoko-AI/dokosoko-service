@@ -2,9 +2,10 @@
 
 import {
   BookOpen,
+  GitBranch,
   LayoutDashboard,
-  LibraryBig,
   LogOut,
+  Package,
   Radio,
   Settings,
   Users,
@@ -16,7 +17,7 @@ import { type Section, sectionPath } from "../../lib/console-routes";
 import { ThemeToggle } from "../ThemeToggle";
 import { ConsoleLink } from "./console-link";
 
-export type NavigationGroup = "catalog" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
+export type NavigationGroup = "apis" | "docs" | "sdk-packages" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
 
 export const navigation: Array<{
   id: NavigationGroup;
@@ -24,21 +25,35 @@ export const navigation: Array<{
   icon: typeof LayoutDashboard;
   defaultSection: Section;
   sections: Array<{ id: Section; label: string; group?: string }>;
+  showSubsections?: boolean;
 }> = [
   {
-    id: "catalog",
-    label: "Catalog",
-    icon: LibraryBig,
+    id: "apis",
+    label: "APIs",
+    icon: GitBranch,
     defaultSection: "product",
+    sections: [{ id: "product", label: "APIs" }],
+  },
+  {
+    id: "docs",
+    label: "Docs",
+    icon: BookOpen,
+    defaultSection: "sources",
     sections: [
-      { id: "product", label: "APIs" },
-      { id: "sources", label: "Sources", group: "Documentation" },
-      { id: "documents", label: "All files", group: "Documentation" },
-      { id: "collections", label: "Collections", group: "Documentation" },
-      { id: "contracts", label: "API contracts", group: "Documentation" },
-      { id: "sdks", label: "SDKs" },
+      { id: "sources", label: "Sources" },
+      { id: "documents", label: "All files" },
+      { id: "collections", label: "Collections" },
+      { id: "contracts", label: "API contracts" },
       { id: "query-lab", label: "Query Lab" },
     ],
+    showSubsections: false,
+  },
+  {
+    id: "sdk-packages",
+    label: "SDKs and packages",
+    icon: Package,
+    defaultSection: "sdks",
+    sections: [{ id: "sdks", label: "Packages" }],
   },
   { id: "identity", label: "Identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", label: "Customer sign-in" }] },
   { id: "tools", label: "Tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", label: "Catalog" }, { id: "connections", label: "Connections" }, { id: "mcp-preview", label: "MCP preview" }] },
@@ -89,7 +104,7 @@ export function ConsoleSidebar({
                 <Icon />
                 <span>{item.label}</span>
               </ConsoleLink>
-              {active && item.sections.length > 1 && <div className="nav-subsections" aria-label={`${item.label} sections`}>
+              {active && item.showSubsections !== false && item.sections.length > 1 && <div className="nav-subsections" aria-label={`${item.label} sections`}>
                 {item.sections.map((candidate, index) => <span className="nav-subsection-entry" key={candidate.id}>
                   {candidate.group && candidate.group !== item.sections[index - 1]?.group && <span className="nav-subsection-label">{candidate.group}</span>}
                   <ConsoleLink path={sectionPath(candidate.id)} onNavigate={onNavigate} className={`nav-subsection ${section === candidate.id ? "active" : ""}`} ariaCurrent={section === candidate.id ? "page" : undefined}>{candidate.label}</ConsoleLink>
@@ -148,7 +163,7 @@ export function ConsoleTopbar({
         <select
           className="mobile-navigation"
           aria-label="Console section"
-          value={section === "settings" ? "settings" : activeNavigationID ?? "catalog"}
+          value={section === "settings" ? "settings" : activeNavigationID ?? "apis"}
           onChange={(event) => onGroupChange(event.target.value as NavigationGroup | "settings")}
         >
           {navigation.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}

@@ -15,12 +15,6 @@
 .integration-directory-row > .badge { justify-self: start; }
 .integration-directory-row .row-arrow svg { width: 16px; height: 16px; }
 .integration-support-cell { overflow: hidden; color: var(--text); font-size: var(--text-caption); text-overflow: ellipsis; white-space: nowrap; }
-.integration-workspace-switcher { display: flex; justify-content: flex-end; margin: -12px 0 4px; }
-.integration-workspace-switcher { align-items: center; gap: 9px; }
-.integration-workspace-switcher > label { color: var(--muted); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
-.integration-switcher-input { min-width: 300px; display: flex; align-items: center; gap: 7px; min-height: 35px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
-.integration-switcher-input > svg { width: 13px; height: 13px; color: var(--subtle); }
-.integration-switcher-input input { min-width: 0; width: 100%; min-height: 33px; border: 0; outline: 0; color: var(--text-strong); background: transparent; font-size: var(--text-body); font-weight: var(--weight-semibold); }
 .integration-tab-content { display: grid; gap: 20px; }
 .integration-tab-content .metrics-grid { margin-bottom: 4px; }
 .api-status-bar { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-subtle); }
@@ -180,7 +174,6 @@
 .mcp-preview-grants strong { font-size: var(--text-caption); }
 .mcp-preview-grants code { overflow: hidden; color: var(--accent-strong); font-size: var(--text-caption); text-overflow: ellipsis; white-space: nowrap; }
 .mcp-preview-grants > p { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--muted); background: var(--surface-subtle); font-size: var(--text-caption); }
-.mcp-preview-context > .private-default-note { margin: 0 18px 18px; }
 .mcp-preview-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .mcp-preview-summary > div { min-width: 0; display: grid; gap: 6px; padding: 13px 16px; border-right: 1px solid var(--line); }
 .mcp-preview-summary > div:last-child { border-right: 0; }

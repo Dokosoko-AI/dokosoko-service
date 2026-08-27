@@ -8,8 +8,8 @@ import type { Section } from "../../../lib/console-routes";
 import { developerAssetsApi, type DeveloperAssetKind, type DeveloperAssetScope, type QueryLabResponse } from "../../../lib/developer-assets-api";
 import { Badge, Button } from "../../core/control";
 import { PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
-import { CatalogNavigation } from "./developer-asset-navigation";
-import { developerAssetError, ExactVersionNotice, PrettyJSON } from "./developer-asset-ui";
+import { DocumentationNavigation } from "./developer-asset-navigation";
+import { developerAssetError, PrettyJSON } from "./developer-asset-ui";
 
 const assetKindOptions: Array<{ id: DeveloperAssetKind; label: string }> = [
   { id: "documentation", label: "Documentation" },
@@ -83,9 +83,8 @@ export function QueryLabView({ live, integrations, initialResult = null, onMessa
   const active: Section = "query-lab";
   const apiRequired = scope === "api" || scope === "combined";
   return <>
-    <PageHeader eyebrow="Catalog" title="Query Lab" description="Test bounded retrieval over exact published global, API, or combined developer-asset scopes." />
-    <CatalogNavigation active={active} onNavigate={onNavigate} />
-    <ExactVersionNotice>Query Lab reads published knowledge only. It runs no tools or SDK code, and every selected result keeps an immutable citation and durable trace ID.</ExactVersionNotice>
+    <PageHeader eyebrow="Docs" title="Query Lab" />
+    <DocumentationNavigation active={active} onNavigate={onNavigate} />
     <form className="developer-query-layout" onSubmit={run}>
       <section className="panel developer-query-form">
         <PanelHeader title="Query published knowledge" description="Choose the scope first, then narrow retrieval with exact filters." />

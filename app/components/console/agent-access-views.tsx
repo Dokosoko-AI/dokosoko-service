@@ -115,7 +115,7 @@ function AgentSetupCard({ kind, tenantName, setup, onCopied, onConfigureIdentity
 
 export function SourcesView({ sources, navigation, onAdd, onCrawl, onPublish, onVisibilityChange, onNavigate }: { sources: Source[]; navigation?: React.ReactNode; onAdd: () => void; onCrawl: (id: string) => void; onPublish: (source: Source) => void; onVisibilityChange: (id: string) => void; onNavigate: (path: string) => void }) {
   return <>
-    <PageHeading eyebrow="Catalog · Documentation" title="Sources" action={<Button onClick={onAdd}><Plus data-slot="icon" />Add source</Button>} />
+    <PageHeading eyebrow="Docs" title="Sources" action={<Button onClick={onAdd}><Plus data-slot="icon" />Add source</Button>} />
     {navigation}
     <div className="summary-strip"><SummaryItem label="Pages indexed" value={String(sources.reduce((total, source) => total + source.pages, 0))} icon={<Database />} /><SummaryItem label="Healthy sources" value={String(sources.filter((source) => source.crawlState === "synced").length)} icon={<CheckCircle2 />} /><SummaryItem label="Needs attention" value={String(sources.filter((source) => source.crawlState === "review" || source.crawlState === "failed").length)} icon={<AlertCircle />} /></div>
     <div className="toolbar"><Button outline onClick={() => sources.forEach((source) => onCrawl(source.id))}><RefreshCw data-slot="icon" />Crawl all</Button></div>

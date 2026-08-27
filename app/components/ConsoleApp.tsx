@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, Check, Eye, RefreshCw, Search, TriangleAlert } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ConsoleFixtures } from "../dev/console-fixtures";
 import {
@@ -16,6 +16,25 @@ import { ViewStack } from "./core/layout";
 import { IntegrationToolBuilderRoute } from "./integrations/IntegrationToolBuilderRoute";
 import { OIDCIdentitySetup } from "./OIDCIdentitySetup";
 import { ToolBuilderView } from "./ToolBuilderView";
+import { DistributionView, SourcesView } from "./console/agent-access-views";
+import {
+  AIProviderLogo,
+  AISettingsView,
+  MCPConnectionsView,
+  MCPPreviewView,
+  OutboxView,
+  RecipesView,
+  RootAccessSettingsView,
+  SettingsView,
+  StorageSettingsView,
+  ToolsView,
+} from "./console/catalog-settings-views";
+import { APIContractsView } from "./console/developer-assets/api-contracts-view";
+import { DocumentationCollectionsView } from "./console/developer-assets/documentation-collections-view";
+import { DocumentationExplorerView } from "./console/developer-assets/documentation-explorer-view";
+import { DocumentationNavigation } from "./console/developer-assets/developer-asset-navigation";
+import { QueryLabView } from "./console/developer-assets/query-lab-view";
+import { SDKCatalogView } from "./console/developer-assets/sdk-catalog-view";
 import { AdminActivityDialogs } from "./console/dialogs/admin-activity-dialogs";
 import { AIConfigurationDialogs } from "./console/dialogs/ai-configuration-dialogs";
 import { MCPDialogs } from "./console/dialogs/mcp-dialogs";
@@ -23,7 +42,9 @@ import { PublicationDialogs } from "./console/dialogs/publication-dialogs";
 import { RecipeDialogs, type RecipeDialogState } from "./console/dialogs/recipe-dialogs";
 import { parseRecipeSpecEditor, recipeEditableSpec, recipeSpecEditorValue } from "./console/dialogs/recipe-spec-editor";
 import { SourceDialogs } from "./console/dialogs/source-dialogs";
+import { IntegrationsView } from "./console/integration-views";
 import { ConsoleLink, type Source, buildAgentSetupEmbedHTML } from "./console/shared";
+import { ConsoleNotFoundView, EntityDetailView, ResourceSetDetailView, ToolDetailView } from "./console/tool-views";
 import { useAdminActivityWorkspace } from "./console/use-admin-activity-workspace";
 import { useAIWorkspaceState } from "./console/use-ai-workspace";
 import { useConsoleNavigation } from "./console/use-console-navigation";
@@ -32,30 +53,6 @@ import { useMCPWorkspaceState } from "./console/use-mcp-workspace";
 import { usePublicationWorkflow } from "./console/use-publication-workflow";
 import { useSourceWorkflow } from "./console/use-source-workflow";
 import { ConsoleSidebar, ConsoleTopbar, navigation } from "./console/workspace-navigation";
-import { CatalogNavigation, DocumentationNavigation } from "./console/developer-assets/developer-asset-navigation";
-
-const AIProviderLogo = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.AIProviderLogo })));
-const AISettingsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.AISettingsView })));
-const MCPConnectionsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.MCPConnectionsView })));
-const MCPPreviewView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.MCPPreviewView })));
-const OutboxView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.OutboxView })));
-const RecipesView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.RecipesView })));
-const RootAccessSettingsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.RootAccessSettingsView })));
-const SettingsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.SettingsView })));
-const StorageSettingsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.StorageSettingsView })));
-const ToolsView = lazy(() => import("./console/catalog-settings-views").then((module) => ({ default: module.ToolsView })));
-const ConsoleNotFoundView = lazy(() => import("./console/tool-views").then((module) => ({ default: module.ConsoleNotFoundView })));
-const EntityDetailView = lazy(() => import("./console/tool-views").then((module) => ({ default: module.EntityDetailView })));
-const ResourceSetDetailView = lazy(() => import("./console/tool-views").then((module) => ({ default: module.ResourceSetDetailView })));
-const ToolDetailView = lazy(() => import("./console/tool-views").then((module) => ({ default: module.ToolDetailView })));
-const DistributionView = lazy(() => import("./console/agent-access-views").then((module) => ({ default: module.DistributionView })));
-const SourcesView = lazy(() => import("./console/agent-access-views").then((module) => ({ default: module.SourcesView })));
-const IntegrationsView = lazy(() => import("./console/integration-views").then((module) => ({ default: module.IntegrationsView })));
-const DocumentationExplorerView = lazy(() => import("./console/developer-assets/documentation-explorer-view").then((module) => ({ default: module.DocumentationExplorerView })));
-const DocumentationCollectionsView = lazy(() => import("./console/developer-assets/documentation-collections-view").then((module) => ({ default: module.DocumentationCollectionsView })));
-const APIContractsView = lazy(() => import("./console/developer-assets/api-contracts-view").then((module) => ({ default: module.APIContractsView })));
-const SDKCatalogView = lazy(() => import("./console/developer-assets/sdk-catalog-view").then((module) => ({ default: module.SDKCatalogView })));
-const QueryLabView = lazy(() => import("./console/developer-assets/query-lab-view").then((module) => ({ default: module.QueryLabView })));
 
 function deploymentAsProduct(value: APIDeployment): APIProduct {
   return {
@@ -329,10 +326,10 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     : toolBuilderIntegration ? <IntegrationToolBuilderRoute key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} integration={toolBuilderIntegration} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useEntityDetail({ consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, reportSubmissions, auditEvents, rootUsers });
-  const workspaceClass = consoleRoute.kind === "tool-builder" ? "workspace-wide" : section === "identity" || section === "settings" ? "workspace-compact" : "workspace-default";
-  const integrationViewProps = { live: apiConnected, navigation: <CatalogNavigation active="product" onNavigate={navigateToPath} />, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
+  const workspaceClass = consoleRoute.kind === "tool-builder" ? "workspace-wide" : section === "settings" ? "workspace-compact" : "workspace-default";
+  const integrationViewProps = { live: apiConnected, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
 
-  return <Suspense fallback={<div className="console-loading-boundary"><RefreshCw className="spin" />Loading console…</div>}><div className="app-shell">
+  return <div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
     <ConsoleSidebar section={section} activeNavigationID={activeNavigation?.id} currentUser={currentUser} onLogout={onLogout} onNavigate={navigateToPath} />
     <main id="main-content" className={workspaceClass} tabIndex={-1}>
@@ -357,7 +354,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
               {section === "query-lab" && <QueryLabView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "identity" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} onChanged={setIdentityConfig} onMessage={showToast} />}
               {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onApprove={approveRecipe} onPublish={publishRecipe} />}
-              {section === "sources" && <SourcesView sources={sources} navigation={<><CatalogNavigation active="sources" onNavigate={navigateToPath} /><DocumentationNavigation active="sources" onNavigate={navigateToPath} /></>} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
+              {section === "sources" && <SourcesView sources={sources} navigation={<DocumentationNavigation active="sources" onNavigate={navigateToPath} />} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
               {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
               {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
               {section === "mcp-preview" && <MCPPreviewView product={product} grants={grantDefinitions} grantStatus={grantDefinitionsStatus} available={apiConnected} privateEndpointEnabled={identityConfig?.configured === true && identityConfig.state === "active"} onMessage={showToast} onNavigate={navigateToPath} />}
@@ -378,5 +375,5 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     <AIConfigurationDialogs workspace={aiWorkspace} ProviderLogo={AIProviderLogo} />
     <RecipeDialogs state={recipeDialog} busy={recipeBusy} onChange={(value) => setRecipeDialog((current) => current ? { ...current, value } : null)} onVisibilityChange={(visibility) => setRecipeDialog((current) => current?.kind === "edit" ? { ...current, visibility } : current)} onClose={() => setRecipeDialog(null)} onSubmit={() => void submitRecipeDialog()} />
     {toast && <div className="toast" role="status"><Check />{toast}</div>}
-  </div></Suspense>;
+  </div>;
 }

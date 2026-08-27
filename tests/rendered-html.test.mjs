@@ -63,6 +63,7 @@ test("keeps the rendered navigation destinations backed by canonical routes", as
     assert.ok(routes.includes(`| "${entity}"`) || routes.includes(`  ${entity}:`), `${entity} should be routable`);
   }
   assert.match(styles, /\.sidebar > nav/);
+  assert.match(styles, /@media \(max-width: 980px\)[\s\S]*?\.nav-subsections\s*\{\s*display:\s*none;\s*\}/);
   assert.match(styles, /\.entity-detail-grid/);
   assert.match(styles, /\.agent-setup-grid/);
   assert.match(styles, /\.content > \.panel \+ \.panel \{ margin-top: var\(--space-section\); \}/);
@@ -241,7 +242,7 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   const quickStart = await readFile(new URL("../app/components/integrations/IntegrationQuickStart.tsx", import.meta.url), "utf8");
   const runtimeAccess = await readFile(new URL("../app/components/integrations/IntegrationRuntimeAccess.tsx", import.meta.url), "utf8");
   const client = await clientSource();
-  const directory = componentSource(source, "IntegrationDirectoryView", "IntegrationSwitcher");
+  const directory = componentSource(source, "IntegrationDirectoryView", "IntegrationWorkspaceView");
   const workspace = componentSource(source, "IntegrationWorkspaceView", "AuthorizationPolicyWorkspace");
   const integrationTabs = routes.slice(routes.indexOf("export const INTEGRATION_TABS"), routes.indexOf("export const INTEGRATION_RESOURCE_TABS"));
 
@@ -272,7 +273,7 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.match(source, /aria-pressed=\{showRetired\}/);
   assert.match(source, /<DataTableEmpty columns=\{5\}>/);
   assert.match(source, /Published history/);
-  assert.match(source, /Switch API/);
+  assert.doesNotMatch(source, /Switch API|IntegrationSwitcher|integration-switcher/);
   assert.doesNotMatch(source, /description=\{integration\.description \|\| undefined\}/);
   assert.doesNotMatch(source, /Ingest → crawl → review → publish → attach\./);
   assert.doesNotMatch(source, /Only unresolved actions appear here/);
@@ -332,6 +333,9 @@ test("uses a focused deployment tool catalog and token-based MCP connections", a
   assert.match(catalog, /<ToolsWorkspaceTabs active="catalog"/);
   assert.match(connections, /<ToolsWorkspaceTabs active="connections"/);
   assert.match(preview, /<ToolsWorkspaceTabs active="preview"/);
+  assert.match(catalog, /<PageHeading eyebrow="Tools" title="Tools"/);
+  assert.match(connections, /<PageHeading eyebrow="Tools" title="MCP connections"/);
+  assert.match(preview, /<PageHeading eyebrow="Tools" title="MCP preview"/);
 
   assert.match(catalog, /<DataTable label="Tool catalog">/);
   assert.match(catalog, /<DataTableHeader className="tool-columns"><span>Tool<\/span><span>Backend<\/span><span>Policy<\/span><span>State<\/span><span>Open<\/span><\/DataTableHeader>/);
@@ -361,7 +365,7 @@ test("uses a focused deployment tool catalog and token-based MCP connections", a
   assert.match(preview, /Simulated customer grants/);
   assert.match(preview, /Exact JSON-RPC response/);
   assert.match(preview, /JSON\.stringify\(preview\.response, null, 2\)/);
-  assert.match(preview, /never creates or uses a customer token/);
+  assert.doesNotMatch(preview, /This preview shares the live MCP response path|never creates or uses a customer token/);
   assert.match(preview, /setLoading\(available\)/);
   assert.match(styles, /\.mcp-preview-json/);
   assert.match(styles, /\.mcp-preview-grants/);
@@ -854,7 +858,7 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   assert.match(identitySetup, /lastTest\.configuration_revision !== identity\.revision \|\| !\(Date\.parse\(lastTest\.expires_at\) > Date\.now\(\)\)/);
   assert.match(identitySetup, /window\.location\.assign\(started\.authorization_url\)/);
   assert.match(identitySetup, /Changes saved as a disabled draft/);
-  assert.match(identitySetup, /Connect one OIDC provider for all private MCP clients\./);
+  assert.doesNotMatch(identitySetup, /Connect (?:one|an) OIDC provider/);
   assert.match(identitySetup, /Review migrated settings/);
   assert.match(identitySetup, /Save reviewed draft/);
   assert.match(identitySetup, /identityConfigurationNeedsReview\(identity\)/);
@@ -885,7 +889,6 @@ test("ships a provider-neutral OIDC draft, test, and activation workspace", asyn
   assert.match(identitySetup, /placeholder="urn:example:customer-api"/);
   assert.match(identitySetup, /<code>openid<\/code> is required\./);
   assert.match(identitySetup, /configured && !reviewRequired && <Button outline/);
-  assert.match(identitySetup, /then activate customer sign-in\./);
   assert.doesNotMatch(identitySetup, /then activate private MCP access\./);
   assert.match(identitySetup, /This verifies only the OIDC sign-in and mapped customer claim\. Use each API&apos;s Test tab to verify end-to-end authorization\./);
   assert.ok(testGuidance, "the OIDC test should explain exactly what it verifies");
@@ -999,7 +1002,7 @@ test("keeps the compatible API documentation route focused on explicit resource 
   const styles = await stylesSource();
 
   assert.match(source, /activeTab === "documentation"[\s\S]*<APIResourcesWorkspace/);
-  assert.match(resources, /This page contains attachment records only/);
+  assert.doesNotMatch(resources, /ExactVersionNotice|This page contains attachment records only/);
   assert.match(resources, /Select one exact reviewed/);
   assert.match(resources, /Open catalog/);
   assert.match(resources, /Attach existing/);
@@ -1010,4 +1013,21 @@ test("keeps the compatible API documentation route focused on explicit resource 
   assert.match(resources, /Change exact/);
   assert.match(resources, /Detach resource/);
   assert.match(styles, /\.api-resource-publications/);
+});
+
+test("keeps developer asset workspaces free of redundant policy banners", async () => {
+  const files = [
+    "api-contracts-view.tsx",
+    "documentation-collections-view.tsx",
+    "documentation-explorer-view.tsx",
+    "query-lab-view.tsx",
+    "sdk-catalog-view.tsx",
+    "developer-asset-ui.tsx",
+  ];
+
+  for (const file of files) {
+    const source = await readFile(new URL(`../app/components/console/developer-assets/${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /ExactVersionNotice|Exact evidence only\./, `${file} should not render the removed policy banner`);
+  }
+  assert.doesNotMatch(await stylesSource(), /\.developer-asset-policy/);
 });

@@ -15,8 +15,8 @@ import {
 } from "../../../lib/developer-assets-api";
 import { Badge, Button, Dialog } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
-import { CatalogNavigation, DocumentationNavigation } from "./developer-asset-navigation";
-import { developerAssetError, ExactVersionNotice, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
+import { DocumentationNavigation } from "./developer-asset-navigation";
+import { developerAssetError, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
 import { documentationUsages, type DocumentationUsage } from "./developer-asset-usage";
 
 type RevisionTab = "members" | "map" | "manifest";
@@ -203,10 +203,8 @@ export function DocumentationCollectionsView({ live, integrations, onMessage, on
 
   const active: Section = "collections";
   return <>
-    <PageHeader eyebrow="Catalog · Documentation" title="Collections" description="Compose exact reviewed evidence into reusable documentation roots and immutable revisions." action={<Button onClick={() => openEditor()}><Plus data-slot="icon" />Create collection</Button>} />
-    <CatalogNavigation active={active} onNavigate={onNavigate} />
+    <PageHeader eyebrow="Docs" title="Collections" action={<Button onClick={() => openEditor()}><Plus data-slot="icon" />Create collection</Button>} />
     <DocumentationNavigation active={active} onNavigate={onNavigate} />
-    <ExactVersionNotice>Each save creates a reviewed immutable revision. APIs attach that exact revision; later collection edits do not change an existing attachment.</ExactVersionNotice>
     <section className="panel developer-global-publication"><PanelHeader title="Global documentation publication" description="Query Lab global scope resolves this immutable deployment snapshot." action={<Button onClick={() => void openPublication()}><Radio data-slot="icon" />Publish snapshot</Button>} />{publications[0] ? <div className="developer-global-active"><span><Badge color="green">active snapshot</Badge><strong>Revision {publications[0].revision}</strong><code>{publications[0].id}</code></span><span><small>{publications[0].members.length} exact collection revision{publications[0].members.length === 1 ? "" : "s"}</small><code>{publications[0].snapshot_hash}</code></span></div> : <p className="empty-row">No global documentation snapshot is published. Global Query Lab scope will remain unavailable.</p>}<details className="advanced-details"><summary>Immutable publication history</summary><div className="developer-asset-publication-history">{publications.map((publication) => <div key={publication.id}><span><strong>Revision {publication.revision}</strong><small>{new Date(publication.published_at).toLocaleString()} · {publication.visibility}</small></span><span><code>{publication.snapshot_hash}</code><small>{publication.members.length} members</small></span></div>)}{publications.length === 0 && <small>No publication history.</small>}</div></details></section>
     {loading ? <LoadingPanel label="Loading documentation collections" /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
       <DataTable label="Documentation collections" className="developer-asset-directory">

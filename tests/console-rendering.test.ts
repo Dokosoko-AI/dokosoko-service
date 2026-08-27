@@ -8,7 +8,7 @@ import { ConsoleSidebar, ConsoleTopbar } from "../app/components/console/workspa
 
 const noop = () => {};
 
-test("renders the six primary console destinations as accessible links", () => {
+test("renders the promoted developer-asset destinations as accessible primary links", () => {
   const html = renderToStaticMarkup(createElement(ConsoleSidebar, {
     section: "tools",
     activeNavigationID: "tools",
@@ -23,7 +23,9 @@ test("renders the six primary console destinations as accessible links", () => {
 
   assert.match(html, /<nav aria-label="Main navigation">/);
   for (const [label, path] of [
-    ["Catalog", "/integrations"],
+    ["APIs", "/integrations"],
+    ["Docs", "/integrations/documentation"],
+    ["SDKs and packages", "/developer-assets/sdk-packages"],
     ["Identity", "/identity"],
     ["Tools", "/tools"],
     ["Recipes", "/recipes"],
@@ -47,7 +49,7 @@ test("renders the same destination model in the mobile console selector", () => 
 
   assert.match(html, /<select class="mobile-navigation" aria-label="Console section">/);
   assert.match(html, /<option value="recipes" selected="">Recipes<\/option>/);
-  for (const label of ["Catalog", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
+  for (const label of ["APIs", "Docs", "SDKs and packages", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
     assert.match(html, new RegExp(`>${label}</option>`));
   }
   assert.match(html, /<strong>Developer Platform<\/strong>/);
