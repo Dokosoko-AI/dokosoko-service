@@ -334,6 +334,12 @@ PostgreSQL integration tests run when `DOKOSOKO_TEST_DATABASE_URL` or
 acceptance client is a separate Go module under
 `examples/mcp-acceptance-client`.
 
+For the opt-in database/upload restore drill, set
+`DOKOSOKO_RESTORE_TEST_DATABASE_URL` to a disposable loopback PostgreSQL 17
+cluster with database-creation permission and install `pg_dump` and `pg_restore`
+on `PATH`. See the [recovery runbook](docs/OPERATIONS.md#local-database-and-upload-rehearsal)
+for the command, evidence report and limits of this local check.
+
 ## Repository map
 
 ```text

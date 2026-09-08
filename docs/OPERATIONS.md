@@ -62,6 +62,12 @@ Back up at least daily and before every release:
 - deployment configuration and the exact master key from secret escrow;
 - deployed image digests and the source commit.
 
+Keep the database and upload snapshot consistent: drain requests and stop the
+service and crawler writers, take both copies, then resume them. A database
+dump alone does not provide a matching filesystem snapshot. Keep the master key
+in separate protected escrow; record its version with the backup rather than
+placing an unprotected key alongside the archive.
+
 Retain encrypted backups in a separate failure domain. Test a restore at least
 quarterly:
 
@@ -74,6 +80,37 @@ quarterly:
    pass.
 6. Destroy the drill environment and record duration, failures, and follow-up
    work. A backup is not considered valid until this drill succeeds.
+
+### Local database and upload rehearsal
+
+The opt-in `TestPostgresBackupRestoreAcceptance` exercises actual `pg_dump` and
+`pg_restore` against PostgreSQL 17 with pgvector. Set
+`DOKOSOKO_RESTORE_TEST_DATABASE_URL` to a disposable cluster at literal
+`127.0.0.1` or `::1`, using a role permitted to create databases and install the
+migration extensions. The drill creates and drops only its own two randomly
+named databases; it does not restore over the database named in the URL.
+Install compatible `pg_dump` and `pg_restore` binaries on `PATH`. This local
+fixture disables TLS for those subprocess connections.
+
+```bash
+# Supply the disposable cluster URL through the environment first.
+DOKOSOKO_ACCEPTANCE_EVIDENCE_DIR=/tmp/dokosoko-restore-evidence \
+  go test ./internal/httpapi -run '^TestPostgresBackupRestoreAcceptance$' -count=1 -v
+```
+
+The test quiesces fixture writers, archives the database and uploaded file,
+restores them into independent storage, compares every public table's row count
+and content hash, and replays migrations. It then checks HTTP readiness, root
+login with MFA, encrypted credential recovery, the same publication and exact
+guidance results, upload bytes and permissions, and anonymous Private MCP denial.
+Negative checks cover a missing MFA code, wrong master key, missing/corrupt
+upload, and truncated archive. The optional `postgres-restore.json` records
+versions, hashes, duration and limitations without plaintext credentials.
+
+This test uses fixture AI and in-process HTTP handlers. The quarterly rehearsal
+above still requires recorded service/crawler image restarts, secret-escrow
+recovery, a real identity/client pairing and a safe private tool call. Its local
+runtime is not a production recovery-time estimate.
 
 ## Monitoring and alerts
 

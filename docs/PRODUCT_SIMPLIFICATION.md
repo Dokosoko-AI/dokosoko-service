@@ -27,8 +27,8 @@ the 20 standalone-client scenarios and the reference-application evaluation.
 
 This is not a production-release sign-off. Production coding-client/OAuth
 validation, customer outcomes compared with existing documentation, backup
-restoration, remaining translations and backend catalog/index scaling are still
-open. The broad acceptance gates remain unchecked. Product review of the actual
+restoration of deployed images, remaining translations and backend catalog/index
+scaling are still open. The broad acceptance gates remain unchecked. Product review of the actual
 setup and Knowledge journeys takes priority over expanding validation scope.
 
 ## Acceptance and implementation evidence
@@ -1319,3 +1319,28 @@ Back/Forward, direct SDK links, the mobile group selector and the existing setup
 walkthrough. Desktop/light and narrow/dark captures had no page overflow or
 JavaScript errors. The walkthrough's normalized document responses and test
 authentication retain their previously stated fixture limitations.
+
+## Local restore rehearsal — 8 September 2026
+
+The opt-in PostgreSQL restore test passed against PostgreSQL 17.11 and pgvector
+0.8.6, using actual Homebrew `pg_dump` and `pg_restore` 18.4. It created two
+isolated databases, preserved row counts/content hashes across all 123 public
+tables, replayed migrations without changing them, and retrieved the same three
+guidance results from the same immutable API publication. A real multipart
+upload retained its bytes and private file permissions. HTTP root login with MFA,
+credential decryption, readiness and anonymous Private MCP denial passed, along
+with six missing/corrupt-input and wrong-key checks. The owned databases were
+removed successfully at test cleanup.
+
+The test and recovery runbook make database/upload quiescence explicit and can
+write a machine-readable evidence report with versions, hashes and limitations.
+AI is a fixture; HTTP handlers run in process. Recorded deployment image and
+crawler restarts, actual escrow recovery, production OAuth/client validation,
+a private runtime call and production-size recovery timing remain outside this
+local evidence. The broader operational acceptance gate remains open.
+
+Full repository verification then passed with the restore drill enabled and a
+fresh disposable PostgreSQL database for the root Go suite: 190 console tests,
+57 crawler tests, typecheck, lint, production build and all root Go packages.
+The standalone-client fixture scenarios and reference-application evaluation
+were enabled in that run.
