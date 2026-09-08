@@ -2572,6 +2572,7 @@ export const enUI = {
     "openNavigation": "Open navigation"
   },
   "documentationSetup": {
+  "readyToImport": "Source saved. Start its import to review documentation.",
     "blockedState": "Import blocked. Correct the source content before continuing.",
     "processingAfterRecovery": "Resolve this import first. The corrected import will require AI processing and a new review.",
     "replaceFile": "Replace uploaded file",

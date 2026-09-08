@@ -1386,3 +1386,24 @@ package/release visibility, lifecycle, attachment state and assurance, exact-ver
 autofill, readable guidance and desktop/mobile layouts. All 18 captures had no
 page overflow or JavaScript errors. The local service used fixture AI and test
 authentication; no external package import or production client claim follows.
+
+## Documentation setup and source review localization — 8 September 2026
+
+The documentation setup, source-content review and source-creation recovery
+sections are translated into all six non-English locales, including shared import
+actions, saved-review guidance and the source-reading button. Public-audience
+confirmation, quarantine recovery, required AI reprocessing, exact before/after
+content and API attachment remain explicit. Saved documentation sources now use
+documentation-specific instructions, and import history uses localized states.
+
+Visual review also corrected older shared-control translations: Japanese source
+location no longer claims Tokyo, file labels identify files, and review-required
+badges no longer ask for feedback or a review of needs. Source material retains
+its original language; these changes affect the interface around it.
+
+Final verification passed: typecheck, lint, production build, 190 console tests,
+57 crawler tests and root Go tests. All six language walkthroughs passed with
+30 desktop/mobile captures and no page overflow or JavaScript errors. Setup and
+history used the local service; source review/comparison used explicit UI fixtures,
+with test authentication and AI. No persistence or public contract changed, and
+environment-dependent PostgreSQL checks were not enabled for this increment.
