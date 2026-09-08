@@ -40,7 +40,7 @@ The normalised contract is now:
 | `/agent-access` | Agent access | `DistributionView` | Header, public MCP block, setup blocks, resource `DataTable`. |
 | `/operations/outbox` | Support outbox | `OutboxView` | Header, plaintext queued reports and recent audit. |
 | `/settings` | Settings overview | `SettingsView` | Header, shared settings tabs, settings collection, identity and administrator panels. |
-| `/settings/ai` | AI configuration | `AISettingsView` | Header, shared settings tabs, workload, prompt, and provider tables. |
+| `/settings/ai` | AI configuration | `AISettingsView` | Header, shared settings tabs, AI readiness, provider connection, model selection, advanced prompts. |
 
 ### Context and entity routes
 
@@ -148,3 +148,206 @@ Every raw colour is declared inside `:root` or `html[data-theme="dark"]`; featur
 ## Adding a new view
 
 Start with `ViewStack` (provided by `ConsoleApp`), then `PageHeader`. Add `PageTabs` only for URL-addressable sibling views, `SegmentedControl` only for local filters, `SectionHeader` for new semantic sections, and `PanelHeader` inside panels. Use `DataTable` for responsive record directories. Do not add a page max width, negative route margin, new font size, new numeric weight, or raw colour.
+
+### Knowledge library and imported evidence
+
+The Knowledge route opens Reviewed content with Needs attention beside it.
+Reviewed files come from each source’s latest included publication; a pending
+import does not displace them. Import history and documentation sets are secondary
+disclosures. Pending rows expose source names, actionable states and exact setup
+continuation, including imports with no files. Both lists are bounded; pending
+rows do not hydrate document bodies, source histories, AI or diagnostic payloads.
+File content loads on selection, and previous included content only when the
+operator requests a comparison. Focus refreshes the visible list; pending failures
+remain actionable errors rather than an empty-success state. Review history, navigation maps, and processing
+metadata live in secondary disclosure panels. A review decision is not a claim
+that the content is currently served by an API.
+
+Source creation keeps errors beside the input and preserves its request identity
+across retry and reload. Recovery stores only a nonce and input digest for seven
+days in the current deployment/reviewer browser scope; it never stores file text
+or URLs. Storage failure is visible. Configured AI details use the shared compact
+disclosure, while blockers stay expanded. Knowledge search controls wrap within
+the available width, including with long source names and additional actions.
+
+**Add content** opens `DocumentationSetupWorkspace` from Knowledge, source
+maintenance, or API Resources. It keeps input, import state, required processing,
+readable review, audience and the finish action in one page composed with
+`PageHeader`, `PanelHeader`, owned controls and semantic spacing. The URL retains
+the source, import and originating API. Import history is secondary, older
+unpublished imports require the current review, and transient queue errors clear
+when the committed job is observed. Source metadata refreshes in the library
+after setup. Uploaded storage paths live under provenance; document rows show
+their title and an Imported file label. Public confirmation and final review
+acknowledgement remain explicit. Existing reviewed custom-set creation is
+available within Attach existing rather than the primary Add content action.
+
+`core/evidence-content.tsx` renders imported text using React text nodes with
+headings, prose, lists, code, and validated HTTP(S) links. It never renders raw
+HTML, images, scripts, or embeds. The shared `core-evidence-*` styles use the
+existing theme, typography, spacing and focus tokens. Diff sections identify
+removed and added text with headings as well as border colors.
+
+Contract creation opens a continuous import/review workspace, retaining the exact
+API and contract in its URL. The catalog shows readable contract content before
+advanced inspection. Review groups operation descriptions and definitions with
+source evidence, required AI processing, audience and the publication action.
+Inherited parameters and changes outside operations remain visible. Imported
+text uses the safe evidence renderer; JSON definitions remain inert. The input,
+source, and import selectors use explicit accessible names. Source/import status
+and advanced provenance remain available without becoming setup prerequisites.
+
+### Required AI setup
+
+`AIReadinessPanel` is the shared administrative prerequisite projection in empty
+API setup, contract/source/SDK import, incomplete Knowledge processing, and recipe
+authoring. It loads only readiness, not all AI settings or recipe histories. Local
+configuration, historical connection tests, and actual processing are separate
+states. Missing prerequisites disable generation/processing; a failed explicit
+connection test is amber and can be retried. Completed processing remains available.
+Provider/model settings have an ordered flow and an internal return-to-setup link.
+Unsaved dialogs open configuration in another tab and refresh readiness on focus;
+their selections remain in the original tab. The component uses shared controls,
+semantic tokens, wrapping actions, and localized dates including reset times.
+
+
+### SDK guidance workspace
+
+The SDK directory opens a version chooser or exact guidance workspace. The normal
+path has package name/URL resolution, bounded text import, required AI processing,
+readable files and samples beside decisions, previous publication comparison, and
+publish/attach recovery. It does not automatically select a package or expose raw
+JSON as its default content. Candidate/publication identity survives advanced
+inspection and return. The advanced catalog is loaded on demand and owns only
+package metadata, exact release creation, lifecycle history and diagnostic
+inspection; duplicate ingestion/review/attachment dialogs were removed.
+
+Configured AI connection details can collapse within SDK input and review. Missing
+prerequisites and failed connection tests stay visible. This changes presentation
+only: the same readiness result gates processing. Review file lists, code, action
+rows and comparisons wrap at narrow widths and use the shared semantic tokens.
+
+Sample rows include language, source path and extracted line ranges to distinguish
+repeated headings. The reader preserves literal sample code, including Markdown.
+Sample comparison is labeled as a full source-file comparison with previously
+included evidence from the same release. Saving disables draft controls without
+prematurely labeling their decisions as published. Reload retains the exact
+candidate's choices while resetting both review and public-audience confirmation.
+
+
+### API publication review
+
+Contract and custom documentation-set creation retain their request identity
+through failed responses or attachment. Reload requires selecting and reviewing
+the same input again. If browser storage is unavailable, a local message explains
+that the form must remain open for retry. Existing dialogs and error controls
+present recovery; internal request keys are not exposed in the form.
+
+The API **Connect** tab retains the `/test` route for existing links and opens a
+task-oriented workspace. It selects a published recipe and audience, checks the
+exact task and its bound API publications, and displays readable canonical task
+content. The initial audience follows the API's visibility. Collapsed evidence
+rows identify their content kind; global publication rows include the revision.
+Copying the prompt or downloading a check plan does not add a publication
+approval step. Configuration preflight is secondary; the setup checklist opens
+the publication review dialog directly.
+
+Task connection uses the owned panel, field, button, badge and safe Markdown
+components with semantic spacing and borders. Failed or mismatched previews
+remain local actionable errors. Client-report import is scoped to the exact plan
+and required checks; implementation fields explicitly record client-reported
+results. Downloads retain evidence origin, and selection/reload clears the open
+results. The page does not imply that simulated private preview authenticates a
+customer or that reported results establish Tested status.
+
+`IntegrationPublicationReviewDialog` owns the exact candidate review and approval.
+Normal content groups named documentation, contracts, SDK versions, global
+knowledge, tools, permissions and runtime connections. Additions, changes and
+removals are visible; historical names come from the frozen snapshot. Version
+labels resolve exact immutable records, with scope checks, before approval is
+enabled. The row comparison shows changed audience and avoids repeating unchanged
+version labels. Execution checks appear when tools are selected. Technical JSON
+is secondary. Shared Dialog, controls and semantic tokens provide keyboard,
+wrapping, dark-theme and narrow-layout behavior. Refresh clears acknowledgement;
+Publish uses the already-reviewed candidate revision/hash.
+
+
+The API publication delivery panel consumes the same server status as overview
+and review. It names the serving revision, marks an incomplete newer publication
+as needing attention, and retries the exact saved revision. Pending delivery uses
+amber status indicators and an explicit finish-delivery checklist step. History
+labels the publication actually serving through MCP rather than assuming the
+newest row is active. Tab/focus refresh and affected mutation callbacks update
+readiness; late responses from an earlier API cannot replace the current status.
+
+
+Recipe reference editing uses an owned Dialog with Checkbox/CheckboxField/Label,
+Select, safe EvidenceContent, and compact AI readiness. Names and retained text
+precede collapsible version/ID/fingerprint details. Save errors remain in the
+dialog's polite status region; choices persist until the user closes or explicitly
+reloads. Reload discards local choices and rebinds the picker to the current saved
+revision. Empty selections are supported. AI authoring/rework remains a separate
+text prompt; the reference editor contains no JSON or instruction textarea.
+
+### Correcting blocked source imports
+
+Documentation setup exposes **Replace uploaded file** beside a failed or
+quarantined upload. It retains the source/audience and supports exact committed
+request recovery on reload. Corrected-file selection is scoped to that source;
+public uploads require renewed audience acknowledgement for the replacement.
+Blocked imports say they are blocked and show correction actions before AI
+processing/publication actions. An older import offers **Open current import**.
+Website recovery reuses the original source after the operator corrects its
+content. These flows use existing details, labels, buttons and semantic panel
+spacing, including narrow and keyboard layouts. New imports continue through
+the existing required-AI and immutable publication review sequence.
+
+### Contract review recovery
+
+Contract setup keeps the primary-attachment choice beside exact contract/source
+content, required AI evidence and the intended attachment audience. The choice
+survives reload for the same candidate and API; final acknowledgement does not.
+An unavailable browser store shows a local recovery limitation beside the choice
+instead of claiming it was saved. The open review retains the choice during
+automatic recovery. After publication succeeds, the remaining action reads
+**Attach exact revision** and explains that publication is already saved.
+Completion reflects the actual exact attachment and clears a recovered response
+error. Choice and acknowledgement controls are disabled while finishing. These
+states use the existing controls, semantic panels and narrow/keyboard behavior.
+
+### MCP discovery pagination
+
+Connect follows resource discovery pages before reviewing the selected task;
+partial or inconsistent discovery cannot produce a check plan. The technical
+MCP preview uses existing Button controls, heading actions and translated
+pagination labels for each exact response. Audience, method, simulated grant
+and refresh changes reset the page. Production-console browser checks covered a
+task on page two, matching client-report import, keyboard next/previous actions,
+exact-page copy and audience/method/refresh resets. Desktop/light and 390px/dark
+screenshots were inspected, with no horizontal overflow or JavaScript errors.
+
+Tool discovery uses the same controls and context reset behavior. Catalog version
+2 is the preview default, showing compact deployment routing instead of repeated
+API manifests. A second production-console fixture checked 42 tools over pages
+of 32 and 10, and 43 over pages of 32 and 11 after selecting a simulated grant.
+Removing that grant restarted the list and excluded the restricted tool; public
+preview showed only its seven available built-ins. Exact-page copy, keyboard
+navigation, method/audience changes and desktop/light plus 390px/dark layouts
+passed. Acceptance client 0.3.0 also found a later-page tool and called the API
+catalog through this actual local service. The fixture used demo identities;
+its private preview correctly did not claim production OAuth was live.
+
+
+### Compact publication review
+
+Connect now renders compact exact publication maps and resolves supporting
+references through exact source filters. It retains the existing publication and
+evidence disclosures, keyboard controls and report import/export workflow.
+Production-console checks used a private API index with 9,005 units and a public
+one with 9,003. Private review made five exact lookups; public review made four
+and retained historical global publication 1 after publication 2 became current.
+Each exported seven exact resources and imported a passing client 0.3.0 report.
+Desktop/light and 390px/dark screenshots were inspected without overflow or
+JavaScript errors. These were local fixtures with synthetic extra evidence and
+demo identities; the results do not establish production OAuth or application
+implementation success.

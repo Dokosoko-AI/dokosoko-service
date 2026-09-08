@@ -1,3 +1,5 @@
+import { AIReadinessPanel } from "./ai-readiness-panel";
+import { aiSetupReturnPath } from "../../lib/ai-setup-navigation";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -85,6 +87,14 @@ export function MCPPreviewView({ product, grants, grantStatus, available, privat
   const [loading, setLoading] = useState(available);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [pages, setPages] = useState<{ scope: string; cursors: (string | undefined)[] }>({ scope: "", cursors: [undefined] });
+  const pageScope = JSON.stringify([product.id, audience, method, selectedGrants, refreshKey]);
+  const cursors = pages.scope === pageScope ? pages.cursors : [undefined];
+  const cursor = cursors.at(-1);
+  const result = preview?.response.result;
+  const continuation = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>).nextCursor : undefined;
+  const pagedMethod = method === "resources/list" || method === "tools/list";
+  const nextCursor = pagedMethod && typeof continuation === "string" && continuation.length <= 512 && !cursors.includes(continuation) ? continuation : undefined;
   const activeGrants = grants.filter((grant) => grant.state === "active");
   const endpointEnabled = audience === "public" ? product.public_mcp_enabled : privateEndpointEnabled;
   const collectionCount = previewCollectionCount(preview);
@@ -92,7 +102,7 @@ export function MCPPreviewView({ product, grants, grantStatus, available, privat
   useEffect(() => {
     if (!available) return;
     let cancelled = false;
-    void api.mcpPreview(product.id, audience, method, audience === "private" ? selectedGrants : []).then((value) => {
+    void api.mcpPreview(product.id, audience, method, audience === "private" ? selectedGrants : [], undefined, cursor).then((value) => {
       if (!cancelled) {
         setPreview(value);
         setError("");
@@ -106,9 +116,10 @@ export function MCPPreviewView({ product, grants, grantStatus, available, privat
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [audience, available, method, product.id, refreshKey, selectedGrants, t]);
+  }, [audience, available, cursor, method, product.id, refreshKey, selectedGrants, t]);
 
-  function beginPreviewChange() {
+  function beginPreviewChange(preservePage = false) {
+    if (!preservePage) setPages({ scope: "", cursors: [undefined] });
     setPreview(null);
     setLoading(available);
     setError("");
@@ -143,6 +154,11 @@ export function MCPPreviewView({ product, grants, grantStatus, available, privat
     <section className="panel mcp-preview-output">
       <PanelHeader title={t("settings.exactJSONRPCResponse")} description={preview ? t("settings.copy2", { method: String(preview.method), endpoint: String(preview.endpoint) }) : t("settings.selectAContextToRenderTheResponse")} action={<span className="heading-actions"><Badge color={endpointEnabled ? "green" : "amber"}>{endpointEnabled ? t("settings.endpointLive") : t("settings.endpointNotLive")}</Badge><Button outline disabled={!preview || loading} onClick={() => void copyResponse()}><Copy data-slot="icon" />{t("settings.copyJSON")}</Button></span>} />
       {preview && <dl className="mcp-preview-summary"><div><dt>{t("settings.catalogRevision")}</dt><dd>{product.catalog_revision}</dd></div><div><dt>{t("settings.protocol")}</dt><dd><code>{preview.protocol_version}</code></dd></div><div><dt>{t("settings.items")}</dt><dd>{collectionCount ?? "—"}</dd></div><div><dt>{t("settings.generated")}</dt><dd>{t("format.dateTime", { value: new Date(preview.generated_at) })}</dd></div></dl>}
+      {pagedMethod && (cursors.length > 1 || nextCursor !== undefined) && <div className="heading-actions">
+        <Button outline disabled={loading || cursors.length < 2} onClick={() => { beginPreviewChange(true); setPages({ scope: pageScope, cursors: cursors.slice(0, -1) }); }}>{t("pagination.previousPage")}</Button>
+        <span role="status">{t("pagination.page", { children: cursors.length })}</span>
+        <Button outline disabled={loading || nextCursor === undefined} onClick={() => { if (nextCursor !== undefined) { beginPreviewChange(true); setPages({ scope: pageScope, cursors: [...cursors, nextCursor] }); } }}>{t("pagination.nextPage")}</Button>
+      </div>}
       {!available && <div className="capability-unavailable" role="status"><TriangleAlert /><span><strong>{t("settings.livePreviewIsUnavailableInFixtureMode")}</strong><small>{t("settings.openTheConnectedConsoleToInspectTheCurrentMCP")}</small></span></div>}
       {error && <div className="capability-unavailable" role="alert"><TriangleAlert /><span><strong>{t("settings.previewUnavailable")}</strong><small>{error}</small></span></div>}
       {loading && !preview && <div className="empty-row"><RefreshCw className="spin" />{t("settings.renderingTheMCPResponse")}</div>}
@@ -166,6 +182,7 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
   onPublish: (recipe: APIRecipe) => void;
 }) {
   const { t } = useTranslation();
+  const [canProcess, setCanProcess] = useState(false);
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const [generationIntegrationID, setGenerationIntegrationID] = useState("");
   const [approvalReview, setApprovalReview] = useState<RecipeApprovalReview | null>(null);
@@ -202,7 +219,7 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       </span>
       <span className="table-actions">
         <Button outline disabled={busy || invalidScope} onClick={() => onEdit(recipe)}>{t("settings.edit")}</Button>
-        {recipe.needs_attention && <Button outline disabled={busy || invalidScope} onClick={() => onRework(recipe)}>{t("settings.rework")}</Button>}
+        <Button outline disabled={busy || invalidScope} onClick={() => onRework(recipe)}>{t("settings.rework")}</Button>
         {deletable && <Button outline className="recipe-delete-button" disabled={busy} onClick={() => { setDeleteTarget(recipe); setDeleteAcknowledged(false); }}><Trash2 data-slot="icon" />{t("settings.delete")}</Button>}
         {recipe.state === "review" && <Button disabled={busy || invalidScope} onClick={() => setApprovalReview(approvalCandidate)}>{t("settings.review")}</Button>}
         {recipe.state === "approved" && <Button disabled={busy || invalidScope} onClick={() => onPublish(recipe)}>{t("settings.publish")}</Button>}
@@ -215,10 +232,11 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       eyebrow={t("settings.authoring")}
       title={t("navigation.recipes")}
       action={<span className="heading-actions">
-        <Button outline disabled={busy || integrations.length === 0} onClick={() => setGenerateDialogOpen(true)}><Sparkles data-slot="icon" />{t("settings.generateFromEvidence")}</Button>
-        <Button disabled={busy} onClick={onCreate}><Plus data-slot="icon" />{t("settings.createRecipe")}</Button>
+        <Button outline disabled={busy || !canProcess || integrations.length === 0} onClick={() => setGenerateDialogOpen(true)}><Sparkles data-slot="icon" />{t("settings.generateFromEvidence")}</Button>
+        <Button disabled={busy || !canProcess} onClick={onCreate}><Plus data-slot="icon" />{t("settings.createRecipe")}</Button>
       </span>}
     />
+    <AIReadinessPanel onCanProcess={setCanProcess} />
     <section className="panel">
       <PanelHeader title={t("settings.recipeCatalog")} description={t("settings.recipeCatalogDescription")} />
       {recipes.map(renderRecipe)}
@@ -229,7 +247,7 @@ export function RecipesView({ integrations, analyses, recipes, busy, onCreate, o
       onClose={(open) => { if (!open && !busy) setGenerateDialogOpen(false); }}
       title={t("settings.generateFromEvidence")}
       description={t("settings.generateFromEvidenceDescription")}
-      actions={<><Button outline disabled={busy} onClick={() => setGenerateDialogOpen(false)}>{t("common.cancel")}</Button><Button disabled={busy || !generationIntegrationID} onClick={() => { const integrationID = generationIntegrationID; setGenerateDialogOpen(false); setGenerationIntegrationID(""); onGenerate(integrationID); }}>{t("settings.generateFromEvidence")}</Button></>}
+      actions={<><Button outline disabled={busy} onClick={() => setGenerateDialogOpen(false)}>{t("common.cancel")}</Button><Button disabled={busy || !canProcess || !generationIntegrationID} onClick={() => { const integrationID = generationIntegrationID; setGenerateDialogOpen(false); setGenerationIntegrationID(""); onGenerate(integrationID); }}>{t("settings.generateFromEvidence")}</Button></>}
     >
       <div className="auth-form compact-form recipe-generation-dialog">
         <label className="auth-field"><span>{t("settings.recipeAPI")}</span><Select aria-label={t("settings.recipeAPI")} value={generationIntegrationID} onChange={(event) => setGenerationIntegrationID(event.target.value)}><option value="">{t("settings.chooseAnAPI")}</option>{integrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name} · {integration.version_key}</option>)}</Select></label>
@@ -287,23 +305,25 @@ const aiPromptOrder: APIAIWorkflowPrompt["key"][] = [
   "sdk.sample_review",
 ];
 
-export function AISettingsView({ profiles, prompts, connections, usage, saving, onSave, onConfigure, onEditPrompt, onAddProvider, onConnect, onTest, onNavigate }: { profiles: APIAIWorkloadProfile[]; prompts: APIAIWorkflowPrompt[]; connections: APIAIProviderConnection[]; usage: APIAIProviderUsage[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void; onEditPrompt: (prompt: APIAIWorkflowPrompt) => void; onAddProvider: () => void; onConnect: (provider: APIAIProviderConnection["provider"]) => void; onTest: (connection: APIAIProviderConnection) => void; onNavigate: (path: string) => void }) {
+export function AISettingsView({ setupSearch = "", profiles, prompts, connections, usage, saving, onSave, onConfigure, onEditPrompt, onAddProvider, onConnect, onTest, onNavigate }: { setupSearch?: string; profiles: APIAIWorkloadProfile[]; prompts: APIAIWorkflowPrompt[]; connections: APIAIProviderConnection[]; usage: APIAIProviderUsage[]; saving: boolean; onSave: (role: AIWorkload, connectionID: string, model: string) => Promise<void>; onConfigure: (role: AIWorkload) => void; onEditPrompt: (prompt: APIAIWorkflowPrompt) => void; onAddProvider: () => void; onConnect: (provider: APIAIProviderConnection["provider"]) => void; onTest: (connection: APIAIProviderConnection) => void; onNavigate: (path: string) => void }) {
   const { t } = useTranslation();
   const primary = connections.filter((connection) => connection.enabled && !connection.is_backup);
   return <>
     <PageHeading eyebrow={t("navigation.settings")} title={t("settings.aiConfiguration")} action={<Button onClick={onAddProvider}><Plus data-slot="icon" />{t("settings.addProvider")}</Button>} />
     <SettingsTabs active="ai" onNavigate={onNavigate} />
-    <SectionHeader title={t("settings.workload")} />
+    {aiSetupReturnPath(setupSearch) && <Button outline onClick={() => onNavigate(aiSetupReturnPath(setupSearch))}>{t("aiReadiness.returnToSetup")}</Button>}
+    <AIReadinessPanel inSettings refreshKey={`${saving}:${profiles.map((value) => value.revision).join(",")}:${connections.map((value) => value.revision).join(",")}`} />
+    <SectionHeader title={t("aiReadiness.connectProvider")} />
+    {connections.length === 0
+      ? <div className="ai-provider-suggestions">{aiProviders.filter((provider) => provider.id !== "openai-compatible").map((provider) => <button type="button" key={provider.id} onClick={() => onConnect(provider.id)}><AIProviderLogo provider={provider.id} /><span><strong>{t("settings.connect")} {aiProviderLabel(provider.id, t)}</strong><small>{aiProviderDescription(provider.id, t)}</small></span><ChevronRight /></button>)}</div>
+      : <section className="panel">{connections.map((connection) => { const stats = usage.find((item) => item.provider === connection.provider); return <div className="provider-row ai-provider-row" key={connection.id}><AIProviderLogo provider={connection.provider} /><span><strong>{aiProviderLabel(connection.provider, t)}</strong><small>{stats?.calls ?? 0} {t("settings.calls")} {stats?.input_tokens ?? 0} {t("settings.inputTokens")} {stats?.output_tokens ?? 0} {t("settings.outputTokens")}</small></span><span className="tool-badges">{connection.is_backup && <Badge color="violet">{t("settings.backup")}</Badge>}<Badge color={connection.enabled ? "green" : "zinc"}>{connection.enabled ? t("aiReadiness.enabled") : t("settings.paused")}</Badge></span><span className="ai-provider-row-actions"><Button outline onClick={() => onTest(connection)}>{t("settings.test")}</Button><Button outline onClick={() => onConnect(connection.provider)}>{t("settings.manage")}</Button></span></div>; })}</section>}
+    <SectionHeader title={t("aiReadiness.chooseModel")} />
     <div className="panel ai-table-panel">
       <Table label={t("settings.aiWorkload")} dense>
         <TableHead><TableRow><TableHeader>{t("settings.name")}</TableHeader><TableHeader>{t("settings.provider")}</TableHeader><TableHeader>{t("settings.model")}</TableHeader><TableHeader>{t("settings.actions")}</TableHeader></TableRow></TableHead>
         <TableBody>{aiWorkloads.map((workload) => { const profile = profiles.find((item) => item.workload === workload.role); const configurationKey = `${workload.role}:${profile?.revision ?? 0}:${profile?.provider_connection_id ?? ""}:${primary.map((connection) => connection.id).join(",")}`; return <AIWorkloadRow key={configurationKey} workload={workload} profile={profile} connections={primary} saving={saving} onSave={onSave} onConfigure={onConfigure} />; })}</TableBody>
       </Table>
     </div>
-    <SectionHeader title={t("settings.providers")} />
-    {connections.length === 0
-      ? <div className="ai-provider-suggestions">{aiProviders.filter((provider) => provider.id !== "openai-compatible").map((provider) => <button type="button" key={provider.id} onClick={() => onConnect(provider.id)}><AIProviderLogo provider={provider.id} /><span><strong>{t("settings.connect")} {aiProviderLabel(provider.id, t)}</strong><small>{aiProviderDescription(provider.id, t)}</small></span><ChevronRight /></button>)}</div>
-      : <section className="panel">{connections.map((connection) => { const stats = usage.find((item) => item.provider === connection.provider); return <div className="provider-row ai-provider-row" key={connection.id}><AIProviderLogo provider={connection.provider} /><span><strong>{aiProviderLabel(connection.provider, t)}</strong><small>{stats?.calls ?? 0} {t("settings.calls")} {stats?.input_tokens ?? 0} {t("settings.inputTokens")} {stats?.output_tokens ?? 0} {t("settings.outputTokens")}</small></span><span className="tool-badges">{connection.is_backup && <Badge color="violet">{t("settings.backup")}</Badge>}<Badge color={connection.enabled ? "green" : "zinc"}>{connection.enabled ? t("settings.connected") : t("settings.paused")}</Badge></span><span className="ai-provider-row-actions"><Button outline onClick={() => onTest(connection)}>{t("settings.test")}</Button><Button outline onClick={() => onConnect(connection.provider)}>{t("settings.manage")}</Button></span></div>; })}</section>}
     <AIWorkflowPromptsAdvanced prompts={prompts} onEditPrompt={onEditPrompt} />
   </>;
 }
@@ -332,7 +352,7 @@ function AIWorkloadRow({ workload, profile, connections, saving, onSave, onConfi
   const [model, setModel] = useState(profile?.model ?? (initial ? aiModelDefaults[initial.provider][workload.role] : ""));
   const selected = connections.find((connection) => connection.id === connectionID);
   const models = selected ? aiModelOptions[selected.provider] : [];
-  return <TableRow><TableCell><strong>{aiWorkloadName(workload.role, t)}</strong><small className="ai-table-subline">{aiWorkloadDescription(workload.role, t)}</small></TableCell><TableCell><span className={`ai-provider-select ${selected ? "has-provider" : ""}`}>{selected && <AIProviderLogo provider={selected.provider} />}<Select aria-label={t("settings.chooseProvider")} value={connectionID} onChange={(event) => { const id = event.target.value; const connection = connections.find((item) => item.id === id); setConnectionID(id); setModel(connection ? aiModelDefaults[connection.provider][workload.role] : ""); }}><option value="">{t("settings.chooseProvider")}</option>{connections.map((connection) => <option key={connection.id} value={connection.id}>{aiProviderLabel(connection.provider, t)}</option>)}</Select></span></TableCell><TableCell>{selected?.provider === "openai-compatible" ? <Input value={model} onChange={(event) => setModel(event.target.value)} /> : <Select value={model} onChange={(event) => setModel(event.target.value)}><option value="">{t("settings.chooseModel")}</option>{models.map((id) => <option value={id} key={id}>{id}</option>)}</Select>}</TableCell><TableCell><div className="ai-table-actions"><Button outline disabled={!profile} onClick={() => onConfigure(workload.role)}>{t("settings.limits")}</Button><Button disabled={saving || !connectionID || !model} onClick={() => void onSave(workload.role, connectionID, model)}>{t("common.save")}</Button></div></TableCell></TableRow>;
+  return <TableRow><TableCell><strong>{aiWorkloadName(workload.role, t)}</strong><small className="ai-table-subline">{aiWorkloadDescription(workload.role, t)}</small></TableCell><TableCell><span className={`ai-provider-select ${selected ? "has-provider" : ""}`}>{selected && <AIProviderLogo provider={selected.provider} />}<Select aria-label={t("settings.chooseProvider")} value={connectionID} onChange={(event) => { const id = event.target.value; const connection = connections.find((item) => item.id === id); setConnectionID(id); setModel(connection ? aiModelDefaults[connection.provider][workload.role] : ""); }}><option value="">{t("settings.chooseProvider")}</option>{connections.map((connection) => <option key={connection.id} value={connection.id}>{aiProviderLabel(connection.provider, t)}</option>)}</Select></span></TableCell><TableCell>{selected?.provider === "openai-compatible" ? <Input aria-label={t("aiReadiness.model")} value={model} onChange={(event) => setModel(event.target.value)} /> : <Select aria-label={t("aiReadiness.model")} value={model} onChange={(event) => setModel(event.target.value)}><option value="">{t("settings.chooseModel")}</option>{models.map((id) => <option value={id} key={id}>{id}</option>)}</Select>}</TableCell><TableCell><div className="ai-table-actions"><Button outline disabled={!profile} onClick={() => onConfigure(workload.role)}>{t("settings.limits")}</Button><Button disabled={saving || !connectionID || !model} onClick={() => void onSave(workload.role, connectionID, model)}>{t("common.save")}</Button></div></TableCell></TableRow>;
 }
 
 export function AIProviderLogo({ provider }: { provider: APIAIProviderConnection["provider"] }) {

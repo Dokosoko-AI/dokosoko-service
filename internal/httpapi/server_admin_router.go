@@ -138,6 +138,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.systemDoctor(w, r)
 	case len(parts) == 4 && parts[2] == "system" && parts[3] == "configuration" && r.Method == http.MethodGet:
 		s.configurationStatus(w, r)
+	case len(parts) == 4 && parts[2] == "ai" && parts[3] == "readiness":
+		s.aiProcessingReadiness(w, r)
 	case len(parts) == 4 && parts[2] == "ai" && parts[3] == "connections":
 		s.aiProviderConnections(w, r)
 	case len(parts) == 6 && parts[2] == "ai" && parts[3] == "connections" && parts[5] == "test" && r.Method == http.MethodPost:
@@ -182,6 +184,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiSDKBinding(w, r, parts[3], parts[6])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "publish" && r.Method == http.MethodPost:
 		s.publishIntegration(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "integrations" && parts[4] == "revisions" && parts[6] == "activate" && r.Method == http.MethodPost:
+		s.activateIntegrationRevision(w, r, parts[3], parts[5])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "preflight" && r.Method == http.MethodPost:
 		s.preflightIntegration(w, r, parts[3])
 	case len(parts) == 5 && parts[2] == "integrations" && parts[4] == "authorization":
@@ -214,10 +218,16 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.developerAssetIngestionRuns(w, r)
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "ingestion-runs":
 		s.developerAssetIngestionRun(w, r, parts[4])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "ingestion-runs" && parts[5] == "processing":
+		s.knowledgeProcessing(w, r, parts[4])
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation" && parts[4] == "documents":
 		s.developerAssetDocuments(w, r)
 	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "documentation" && parts[4] == "documents":
 		s.developerAssetDocument(w, r, parts[5])
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation" && parts[4] == "library":
+		s.documentationLibrary(w, r)
+	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation" && parts[4] == "attention":
+		s.documentationAttention(w, r)
 	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "documentation-collections":
 		s.documentationCollections(w, r)
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation-collections":
@@ -230,6 +240,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.deploymentDocumentationPublications(w, r)
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "documentation-publications":
 		s.deploymentDocumentationPublication(w, r, parts[4])
+	case len(parts) == 6 && parts[2] == "developer-assets" && parts[3] == "documentation-publications" && parts[5] == "activate":
+		s.activateDeploymentDocumentationPublication(w, r, parts[4])
 	case len(parts) == 4 && parts[2] == "developer-assets" && parts[3] == "api-contracts":
 		s.apiContracts(w, r)
 	case len(parts) == 5 && parts[2] == "developer-assets" && parts[3] == "api-contracts":
@@ -318,6 +330,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.sources(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "sources" && parts[5] == "upload":
 		s.uploadSource(w, r, parts[3])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "upload":
+		s.replaceSourceUpload(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "visibility" && r.Method == http.MethodPatch:
 		s.sourceVisibility(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawl" && r.Method == http.MethodPost:
@@ -326,6 +340,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.publishSource(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "review" && r.Method == http.MethodGet:
 		s.sourceReview(w, r, parts[3], parts[5])
+	case len(parts) == 9 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "review" && parts[7] == "documents" && r.Method == http.MethodGet:
+		s.sourceReviewContent(w, r, parts[3], parts[5], parts[8])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "publications" && r.Method == http.MethodGet:
 		s.sourcePublications(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "sources" && parts[6] == "crawls" && r.Method == http.MethodGet:
@@ -390,6 +406,8 @@ func (s *Server) adminAPI(w http.ResponseWriter, r *http.Request) {
 		s.recipes(w, r, parts[3])
 	case len(parts) == 6 && parts[2] == "products" && parts[4] == "recipes":
 		s.recipe(w, r, parts[3], parts[5])
+	case len(parts) == 7 && parts[2] == "products" && parts[4] == "recipes" && parts[6] == "references" && r.Method == http.MethodGet:
+		s.recipeReferenceOptions(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "recipes" && parts[6] == "rework" && r.Method == http.MethodPost:
 		s.reworkRecipe(w, r, parts[3], parts[5])
 	case len(parts) == 7 && parts[2] == "products" && parts[4] == "recipes" && parts[6] == "approve" && r.Method == http.MethodPost:

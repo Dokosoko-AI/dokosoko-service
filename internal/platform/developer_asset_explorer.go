@@ -18,6 +18,53 @@ type DocumentationExplorerInput struct {
 	Offset              int
 }
 
+func (s *Service) DocumentationLibrary(ctx context.Context, sourceID, publicationID, query, view string, limit, offset int) (store.DocumentationLibraryPage, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return store.DocumentationLibraryPage{}, err
+	}
+	query, sourceID = strings.TrimSpace(query), strings.TrimSpace(sourceID)
+	if len(query) > 500 || limit < 1 || limit > 100 || offset < 0 || (view != "current" && view != "history" && view != "reviewed") {
+		return store.DocumentationLibraryPage{}, errors.New("library requires view current, history or reviewed, query up to 500 characters, limit 1–100, and a nonnegative offset")
+	}
+	if sourceID != "" {
+		if _, err := s.store.Source(ctx, deployment.ID, sourceID); err != nil {
+			return store.DocumentationLibraryPage{}, err
+		}
+	}
+	publicationID = strings.TrimSpace(publicationID)
+	if publicationID != "" {
+		if view != "history" {
+			return store.DocumentationLibraryPage{}, errors.New("an exact source publication requires view=history")
+		}
+		publication, err := s.store.SourcePublication(ctx, deployment.ID, publicationID)
+		if err != nil {
+			return store.DocumentationLibraryPage{}, err
+		}
+		if sourceID != "" && sourceID != publication.SourceID {
+			return store.DocumentationLibraryPage{}, store.ErrNotFound
+		}
+	}
+	return s.store.DocumentationLibrary(ctx, store.DocumentationLibraryQuery{DeploymentID: deployment.ID, SourceID: sourceID, SourcePublicationID: publicationID, Query: query, History: view == "history", Reviewed: view == "reviewed", Limit: limit, Offset: offset})
+}
+
+func (s *Service) DocumentationAttention(ctx context.Context, sourceID string, limit, offset int) (store.DocumentationAttentionPage, error) {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return store.DocumentationAttentionPage{}, err
+	}
+	if limit < 1 || limit > 100 || offset < 0 {
+		return store.DocumentationAttentionPage{}, errors.New("attention requires limit 1–100 and a nonnegative offset")
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID != "" {
+		if _, err := s.store.Source(ctx, deployment.ID, sourceID); err != nil {
+			return store.DocumentationAttentionPage{}, err
+		}
+	}
+	return s.store.DocumentationAttention(ctx, deployment.ID, sourceID, limit, offset)
+}
+
 func (s *Service) DocumentationCandidates(ctx context.Context, input DocumentationExplorerInput) (store.DocumentationCandidatePage, error) {
 	deployment, err := s.store.Deployment(ctx)
 	if err != nil {

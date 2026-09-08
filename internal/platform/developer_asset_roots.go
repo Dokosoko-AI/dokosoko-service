@@ -13,6 +13,7 @@ import (
 )
 
 type APIContractInput struct {
+	RequestKey  string
 	Name        string
 	Slug        string
 	Description string
@@ -48,19 +49,34 @@ func (s *Service) SaveAPIContract(ctx context.Context, contractID string, input 
 		return model.APIContract{}, errors.New("contract lifecycle must be active or archived")
 	}
 	contractID = strings.TrimSpace(contractID)
-	if contractID == "" {
+	creating := contractID == ""
+	if input.RequestKey != "" && (!creating || input.Revision != 0) {
+		return model.APIContract{}, store.ErrConflict
+	}
+	if creating {
 		contractID, err = randomUUID()
 		if err != nil {
 			return model.APIContract{}, err
 		}
 	}
+	key := input.RequestKey
+	input.RequestKey = ""
+	requests, err := s.developerAssetCreation(key, input, deployment, actor, "api_contract", contractID, "api_contract.saved", map[string]any{
+		"name": input.Name, "slug": input.Slug, "visibility": input.Visibility, "lifecycle": input.Lifecycle, "revision": int64(1),
+	})
+	if err != nil {
+		return model.APIContract{}, err
+	}
 	value, err := s.store.SaveAPIContract(ctx, model.APIContract{
 		ID: contractID, DeploymentID: deployment.ID, OrganisationID: deployment.OrganisationID,
 		Name: input.Name, Slug: input.Slug, Description: input.Description, Kind: "openapi",
 		Visibility: input.Visibility, Lifecycle: input.Lifecycle,
-	}, input.Revision)
+	}, input.Revision, requests...)
 	if err != nil {
 		return model.APIContract{}, err
+	}
+	if len(requests) != 0 {
+		return value, nil
 	}
 	if err := s.appendDeveloperAssetAudit(ctx, deployment, actor, "api_contract.saved", "api_contract", value.ID, map[string]any{
 		"name": value.Name, "slug": value.Slug, "visibility": value.Visibility, "lifecycle": value.Lifecycle, "revision": value.Revision,
@@ -148,6 +164,7 @@ type DocumentationCollectionMemberInput struct {
 }
 
 type DocumentationCollectionInput struct {
+	RequestKey          string
 	Name                string
 	Slug                string
 	Description         string
@@ -569,7 +586,11 @@ func (s *Service) resolveDocumentationMember(ctx context.Context, deploymentID, 
 			return resolvedDocumentationMember{}, mapErr
 		}
 		result.Member.SourcePublicationID = publication.ID
-		result.Title, result.ContentHash, result.Visibility = publication.SourceID, publication.ContentHash, publication.Visibility
+		source, lookupErr := s.store.Source(ctx, deploymentID, publication.SourceID)
+		if lookupErr != nil {
+			return resolvedDocumentationMember{}, lookupErr
+		}
+		result.Title, result.ContentHash, result.Visibility = source.Name, publication.ContentHash, publication.Visibility
 		result.EvidenceID = "source-publication:" + publication.ID
 		result.MapBody = mapBody
 	case "document":
@@ -652,6 +673,9 @@ func (s *Service) SaveDocumentationCollection(ctx context.Context, collectionID 
 	}
 	collectionID = strings.TrimSpace(collectionID)
 	creating := collectionID == ""
+	if input.RequestKey != "" && (!creating || input.Revision != 0) {
+		return model.DocumentationCollection{}, store.ErrConflict
+	}
 	if creating {
 		collectionID, err = randomUUID()
 		if err != nil {
@@ -739,13 +763,26 @@ func (s *Service) SaveDocumentationCollection(ctx context.Context, collectionID 
 		Visibility: input.Visibility, Lifecycle: input.Lifecycle,
 	}
 	record := store.DocumentationCollectionRevisionRecord{Revision: revision, Members: memberValues, Map: &documentationMap}
+	var requests []store.DeveloperAssetCreation
 	if creating {
-		collection, err = s.store.CreateDocumentationCollection(ctx, collection, record)
+		key := input.RequestKey
+		input.RequestKey = ""
+		requests, err = s.developerAssetCreation(key, input, deployment, actor, "documentation_collection", collection.ID, "documentation_collection.revision_saved", map[string]any{
+			"name": collection.Name, "revision": int64(1), "revision_id": revision.ID,
+			"content_hash": revision.ContentHash, "member_count": len(memberValues), "visibility": collection.Visibility,
+		})
+		if err != nil {
+			return model.DocumentationCollection{}, err
+		}
+		collection, err = s.store.CreateDocumentationCollection(ctx, collection, record, requests...)
 	} else {
 		collection, err = s.store.ReviseDocumentationCollection(ctx, collection, input.Revision, record)
 	}
 	if err != nil {
 		return model.DocumentationCollection{}, err
+	}
+	if len(requests) != 0 {
+		return collection, nil
 	}
 	if err := s.appendDeveloperAssetAudit(ctx, deployment, actor, "documentation_collection.revision_saved", "documentation_collection", collection.ID, map[string]any{
 		"name": collection.Name, "revision": collection.Revision, "revision_id": revision.ID,

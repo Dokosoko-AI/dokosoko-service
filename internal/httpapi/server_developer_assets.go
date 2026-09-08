@@ -52,7 +52,12 @@ func developerAssetMethodNotAllowed(w http.ResponseWriter, methods ...string) {
 }
 
 func (s *Server) developerAssetError(w http.ResponseWriter, err error) {
+	if writeKnowledgeProcessingError(w, err) || writeAIWorkflowError(w, err) {
+		return
+	}
 	switch {
+	case errors.Is(err, store.ErrDeveloperAssetCreationConflict):
+		writeError(w, http.StatusConflict, "creation_conflict", err.Error(), nil)
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
 		s.storeError(w, err)
 	case errors.Is(err, platform.ErrSourceReviewRequired):
@@ -70,6 +75,18 @@ func (s *Server) developerAssetError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_developer_asset", err.Error(), nil)
 	}
+}
+
+func writeKnowledgeProcessingError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, platform.ErrKnowledgeProcessingRequired):
+		writeError(w, http.StatusUnprocessableEntity, "knowledge_processing_required", "Complete AI processing for this import, review its results, then publish.", nil)
+	case errors.Is(err, platform.ErrKnowledgeProcessingBusy):
+		writeError(w, http.StatusConflict, "knowledge_processing_busy", "This import has an AI batch in progress. Refresh its processing status before retrying.", nil)
+	default:
+		return false
+	}
+	return true
 }
 
 func developerAssetQueryLimit(r *http.Request, defaultValue, maximum int) (int, error) {
@@ -157,6 +174,26 @@ func (s *Server) developerAssetIngestionRun(w http.ResponseWriter, r *http.Reque
 	value, err := s.service.DeveloperAssetIngestion(r.Context(), runID)
 	if err != nil {
 		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) knowledgeProcessing(w http.ResponseWriter, r *http.Request, runID string) {
+	var value platform.KnowledgeProcessingStatus
+	var err error
+	switch r.Method {
+	case http.MethodGet:
+		value, err = s.service.KnowledgeProcessingStatus(r.Context(), runID)
+	case http.MethodPost:
+		// Evidence is resolved server-side from the exact immutable import.
+		value, err = s.service.ProcessKnowledgeBatch(r.Context(), runID, actor(r))
+	default:
+		developerAssetMethodNotAllowed(w, http.MethodGet, http.MethodPost)
+		return
+	}
+	if err != nil {
+		s.developerAssetError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)

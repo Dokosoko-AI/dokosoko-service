@@ -69,11 +69,26 @@ func (m *Memory) validateDocumentationRevisionLocked(collection model.Documentat
 	return nil
 }
 
-func (m *Memory) CreateDocumentationCollection(_ context.Context, value model.DocumentationCollection, record DocumentationCollectionRevisionRecord) (model.DocumentationCollection, error) {
+func (m *Memory) CreateDocumentationCollection(_ context.Context, value model.DocumentationCollection, record DocumentationCollectionRevisionRecord, requests ...DeveloperAssetCreation) (model.DocumentationCollection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.hasDeployment || value.DeploymentID != m.deployment.ID || value.OrganisationID != m.deployment.OrganisationID {
 		return model.DocumentationCollection{}, ErrNotFound
+	}
+	request, err := validateDeveloperAssetCreation(requests, value.DeploymentID, value.OrganisationID, "documentation_collection", value.ID, 0)
+	if err != nil {
+		return model.DocumentationCollection{}, err
+	}
+	recovered, err := m.developerAssetCreationLocked(request)
+	if err != nil {
+		return model.DocumentationCollection{}, err
+	}
+	if recovered != "" {
+		current, exists := m.developerAssets.documentationCollections[recovered]
+		if !exists || current.DeploymentID != value.DeploymentID {
+			return model.DocumentationCollection{}, ErrNotFound
+		}
+		return memoryClone(current), nil
 	}
 	for _, current := range m.developerAssets.documentationCollections {
 		if current.DeploymentID == value.DeploymentID && (current.ID == value.ID || current.Slug == value.Slug) {
@@ -102,6 +117,7 @@ func (m *Memory) CreateDocumentationCollection(_ context.Context, value model.Do
 	m.developerAssets.documentationCollections[value.ID] = memoryClone(value)
 	m.developerAssets.documentationRevisions[record.Revision.ID] = memoryClone(record)
 	m.developerAssets.documentationRevisionIDs[value.ID] = append(m.developerAssets.documentationRevisionIDs[value.ID], record.Revision.ID)
+	m.saveDeveloperAssetCreationLocked(request)
 	m.bumpDeveloperAssetCatalogRevisionLocked()
 	return value, nil
 }
@@ -264,11 +280,26 @@ func (m *Memory) APIContract(_ context.Context, deploymentID, id string) (model.
 	return memoryClone(value), nil
 }
 
-func (m *Memory) SaveAPIContract(_ context.Context, value model.APIContract, expected int64) (model.APIContract, error) {
+func (m *Memory) SaveAPIContract(_ context.Context, value model.APIContract, expected int64, requests ...DeveloperAssetCreation) (model.APIContract, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.hasDeployment || value.DeploymentID != m.deployment.ID || value.OrganisationID != m.deployment.OrganisationID {
 		return model.APIContract{}, ErrNotFound
+	}
+	request, err := validateDeveloperAssetCreation(requests, value.DeploymentID, value.OrganisationID, "api_contract", value.ID, expected)
+	if err != nil {
+		return model.APIContract{}, err
+	}
+	recovered, err := m.developerAssetCreationLocked(request)
+	if err != nil {
+		return model.APIContract{}, err
+	}
+	if recovered != "" {
+		current, exists := m.developerAssets.contracts[recovered]
+		if !exists || current.DeploymentID != value.DeploymentID {
+			return model.APIContract{}, ErrNotFound
+		}
+		return memoryClone(current), nil
 	}
 	for id, current := range m.developerAssets.contracts {
 		if current.DeploymentID == value.DeploymentID && current.Slug == value.Slug && id != value.ID {
@@ -293,6 +324,7 @@ func (m *Memory) SaveAPIContract(_ context.Context, value model.APIContract, exp
 		value.Revision, value.UpdatedAt = expected+1, now
 	}
 	m.developerAssets.contracts[value.ID] = memoryClone(value)
+	m.saveDeveloperAssetCreationLocked(request)
 	m.bumpDeveloperAssetCatalogRevisionLocked()
 	return value, nil
 }

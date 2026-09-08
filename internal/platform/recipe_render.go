@@ -529,39 +529,35 @@ func (s *Service) authorRecipeForContract(ctx context.Context, product model.Pro
 		"editor_instruction":    strings.TrimSpace(instruction),
 	})
 	invocation := aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_authoring", PromptKey: AIPromptKeyRecipeAuthoring, User: string(prompt), SchemaName: "recipe", Schema: recipeAuthoringSchema, MaxOutput: 8192, Temperature: 0.1}
-	prepared, prepareErr := s.prepareAIInvocation(ctx, invocation)
-	if prepareErr == nil {
-		result, generateErr := s.generateAIStructured(ctx, prepared)
-		if generateErr == nil {
-			var response recipeAuthoringResponse
-			if decodeStrictAIResult(result.JSON, &response) == nil && response.Status == "ready" && len(response.Gaps) == 0 {
-				references, referencesOK := selectRecipeReferences(response.ReferenceIDs, allowedReferences)
-				if referencesOK {
-					spec := canonicalSpec
-					spec.ReferenceIDs = append([]string(nil), response.ReferenceIDs...)
-					recipe := recipeForSpecValidation(spec, contractVersion, seed)
-					findings := validateRecipeSpec(spec, recipe, selectedEvidence)
-					markdown := renderRecipeSpec(spec, references)
-					findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, references, recipeGroundedURLs(selectedAnalysis)...)...)
-					if !hasRecipeErrors(findings) {
-						return authoredRecipe{Spec: spec, Markdown: markdown, References: references, GeneratedBy: "ai", Model: firstNonEmpty(result.ResolvedModel, result.RequestedModel), PromptVersion: prepared.PromptVersion, PromptHash: recipeAIRequestHash(prepared)}, nil
-					}
-				}
-			}
-		}
+	prepared, err := s.prepareAIInvocation(ctx, invocation)
+	if err != nil {
+		return authoredRecipe{}, err
 	}
-
+	result, err := s.generateAIStructured(ctx, prepared)
+	if err != nil {
+		return authoredRecipe{}, err
+	}
+	var response recipeAuthoringResponse
+	if decodeStrictAIResult(result.JSON, &response) != nil {
+		return authoredRecipe{}, &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput}
+	}
+	if response.Status != "ready" || len(response.Gaps) != 0 {
+		return authoredRecipe{}, ErrRecipeNeedsInput
+	}
+	references, referencesOK := selectRecipeReferences(response.ReferenceIDs, allowedReferences)
+	if !referencesOK {
+		return authoredRecipe{}, &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput}
+	}
 	spec := canonicalSpec
-	// Deterministic output includes no optional reading list. Its factual URLs
-	// are direct, server-owned operation facts and are validated as grounded.
-	markdown := renderRecipeSpec(spec, nil)
+	spec.ReferenceIDs = append([]string(nil), response.ReferenceIDs...)
 	recipe := recipeForSpecValidation(spec, contractVersion, seed)
 	findings := validateRecipeSpec(spec, recipe, selectedEvidence)
-	findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, nil, recipeGroundedURLs(selectedAnalysis)...)...)
+	markdown := renderRecipeSpec(spec, references)
+	findings = append(findings, validateRecipeMarkdown(markdown, seed.Title, references, recipeGroundedURLs(selectedAnalysis)...)...)
 	if hasRecipeErrors(findings) {
 		return authoredRecipe{}, ErrRecipeNeedsInput
 	}
-	return authoredRecipe{Spec: spec, Markdown: markdown, GeneratedBy: "deterministic"}, nil
+	return authoredRecipe{Spec: spec, Markdown: markdown, References: references, GeneratedBy: "ai", Model: firstNonEmpty(result.ResolvedModel, result.RequestedModel), PromptVersion: prepared.PromptVersion, PromptHash: recipeAIRequestHash(prepared)}, nil
 }
 
 func recipeForSpecValidation(spec model.RecipeSpec, contractVersion string, seed model.RecipeSeed) model.Recipe {
@@ -574,7 +570,7 @@ func recipeForSpecValidation(spec model.RecipeSpec, contractVersion string, seed
 	return value
 }
 
-func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec model.RecipeSpec, markdown string, selectedEvidence []model.IntegrationEvidence, findings []model.RecipeValidationFinding) (string, []model.RecipeValidationFinding) {
+func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec model.RecipeSpec, markdown string, selectedEvidence []model.IntegrationEvidence, findings []model.RecipeValidationFinding) (string, []model.RecipeValidationFinding, error) {
 	reviewInput := map[string]any{
 		"recipe_spec":            spec,
 		"rendered_markdown":      markdown,
@@ -585,24 +581,24 @@ func (s *Service) reviewRecipe(ctx context.Context, product model.Product, spec 
 	prompt, _ := json.Marshal(reviewInput)
 	result, err := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_review", PromptKey: AIPromptKeyRecipeReview, User: string(prompt), SchemaName: "recipe_review", Schema: recipeReviewSchema, MaxOutput: 2048, Temperature: 0})
 	if err != nil {
-		return "AI review was unavailable; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_unavailable", Message: "The advisory review did not complete. Review every claim before approval."})
+		return "", findings, err
 	}
 	var response recipeReviewResponse
 	if decodeStrictAIResult(result.JSON, &response) != nil {
-		return "AI review returned an invalid result; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_invalid", Message: "The advisory review was invalid. Review every claim before approval."})
+		return "", findings, &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput}
 	}
 	advisoryFindings, valid := recipeReviewValidationFindings(response, selectedEvidence)
 	if !valid {
-		return "AI review returned an invalid result; human review is required.", append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_invalid", Message: "The advisory review was invalid. Review every claim before approval."})
+		return "", findings, &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput}
 	}
 	findings = append(findings, advisoryFindings...)
 	if response.Recommendation == "revise" && len(advisoryFindings) == 0 {
 		findings = append(findings, model.RecipeValidationFinding{Level: "warning", Code: "ai_review_revise", Message: "The advisory reviewer recommends revision but returned no usable finding; inspect every claim before approval."})
 	}
 	if response.Recommendation == "revise" {
-		return "Advisory AI review recommends revision; inspect the server-owned findings before approval.", findings
+		return "Advisory AI review recommends revision; inspect the server-owned findings before approval.", findings, nil
 	}
-	return "Advisory AI review found no additional issue; human review is still required.", findings
+	return "Advisory AI review found no additional issue; human review is still required.", findings, nil
 }
 
 var recipeReviewFindingMessages = map[string]string{

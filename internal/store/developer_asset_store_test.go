@@ -480,9 +480,9 @@ func TestMemoryDocumentationExplorerAndCompleteSourceReview(t *testing.T) {
 	ctx := context.Background()
 	const (
 		deploymentID  = "prod_acme"
-		runID         = "documentation-ingestion"
 		publicationID = "pub_docs_seed"
 	)
+	runID := memory.sourcePublications[deploymentID][publicationID].CrawlJobID
 	startedAt := time.Now().UTC()
 	if _, err := memory.CreateDeveloperAssetIngestionRun(ctx, model.DeveloperAssetIngestionRun{
 		ID: runID, DeploymentID: deploymentID, OrganisationID: "org_acme", AssetKind: model.DeveloperAssetDocumentation,
@@ -550,6 +550,10 @@ func TestMemoryDocumentationExplorerAndCompleteSourceReview(t *testing.T) {
 	}
 	if err := memory.SaveSourcePublicationDocumentationReview(ctx, deploymentID, review); err != nil {
 		t.Fatalf("save complete documentation review: %v", err)
+	}
+	page, err := memory.DocumentationLibrary(ctx, DocumentationLibraryQuery{DeploymentID: deploymentID, SourcePublicationID: publicationID, History: true, Limit: 50})
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "document-a" || page.Items[0].Decision != "included" {
+		t.Fatalf("exact reviewed file picker=%#v %v", page, err)
 	}
 	storedReview, err := memory.SourcePublicationDocumentationReview(ctx, deploymentID, publicationID)
 	if err != nil || len(storedReview.Selections) != 2 || storedReview.MapLink == nil {

@@ -35,9 +35,9 @@ func (s *Server) sources(w http.ResponseWriter, r *http.Request, productID strin
 			writeError(w, http.StatusBadRequest, "source_upload_requires_multipart", "Create uploaded sources with the reviewed multipart upload endpoint.", nil)
 			return
 		}
-		value, err := s.service.CreateSource(r.Context(), input.OrganisationID, productID, input.Name, input.Kind, input.Location, actor(r))
+		value, err := s.service.CreateSourceWithRequest(r.Context(), platform.SourceCreationInput{OrganisationID: input.OrganisationID, ProductID: productID, Name: input.Name, Kind: input.Kind, Location: input.Location, RequestKey: r.Header.Get("Idempotency-Key")}, actor(r))
 		if err != nil {
-			s.creationError(w, err)
+			s.sourceCreationError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, value)
@@ -45,6 +45,14 @@ func (s *Server) sources(w http.ResponseWriter, r *http.Request, productID strin
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) sourceCreationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrSourceCreationConflict) {
+		writeError(w, http.StatusConflict, "source_creation_conflict", "This source creation request was already used with different input. Start a new creation request for changed content.", nil)
+		return
+	}
+	s.creationError(w, err)
 }
 
 func (s *Server) queueCrawl(w http.ResponseWriter, r *http.Request, productID, sourceID string) {
@@ -71,6 +79,20 @@ func (s *Server) crawlJobs(w http.ResponseWriter, r *http.Request, productID, so
 
 func (s *Server) sourceReview(w http.ResponseWriter, r *http.Request, productID, sourceID string) {
 	value, err := s.service.SourceReview(r.Context(), productID, sourceID, strings.TrimSpace(r.URL.Query().Get("crawl_job_id")))
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) sourceReviewContent(w http.ResponseWriter, r *http.Request, productID, sourceID, documentID string) {
+	crawlID := strings.TrimSpace(r.URL.Query().Get("crawl_job_id"))
+	if crawlID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "crawl_job_id is required to read exact review content.", nil)
+		return
+	}
+	value, err := s.service.Store().SourceReviewContent(r.Context(), productID, sourceID, crawlID, documentID)
 	if err != nil {
 		s.storeError(w, err)
 		return
@@ -114,7 +136,9 @@ func (s *Server) publishSource(w http.ResponseWriter, r *http.Request, productID
 	}
 	value, publication, err := s.service.PublishSource(r.Context(), productID, sourceID, platform.SourcePublicationInput{Revision: input.Revision, CrawlJobID: input.CrawlJobID, DocumentIDs: input.DocumentIDs, AcknowledgeReviewed: input.AcknowledgeReviewed}, actor(r))
 	if err != nil {
-		s.platformError(w, err, "Quarantined source content cannot be published.")
+		if !writeKnowledgeProcessingError(w, err) && !writeAIWorkflowError(w, err) {
+			s.platformError(w, err, "Quarantined source content cannot be published.")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"source": value, "publication": publication})

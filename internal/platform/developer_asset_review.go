@@ -89,6 +89,10 @@ func (s *Service) PublishAPIContractCandidate(ctx context.Context, contractID, c
 	if exactPublication == nil {
 		return model.APIContract{}, model.APIContractRevision{}, errors.New("contract candidate requires a reviewed source publication from its exact ingestion generation")
 	}
+	processing, err := s.requireKnowledgeProcessing(ctx, run.ID)
+	if err != nil {
+		return model.APIContract{}, model.APIContractRevision{}, err
+	}
 	sourceEvidence := &model.APIContractRevisionSourcePublication{
 		APIContractRevisionID: revision.ID, DeploymentID: deployment.ID,
 		APIContractCandidateID: revision.APIContractCandidateID, SourcePublicationID: exactPublication.ID,
@@ -101,6 +105,7 @@ func (s *Service) PublishAPIContractCandidate(ctx context.Context, contractID, c
 	if err := s.appendDeveloperAssetAudit(ctx, deployment, actor, "api_contract.revision_published", "api_contract_revision", revision.ID, map[string]any{
 		"api_contract_id": contract.ID, "api_contract_candidate_id": record.Candidate.ID,
 		"revision": revision.Revision, "content_hash": revision.ContentHash, "visibility": revision.Visibility,
+		"knowledge_processing_stage_ids": processing.StageIDs,
 	}); err != nil {
 		return model.APIContract{}, model.APIContractRevision{}, err
 	}
@@ -257,6 +262,10 @@ func (s *Service) PublishSDKContentCandidate(ctx context.Context, releaseID, can
 		SDKContentPublicationID: id, DeploymentID: deployment.ID, SDKContentCandidateID: record.Candidate.ID,
 		SDKMapID: publishedMap.ID, ContentHash: publishedMap.ContentHash,
 	}
+	processing, err := s.requireKnowledgeProcessing(ctx, run.ID)
+	if err != nil {
+		return model.SDKContentPublication{}, err
+	}
 	publication, err := s.store.PublishSDKContentCandidate(ctx, publicationRecord)
 	if err != nil {
 		return model.SDKContentPublication{}, err
@@ -265,6 +274,7 @@ func (s *Service) PublishSDKContentCandidate(ctx context.Context, releaseID, can
 		"sdk_release_id": release.ID, "sdk_content_candidate_id": record.Candidate.ID,
 		"revision": publication.Revision, "content_hash": publication.ContentHash,
 		"included_files": fileOrdinal, "approved_samples": sampleOrdinal, "visibility": publication.Visibility,
+		"knowledge_processing_stage_ids": processing.StageIDs,
 	}); err != nil {
 		return model.SDKContentPublication{}, err
 	}

@@ -41,7 +41,7 @@ test("promotes APIs, Docs, and SDKs and packages to the primary navigation", () 
   assert.match(documentation, /href="\/developer-assets\/query-lab" class="page-tab docs-query-lab-tab">Query Lab<\/a>/);
 
   const sidebar = render(createElement(ConsoleSidebar, { section: "contracts", activeNavigationID: "docs", onNavigate: noop }));
-  for (const [label, path] of [["APIs", "/integrations"], ["Docs", "/integrations/documentation"], ["SDKs and packages", "/developer-assets/sdk-packages"]]) {
+  for (const [label, path] of [["APIs", "/integrations"], ["Docs", "/developer-assets/documentation/documents"], ["SDKs and packages", "/developer-assets/sdk-packages"]]) {
     assert.match(sidebar, new RegExp(`href="${path}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
   assert.doesNotMatch(sidebar, /Catalog sections|Docs sections|nav-subsections/);

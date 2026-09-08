@@ -5,7 +5,7 @@ installation publishes the material developers and agents need to use the
 vendor's APIs:
 
 - reviewed documentation and OpenAPI contracts;
-- exact, API-owned SDK installation references;
+- reusable SDK packages with exact, reviewed guidance selected by each API;
 - runtime service connections and encrypted credentials;
 - reviewed HTTP, upstream MCP, and trusted native tools;
 - evidence-grounded recipes;
@@ -19,12 +19,95 @@ Vendors implementing private customer access use the optional
 
 An API is an `Integration`. Publishing it creates an immutable snapshot of its
 reviewed documentation, contracts, exact SDK references, authorization points,
-tools, and runtime service connections. There are no product channels, pins,
-staged promotion, rollout, package catalogue, or package provenance workflow.
+tools, and runtime service connections. Shared documentation, contracts, and SDK
+guidance have their own review histories; existing API publications retain their
+selected revisions when those shared assets advance.
 
-SDK entries contain an ecosystem, coordinate, exact version, install command,
-optional HTTPS documentation/source URLs, optional digest, and visibility.
-DokoSoko never hosts or proxies package bytes.
+SDK packages belong to the deployment and can be reused across APIs. Package
+setup resolves an exact registry or Git release, imports bounded guidance text,
+requires AI processing and human review, and publishes that content before API
+attachment. Normal setup shows readable files and examples; package metadata,
+lifecycle history, symbols and maps are available through advanced inspection.
+DokoSoko does not install or execute packages, or host or proxy package bytes.
+
+SDK review shows literal sample code with its language and source location.
+Comparisons show the previous published source file; sample approval applies to
+the selected sample. Reload preserves decisions for the same content and requires
+fresh acknowledgement. Completion verifies the saved exact API attachment,
+including its audience, selectors and compatibility claims.
+
+The API **Connect** tab starts with a published task and audience. Review its
+canonical instructions, exact API publications and selected supporting evidence,
+copy a contextual connection
+prompt, and download a check plan. Imported client reports and recorded application
+checks stay separate from the administrator preview; export the evidence record
+to retain them across reloads.
+
+The standalone MCP acceptance client can check an exact reviewed task plan,
+including task revision, guidance text hashes and publication metadata. Its
+reports separate client-observed retrieval from application tests, which it does
+not run. See [recorded client evidence](docs/client-compatibility.md) for the
+current results and the production checks still required.
+
+The [published guidance retrieval evaluation](docs/retrieval-evaluations.md)
+records task evidence recall, precision, exact citations and version isolation
+against memory and PostgreSQL. It does not establish application test success.
+The separate [reference application evaluation](examples/integration-evaluation/README.md)
+runs actual HTTP and webhook checks using a published fixture SDK; its reports
+record the runtime, exact source hashes, expected outcomes and failure cases.
+
+MCP catalog version 2 is the default: initial discovery contains deployment
+summary and routing information. Use `deployment.apis.list` to find an API by
+name/version and `deployment.apis.get` with its exact manifest hash to read that
+publication. Follow `nextCursor` for tool/resource lists and `next_cursor` for the
+API catalog. Existing consumers of the full `result.deployment`/`result.product`
+extensions can request `params._meta["com.dokosoko/catalogVersion"] = 1` on each
+request while migrating. The [setup guide](docs/INTEGRATION_SETUP.md#mcp-catalog-migration)
+describes the compatibility contract and limits.
+
+Compact publication maps use `/map-v2` resource URIs. Their index supports paged
+browsing, query words and exact source filters. Connect uses these filters to
+retrieve only the task's selected references, even when its API has a large
+knowledge index. Original full-map and evidence URLs retain their contents.
+
+Find a published task with `integration.recipes.list`, using `query` words or an
+exact `api_id`. Follow `next_cursor` with the same filters. Each result identifies
+the exact recipe revision and its pinned API names, versions and publication
+hashes. Read the selected recipe URI and confirm its `revision_id`; its recipe
+and evidence contain the SDK selections and implementation checks.
+
+Contract setup keeps the chosen primary-contract setting for the exact candidate
+and API across reloads. If publication succeeds before attachment fails, continue
+with **Attach exact revision**. The saved revision is reused; final approval is
+required again and completion checks the actual attachment settings.
+
+Website and file source creation supports recovery after a lost response. Add
+content and contract setup retain a request identity for seven days in the current
+browser; retry with the same URL or file. API clients can send `Idempotency-Key`
+to either source-creation endpoint. The same administrator, deployment, key and
+input recover the current source; changed input with the same key returns a
+conflict. Creation alone does not ingest, process or publish content. See the
+[setup guide](docs/INTEGRATION_SETUP.md) for the remaining review steps.
+
+**Add content** in Knowledge or API Resources opens one documentation setup page:
+website/file/existing source, import, required AI processing, readable review,
+and a saved documentation version. Starting from an API retains that API and
+attaches the exact reviewed version to its draft. Import history, diagnostics
+and provenance remain secondary. API publication is a separate review action.
+
+Knowledge opens **Reviewed content**: included files from each source’s latest
+reviewed publication. New or failed imports do not replace those files.
+**Needs attention** lists unfinished website/file imports, including sources
+without files, and resumes their exact setup. History and documentation sets are
+secondary. API attachment and serving status remain in the API workspace.
+
+For blocked uploaded content, **Replace uploaded file** keeps the source and
+earlier reviews, stores a corrected file, and queues its import atomically.
+Replacement waits for active imports to finish and preserves quarantine until
+the crawler accepts clean content. Reload recovers a committed replacement;
+required AI processing and human review run against the new import.
+Review and the reviewed-content library compare a replacement with the earlier
+approved file from the same source, even when its storage filename changed.
 
 Runtime credentials are write-only, encrypted at rest, and attached to fixed
 service origins. HTTP tools cannot choose destinations at request time. Trusted
@@ -144,13 +227,25 @@ upload volume. The legacy `git` source kind remains reserved in the API for
 compatibility, returns an explicit unsupported-source result, and is not shown
 as an available option in the console.
 
-Administrators review crawl output and quarantine indicators before publishing
-an immutable source revision. A published API pins the exact reviewed source
+Administrators complete required AI processing, then review the exact content
+and quarantine indicators before publishing an immutable source revision. The
+crawler retains no AI credentials. The Go service processes bounded batches
+with the configured Analysis provider and saves each result for the exact import.
+Source, contract, and SDK review screens offer progress and pause/resume controls.
+Retries reuse successful batches; model failures cannot silently publish content.
+Older imports without normalized evidence must be ingested again; OpenAPI sources
+must be attached to a contract before that ingestion. The contract **Create & set
+up** flow performs that attachment, starts the import, presents exact content and
+AI findings, and can publish and attach the reviewed revision to the originating
+API. It retains progress through reload and reuses completed publication steps
+when an attachment fails. See [Integration setup](docs/INTEGRATION_SETUP.md).
+A published API pins the exact reviewed source
 publication rather than a mutable crawl result.
 
 ## AI providers and recipes
 
-AI remains optional and provider-neutral. One Analysis workload powers bounded
+AI is required for Knowledge processing and recipe authoring/review. One
+provider-neutral Analysis workload powers bounded Knowledge processing,
 integration planning, tool-authoring assistance, and recipe authoring/review. It
 can select OpenAI, Google, Anthropic, DigitalOcean, xAI, DeepSeek, or a fixed
 public OpenAI-compatible endpoint. Provider credentials, the model, token
@@ -158,6 +253,36 @@ limits, daily budget, and one backup model remain explicit. Failover occurs only
 for configured transient failures; invalid configuration, unsafe input,
 exhausted budgets, and invalid output do not fail over. A retry sends the same
 bounded prompt and reviewed evidence to the configured backup provider once.
+Required Knowledge processing uses the configured primary provider only. Its
+input is imported content awaiting approval; it has no tools or execution rights.
+Existing completed processing and historical publications remain readable without
+a new provider call. AI summaries and findings are review aids, not approval,
+compatibility assertions, or proof that code was tested.
+
+The console shows AI setup before imports and required processing, and disables
+recipe generation while a local prerequisite is missing. AI settings starts with
+connecting a provider, then selecting the Analysis model. Setup links retain the
+originating API/contract/package route; links from an unsaved form open settings
+in another tab so the form remains available. Return to that tab and refresh
+readiness after configuration.
+
+The administrative `GET /api/v1/ai/readiness` projection checks the same local
+provider/model/credential prerequisites as processing, plus daily usage and live
+unexpired token reservations. It neither calls a provider nor reserves tokens.
+`can_process` means a request can be attempted, not that the provider is reachable,
+the account has model access, or the next batch fits the remaining budget. Actual
+calls still reserve their exact budget. **Test connection** explicitly sends a
+small test prompt; its result is historical and is invalidated after a provider
+save or a newer model configuration. Missing models, disabled workloads/providers,
+unavailable credentials, invalid configuration, and exhausted daily budgets have
+separate actionable states. Completed processing and publications do not become
+unreviewable just because current AI setup is unavailable.
+
+Recipe processing stops if a required AI stage fails; there is no silent
+non-AI authoring fallback. The console receives distinct errors for missing
+configuration, rejected credentials, exhausted budgets, unavailable providers,
+and invalid structured output. Reviewed publication and delivery of existing
+material do not require runtime tools or service credentials.
 
 The integration-analysis, recipe-brief, recipe-authoring, and recipe-review
 instruction bodies are versioned per product and can be restored to their safe
@@ -172,7 +297,11 @@ requires exact capabilities from each; every revision freezes those APIs'
 published revisions and manifest hashes. The generator detects eligible APIs
 from reviewed evidence, while the server owns the attachments, instructions,
 validation, and publication boundary. Generated content is never published
-automatically.
+automatically. References are selected by name from exact retained evidence;
+manual JSON editing is not required. Saving references or visibility runs AI
+review and creates a revision for human approval. Rework changes instructions
+through the required AI workflow. Failed saves retain choices in the open dialog,
+and an explicit reload recovers the current saved revision.
 
 ## Deploy and verify
 

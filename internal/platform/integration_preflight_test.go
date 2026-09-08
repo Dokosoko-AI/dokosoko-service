@@ -2,6 +2,7 @@ package platform_test
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -126,7 +127,7 @@ func TestPrivateIntegrationPublicationRequiresServerPreflightAndExactCandidate(t
 	if failed.Ready {
 		t.Fatalf("incomplete preflight unexpectedly ready: %#v", failed.Checks)
 	}
-	if _, err = service.PublishIntegration(ctx, incomplete.ID, actor); err == nil || !strings.Contains(err.Error(), "Published documentation") {
+	if _, err = service.PublishIntegration(ctx, incomplete.ID, actor); err == nil || !strings.Contains(err.Error(), "Add reviewed documentation") {
 		t.Fatalf("incomplete publication error = %v", err)
 	}
 
@@ -149,5 +150,75 @@ func TestPrivateIntegrationPublicationRequiresServerPreflightAndExactCandidate(t
 	}
 	if _, err = service.PublishIntegrationCandidate(ctx, current.ID, preflight.CandidateRevision, preflight.CandidateManifestHash, actor); err == nil || !strings.Contains(err.Error(), "changed after preflight") {
 		t.Fatalf("stale candidate publication error = %v", err)
+	}
+}
+
+func TestPrivateKnowledgePublicationDoesNotRequireRuntimeSetup(t *testing.T) {
+	ctx := t.Context()
+	memory := store.NewMemory()
+	service := platform.New(memory)
+	actor := platform.Actor{ID: "knowledge-reviewer"}
+	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "knowledge-only", VersionKey: "v1", DisplayName: "Knowledge API", Lifecycle: "draft"}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := memory.SourcePublication(ctx, integration.DeploymentID, "pub_docs_seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal([]map[string]any{{"source_publication_id": publication.ID, "source_id": publication.SourceID, "revision": publication.Revision, "content_hash": publication.ContentHash, "name": "Reviewed documentation"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := service.CreateResourceSet(ctx, platform.ResourceSetInput{Kind: "documentation", Name: "Getting started", State: "active", Manifest: manifest}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.AttachResourceSet(ctx, integration.ID, resource.ID, resource.Latest.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.IdentityProvider(ctx, integration.DeploymentID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("fixture unexpectedly has identity configured: %v", err)
+	}
+
+	status, err := service.IntegrationPublishStatus(ctx, integration.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := service.IntegrationPreflight(ctx, integration.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Ready || !preflight.Ready || status.CurrentManifestHash != preflight.CandidateManifestHash || status.IntegrationID != integration.ID || status.CandidateRevision != preflight.CandidateRevision || status.CandidateRevision != integration.Revision+1 {
+		t.Fatalf("status=%#v preflight=%#v", status, preflight)
+	}
+	// The status displayed by the console is a complete exact publish input.
+	published, err := service.PublishIntegrationCandidate(ctx, status.IntegrationID, status.CandidateRevision, status.CurrentManifestHash, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published.ManifestHash != preflight.CandidateManifestHash {
+		t.Fatal("publication changed the reviewed content")
+	}
+	activeStatus, err := service.IntegrationPublishStatus(ctx, integration.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeStatus.HasChanges || !activeStatus.LatestDeliveryReady || activeStatus.ServingRevisionID != published.ID || activeStatus.CandidateRevision != status.CandidateRevision || activeStatus.CurrentManifestHash != published.ManifestHash {
+		t.Fatalf("publication status changed after publishing exact draft: %#v", activeStatus)
+	}
+	// A lost response can be retried with the same reviewed input. It must not
+	// create a duplicate or require silently picking a different candidate.
+	retried, err := service.PublishIntegrationCandidate(ctx, status.IntegrationID, status.CandidateRevision, status.CurrentManifestHash, actor)
+	if err != nil || retried.ID != published.ID {
+		t.Fatalf("retry=%#v error=%v", retried, err)
+	}
+	tools, err := memory.IntegrationToolBindings(ctx, integration.ID)
+	if err != nil || len(tools) != 0 {
+		t.Fatalf("unexpected tool bindings: %#v, %v", tools, err)
+	}
+	connections, err := memory.RuntimeServiceConnections(ctx, integration.DeploymentID, integration.ID)
+	if err != nil || len(connections) != 0 {
+		t.Fatalf("unexpected runtime setup: %#v, %v", connections, err)
 	}
 }

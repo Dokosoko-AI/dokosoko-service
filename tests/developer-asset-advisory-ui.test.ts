@@ -10,6 +10,8 @@ test("developer asset advisory UI is persisted, evidence-bounded, and explicitly
   const [component, client] = await Promise.all([
     read("../app/components/console/developer-assets/developer-asset-ai-advisory.tsx").then(resolveEnglishTranslations),
     read("../app/lib/developer-assets-api.ts"),
+    read("../app/components/console/developer-assets/sdk-guidance-input.tsx").then(resolveEnglishTranslations),
+    read("../app/components/console/developer-assets/sdk-catalog-view.tsx"),
   ]);
 
   for (const key of ["documentation.map_enrichment", "sdk.map_enrichment", "sdk.applicability_suggestion", "sdk.sample_review"]) {
@@ -37,16 +39,16 @@ test("advisory actions are attached only to exact reviewed or published scopes",
   const [sources, explorer, sdk, resources] = await Promise.all([
     read("../app/components/console/agent-access-views.tsx"),
     read("../app/components/console/developer-assets/documentation-explorer-view.tsx"),
-    read("../app/components/console/developer-assets/sdk-catalog-view.tsx").then(resolveEnglishTranslations),
+    read("../app/components/console/developer-assets/sdk-advanced-catalog-view.tsx").then(resolveEnglishTranslations),
     read("../app/components/console/developer-assets/api-resources-workspace.tsx"),
   ]);
 
   assert.match(sources, /source\.latestPublication\.id/);
   assert.match(sources, /documentation\.map_enrichment/);
-  assert.match(explorer, /source_publication_id: latestPublication\.id/);
-  assert.match(explorer, /record\.documentation_map\?\.id === selectedMapID/);
-  assert.match(explorer, /record\.documentation_map\?\.content_hash === selectedMapHash/);
-  assert.match(explorer, /reviewedPublicationID \? \{ prompt_key: "documentation\.map_enrichment"/);
+  assert.match(explorer, /selection\.decision === "included"/);
+  assert.match(explorer, /selection\.content_hash === record\.document\.content_hash/);
+  assert.match(explorer, /record\?\.source_publication_selections\.find/);
+  assert.match(explorer, /reviewedSourcePublicationID \? \{ prompt_key: "documentation\.map_enrichment"/);
   assert.match(sdk, /sdk\.map_enrichment/);
   assert.match(sdk, /sdk\.sample_review/);
   assert.match(sdk, /api_developer_asset_publication_id: publication\.id/);
@@ -56,9 +58,11 @@ test("advisory actions are attached only to exact reviewed or published scopes",
 });
 
 test("SDK console exposes effective lifecycle controls and bounded local ingestion/explorer tooling", async () => {
-  const [sdk, client] = await Promise.all([
-    read("../app/components/console/developer-assets/sdk-catalog-view.tsx").then(resolveEnglishTranslations),
+  const [sdk, client, input, catalog] = await Promise.all([
+    read("../app/components/console/developer-assets/sdk-advanced-catalog-view.tsx").then(resolveEnglishTranslations),
     read("../app/lib/developer-assets-api.ts"),
+    read("../app/components/console/developer-assets/sdk-guidance-input.tsx").then(resolveEnglishTranslations),
+    read("../app/components/console/developer-assets/sdk-catalog-view.tsx"),
   ]);
 
   assert.match(client, /sdkReleaseLifecycle:/);
@@ -75,7 +79,10 @@ test("SDK console exposes effective lifecycle controls and bounded local ingesti
   assert.match(sdk, /No symbols match this local filter/);
   assert.match(sdk, /No samples match this local filter/);
 
-  assert.match(sdk, /type="file" multiple/);
-  assert.match(sdk, /rejectedFiles\.length/);
-  assert.match(sdk, /No code execution/);
+  assert.match(input, /type="file" multiple/);
+  assert.match(input, /rejected\.length/);
+  assert.match(input, /Package code is never executed/);
+  assert.match(catalog, /lazy\(\(\) => import\("\.\/sdk-advanced-catalog-view"\)/);
+  assert.match(catalog, /<SDKSetupWorkspace/);
+  assert.doesNotMatch(sdk, /publishSDKContentCandidate|ingestSDKContent|attachAPISDK|reviewOpen|ingestOpen/);
 });

@@ -84,7 +84,8 @@ test("keeps documents and saved documentation sets in one navigable workspace", 
   const styles = await stylesSource();
 
   assert.match(source, /className="panel documentation-file-navigator"/);
-  assert.match(source, /documentGroups\.map/);
+  assert.match(source, /developerAssetsApi\.documentationLibrary\(/);
+  assert.match(source, /evidenceChange\(/);
   assert.match(source, /Save selection as set/);
   assert.match(source, /Documentation sets/);
   assert.match(source, /<DocumentationCollectionsView[\s\S]*?embedded/);
@@ -139,9 +140,9 @@ test("gives AI configuration a dedicated, guarded settings workspace", async () 
   assert.match(routes, /settingsPath/);
   assert.match(source, /title="AI configuration"/);
   assert.doesNotMatch(source, /Two models, two clear jobs|AI ready|workloads enabled/);
-  assert.match(source, /title="Workload"/);
+  assert.match(source, /title="2\. Choose an AI model"/);
   assert.match(source, /title="Workflow prompts"/);
-  assert.match(source, /title="Providers"/);
+  assert.match(source, /title="1\. Connect a provider"/);
   assert.doesNotMatch(source, /Choose one strong model for analysis|Fetching, retrieval, authorization/);
   assert.match(source, /OpenAI-compatible/);
   assert.doesNotMatch(source, /Mandatory AI safeguards|No model tools|Grounded output/);
@@ -246,7 +247,7 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(recipesView, /open=\{generateDialogOpen\}/);
   assert.match(recipesView, /Choose an API to analyze its reviewed evidence and generate draft recipes/);
   assert.doesNotMatch(source, /disabled=\{busy \|\| analyses\.length/);
-  assert.match(source, /disabled=\{busy \|\| integrations\.length === 0\}/);
+  assert.match(source, /disabled=\{busy \|\| !canProcess \|\| integrations\.length === 0\}/);
   assert.match(recipesView, /recipes\.map\(renderRecipe\)/);
   assert.doesNotMatch(recipesView, /activeIntegrationID|visibleRecipes|recipeMatchesIntegration/);
   assert.doesNotMatch(source, /unscopedOrInvalidRecipes|Deployment-wide and scope exceptions|Coding-agent implementation recipes/);
@@ -257,11 +258,11 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(source, /Product-integration workflows grounded in exact API revision evidence/);
   assert.doesNotMatch(source, /Filter by API\. Multi-API recipes appear under every attached API/);
   assert.match(source, /Describe the specific product-integration step/);
-  assert.match(source, /Reviewed reference IDs \(JSON\)/);
-  assert.match(source, /parseRecipeSpecEditor/);
-  assert.match(source, /aria-invalid=\{Boolean\(validationError\)\}/);
-  assert.match(source, /visibility: recipe\.visibility/);
-  assert.match(source, /parsed\.referenceIDs, recipeDialog\.visibility/);
+  assert.doesNotMatch(source, /Reviewed reference IDs \(JSON\)|parseRecipeSpecEditor/);
+  assert.match(source, /recipeReferenceOptionsMatch/);
+  assert.match(source, /validRecipeReferenceSelection/);
+  assert.match(source, /onSaveReferences=\{editRecipe\}/);
+  assert.match(source, /onSave\(recipe, selected, visibility\)/);
   assert.match(source, /api\.reworkRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id, instruction\)/);
   assert.match(source, /api\.approveRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id\)/);
   assert.match(source, /api\.publishRecipe\(product\.id, recipe\.id, recipe\.revision, recipe\.current_revision_id\)/);
@@ -270,16 +271,15 @@ test("ships one evidence-to-recipe review workflow", async () => {
   assert.match(source, /This permanently deletes the recipe record and every immutable revision\. The deletion audit event remains\./);
   assert.match(source, /I understand this permanently deletes the recipe and its revisions\./);
   assert.match(source, /error instanceof APIError && error\.status === 409[\s\S]*setRecipes\(await api\.recipes\(product\.id\)\)[\s\S]*latest revision is loaded; review it before retrying/);
-  assert.match(recipeDialog, /value=\{state\.visibility\}/);
-  assert.match(recipeDialog, /recipe-dialog-error" role="status" aria-live="polite"/);
-  assert.doesNotMatch(recipeDialog, /recipe-dialog-error" role="alert"/);
+  assert.match(recipeDialog, /RecipeReferencesDialog/);
+  assert.match(recipeDialog, /busy \|\| !canProcess \|\| !state\.value\.trim/);
   assert.match(source, /scope dependency mismatch/);
   assert.doesNotMatch(source, /window\.prompt/);
   for (const detail of ["Canonical Markdown", "Current revision ID", "Integration revision ID", "Integration manifest hash", "Generation provenance", "Validation findings", "References"]) assert.match(source, new RegExp(detail));
   assert.match(source, /revision\.id !== recipe\.current_revision_id/);
   assert.match(source, /await onApprove\(recipe\)/);
   assert.doesNotMatch(source, /Start from evidence, not a blank prompt|Review queue|Most used · 30 days/);
-  assert.match(styles, /\.recipe-dialog-form \.recipe-spec-editor textarea/);
+  assert.match(styles, /\.recipe-reference-option/);
   assert.match(styles, /\.dialog-panel:has\(\.recipe-approval-review\)/);
   assert.doesNotMatch(styles, /\.recipe-library-row|\.recipe-editor-layout|\.recipe-markdown-(?:input|editor)/);
   assert.match(client, /createRecipe/);
@@ -342,7 +342,7 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   const workspace = componentSource(source, "IntegrationWorkspaceView", "AuthorizationPolicyWorkspace");
   const integrationTabs = routes.slice(routes.indexOf("export const INTEGRATION_TABS"), routes.indexOf("export const INTEGRATION_RESOURCE_TABS"));
 
-  assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "routes\.quickStart" \},\s*\{ id: "documentation", label: "routes\.resources" \},\s*\{ id: "authorization", label: "routes\.keysAccess" \},\s*\{ id: "tools", label: "routes\.tools" \},\s*\{ id: "test", label: "routes\.test" \},\s*\{ id: "history", label: "routes\.history" \},\s*\];/);
+  assert.match(integrationTabs, /export const INTEGRATION_TABS:[^=]+=\s*\[\s*\{ id: "overview", label: "routes\.quickStart" \},\s*\{ id: "documentation", label: "routes\.resources" \},\s*\{ id: "authorization", label: "routes\.keysAccess" \},\s*\{ id: "tools", label: "routes\.tools" \},\s*\{ id: "test", label: "taskConnection\.tab" \},\s*\{ id: "history", label: "routes\.history" \},\s*\];/);
   for (const removed of ["access", "recipes", "delivery", "resources"]) {
     assert.ok(!integrationTabs.includes(`id: "${removed}"`), `${removed} should not remain an API tab`);
     assert.doesNotMatch(workspace, new RegExp(`activeTab === "${removed}"`));
@@ -359,8 +359,8 @@ test("uses an API directory and a complete onboarding workspace", async () => {
   assert.match(quickStart, /Get your API ready/);
   assert.match(quickStart, /Optional setup and API details/);
   assert.match(quickStart, /const nextStep = steps\.findIndex/);
-  assert.match(source, /label: "Connect Authorization"[^\n]*path: integrationPath\(integration\.id, "authorization"\)/);
-  assert.match(source, /label: "Expose tools"[^\n]*path: integrationPath\(integration\.id, "tools"\)/);
+  assert.match(source, /label: "Add reviewed guidance"[^\n]*path: integrationPath\(integration\.id, "documentation"\)/);
+  assert.match(source, /label: "Resolve publication requirements"/);
   assert.match(source, /IntegrationDirectoryView/);
   assert.match(source, /IntegrationWorkspaceView/);
   assert.match(source, /integration\.lifecycle !== "retired"/);
@@ -504,7 +504,7 @@ test("keeps API action policy authoring in the API Tools workspace and out of ro
   assert.match(source, /\{section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup/);
   assert.match(source, /\{section === "tools" && <ToolsView/);
   assert.doesNotMatch(toolsView, /AuthorizationPolicyWorkspace|API action policies|Grant registry/);
-  assert.match(integrationWorkspace, /activeTab === "tools"[\s\S]*<IntegrationToolsWorkspace[\s\S]*<AuthorizationPolicyWorkspace integration=\{integration\} onMessage=\{onMessage\} \/>/);
+  assert.match(integrationWorkspace, /activeTab === "tools"[\s\S]*<IntegrationToolsWorkspace[\s\S]*<AuthorizationPolicyWorkspace integration=\{integration\} onMessage=\{onMessage\} onChanged=\{onRuntimeChanged\} \/>/);
   for (const label of ["Action policies", "Grant registry", "API action policies"]) {
     assert.ok(policyWorkspace.includes(label), `${label} should be present in the API Tools policy workspace`);
   }
@@ -516,10 +516,10 @@ test("keeps API action policy authoring in the API Tools workspace and out of ro
   assert.doesNotMatch(policyWorkspace, /API policy scope|selectedIntegration/);
   assert.doesNotMatch(policyWorkspace, /Policy simulator|Simulation only|simulateAuthorizationPoint/);
   assert.doesNotMatch(identitySetup, /grantDefinitions|authorizationPoints|Grant registry|API action policies|Policy simulator|simulateAuthorizationPoint|\bcustomerAccounts\b|APICustomerAccount/);
-  assert.match(source, /label: "Configure customer access"[^\n]*path: integrationPath\(integration\.id, "tools"\)/);
+  assert.match(source, /actionableValidations = publishStatus\?\.validations/);
   assert.match(source, /integrationValidationPath\(integration\.id, tab\)/);
   assert.match(await readFile(new URL("../app/lib/console-routes.ts", import.meta.url), "utf8"), /case "authorization": return integrationPath\(uid, "authorization"\)/);
-  assert.match(source, /publishValidationCodes\.has\("authorization_missing"\)/);
+  assert.doesNotMatch(integrationWorkspace, /publishValidationCodes\.has\("authorization_missing"\)/);
 });
 
 test("keeps reusable tool authoring in the deployment tool builder and detail", async () => {
@@ -588,7 +588,7 @@ test("keeps reusable tool authoring in the deployment tool builder and detail", 
   assert.doesNotMatch(builder, /window\.confirm/);
   assert.match(source, /const toolBuilderDirtyRef = useRef\(false\)/);
   assert.match(source, /const confirmToolBuilderNavigation = useCallback\(\(nextPath: string\) =>/);
-  assert.match(source, /window\.history\.pushState\(null, "", browserRouteURL\(current\.path\)\)/);
+  assert.match(source, /window\.history\.pushState\(null, "", browserRouteURL\(`\$\{current\.path\}\$\{current\.search \?\? ""\}`\)\)/);
   assert.match(source, /onDirtyChange=\{onToolBuilderDirtyChange\}/);
   assert.match(styles, /\.tool-builder-chat-transcript[\s\S]*overflow-y: auto/);
   assert.match(styles, /\.tool-detail-section \.integration-health-check \{ grid-template-columns: 30px minmax\(0, 1fr\) auto;/);
@@ -710,7 +710,7 @@ test("splits API tools into built-ins, API-owned definitions, and attached commo
   assert.doesNotMatch(bindingWorkspace, /MCP Tool Editor|Edit & dry-run|Bounded dry-run|Run dry-run|Clone tool to a draft/);
   const catalog = componentSource(source, "ToolsView", "SettingsTabs");
   assert.doesNotMatch(catalog, /API exposure|<IntegrationToolsWorkspace/);
-  assert.match(source, /publishValidationCodes\.has\("tools_missing"\)/);
+  assert.doesNotMatch(source, /publishValidationCodes\.has\("tools_missing"\)/);
 });
 
 test("uploads local knowledge files without asking for duplicate source names", async () => {
@@ -718,7 +718,7 @@ test("uploads local knowledge files without asking for duplicate source names", 
   const styles = await stylesSource();
   const client = await clientSource();
 
-  assert.match(client, /uploadSource: \(productID: string, organisationID: string, file: File, name\?: string\)/);
+  assert.match(client, /uploadSource: \(productID: string, organisationID: string, file: File, name\?: string, requestKey\?: string\)/);
   assert.match(client, /const body = new FormData\(\)/);
   for (const field of ["organisation_id", "file"]) assert.match(client, new RegExp(`body\\.append\\("${field}"`));
   assert.match(client, /if \(name\?\.trim\(\)\) body\.append\("name", name\.trim\(\)\)/);
@@ -887,15 +887,11 @@ test("creates private APIs without retaining the Product Definition builder", as
   const client = await clientSource();
 
   assert.match(source, /Add API/);
-  assert.match(source, /OpenAPI file/);
-  assert.match(source, /Import existing/);
-  assert.match(source, /Configure new/);
-  assert.match(source, /Key management URL/);
-  assert.match(source, /API_KEY_ENV/);
+  assert.match(source, /Create and add guidance/);
+  assert.match(source, /onNavigate\(integrationPath\(saved\.id, "documentation"\)\)/);
   assert.match(source, /api\.uploadSource/);
   assert.match(source, /developerAssetsApi\.createAPIContract/);
   assert.match(source, /developerAssetsApi\.attachAPIContractSource/);
-  assert.match(source, /api\.configureIntegrationAuthorization/);
   assert.match(source, /<span>API name<\/span>/);
   assert.match(source, /apiFamilyKeyFromName\(displayName\)/);
   assert.doesNotMatch(source, /Auto-magic|title="Product definition"|Build product automatically/);
@@ -1187,9 +1183,9 @@ test("keeps the compatible API documentation route focused on explicit resource 
   assert.match(resources, /Select one exact reviewed/);
   assert.match(resources, /Open catalog/);
   assert.match(resources, /Attach existing/);
-  assert.match(resources, /panelKind === "contract" \? "Create in Catalog" : "Create & attach"/);
-  assert.match(resources, /This creates only the reusable contract root\. It does not ingest, approve, publish, or attach a contract to this API\./);
-  assert.match(resources, /Next steps happen in Catalog/);
+  assert.match(resources, /panelKind === "contract" \? "Create & set up" : "Create & attach"/);
+  assert.match(resources, /contractSetupPath\(\{ contract: created\.id, api: integration\.id, input: "new" \}\)/);
+  assert.match(resources, /add an OpenAPI URL or file, complete AI processing/);
   assert.doesNotMatch(resources, /Create and review in Catalog/);
   assert.match(resources, /Change exact/);
   assert.match(resources, /Detach resource/);

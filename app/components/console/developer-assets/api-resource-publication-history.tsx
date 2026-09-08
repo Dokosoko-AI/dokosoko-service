@@ -10,7 +10,7 @@ import { Badge } from "../../core/control";
 import { PanelHeader } from "../../core/layout";
 import { developerAssetError } from "./developer-asset-ui";
 
-export function APIResourcePublicationHistory({ integrationID, live, onMessage }: { integrationID: string; live: boolean; onMessage: (message: string) => void }) {
+export function APIResourcePublicationHistory({ integrationID, live, onMessage, servingPublicationID }: { integrationID: string; live: boolean; onMessage: (message: string) => void; servingPublicationID?: string }) {
   const { t } = useTranslation();
   const [publications, setPublications] = useState<APIDeveloperAssetPublication[]>([]);
 
@@ -27,13 +27,13 @@ export function APIResourcePublicationHistory({ integrationID, live, onMessage }
   useEffect(() => {
     const timeout = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timeout);
-  }, [load]);
+  }, [load, servingPublicationID]);
 
   return <section className="panel api-resource-publications">
     <PanelHeader title={t("apiPublicationHistory.developerAssetSnapshots")} description={t("apiPublicationHistory.exactIDsAndHashesUsedByQueryLabRetrieval")} />
-    {publications.map((publication, index) => <div className="developer-api-publication-row" key={publication.id}>
+    {publications.map((publication) => <div className="developer-api-publication-row" key={publication.id}>
       <span><GitBranch /><span><strong>{t("format.dateTime", { value: new Date(publication.published_at) })}</strong><code>{publication.id}</code></span></span>
-      <span>{index === 0 && <Badge color="green">{t("apiPublicationHistory.latest")}</Badge>}<code>{publication.snapshot_hash}</code><small>{publication.documentation.length} {t("apiPublicationHistory.documentation")} {publication.contracts.length} {t("apiPublicationHistory.contracts")} {publication.sdks.length} {t("apiPublicationHistory.sdks")}</small></span>
+      <span>{publication.id === servingPublicationID && <Badge color="green">{t("publicationReview.currentlyServing")}</Badge>}<code>{publication.snapshot_hash}</code><small>{publication.documentation.length} {t("apiPublicationHistory.documentation")} {publication.contracts.length} {t("apiPublicationHistory.contracts")} {publication.sdks.length} {t("apiPublicationHistory.sdks")}</small></span>
     </div>)}
     {publications.length === 0 && <p className="empty-row">{t("apiPublicationHistory.noImmutableDeveloperAssetSnapshotHasBeenPublishedFor")}</p>}
   </section>;

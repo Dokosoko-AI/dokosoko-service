@@ -183,3 +183,20 @@ func (m *Memory) AIUsageEvents(_ context.Context, productID string, since time.T
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
 	return result, nil
 }
+
+func (m *Memory) AIBudgetStatus(_ context.Context, productID, workload string, day time.Time) (model.AIBudgetStatus, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.products[productID]; !ok {
+		return model.AIBudgetStatus{}, ErrNotFound
+	}
+	key := budgetDayKey(productID, workload, day)
+	value := model.AIBudgetStatus{Used: m.aiBudgetUsed[key]}
+	now := time.Now().UTC()
+	for _, reservation := range m.aiBudgetReservations {
+		if reservation.ExpiresAt.After(now) && budgetDayKey(reservation.ProductID, reservation.Workload, reservation.Day) == key {
+			value.Reserved += reservation.ReservedTokens
+		}
+	}
+	return value, nil
+}

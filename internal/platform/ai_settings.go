@@ -136,7 +136,7 @@ func (s *Service) SaveAIProviderConnection(ctx context.Context, input AIProvider
 		backupModels[string(airuntime.WorkloadAnalysis)] = modelID
 	}
 	backupModelsJSON, _ := json.Marshal(backupModels)
-	value, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: input.OrganisationID, DeploymentID: input.DeploymentID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: input.Enabled, IsBackup: input.IsBackup, BackupModels: backupModelsJSON, LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, input.Revision)
+	value, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: input.OrganisationID, DeploymentID: input.DeploymentID, Provider: input.Provider, Endpoint: input.Endpoint, CredentialID: credentialID, ManagedBy: "console", Enabled: input.Enabled, IsBackup: input.IsBackup, BackupModels: backupModelsJSON}, input.Revision)
 	if err != nil {
 		return model.AIProviderConnection{}, err
 	}
@@ -312,7 +312,7 @@ func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironme
 			return err
 		}
 	}
-	connection, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: deployment.OrganisationID, DeploymentID: deployment.ID, Provider: config.Provider, Endpoint: config.Endpoint, ManagedBy: "environment", Enabled: true, BackupModels: json.RawMessage(`{}`), LastTestedAt: current.LastTestedAt, LastErrorCode: current.LastErrorCode}, current.Revision)
+	connection, err := s.store.SaveAIProviderConnection(ctx, model.AIProviderConnection{ID: connectionID, OrganisationID: deployment.OrganisationID, DeploymentID: deployment.ID, Provider: config.Provider, Endpoint: config.Endpoint, ManagedBy: "environment", Enabled: true, BackupModels: json.RawMessage(`{}`)}, current.Revision)
 	if err != nil {
 		return err
 	}
@@ -361,6 +361,9 @@ func (s *Service) ConfigureEnvironmentAI(ctx context.Context, config AIEnvironme
 }
 
 func (s *Service) TestAIProviderConnection(ctx context.Context, deploymentID, connectionID string, actor Actor) (model.AIProviderConnection, error) {
+	// Record the start before reading the model. A model saved while this probe
+	// runs must not inherit a successful test of the previous configuration.
+	testedAt := s.now().UTC()
 	product, err := s.store.Product(ctx, deploymentID)
 	if err != nil {
 		return model.AIProviderConnection{}, err
@@ -406,7 +409,7 @@ func (s *Service) TestAIProviderConnection(ctx context.Context, deploymentID, co
 	connectionTestSchema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)
 	_, testErr := s.aiRuntime.GenerateStructured(ctx, airuntime.StructuredRequest{Provider: airuntime.ProviderConfig{Provider: connection.Provider, Endpoint: connection.Endpoint, Credential: string(credential)}, Model: modelID, System: "Return only the JSON object requested by the user. Do not call tools.", User: `Return {"ok":true}.`, SchemaName: "connection_test", Schema: connectionTestSchema, MaxOutputTokens: 256})
 	now := s.now()
-	connection.LastTestedAt = &now
+	connection.LastTestedAt = &testedAt
 	connection.LastErrorCode = ""
 	if testErr != nil {
 		connection.LastErrorCode = string(airuntime.Code(testErr))

@@ -7,6 +7,7 @@ import (
 
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
+	"github.com/dokosoko/dokosoko-service/internal/testutil"
 )
 
 func TestSDKPublicationMapProjectsOnlyReviewedFilesAndSamples(t *testing.T) {
@@ -48,6 +49,7 @@ func TestSDKPublicationMapProjectsOnlyReviewedFilesAndSamples(t *testing.T) {
 		}
 		sampleDecisions = append(sampleDecisions, decision)
 	}
+	testutil.ProcessKnowledge(t, service.Store(), result.Run.ID)
 	publication, err := service.PublishSDKContentCandidate(t.Context(), release.ID, result.Candidate.Candidate.ID, platform.SDKContentCandidatePublicationInput{
 		Files: fileDecisions, Samples: sampleDecisions, AcknowledgeReviewed: true,
 	}, actor)

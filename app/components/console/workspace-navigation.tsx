@@ -59,11 +59,11 @@ export const navigation: Array<{
     id: "docs",
     labelKey: "navigation.docs",
     icon: BookOpen,
-    defaultSection: "sources",
+    defaultSection: "documents",
     sections: [
-      { id: "sources", labelKey: "navigation.sources" },
       { id: "documents", labelKey: "navigation.documents" },
       { id: "contracts", labelKey: "navigation.apiContracts" },
+      { id: "sources", labelKey: "navigation.sources" },
       { id: "query-lab", labelKey: "navigation.queryLab" },
     ],
     showSubsections: false,

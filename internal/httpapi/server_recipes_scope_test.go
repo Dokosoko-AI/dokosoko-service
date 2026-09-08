@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,12 +14,19 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/testutil"
 )
 
 func preparePublishedRecipeHTTPIntegration(t *testing.T, ctx context.Context, memory *store.Memory, service *platform.Service, integration model.Integration, namespace string, actor platform.Actor) model.Tool {
 	t.Helper()
 	grantKey := namespace + ".read"
-	if _, err := memory.SaveIdentityProvider(ctx, identity.ProviderConfig{ID: "idp_" + namespace, OrganisationID: integration.OrganisationID, DeploymentID: integration.DeploymentID, Issuer: "https://identity.example.test", ClientID: namespace + "-client", Scopes: []string{"openid", grantKey}, Audience: "https://api.example.test", OAuthResource: "https://api.example.test", OrganisationClaim: "tenant_id", DelegatedAPIOrigin: "https://api.example.test", State: "active"}); err != nil {
+	// Multiple APIs share the deployment's identity provider. Preserve the first
+	// configured provider when this fixture adds a second API.
+	if _, err := memory.IdentityProvider(ctx, integration.DeploymentID); err == store.ErrNotFound {
+		if _, err = memory.SaveIdentityProvider(ctx, identity.ProviderConfig{ID: "idp_" + namespace, OrganisationID: integration.OrganisationID, DeploymentID: integration.DeploymentID, Issuer: "https://identity.example.test", ClientID: namespace + "-client", Scopes: []string{"openid", grantKey}, Audience: "https://api.example.test", OAuthResource: "https://api.example.test", OrganisationClaim: "tenant_id", DelegatedAPIOrigin: "https://api.example.test", State: "active"}); err != nil {
+			t.Fatal(err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	grant, err := service.SaveGrantDefinition(ctx, "", platform.GrantDefinitionInput{Key: grantKey, DisplayName: "Read " + namespace, Description: "Read one product status.", Risk: "low", State: "active"}, actor)
@@ -67,7 +76,7 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	memory := store.NewMemory()
-	service := platform.New(memory)
+	service := testutil.NewRecipeService(t, memory, testutil.RecipeAI{})
 	actor := platform.Actor{ID: "root_recipe_http"}
 	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true})
 	selected, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "payments-api", VersionKey: "v1", DisplayName: "Payments API", Description: "Payment operations.", Visibility: model.VisibilityPrivate, Lifecycle: "active"}, actor)
@@ -114,6 +123,31 @@ func TestRecipeHTTPFlowCarriesSelectedIntegrationScope(t *testing.T) {
 		t.Fatalf("generated deployment recipe binding = %#v", recipe)
 	}
 	initialRevision := recipe.CurrentRevision
+	referencePath := "/api/v1/products/prod_acme/recipes/" + recipe.ID + "/references"
+	referenceQuery := "?" + url.Values{"revision": {strconv.FormatInt(recipe.Revision, 10)}, "current_revision_id": {recipe.CurrentRevisionID}}.Encode()
+	w = request(t, handler, http.MethodGet, referencePath+referenceQuery, "doko_admin_demo", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("reference options status=%d body=%s", w.Code, w.Body.String())
+	}
+	var referenceOptions platform.RecipeReferenceOptions
+	if err := json.Unmarshal(w.Body.Bytes(), &referenceOptions); err != nil || referenceOptions.Items == nil || referenceOptions.ProductID != recipe.ProductID || referenceOptions.RecipeID != recipe.ID || referenceOptions.RecipeRevision != recipe.Revision || referenceOptions.CurrentRevisionID != recipe.CurrentRevisionID {
+		t.Fatalf("reference options wire=%s err=%v", w.Body.String(), err)
+	}
+	for _, denied := range []struct {
+		path, token string
+		status      int
+	}{
+		{referencePath + referenceQuery, "", http.StatusUnauthorized},
+		{referencePath + referenceQuery, "doko_private_demo", http.StatusUnauthorized},
+		{referencePath, "doko_admin_demo", http.StatusBadRequest},
+		{referencePath + "?revision=999&current_revision_id=" + recipe.CurrentRevisionID, "doko_admin_demo", http.StatusConflict},
+		{strings.Replace(referencePath, "prod_acme", "foreign-deployment", 1) + referenceQuery, "doko_admin_demo", http.StatusNotFound},
+	} {
+		w = request(t, handler, http.MethodGet, denied.path, denied.token, "")
+		if w.Code != denied.status || strings.Contains(w.Body.String(), `"items"`) {
+			t.Fatalf("denied reference read path=%s status=%d body=%s", denied.path, w.Code, w.Body.String())
+		}
+	}
 	if initialRevision.SpecVersion != model.RecipeSpecVersion3 || initialRevision.IntegrationRevisionID != "" || initialRevision.IntegrationManifestHash != "" || len(initialRevision.APIBindings) != 1 || initialRevision.APIBindings[0].IntegrationID != selected.ID || initialRevision.APIBindings[0].IntegrationRevisionID == "" || initialRevision.APIBindings[0].IntegrationManifestHash == "" {
 		t.Fatalf("generated recipe revision provenance = %#v", initialRevision)
 	}

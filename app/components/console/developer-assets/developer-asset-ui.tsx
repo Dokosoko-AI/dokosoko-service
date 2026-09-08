@@ -9,6 +9,7 @@ import type { ReactNode } from "react";
 import { APIError } from "../../../lib/api";
 import type { DeveloperAssetRecord } from "../../../lib/developer-assets-api";
 import { Badge, Button } from "../../core/control";
+import { EvidenceContent } from "../../core/evidence-content";
 
 export function developerAssetError(error: unknown, fallback: string) {
   return error instanceof APIError || error instanceof Error ? error.message : fallback;
@@ -36,7 +37,7 @@ export function PrettyJSON({ value, label }: { value: unknown; label?: string })
 
 export function MarkdownEvidence({ children, label }: { children: string; label: string }) {
   const { t } = useTranslation();
-  return <pre className="developer-asset-markdown" aria-label={label}><code>{children || t("developerAssets.noGeneratedNavigationMarkdown")}</code></pre>;
+  return <EvidenceContent label={label} text={children || t("developerAssets.noGeneratedNavigationMarkdown")} />;
 }
 
 export function LoadingPanel({ label }: { label: string }) {

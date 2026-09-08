@@ -189,6 +189,8 @@ test("persists a normalized documentation run, lineage, sections, map, stages, a
   assert.ok(agentMarkdown.includes(`evidence \`section:${section.values[0]}\``));
   assert.doesNotMatch(JSON.stringify(structuredMap), /"(?:document|section)_[0-9a-f]+"/);
   assert.equal(calls.filter((call) => call.sql.includes("INSERT INTO developer_asset_ingestion_stages")).length, 11);
+  const processingStage = calls.find((call) => call.sql.includes("INSERT INTO developer_asset_ingestion_stages") && call.values[2] === "ai_enrich");
+  assert.equal(processingStage?.values[4], "queued", "normalization cannot skip required Go-side AI processing");
   assert.ok(calls.some((call) => /UPDATE developer_asset_ingestion_runs[\s\S]*state = 'review_ready'/.test(call.sql)));
   assert.equal(calls.at(-1)?.sql, "COMMIT");
 });

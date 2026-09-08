@@ -347,7 +347,12 @@
 .dialog-panel:has(.publish-review), .dialog-panel:has(.revision-inspector) { width: min(760px, 100%); }
 .dialog-panel:has(.recipe-dialog-form) { width: min(760px, 100%); }
 .dialog-panel:has(.recipe-approval-review) { width: min(960px, 100%); }
-.recipe-dialog-form .recipe-spec-editor textarea { min-height: 420px; font-family: var(--font-code); }
+.recipe-dialog-form { display: grid; gap: 16px; min-width: 0; }
+.recipe-reference-option { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+.recipe-reference-option > a, .recipe-reference-option dd { overflow-wrap: anywhere; }
+.recipe-reference-option details { color: var(--muted); font-size: var(--text-caption); }
+.recipe-reference-option summary { cursor: pointer; }
+.recipe-reference-option dd { margin: 4px 0 12px; }
 .recipe-approval-review { min-width: 0; display: grid; gap: 22px; }
 .recipe-approval-review > section { min-width: 0; display: grid; gap: 10px; }
 .recipe-approval-review h3 { margin: 0; color: var(--text-strong); font-size: var(--text-body); font-weight: var(--weight-semibold); }
@@ -407,3 +412,5 @@
   .mcp-preview-output .panel-heading { align-items: flex-start; flex-direction: column; }
   .mcp-preview-output .heading-actions { width: 100%; justify-content: space-between; }
 }
+
+.status-dot.attention { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }

@@ -16,6 +16,9 @@ import (
 )
 
 func (s *Server) recipeCreationError(w http.ResponseWriter, err error) {
+	if writeAIWorkflowError(w, err) {
+		return
+	}
 	if errors.Is(err, platform.ErrRecipeGroundingChanged) {
 		writeError(w, http.StatusConflict, "recipe_grounding_changed", "The reviewed product evidence changed. Reload, analyse, and regenerate the recipe before retrying.", nil)
 		return
@@ -289,6 +292,21 @@ func (s *Server) recipe(w http.ResponseWriter, r *http.Request, productID, recip
 		w.Header().Set("Allow", "GET, PATCH, DELETE")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
 	}
+}
+
+func (s *Server) recipeReferenceOptions(w http.ResponseWriter, r *http.Request, productID, recipeID string) {
+	revision, err := strconv.ParseInt(r.URL.Query().Get("revision"), 10, 64)
+	currentRevisionID := r.URL.Query().Get("current_revision_id")
+	if err != nil || revision < 1 || strings.TrimSpace(currentRevisionID) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision and current_revision_id are required", nil)
+		return
+	}
+	value, err := s.service.RecipeReferenceOptions(r.Context(), productID, recipeID, revision, currentRevisionID)
+	if err != nil {
+		s.recipeUpdateError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) reworkRecipe(w http.ResponseWriter, r *http.Request, productID, recipeID string) {

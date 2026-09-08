@@ -41,10 +41,64 @@ type DocumentationCandidatePage struct {
 	HasMore bool                           `json:"has_more"`
 }
 
+// DocumentationLibraryItem deliberately excludes content, sections, maps and
+// diagnostic payloads. Those are loaded only when the operator opens a file.
+type DocumentationLibraryItem struct {
+	ID                 string           `json:"id"`
+	SourceID           string           `json:"source_id"`
+	IngestionRunID     string           `json:"ingestion_run_id"`
+	SourcePath         string           `json:"source_path"`
+	Title              string           `json:"title"`
+	ContentHash        string           `json:"content_hash"`
+	Visibility         model.Visibility `json:"visibility"`
+	Decision           string           `json:"decision"`
+	PreviousDocumentID string           `json:"previous_document_id"`
+	QueuedAt           time.Time        `json:"queued_at"`
+}
+
+type DocumentationLibraryQuery struct {
+	DeploymentID        string
+	SourceID            string
+	SourcePublicationID string
+	Query               string
+	History             bool
+	Reviewed            bool
+	Limit               int
+	Offset              int
+}
+
+type DocumentationLibraryPage struct {
+	Items   []DocumentationLibraryItem `json:"items"`
+	Total   int                        `json:"total"`
+	HasMore bool                       `json:"has_more"`
+}
+
+// DocumentationAttentionItem is an administrative workflow summary. It never
+// substitutes for the exact AI processing/readiness or publication checks.
+type DocumentationAttentionItem struct {
+	SourceID     string           `json:"source_id"`
+	Name         string           `json:"name"`
+	Kind         string           `json:"kind"`
+	Visibility   model.Visibility `json:"visibility"`
+	CrawlJobID   string           `json:"crawl_job_id"`
+	Status       string           `json:"status"`
+	FetchedCount int              `json:"fetched_count"`
+	ChangedCount int              `json:"changed_count"`
+	FailedCount  int              `json:"failed_count"`
+	SkippedCount int              `json:"skipped_count"`
+	UpdatedAt    time.Time        `json:"updated_at"`
+}
+
+type DocumentationAttentionPage struct {
+	Items   []DocumentationAttentionItem `json:"items"`
+	Total   int                          `json:"total"`
+	HasMore bool                         `json:"has_more"`
+}
+
 type DocumentationCollectionRevisionRecord struct {
-	Revision model.DocumentationCollectionRevision
-	Members  []model.DocumentationCollectionMember
-	Map      *model.DocumentationMap
+	Revision model.DocumentationCollectionRevision `json:"revision"`
+	Members  []model.DocumentationCollectionMember `json:"members"`
+	Map      *model.DocumentationMap               `json:"map,omitempty"`
 }
 
 func snapshotDocumentationCollectionIdentity(collection model.DocumentationCollection, revision *model.DocumentationCollectionRevision) error {
@@ -149,11 +203,11 @@ type SourcePublicationDocumentationReview struct {
 }
 
 type APIContractCandidateRecord struct {
-	Candidate  model.APIContractCandidate
-	Operations []model.APIContractOperation
-	Schemas    []model.APIContractSchema
-	Examples   []model.APIContractExample
-	Map        *model.APIContractMap
+	Candidate  model.APIContractCandidate   `json:"candidate"`
+	Operations []model.APIContractOperation `json:"operations"`
+	Schemas    []model.APIContractSchema    `json:"schemas"`
+	Examples   []model.APIContractExample   `json:"examples"`
+	Map        *model.APIContractMap        `json:"map,omitempty"`
 }
 
 type SDKContentCandidateRecord struct {
@@ -245,6 +299,7 @@ type DeveloperAssetIngestionStore interface {
 	TransitionDeveloperAssetIngestionRun(context.Context, model.DeveloperAssetIngestionRun, model.DeveloperAssetIngestionState) (model.DeveloperAssetIngestionRun, error)
 	DeveloperAssetIngestionStages(context.Context, string) ([]model.DeveloperAssetIngestionStage, error)
 	SaveDeveloperAssetIngestionStage(context.Context, model.DeveloperAssetIngestionStage, string) (model.DeveloperAssetIngestionStage, error)
+	ClaimKnowledgeProcessingStage(context.Context, string, model.DeveloperAssetIngestionStage, time.Time) (model.DeveloperAssetIngestionStage, error)
 }
 
 // DeveloperAssetDocumentationStore owns normalized documentation candidates,
@@ -254,13 +309,15 @@ type DeveloperAssetDocumentationStore interface {
 	SaveDocumentationIngestionOutput(context.Context, string, DocumentationIngestionOutput) error
 	DocumentationCandidateDocuments(context.Context, DocumentationCandidateQuery) (DocumentationCandidatePage, error)
 	DocumentationCandidateDocument(context.Context, string, string) (DocumentationCandidateRecord, error)
+	DocumentationLibrary(context.Context, DocumentationLibraryQuery) (DocumentationLibraryPage, error)
+	DocumentationAttention(context.Context, string, string, int, int) (DocumentationAttentionPage, error)
 	DocumentationCandidateSection(context.Context, string, string) (model.DocumentationSection, DocumentationCandidateRecord, error)
 	SourcePublicationDocumentationReview(context.Context, string, string) (SourcePublicationDocumentationReview, error)
 	SaveSourcePublicationDocumentationReview(context.Context, string, SourcePublicationDocumentationReview) error
 
 	DocumentationCollections(context.Context, string) ([]model.DocumentationCollection, error)
 	DocumentationCollection(context.Context, string, string) (model.DocumentationCollection, error)
-	CreateDocumentationCollection(context.Context, model.DocumentationCollection, DocumentationCollectionRevisionRecord) (model.DocumentationCollection, error)
+	CreateDocumentationCollection(context.Context, model.DocumentationCollection, DocumentationCollectionRevisionRecord, ...DeveloperAssetCreation) (model.DocumentationCollection, error)
 	ReviseDocumentationCollection(context.Context, model.DocumentationCollection, int64, DocumentationCollectionRevisionRecord) (model.DocumentationCollection, error)
 	DocumentationCollectionRevisions(context.Context, string, string) ([]model.DocumentationCollectionRevision, error)
 	DocumentationCollectionRevision(context.Context, string, string) (DocumentationCollectionRevisionRecord, error)
@@ -276,7 +333,7 @@ type DeveloperAssetDocumentationStore interface {
 type DeveloperAssetContractStore interface {
 	APIContracts(context.Context, string) ([]model.APIContract, error)
 	APIContract(context.Context, string, string) (model.APIContract, error)
-	SaveAPIContract(context.Context, model.APIContract, int64) (model.APIContract, error)
+	SaveAPIContract(context.Context, model.APIContract, int64, ...DeveloperAssetCreation) (model.APIContract, error)
 	APIContractSources(context.Context, string, string) ([]model.APIContractSource, error)
 	APIContractSource(context.Context, string, string) (model.APIContractSource, error)
 	ActiveAPIContractSourceBySource(context.Context, string, string) (model.APIContractSource, error)

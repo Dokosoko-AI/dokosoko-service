@@ -30,7 +30,7 @@ function integrationToolBindingSelectionSignature(selection: Record<string, Inte
   return JSON.stringify(Object.entries(selection).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-export function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate }: { integration: APIIntegration; tools: APITool[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+export function IntegrationToolsWorkspace({ integration, tools, onMessage, onNavigate, onChanged }: { integration: APIIntegration; tools: APITool[]; onMessage: (message: string) => void; onNavigate: (path: string) => void; onChanged: () => void | Promise<void> }) {
   const { t } = useTranslation();
   const [bindings, setBindings] = useState<APIIntegrationToolBinding[]>([]);
   const [authorizationPoints, setAuthorizationPoints] = useState<APIAuthorizationPoint[]>([]);
@@ -134,6 +134,7 @@ export function IntegrationToolsWorkspace({ integration, tools, onMessage, onNav
       setBindings(value.items);
       setBindingSelection(next);
       setSavedSignature(integrationToolBindingSelectionSignature(next));
+      await onChanged();
       onMessage(value.items.length === 0 ? t("integrationTools.allToolBindingsClearedFromThisAPIDraft") : t("integrationTools.exactToolRevisionsBound", { count: value.items.length }));
     } catch (error) {
       onMessage(unavailableConsoleCapability(error) ? t("integrationTools.exactAPIToolBindingsAreNotEnabledInThis") : error instanceof APIError ? error.message : t("integrationTools.toolBindingsCouldNotBeSaved"));

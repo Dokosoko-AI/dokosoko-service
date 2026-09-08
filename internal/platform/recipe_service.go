@@ -374,7 +374,11 @@ func (s *Service) createRecipeRevision(ctx context.Context, product model.Produc
 		return recipe, errors.New("recipe spec failed deterministic product-integration validation")
 	}
 	if review == "" {
-		review, findings = s.reviewRecipe(ctx, product, draft.Spec, draft.Markdown, selectedEvidence, findings)
+		var reviewErr error
+		review, findings, reviewErr = s.reviewRecipe(ctx, product, draft.Spec, draft.Markdown, selectedEvidence, findings)
+		if reviewErr != nil {
+			return recipe, reviewErr
+		}
 	}
 	bindings, err := s.currentPublishedRecipeAPIBindings(ctx, recipeIntegrationIDs(recipe))
 	if err != nil {
@@ -715,11 +719,11 @@ func (s *Service) CreateRecipeFromPromptWithAPIs(ctx context.Context, productID 
 	})
 	result, aiErr := s.generateAIStructured(ctx, aiInvocation{Product: product, Workload: airuntime.WorkloadAnalysis, Action: "recipe_brief", PromptKey: AIPromptKeyRecipeBrief, User: string(prompt), SchemaName: "recipe_brief", Schema: recipeBriefSchema, MaxOutput: 2048, Temperature: 0.1})
 	if aiErr != nil {
-		return recipe, ErrRecipeNeedsInput
+		return recipe, aiErr
 	}
 	var response recipeBriefAIResponse
 	if decodeStrictAIResult(result.JSON, &response) != nil {
-		return recipe, ErrRecipeNeedsInput
+		return recipe, &airuntime.Error{Code: airuntime.ErrorInvalidStructuredOutput}
 	}
 	seed, valid := recipeBriefResponseSeed(response, analysis)
 	if !valid {
@@ -939,17 +943,9 @@ func (s *Service) UpdateRecipeReferences(ctx context.Context, productID, recipeI
 			return recipe, errors.New("recipe reference_ids must be non-empty IDs without surrounding whitespace")
 		}
 	}
-	analysis, err := s.store.IntegrationAnalysis(ctx, productID, recipe.AnalysisID)
+	analysis, selectedEvidence, err := s.recipeReferenceEvidence(ctx, product, recipe)
 	if err != nil {
 		return recipe, err
-	}
-	analysis, err = s.relevantRecipeAnalysis(ctx, product, analysis, recipe.Outcome)
-	if err != nil {
-		return recipe, err
-	}
-	selectedEvidence, ok := recipeEvidenceForDependencies(analysis.Evidence, recipe.Dependencies)
-	if !ok {
-		return recipe, ErrRecipeGroundingChanged
 	}
 	spec.ReferenceIDs = append([]string(nil), referenceIDs...)
 	references, ok := selectRecipeReferences(spec.ReferenceIDs, recipeReferences(selectedEvidence))

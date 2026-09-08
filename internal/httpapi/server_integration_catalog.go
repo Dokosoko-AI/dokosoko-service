@@ -146,3 +146,11 @@ func (s *Server) preflightIntegration(w http.ResponseWriter, r *http.Request, in
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, value)
 }
+
+func (s *Server) activateIntegrationRevision(w http.ResponseWriter, r *http.Request, integrationID, revisionID string) {
+	if err := s.service.ActivateIntegrationRevision(r.Context(), integrationID, revisionID, actor(r)); err != nil {
+		s.productCatalogError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

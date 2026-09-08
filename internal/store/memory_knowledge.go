@@ -102,6 +102,11 @@ func (m *Memory) SourceReview(_ context.Context, productID, sourceID, crawlJobID
 		if publication.SourceID == sourceID && publication.CrawlJobID == job.ID {
 			copy := publication
 			review.Publication = &copy
+			for _, document := range review.Documents {
+				if m.publicationDocuments[publication.ID][document.ID] {
+					review.PublishedDocumentIDs = append(review.PublishedDocumentIDs, document.ID)
+				}
+			}
 			break
 		}
 	}

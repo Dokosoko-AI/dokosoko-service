@@ -24,6 +24,18 @@ export type Source = {
   latestPublication?: APISourcePublication;
 };
 
+export function mergeSourceMetadata(items: Source[], source: Pick<Source, "id" | "name" | "kind" | "location" | "visibility" | "published" | "quarantined" | "revision">): Source[] {
+  const current = items.find((item) => item.id === source.id);
+  if (current && current.revision > source.revision) return items;
+  const next: Source = {
+    crawlState: source.published ? "synced" : "draft", pages: 0, lastCrawl: "not-crawled", ...current,
+    id: source.id, name: source.name, kind: source.kind, location: source.location,
+    visibility: source.visibility, published: source.published, quarantined: source.quarantined, revision: source.revision,
+  };
+  if (current?.crawlState === "draft" && source.published) next.crawlState = "synced";
+  return current ? items.map((item) => item.id === source.id ? next : item) : [...items, next];
+}
+
 const integrationRecipeScopeKind = "integration_scope";
 const recipeAnalysisRunningTimeoutMS = 5 * 60 * 1000;
 

@@ -141,6 +141,15 @@ func TestPostgresSourcePublicationAtomicallyPersistsTypedReview(t *testing.T) {
 	if includedCount != 1 || excludedCount != 1 {
 		t.Fatalf("typed decisions=%#v", typedReview.Selections)
 	}
+	page, err := postgres.DocumentationLibrary(ctx, DocumentationLibraryQuery{DeploymentID: deployment.ID, SourcePublicationID: published.ID, History: true, Limit: 50})
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].Decision != "included" {
+		t.Fatalf("exact reviewed file picker=%#v %v", page, err)
+	}
+	for _, selection := range typedReview.Selections {
+		if selection.Decision == "included" && page.Items[0].ID != selection.DocumentationDocumentID {
+			t.Fatalf("wrong selected document: %#v", page)
+		}
+	}
 	typedRun, err := postgres.DeveloperAssetIngestionRun(ctx, deployment.ID, crawlID)
 	if err != nil || typedRun.State != model.DeveloperAssetIngestionPublished {
 		t.Fatalf("typed run=%#v err=%v", typedRun, err)

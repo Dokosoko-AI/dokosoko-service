@@ -12,6 +12,7 @@ export type IntegrationSetupStep = {
   detail: string;
   ready: boolean;
   path: string;
+  onSelect?: () => void;
 };
 
 export type IntegrationSetupValidation = {
@@ -44,7 +45,7 @@ export function IntegrationQuickStart({
   onNavigate,
 }: {
   lifecycle: string;
-  status: "checking" | "ready" | "published" | "setup";
+  status: "checking" | "ready" | "published" | "setup" | "delivery";
   statusDetail: string;
   steps: IntegrationSetupStep[];
   validations: IntegrationSetupValidation[];
@@ -54,12 +55,12 @@ export function IntegrationQuickStart({
   const { t } = useTranslation();
   const readyCount = steps.filter((step) => step.ready).length;
   const nextStep = steps.findIndex((step) => !step.ready);
-  const statusLabel = status === "checking" ? t("integrationQuickStart.checkingStatus") : status === "ready" ? t("integrationQuickStart.readyToPublish") : status === "published" ? t("integrationQuickStart.published") : t("integrationQuickStart.needsSetup");
+  const statusLabel = status === "checking" ? t("integrationQuickStart.checkingStatus") : status === "ready" ? t("integrationQuickStart.readyToPublish") : status === "published" ? t("integrationQuickStart.published") : status === "delivery" ? t("publicationReview.deliveryPending") : t("integrationQuickStart.needsSetup");
   const lifecycleColor = lifecycle === "active" ? "green" : lifecycle === "deprecated" ? "amber" : "zinc";
 
   return <div className="integration-tab-content integration-quick-start">
     <div className="api-status-bar">
-      <span><span className={`status-dot${status === "checking" ? " checking" : ""}`} /><strong>{statusLabel}</strong><small>{statusDetail}</small></span>
+      <span><span className={`status-dot${status === "checking" ? " checking" : status === "delivery" || status === "setup" ? " attention" : ""}`} /><strong>{statusLabel}</strong><small>{statusDetail}</small></span>
       <Badge color={lifecycleColor}>{lifecycle === "active" ? t("integrationQuickStart.active") : lifecycle === "deprecated" ? t("integrationQuickStart.deprecated") : lifecycle === "archived" ? t("integrationQuickStart.archived") : lifecycle}</Badge>
     </div>
     <section className="panel onboarding-checklist">
@@ -70,7 +71,7 @@ export function IntegrationQuickStart({
       />
       {steps.map((step, index) => {
         const isNext = index === nextStep;
-        return <WorkspaceLink key={step.label} path={step.path} onNavigate={onNavigate} className={`integration-health-check${isNext ? " next" : ""}`}>
+        return <WorkspaceLink key={step.label} path={step.path} onNavigate={step.onSelect ?? onNavigate} className={`integration-health-check${isNext ? " next" : ""}`}>
           <span className={`health-icon ${step.ready ? "ready" : ""}`}>{step.ready ? <CheckCircle2 /> : <span className="step-number">{index + 1}</span>}</span>
           <span><strong>{step.label}</strong><small>{step.detail}</small></span>
           <Badge color={step.ready ? "green" : isNext ? "violet" : "zinc"}>{step.ready ? t("integrationQuickStart.ready") : isNext ? t("integrationQuickStart.next") : t("integrationQuickStart.setup")}</Badge>
@@ -78,9 +79,6 @@ export function IntegrationQuickStart({
         </WorkspaceLink>;
       })}
     </section>
-    <details className="panel advanced-details quick-start-advanced">
-      <summary>{t("integrationQuickStart.optionalSetupAndAPIDetails")}</summary>
-      <div className="advanced-details-body">
         {validations.length > 0 && <section className="panel quick-start-validation-list">
           <PanelHeader title={t("integrationQuickStart.publicationDetails")} description={t("integrationQuickStart.additionalFindingsFromTheCurrentCandidateSnapshot")} />
           {validations.map((validation) => <WorkspaceLink key={validation.code} path={validation.path} onNavigate={onNavigate} className={`publish-validation ${validation.level}`}>
@@ -89,6 +87,10 @@ export function IntegrationQuickStart({
             <ChevronRight />
           </WorkspaceLink>)}
         </section>}
+    <details className="panel advanced-details quick-start-advanced">
+      <summary>{t("integrationQuickStart.optionalSetupAndAPIDetails")}</summary>
+      <div className="advanced-details-body">
+
         {advanced}
       </div>
     </details>

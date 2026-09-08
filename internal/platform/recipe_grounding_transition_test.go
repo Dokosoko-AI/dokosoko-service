@@ -9,6 +9,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/testutil"
 )
 
 type recipeGroundingTransitionFixture struct {
@@ -56,7 +57,7 @@ func createTransitionRecipe(t *testing.T, backend store.Store) recipeGroundingTr
 			memory = racing.Store.(*store.Memory)
 		}
 	}
-	service := platform.New(backend)
+	service := testutil.NewRecipeService(t, backend, testutil.RecipeAI{})
 	actor := platform.Actor{ID: "grounding-reviewer", RequestID: "recipe-grounding-transition"}
 	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "grounding-api", VersionKey: "v1", DisplayName: "Grounding API", Description: "Create readiness checks.", Visibility: model.VisibilityPublic, AcknowledgePublic: true, Lifecycle: "active"}, actor)
 	if err != nil {

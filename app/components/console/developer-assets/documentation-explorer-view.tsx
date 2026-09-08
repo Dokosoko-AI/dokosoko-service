@@ -2,17 +2,18 @@
 
 
 import { useTranslation } from "react-i18next";
-import { BookOpen, FileText, Folder, Layers3, Plus, RefreshCw, Search } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FileText, Plus, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Section } from "../../../lib/console-routes";
 import type { Source } from "../../../lib/console-domain";
-import type { APIIntegration } from "../../../lib/api";
+import type { APIIntegration, APISource } from "../../../lib/api";
 import {
   developerAssetsApi,
   type DeveloperAssetIngestionSummary,
   type DocumentationCandidateRecord,
-  type DocumentationCollection,
+  type DocumentationLibraryItem,
+  type DocumentationAttentionPage,
   type DocumentationCollectionMemberInput,
   type SourcePublicationDocumentSelection,
 } from "../../../lib/developer-assets-api";
@@ -21,9 +22,11 @@ import { PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
 import { DocumentationNavigation } from "./developer-asset-navigation";
 import { DocumentationCollectionsView } from "./documentation-collections-view";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
-import { developerAssetError, enumLabel, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
+import { evidenceChange } from "../../core/evidence-content";
+import { developerAssetError, enumLabel, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel } from "./developer-asset-ui";
+import { documentationSetupPath, parseDocumentationSetupSelection } from "../../../lib/documentation-setup";
+import { DocumentationSetupWorkspace } from "./documentation-setup-workspace";
 
-type InspectorTab = "detail" | "sections" | "map" | "diagnostics" | "run";
 
 function DocumentationDecisionBadge({ decision }: { decision: SourcePublicationDocumentSelection["decision"] | "unreviewed" }) {
   const { t } = useTranslation();
@@ -62,197 +65,187 @@ export function DocumentationReviewHistory({ selections }: { selections: SourceP
   </section>;
 }
 
-export function DocumentationExplorerView({ live, sources, integrations, onMessage, onNavigate }: { live: boolean; sources: Source[]; integrations: APIIntegration[]; onMessage: (message: string) => void; onNavigate: (path: string) => void }) {
+type DocumentationExplorerProps = {
+  live: boolean; sources: Source[]; integrations: APIIntegration[];
+  setupSearch?: string; reviewerID?: string; onSourceChanged?: (source: APISource) => void;
+  onMessage: (message: string) => void; onNavigate: (path: string) => void;
+  onAddSource: () => void; onReviewSource: (source: Source) => void;
+};
+export function DocumentationExplorerView(props: DocumentationExplorerProps) {
+  const selection = useMemo(() => parseDocumentationSetupSelection(props.setupSearch), [props.setupSearch]);
+  if (props.live && selection.setup) return <DocumentationSetupWorkspace key={selection.api} selection={selection} reviewerID={props.reviewerID ?? ""} onSourceChanged={props.onSourceChanged} onNavigate={props.onNavigate} onMessage={props.onMessage} />;
+  return <DocumentationLibraryView {...props} onAddSource={props.live ? () => props.onNavigate(documentationSetupPath({ setup: "new" })) : props.onAddSource} onReviewSource={props.live ? (source) => props.onNavigate(documentationSetupPath({ source: source.id })) : props.onReviewSource} />;
+}
+
+function DocumentationLibraryView({ live, sources, integrations, reviewerID, onMessage, onNavigate, onAddSource, onReviewSource }: DocumentationExplorerProps) {
   const { t } = useTranslation();
-  const [documents, setDocuments] = useState<DocumentationCandidateRecord[]>([]);
-  const [selectedID, setSelectedID] = useState("");
+  const listRequest = useRef(0);
+  const [detailAttempt, setDetailAttempt] = useState(0);
+  const [documents, setDocuments] = useState<DocumentationLibraryItem[]>([]);
+  const [view, setView] = useState<"reviewed" | "attention" | "history" | "sets">("reviewed");
+  const attentionRequest = useRef(0);
+  const [attention, setAttention] = useState<DocumentationAttentionPage | null>(null);
+  const [attentionProblem, setAttentionProblem] = useState("");
+  const [attentionLoading, setAttentionLoading] = useState(false);
+  const [sourceID, setSourceID] = useState("");
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
-  const [tab, setTab] = useState<InspectorTab>("detail");
+  const [selectedID, setSelectedID] = useState("");
+  const [selectedRecord, setSelectedRecord] = useState<DocumentationCandidateRecord | null>(null);
+  const [previous, setPrevious] = useState<DocumentationCandidateRecord | null>(null);
+  const [compare, setCompare] = useState(false);
+  const [detailProblem, setDetailProblem] = useState("");
+  const [previousProblem, setPreviousProblem] = useState("");
   const [runSummary, setRunSummary] = useState<DeveloperAssetIngestionSummary | null>(null);
+  const [selectedDocumentIDs, setSelectedDocumentIDs] = useState<string[]>([]);
+  const [pendingSetMembers, setPendingSetMembers] = useState<DocumentationCollectionMemberInput[] | null>(null);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(live);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [problem, setProblem] = useState("");
-  const [reviewedPublicationID, setReviewedPublicationID] = useState("");
-  const [reviewCheckPending, setReviewCheckPending] = useState(false);
-  const [collections, setCollections] = useState<DocumentationCollection[]>([]);
-  const [activeNavigatorKind, setActiveNavigatorKind] = useState<"document" | "sets">("document");
-  const [selectedCollectionID, setSelectedCollectionID] = useState("");
-  const [selectedDocumentIDs, setSelectedDocumentIDs] = useState<string[]>([]);
-  const [collectionWorkspaceKey, setCollectionWorkspaceKey] = useState(0);
-  const [pendingSetMembers, setPendingSetMembers] = useState<DocumentationCollectionMemberInput[] | null>(null);
 
   const load = useCallback(async (offset = 0, append = false) => {
-    if (!live) return;
-    if (append) setLoadingMore(true);
-    else setLoading(true);
+    if (!live || view === "sets" || view === "attention") return;
+    const request = ++listRequest.current;
+    if (append) setLoadingMore(true); else setLoading(true);
     setProblem("");
     try {
-      const page = await developerAssetsApi.documentationDocuments({ query: submittedQuery, limit: 100, offset });
-      setDocuments((current) => append ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.document.id === item.document.id))] : page.items);
-      setTotal(page.total);
-      setHasMore(page.has_more);
-      setSelectedID((current) => append || page.items.some((item) => item.document.id === current) ? current : page.items[0]?.document.id ?? "");
+      const page = await developerAssetsApi.documentationLibrary({ view, source_id: sourceID, query: submittedQuery, limit: 50, offset });
+      if (request !== listRequest.current) return;
+      setDetailProblem("");
+      setDocuments((current) => append ? [...current, ...page.items.filter((item) => !current.some((other) => other.id === item.id))] : page.items);
+      setTotal(page.total); setHasMore(page.has_more);
+      if (!append) {
+        setSelectedID((current) => page.items.some((item) => item.id === current) ? current : page.items[0]?.id ?? "");
+        setSelectedDocumentIDs([]);
+      }
+    } catch (error) { if (request === listRequest.current) setProblem(developerAssetError(error, t("documentationExplorer.normalizedDocumentationCouldNotBeLoaded"))); }
+    finally { if (request === listRequest.current) { setLoading(false); setLoadingMore(false); } }
+  }, [live, sourceID, submittedQuery, t, view]);
+
+  const loadAttention = useCallback(async (offset = 0) => {
+    if (!live) return;
+    const request = ++attentionRequest.current;
+    setAttentionLoading(true); setAttentionProblem("");
+    if (!offset) setAttention(null);
+    try {
+      const page = await developerAssetsApi.documentationAttention(sourceID, view === "attention" ? 50 : 1, offset);
+      if (request === attentionRequest.current) setAttention((current) => offset && current ? { ...page, items: [...current.items, ...page.items.filter((item) => !current.items.some((other) => other.source_id === item.source_id))] } : page);
     } catch (error) {
-      setProblem(developerAssetError(error, t("documentationExplorer.normalizedDocumentationCouldNotBeLoaded")));
-    } finally {
-      if (append) setLoadingMore(false);
-      else setLoading(false);
-    }
-  }, [live, submittedQuery, t]);
+      if (request === attentionRequest.current) setAttentionProblem(developerAssetError(error, t("documentationExplorer.attentionUnavailable")));
+    } finally { if (request === attentionRequest.current) setAttentionLoading(false); }
+  }, [live, sourceID, t, view]);
+  const invalidateAttention = useCallback(() => { attentionRequest.current++; }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadAttention(), 0);
+    const refresh = () => void loadAttention();
+    window.addEventListener("focus", refresh);
+    return () => { window.clearTimeout(timer); window.removeEventListener("focus", refresh); invalidateAttention(); };
+  }, [invalidateAttention, loadAttention]);
+
+  const invalidateList = useCallback(() => { listRequest.current++; }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    const refresh = () => void load();
+    window.addEventListener("focus", refresh);
+    return () => { window.clearTimeout(timer); window.removeEventListener("focus", refresh); invalidateList(); };
+  }, [invalidateList, load]);
+  const selected = documents.find((item) => item.id === selectedID);
+  const source = sources.find((item) => item.id === selected?.source_id);
+  const record = selectedRecord?.document.id === selectedID ? selectedRecord : null;
+  const reviewedSourcePublicationID = record?.source_publication_selections.find((selection) => selection.decision === "included" && selection.content_hash === record.document.content_hash)?.source_publication_id;
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => { void load(0); }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [load]);
-
-  useEffect(() => {
+    if (!live || !selectedID || view === "sets" || view === "attention") return;
     let cancelled = false;
-    if (!live) return () => { cancelled = true; };
-    developerAssetsApi.documentationCollections()
-      .then((values) => { if (!cancelled) setCollections(values); })
-      .catch((error) => { if (!cancelled) onMessage(developerAssetError(error, t("documentationCollections.documentationCollectionsCouldNotBeLoaded"))); });
+    developerAssetsApi.documentationDocument(selectedID).then((value) => {
+      if (!cancelled) { setSelectedRecord(value); setDetailProblem(""); }
+    }).catch((error) => { if (!cancelled) setDetailProblem(developerAssetError(error, t("documentationExplorer.detailUnavailable"))); });
     return () => { cancelled = true; };
-  }, [live, onMessage, t]);
-
-  const selected = useMemo(() => documents.find((item) => item.document.id === selectedID) ?? null, [documents, selectedID]);
-  const documentGroups = useMemo(() => {
-    const recordsBySource = new Map<string, DocumentationCandidateRecord[]>();
-    documents.forEach((record) => {
-      const sourceID = record.run.source_id ?? "";
-      recordsBySource.set(sourceID, [...(recordsBySource.get(sourceID) ?? []), record]);
-    });
-    const groups = sources.map((source) => ({ id: source.id, name: source.name, records: recordsBySource.get(source.id) ?? [] }));
-    const knownSourceIDs = new Set(sources.map((source) => source.id));
-    const unmatched = documents.filter((record) => !knownSourceIDs.has(record.run.source_id ?? ""));
-    if (unmatched.length > 0) groups.push({ id: "unassigned", name: t("documentationExplorer.otherDocuments"), records: unmatched });
-    return groups.filter((group) => group.records.length > 0);
-  }, [documents, sources, t]);
+  }, [detailAttempt, live, selectedID, t, view]);
 
   useEffect(() => {
+    if (view === "sets" || view === "attention" || !compare || !selected?.previous_document_id) return;
     let cancelled = false;
-    if (!live || !selected?.run.id) {
-      queueMicrotask(() => { if (!cancelled) setRunSummary(null); });
-      return () => { cancelled = true; };
-    }
-    developerAssetsApi.ingestionRun(selected.run.id).then((value) => { if (!cancelled) setRunSummary(value); }).catch(() => { if (!cancelled) setRunSummary(null); });
+    developerAssetsApi.documentationDocument(selected.previous_document_id).then((value) => {
+      if (!cancelled) { setPrevious(value); setPreviousProblem(""); }
+    }).catch((error) => { if (!cancelled) setPreviousProblem(developerAssetError(error, t("documentationExplorer.detailUnavailable"))); });
     return () => { cancelled = true; };
-  }, [live, selected?.run.id]);
+  }, [compare, selected?.previous_document_id, t, view]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const latestPublication = sources.find((source) => source.id === selected?.run.source_id)?.latestPublication;
-    if (!live || !selected || !latestPublication || !selected.documentation_map) {
-      queueMicrotask(() => { if (!cancelled) { setReviewedPublicationID(""); setReviewCheckPending(false); } });
-      return () => { cancelled = true; };
-    }
-    const selectedMapID = selected.documentation_map.id;
-    const selectedMapHash = selected.documentation_map.content_hash;
-    queueMicrotask(() => { if (!cancelled) { setReviewedPublicationID(""); setReviewCheckPending(true); } });
-    developerAssetsApi.documentationDocuments({ source_publication_id: latestPublication.id, query: selected.document.source_path, limit: 100, offset: 0 }).then((page) => {
-      if (cancelled) return;
-      const reviewed = page.items.some((record) => record.document.id === selected.document.id && record.documentation_map?.id === selectedMapID && record.documentation_map?.content_hash === selectedMapHash);
-      setReviewedPublicationID(reviewed ? latestPublication.id : "");
-    }).catch(() => { if (!cancelled) setReviewedPublicationID(""); }).finally(() => { if (!cancelled) setReviewCheckPending(false); });
-    return () => { cancelled = true; };
-  }, [live, selected, sources]);
-
-  function submitSearch(event: FormEvent) {
-    event.preventDefault();
-    setSubmittedQuery(query.trim());
+  function selectDocument(id: string) {
+    setSelectedID(id); setCompare(false); setPrevious(null); setPreviousProblem(""); setDetailProblem(""); setRunSummary(null);
   }
-
-  function selectDocument(documentID: string) {
-    setActiveNavigatorKind("document");
-    setSelectedID(documentID);
-    setTab("detail");
-  }
-
-  function selectDocumentationSet(collectionID: string) {
-    setActiveNavigatorKind("sets");
-    setSelectedCollectionID(collectionID);
-  }
-
-  function toggleDocumentSelection(documentID: string, checked: boolean) {
-    setSelectedDocumentIDs((current) => checked ? [...current, documentID] : current.filter((id) => id !== documentID));
-  }
-
   function createSetFromSelection() {
-    if (selectedDocumentIDs.length === 0) return;
     setPendingSetMembers(selectedDocumentIDs.map((id) => ({ kind: "document", id, include_descendants: true, selector: {} })));
-    setCollectionWorkspaceKey((current) => current + 1);
-    setActiveNavigatorKind("sets");
+    setView("sets");
   }
-
-  const documentOutline = selected ? {
-    document_id: selected.document.id,
-    source_path: selected.document.source_path,
-    sections: selected.sections.map((section) => ({ id: section.id, heading: section.heading, breadcrumb: section.breadcrumb, anchor: section.anchor })),
-  } : {};
+  const change = record && previous && previous.document.id === selected?.previous_document_id ? evidenceChange(previous.document.normalized_markdown, record.document.normalized_markdown) : null;
   const active: Section = "documents";
 
   return <>
-    <PageHeader eyebrow={t("navigation.docs")} title={t("documentationExplorer.documents")} action={<Button disabled={selectedDocumentIDs.length === 0} onClick={createSetFromSelection}><Plus data-slot="icon" />{t("documentationExplorer.saveSelectionAsSet")}</Button>} />
+    <PageHeader eyebrow={t("navigation.docs")} title={t("documentationExplorer.library")} description={t("documentationExplorer.libraryDescription")} action={<Button onClick={onAddSource}><Plus data-slot="icon" />{t("documentationExplorer.addContent")}</Button>} />
     <DocumentationNavigation active={active} onNavigate={onNavigate} />
-    <form className="toolbar developer-asset-search" onSubmit={submitSearch}>
-      <div className="search-field"><Search /><input aria-label={t("documentationExplorer.searchDocuments")} placeholder={t("documentationExplorer.searchPathsTitlesAndContent")} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-      <Button type="submit" outline>{t("documentationExplorer.search")}</Button>
-      {submittedQuery && <Button type="button" outline onClick={() => { setQuery(""); setSubmittedQuery(""); }}>{t("documentationExplorer.clear")}</Button>}
-      <span className="toolbar-count">{t("documentationExplorer.documentsShown", { shown: documents.length, count: total })}</span>
-      {hasMore && <Button type="button" outline disabled={loadingMore} onClick={() => void load(documents.length, true)}>{loadingMore ? t("common.loading") : t("documentationExplorer.loadMore")}</Button>}
-    </form>
-    {loading ? <LoadingPanel label={t("documentationExplorer.loadingNormalizedDocumentation")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
-      <aside className="panel documentation-file-navigator" aria-label={t("documentationExplorer.fileNavigator")}>
-        <header className="documentation-file-navigator-heading"><span><strong>{t("documentationExplorer.filesBySource")}</strong><small>{t("documentationExplorer.selectedDocuments", { count: selectedDocumentIDs.length })}</small></span><Badge>{documents.length}</Badge></header>
-        <div className="documentation-file-tree">
-          {documentGroups.map((group) => <section className="documentation-source-group" key={group.id}>
-            <header><Folder /><span><strong>{group.name}</strong><small>{t("documentationExplorer.documentsCount", { count: group.records.length })}</small></span></header>
-            <div>{group.records.map((record) => {
-              const title = record.document.title || record.document.source_path;
-              const latestDecision = record.source_publication_selections[0]?.decision ?? "unreviewed";
-              return <div className={`documentation-file-row ${activeNavigatorKind === "document" && record.document.id === selectedID ? "active" : ""}`} key={record.document.id}>
-                <input type="checkbox" aria-label={t("documentationExplorer.selectDocument", { title })} checked={selectedDocumentIDs.includes(record.document.id)} onChange={(event) => toggleDocumentSelection(record.document.id, event.target.checked)} />
-                <button type="button" onClick={() => selectDocument(record.document.id)}><FileText /><span><strong>{title}</strong><small>{record.document.source_path}</small></span><DocumentationDecisionBadge decision={latestDecision} /></button>
-              </div>;
-            })}</div>
-          </section>)}
-          {documentGroups.length === 0 && <p className="documentation-file-tree-empty">{submittedQuery ? t("documentationExplorer.noNormalizedFilesMatchThisSearch") : t("documentationExplorer.noDocumentationFilesHaveBeenNormalizedYet")}</p>}
-          <section className="documentation-source-group documentation-set-group">
-            <button type="button" className={`documentation-set-root ${activeNavigatorKind === "sets" && !selectedCollectionID ? "active" : ""}`} onClick={() => { setActiveNavigatorKind("sets"); setSelectedCollectionID(""); }}><Layers3 /><span><strong>{t("documentationExplorer.documentationSets")}</strong><small>{t("documentationExplorer.savedSelectionsDescription")}</small></span><Badge>{collections.length}</Badge></button>
-            <div>{collections.map((collection) => <button type="button" className={`documentation-set-row ${activeNavigatorKind === "sets" && collection.id === selectedCollectionID ? "active" : ""}`} key={collection.id} onClick={() => selectDocumentationSet(collection.id)}><Layers3 /><span><strong>{collection.name}</strong><small>{collection.slug} · r{collection.revision}</small></span><ReviewStateBadge state={collection.lifecycle} /></button>)}</div>
-          </section>
-        </div>
-      </aside>
-      {activeNavigatorKind === "sets" ? <DocumentationCollectionsView
-        key={`documentation-sets-${collectionWorkspaceKey}`}
-        live={live}
-        integrations={integrations}
-        onMessage={onMessage}
-        onNavigate={onNavigate}
-        embedded
-        selectedCollectionID={selectedCollectionID}
-        startCreate={pendingSetMembers !== null}
-        initialMembers={pendingSetMembers ?? []}
-        onCollectionsChange={setCollections}
-        onSelectedCollectionChange={setSelectedCollectionID}
-        onCreateStarted={() => setPendingSetMembers(null)}
-      /> : <section className="panel developer-asset-inspector">
-        {selected ? <>
-          <PanelHeader title={selected.document.title || selected.document.source_path} description={t("documentationExplorer.copy", { document_kind: String(selected.document.document_kind), media_type: String(selected.document.media_type) })} action={<span className="heading-actions"><Badge color={selected.document.visibility === "public" ? "blue" : "zinc"}>{selected.document.visibility}</Badge><DeveloperAssetAIAdvisoryButton input={reviewedPublicationID ? { prompt_key: "documentation.map_enrichment", source_publication_id: reviewedPublicationID } : null} subject={t("documentationExplorer.reviewedSourcePublicationSubject", { name: selected.document.title || selected.document.source_path })} label={t("documentationExplorer.aiMapAdvisory")} unavailableReason={reviewCheckPending ? t("documentationExplorer.checkingExactReview") : t("documentationExplorer.reviewedPublicationRequiredForAI")} /></span>} />
-          <div className="developer-asset-inspector-tabs"><SegmentedControl label={t("documentationExplorer.documentInspector")} value={tab} onChange={setTab} items={[
-            { id: "detail", label: t("common.detail") }, { id: "sections", label: t("common.sections"), count: selected.sections.length }, { id: "map", label: t("common.map") }, { id: "diagnostics", label: t("common.diagnostics") }, { id: "run", label: t("common.runStatus") },
-          ]} /></div>
-          <div className="developer-asset-inspector-body">
-            {tab === "detail" && <><DocumentationReviewHistory selections={selected.source_publication_selections} /><dl className="entity-detail-grid"><div><dt>{t("documentationExplorer.sourcePath")}</dt><dd><code>{selected.document.source_path}</code></dd></div><div><dt>{t("documentationExplorer.contentHash")}</dt><dd><code>{selected.document.content_hash}</code></dd></div><div><dt>{t("documentationExplorer.language")}</dt><dd>{selected.document.language || "—"}</dd></div><div><dt>{t("documentationExplorer.ingestionRun")}</dt><dd><code>{selected.run.id}</code></dd></div>{selected.document.canonical_url && <div><dt>{t("documentationExplorer.canonicalURL")}</dt><dd><a href={selected.document.canonical_url} target="_blank" rel="noreferrer">{t("documentationExplorer.openSource")}</a></dd></div>}</dl><pre className="developer-asset-markdown"><code>{selected.document.normalized_markdown}</code></pre></>}
-            {tab === "sections" && <div className="developer-asset-section-list">{selected.sections.map((section) => <article key={section.id}><header><span><BookOpen /><strong>{section.heading || section.breadcrumb.at(-1) || t("documentationExplorer.untitledSection")}</strong></span><Badge>{t("documentationExplorer.tokens", { count: section.token_estimate })}</Badge></header><small>{section.breadcrumb.join(" / ")}{section.anchor ? t("documentationExplorer.copy2", { anchor: String(section.anchor) }) : ""}</small><pre><code>{section.normalized_text}</code></pre></article>)}{selected.sections.length === 0 && <p className="empty-row">{t("documentationExplorer.noSectionsWereEmittedForThisFile")}</p>}</div>}
-            {tab === "map" && <>{selected.documentation_map ? <><p className="developer-asset-help">{t("documentationExplorer.thisPersistedMapIsAnInspectableNavigationArtifactIt")}</p><dl className="entity-detail-grid"><div><dt>{t("documentationExplorer.mapVersion")}</dt><dd>{selected.documentation_map.map_version}</dd></div><div><dt>{t("documentationExplorer.contentHash")}</dt><dd><code>{selected.documentation_map.content_hash}</code></dd></div><div><dt>{t("documentationExplorer.mapID")}</dt><dd><code>{selected.documentation_map.id}</code></dd></div><div><dt>{t("documentationExplorer.visibility")}</dt><dd>{selected.documentation_map.visibility ?? selected.document.visibility}</dd></div></dl><MarkdownEvidence label={t("documentationExplorer.documentationMapAgentMarkdown")}>{selected.documentation_map.agent_markdown}</MarkdownEvidence><PrettyJSON value={selected.documentation_map.map} label={t("documentationExplorer.documentationMapData")} /></> : <><p className="developer-asset-help">{t("documentationExplorer.noPersistedDocumentationMapIsAvailableForThisOlder")}</p><PrettyJSON value={documentOutline} label={t("documentationExplorer.derivedDocumentOutline")} /></>}</>}
-            {tab === "diagnostics" && <PrettyJSON value={{ document: selected.document.metadata, run: selected.run.diagnostics, source_publication_review: { latest_decision: selected.source_publication_selections[0] ?? { decision: "unreviewed", reason: t("documentationExplorer.noPersistedDecision") }, history_newest_first: selected.source_publication_selections } }} label={t("documentationExplorer.documentationDiagnosticsAndSourcePublicationReviewHistory")} />}
-            {tab === "run" && <div className="developer-asset-run"><div className="developer-asset-run-summary"><RefreshCw /><span><strong>{enumLabel(t, selected.run.state)}</strong><small>{selected.run.acquired_count} {t("documentationExplorer.acquired")} {selected.run.failed_count} {t("documentationExplorer.failed")} {t("documentationExplorer.quarantinedCount", { count: selected.run.quarantined_count })}</small></span><ReviewStateBadge state={selected.run.state} /></div><dl className="entity-detail-grid"><div><dt>{t("documentationExplorer.target")}</dt><dd>{selected.run.target_key}</dd></div><div><dt>{t("documentationExplorer.attempt")}</dt><dd>{selected.run.attempt}</dd></div><div><dt>{t("documentationExplorer.queued")}</dt><dd>{t("format.dateTime", { value: new Date(selected.run.queued_at) })}</dd></div><div><dt>{t("documentationExplorer.finished")}</dt><dd>{selected.run.finished_at ? t("format.dateTime", { value: new Date(selected.run.finished_at) }) : "—"}</dd></div></dl><div className="developer-asset-stage-list">{runSummary?.stages.map((stage) => <div key={stage.id}><span><strong>{stage.stage_name}</strong><small>{t("documentationExplorer.attempt")} {stage.attempt}</small></span><ReviewStateBadge state={stage.state} /></div>)}{!runSummary && <small>{t("documentationExplorer.stageCheckpointsAreUnavailable")}</small>}</div></div>}
-          </div>
-        </> : <div className="developer-asset-inspector-empty"><FileText /><strong>{t("documentationExplorer.selectAFile")}</strong><small>{t("documentationExplorer.itsExactContentSectionsMapDiagnosticsAndRunStatus")}</small></div>}
-      </section>}
-    </div>}
+    <SegmentedControl label={t("documentationExplorer.libraryView")} value={view} onChange={(value) => { setView(value); setAttention(null); setAttentionLoading(live); setCompare(false); setDetailProblem(""); }} items={[
+      { id: "reviewed", label: t("documentationExplorer.reviewedContent") }, { id: "attention", label: t("documentationExplorer.needsAttention"), count: attentionProblem || attentionLoading ? undefined : attention?.total },
+    ]} />
+    <details className="advanced-details"><summary>{t("documentationExplorer.historyAndSets")}</summary><div className="heading-actions">
+      <Button outline onClick={() => { setView("history"); setCompare(false); }}>{t("documentationExplorer.importHistory")}</Button>
+      <Button outline onClick={() => { setView("sets"); setCompare(false); }}>{t("documentationExplorer.documentationSets")}</Button>
+    </div></details>
+    {view === "reviewed" && attentionProblem && <ProblemPanel message={attentionProblem} onRetry={() => void loadAttention()} />}
+    {view === "attention" ? <section className="panel documentation-attention-panel">
+      <PanelHeader title={t("documentationExplorer.needsAttention")} description={t("documentationExplorer.attentionDescription")} action={<Button outline disabled={attentionLoading} onClick={() => void loadAttention()}>{t("documentationExplorer.refreshPending")}</Button>} />
+      <select aria-label={t("documentationExplorer.sourceFilter")} value={sourceID} onChange={(event) => { setSourceID(event.target.value); setAttention(null); setAttentionLoading(live); }}><option value="">{t("documentationExplorer.allSources")}</option>{sources.filter((item) => item.kind === "website" || item.kind === "upload").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+      {attentionProblem ? <ProblemPanel message={attentionProblem} onRetry={() => void loadAttention()} /> : attentionLoading && !attention ? <LoadingPanel label={t("common.loading")} /> : <>
+        {attention?.items.map((item) => <article className="documentation-attention-row" key={item.source_id}>
+          <div><h3>{item.name}</h3><p>{t(`documentationExplorer.attentionHelp.${item.status}`)}</p><small>{t("format.dateTime", { value: new Date(item.updated_at) })}</small></div>
+          <div className="documentation-attention-actions"><Badge color={item.status === "blocked" || item.status === "import_failed" ? "red" : "amber"}>{t(`documentationExplorer.attentionStatus.${item.status}`)}</Badge><Button outline onClick={() => onNavigate(documentationSetupPath({ source: item.source_id, run: item.crawl_job_id }))}>{t("documentationExplorer.continueSetup")}</Button></div>
+        </article>)}
+        {!attentionLoading && attention?.total === 0 && <p>{t("documentationExplorer.noPendingImports")}</p>}
+        {attention?.has_more && <Button outline disabled={attentionLoading} onClick={() => void loadAttention(attention.items.length)}>{attentionLoading ? t("common.loading") : t("documentationExplorer.loadMore")}</Button>}
+      </>}
+    </section> :
+    view === "sets" ? <DocumentationCollectionsView reviewerID={reviewerID} live={live} integrations={integrations} onMessage={onMessage} onNavigate={onNavigate} embedded startCreate={pendingSetMembers !== null} initialMembers={pendingSetMembers ?? []} initialMemberLabels={Object.fromEntries(documents.map((document) => [document.id, document.title]))} onCreateStarted={() => setPendingSetMembers(null)} /> : <>
+      <form className="toolbar developer-asset-search" onSubmit={(event) => { event.preventDefault(); setSubmittedQuery(query.trim()); }}>
+        <div className="search-field"><Search /><input aria-label={t("documentationExplorer.searchDocuments")} placeholder={t("documentationExplorer.searchPathsTitlesAndContent")} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+        <select aria-label={t("documentationExplorer.sourceFilter")} value={sourceID} onChange={(event) => { setSourceID(event.target.value); setAttention(null); setAttentionLoading(live); }}><option value="">{t("documentationExplorer.allSources")}</option>{sources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+        <Button type="submit" outline>{t("documentationExplorer.search")}</Button>
+        {submittedQuery && <Button type="button" outline onClick={() => { setQuery(""); setSubmittedQuery(""); }}>{t("documentationExplorer.clear")}</Button>}
+        {selectedDocumentIDs.length > 0 && <Button type="button" outline onClick={createSetFromSelection}>{t("documentationExplorer.saveSelectionAsSet")}</Button>}
+      </form>
+      {loading ? <LoadingPanel label={t("documentationExplorer.loadingLibrary")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
+        <aside className="panel documentation-file-navigator" aria-label={t("documentationExplorer.fileNavigator")}>
+          <header className="documentation-file-navigator-heading"><strong>{view === "history" ? t("documentationExplorer.importHistory") : t("documentationExplorer.reviewedContent")}</strong><small>{t("documentationExplorer.documentsShown", { shown: documents.length, count: total })}</small></header>
+          <div className="documentation-file-tree">{documents.map((item) => <div className={`documentation-file-row ${item.id === selectedID ? "active" : ""}`} key={item.id}>
+            <input type="checkbox" aria-label={t("documentationExplorer.selectDocument", { title: item.title })} checked={selectedDocumentIDs.includes(item.id)} onChange={(event) => setSelectedDocumentIDs((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />
+            <button type="button" onClick={() => selectDocument(item.id)}><FileText /><span><strong>{item.title || item.source_path}</strong><small>{sources.find((value) => value.id === item.source_id)?.name}{sources.find((value) => value.id === item.source_id)?.kind !== "upload" && <> · {item.source_path}</>}</small>{view === "history" && <small>{t("format.dateTime", { value: new Date(item.queued_at) })}</small>}</span><DocumentationDecisionBadge decision={item.decision} /></button>
+          </div>)}</div>
+          {documents.length === 0 && <div className="developer-asset-inspector-empty"><FileText /><strong>{t(view === "reviewed" ? "documentationExplorer.noReviewedFiles" : "documentationExplorer.noFiles")}</strong><small>{t(view === "reviewed" ? "documentationExplorer.reviewedEmptyHelp" : "documentationExplorer.addContentHelp")}</small><Button outline onClick={onAddSource}>{t("documentationExplorer.addContent")}</Button></div>}
+          {hasMore && <Button outline disabled={loadingMore} onClick={() => void load(documents.length, true)}>{loadingMore ? t("common.loading") : t("documentationExplorer.loadMore")}</Button>}
+        </aside>
+        <section className="panel developer-asset-inspector">
+          {selected ? <>
+            <PanelHeader title={selected.title || selected.source_path} description={source?.kind === "upload" ? source.name : selected.source_path} action={<span className="heading-actions"><Badge>{selected.visibility}</Badge>{source && view === "reviewed" && <Button outline onClick={() => onReviewSource(source)}>{t("documentationExplorer.reviewLatestImport")}</Button>}</span>} />
+            <div className="developer-asset-inspector-body">
+              <p className="developer-asset-help">{t("documentationExplorer.reviewIsNotDelivery")}</p>
+              {detailProblem ? <ProblemPanel message={detailProblem} onRetry={() => { setDetailProblem(""); setDetailAttempt((value) => value + 1); }} /> : !record ? <LoadingPanel label={t("documentationExplorer.loadingContent")} /> : <>
+                {selected.previous_document_id && <Button outline onClick={() => setCompare((value) => !value)}>{compare ? t("documentationExplorer.readContent") : t("documentationExplorer.comparePrevious")}</Button>}
+                {compare ? previousProblem ? <p role="alert">{previousProblem}</p> : !change ? <LoadingPanel label={t("documentationExplorer.loadingComparison")} /> : change.unchanged ? <p>{t("documentationExplorer.noContentChanges")}</p> : <div className="core-evidence-diff"><section><h3>{t("documentationExplorer.removedText")}</h3><pre><code>{change.removed || t("documentationExplorer.none")}</code></pre></section><section><h3>{t("documentationExplorer.addedText")}</h3><pre><code>{change.added || t("documentationExplorer.none")}</code></pre></section></div> : <MarkdownEvidence label={t("documentationExplorer.documentContent")}>{record.document.normalized_markdown}</MarkdownEvidence>}
+                <details className="advanced-details"><summary>{t("documentationExplorer.reviewHistory")}</summary><DocumentationReviewHistory selections={record.source_publication_selections} /></details>
+                <details className="advanced-details" onToggle={(event) => { if (event.currentTarget.open && runSummary?.run.id !== record.run.id) void developerAssetsApi.ingestionRun(record.run.id).then(setRunSummary).catch((error) => onMessage(developerAssetError(error, t("documentationExplorer.diagnosticsUnavailable")))); }}>
+                  <summary>{t("documentationExplorer.processingDetails")}</summary>
+                  <DeveloperAssetAIAdvisoryButton input={reviewedSourcePublicationID ? { prompt_key: "documentation.map_enrichment", source_publication_id: reviewedSourcePublicationID } : null} subject={t("documentationExplorer.reviewedSourcePublicationSubject", { name: source?.name ?? selected.title })} label={t("documentationExplorer.aiMapAdvisory")} unavailableReason={t("documentationExplorer.reviewedPublicationRequiredForAI")} />
+                  <dl className="entity-detail-grid"><div><dt>{t("documentationExplorer.contentHash")}</dt><dd><code>{record.document.content_hash}</code></dd></div><div><dt>{t("documentationExplorer.ingestionRun")}</dt><dd><code>{record.run.id}</code></dd></div></dl>
+                  {record.documentation_map && <details className="advanced-details"><summary>{t("documentationExplorer.navigationMap")}</summary><MarkdownEvidence label={t("documentationExplorer.documentationMapAgentMarkdown")}>{record.documentation_map.agent_markdown}</MarkdownEvidence></details>}
+                  <PrettyJSON value={{ metadata: record.document.metadata, processing: runSummary?.run.id === record.run.id ? runSummary : record.run }} label={t("documentationExplorer.documentationDiagnosticsAndSourcePublicationReviewHistory")} />
+                </details>
+              </>}
+            </div>
+          </> : <div className="developer-asset-inspector-empty"><FileText /><strong>{t("documentationExplorer.selectAFile")}</strong></div>}
+        </section>
+      </div>}
+    </>}
   </>;
 }

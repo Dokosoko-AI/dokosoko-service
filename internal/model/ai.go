@@ -101,3 +101,31 @@ type AIUsageEvent struct {
 	PromptVersion     string        `json:"prompt_version"`
 	CreatedAt         time.Time     `json:"created_at"`
 }
+
+// AIBudgetStatus is a read-only snapshot of the same daily counters and active
+// reservations used by ReserveAIBudget. Zero daily limit means unlimited.
+type AIBudgetStatus struct {
+	Used     int64
+	Reserved int64
+}
+type AIProcessingBudget struct {
+	Limited    bool      `json:"limited"`
+	DailyLimit int64     `json:"daily_limit"`
+	Used       int64     `json:"used"`
+	Reserved   int64     `json:"reserved"`
+	Remaining  *int64    `json:"remaining,omitempty"`
+	ResetsAt   time.Time `json:"resets_at"`
+}
+type AIProcessingReadiness struct {
+	Workload             string              `json:"workload"`
+	CanProcess           bool                `json:"can_process"`
+	Blockers             []string            `json:"blockers"`
+	CheckedAt            time.Time           `json:"checked_at"`
+	ProviderConnectionID string              `json:"provider_connection_id,omitempty"`
+	Provider             string              `json:"provider,omitempty"`
+	Model                string              `json:"model,omitempty"`
+	ManagedBy            string              `json:"managed_by,omitempty"`
+	LastTestedAt         *time.Time          `json:"last_tested_at,omitempty"`
+	LastTestErrorCode    string              `json:"last_test_error_code,omitempty"`
+	Budget               *AIProcessingBudget `json:"budget,omitempty"`
+}

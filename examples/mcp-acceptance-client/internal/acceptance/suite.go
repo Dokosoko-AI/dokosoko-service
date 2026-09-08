@@ -3,7 +3,6 @@ package acceptance
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -14,12 +13,31 @@ func Run(ctx context.Context, config Config) (Report, error) {
 	if err := validateSecureEndpoint(config.Endpoint, config.AllowedLoopbackHTTP); err != nil {
 		return Report{}, err
 	}
+	if config.TaskPlan != nil {
+		if err := config.TaskPlan.validate(config.Endpoint); err != nil {
+			return Report{}, err
+		}
+	}
 	if config.Timeout <= 0 {
 		config.Timeout = 20 * time.Second
 	}
 	httpClient := clientWithoutRedirects(config.HTTPClient, config.Timeout)
 	started := time.Now().UTC()
-	report := Report{Endpoint: strings.TrimRight(config.Endpoint, "/"), ProtocolVersion: ProtocolVersion, StartedAt: started}
+	report := Report{ClientName: "DokoSoko MCP acceptance client", ClientVersion: ClientVersion, EvidenceOrigin: "acceptance_client_observation", Endpoint: strings.TrimRight(config.Endpoint, "/"), ProtocolVersion: ProtocolVersion, StartedAt: started}
+	expectations := map[string]*ResourceExpectation{}
+	discoveryTargets := append([]string(nil), config.ExpectedResources...)
+	readTargets := append([]string(nil), config.ExpectedResources...)
+	if config.TaskPlan != nil {
+		report.Task = &TaskReport{Selection: config.TaskPlan.Task, PlanSHA256: config.TaskPlan.fingerprint(), RetrievalStatus: Fail, ImplementationStatus: "not_run"}
+		for index := range config.TaskPlan.Resources {
+			value := &config.TaskPlan.Resources[index]
+			expectations[value.URI] = value
+			readTargets = append(readTargets, value.URI)
+			if value.Discover {
+				discoveryTargets = append(discoveryTargets, value.URI)
+			}
+		}
+	}
 	client := mcpClient{endpoint: config.Endpoint, origin: config.Origin, token: config.Token, httpClient: httpClient}
 
 	discover := client.call(ctx, "server/discover", "", nil, false)
@@ -30,36 +48,40 @@ func Run(ctx context.Context, config Config) (Report, error) {
 	}
 	report.Add(discoverCheck)
 
-	resourcesOutcome := client.call(ctx, "resources/list", "", nil, false)
-	resourcesCheck := outcomeCheck("resources/list", resourcesOutcome, nil)
+	resourceCatalog := client.listAll(ctx, "resources/list", "resources", "uri")
+	resourcesCheck := resourceCatalog.Check
 	resourceURIs := []string{}
+	descriptions := []resourceDescription{}
 	if resourcesCheck.Status == Pass {
-		var result struct {
-			Resources []struct {
-				URI string `json:"uri"`
-			} `json:"resources"`
-		}
-		if json.Unmarshal(resourcesOutcome.Response.Result, &result) != nil || result.Resources == nil {
-			resourcesCheck.Status = Fail
-			resourcesCheck.Detail = "result.resources was not an array"
-		} else {
-			for _, item := range result.Resources {
-				if item.URI != "" {
-					resourceURIs = append(resourceURIs, item.URI)
-				}
+		for _, raw := range resourceCatalog.Items {
+			var item resourceDescription
+			if json.Unmarshal(raw, &item) != nil {
+				resourcesCheck.Status, resourcesCheck.Detail = Fail, "resource descriptor was invalid"
+				break
 			}
+			descriptions = append(descriptions, item)
+			resourceURIs = append(resourceURIs, item.URI)
 		}
 	}
 	report.Add(resourcesCheck)
-	for _, expected := range unique(config.ExpectedResources) {
+	for _, expected := range unique(discoveryTargets) {
 		status := Pass
 		detail := "resource was advertised"
-		if !contains(resourceURIs, expected) {
-			status, detail = Fail, "expected resource was not advertised"
+		matches := []resourceDescription{}
+		for _, description := range descriptions {
+			if description.URI == expected {
+				matches = append(matches, description)
+			}
 		}
-		report.Add(Check{Name: "resource expected: " + expected, Status: status, Required: true, Detail: detail})
+		if len(matches) != 1 {
+			status, detail = Fail, "expected resource was absent or advertised more than once"
+		} else if value := expectations[expected]; value != nil && (!metadataMatches(matches[0].Metadata, value.Metadata) || value.MIMEType != "" && matches[0].MIMEType != value.MIMEType) {
+			status, detail = Fail, "advertised revision, publication or media type does not match the reviewed expectation"
+		}
+		resourcesOutcome := resourceCatalog.Requests[expected]
+		report.Add(Check{Name: "resource expected: " + expected, Status: status, Required: true, Detail: detail, ResourceURI: expected, RequestID: resourcesOutcome.RequestID, ResponseRequestID: resourcesOutcome.ResponseRequestID})
 	}
-	readTargets := unique(config.ExpectedResources)
+	readTargets = unique(readTargets)
 	if len(readTargets) == 0 && len(resourceURIs) > 0 {
 		readTargets = []string{resourceURIs[0]}
 	}
@@ -68,28 +90,19 @@ func Run(ctx context.Context, config Config) (Report, error) {
 	} else {
 		for _, uri := range readTargets {
 			outcome := client.callWithParams(ctx, "resources/read", map[string]any{"uri": uri})
-			report.Add(outcomeCheck("resources/read: "+uri, outcome, nil))
+			report.Add(resourceReadCheck(uri, outcome, expectations[uri]))
 		}
 	}
+	if report.Task != nil && report.Summary.Failed == 0 && report.Summary.RequiredSkipped == 0 {
+		report.Task.RetrievalStatus = Pass
+	}
 
-	toolsOutcome := client.call(ctx, "tools/list", "", nil, false)
-	toolsCheck := outcomeCheck("tools/list", toolsOutcome, nil)
+	toolCatalog := client.listAll(ctx, "tools/list", "tools", "name")
+	toolsCheck := toolCatalog.Check
 	toolNames := []string{}
 	if toolsCheck.Status == Pass {
-		var result struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		}
-		if json.Unmarshal(toolsOutcome.Response.Result, &result) != nil || result.Tools == nil {
-			toolsCheck.Status = Fail
-			toolsCheck.Detail = "result.tools was not an array"
-		} else {
-			for _, item := range result.Tools {
-				if item.Name != "" {
-					toolNames = append(toolNames, item.Name)
-				}
-			}
+		for name := range toolCatalog.Requests {
+			toolNames = append(toolNames, name)
 		}
 	}
 	report.Add(toolsCheck)
@@ -185,16 +198,14 @@ func runGrantChecks(ctx context.Context, report *Report, config Config, client m
 		return
 	}
 	restricted := mcpClient{endpoint: config.Endpoint, origin: config.Origin, token: config.RestrictedToken, httpClient: httpClient}
-	outcome := restricted.call(ctx, "tools/list", "", nil, false)
-	check := outcomeCheck("authorization.grant.negative", outcome, nil)
+	catalog := restricted.listAll(ctx, "tools/list", "tools", "name")
+	check := catalog.Check
+	check.Name = "authorization.grant.negative"
 	if check.Status == Pass {
-		names, err := toolNames(outcome.Response.Result)
-		if err != nil {
-			check.Status, check.Detail = Fail, "restricted result.tools was not an array"
-		} else if contains(names, config.GrantTool) {
+		if _, exists := catalog.Requests[config.GrantTool]; exists {
 			check.Status, check.Detail = Fail, "grant-gated tool was disclosed to the restricted token"
 		} else {
-			check.Detail = "grant-gated tool was hidden from the restricted token"
+			check.Detail = "grant-gated tool was hidden from every discovery page for the restricted token"
 		}
 	}
 	report.Add(check)
@@ -256,22 +267,6 @@ func runConfirmationChecks(ctx context.Context, report *Report, config Config, c
 		replay.Detail = "the consumed confirmation challenge was rejected on replay"
 	}
 	report.Add(replay)
-}
-
-func toolNames(raw json.RawMessage) ([]string, error) {
-	var result struct {
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
-	}
-	if json.Unmarshal(raw, &result) != nil || result.Tools == nil {
-		return nil, errors.New("result.tools was not an array")
-	}
-	values := make([]string, 0, len(result.Tools))
-	for _, item := range result.Tools {
-		values = append(values, item.Name)
-	}
-	return values, nil
 }
 
 func unique(values []string) []string {

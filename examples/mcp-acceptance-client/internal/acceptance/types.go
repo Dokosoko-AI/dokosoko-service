@@ -7,6 +7,7 @@ import (
 )
 
 const ProtocolVersion = "2026-07-28"
+const ClientVersion = "0.3.0"
 
 type Config struct {
 	Endpoint                   string
@@ -28,6 +29,7 @@ type Config struct {
 	CheckUnauthenticated       bool
 	Timeout                    time.Duration
 	HTTPClient                 *http.Client
+	TaskPlan                   *TaskPlan
 }
 
 type Status string
@@ -39,15 +41,26 @@ const (
 )
 
 type Check struct {
-	Name              string `json:"name"`
-	Status            Status `json:"status"`
-	Required          bool   `json:"required"`
-	Detail            string `json:"detail,omitempty"`
-	RequestID         string `json:"request_id,omitempty"`
+	Name              string          `json:"name"`
+	Status            Status          `json:"status"`
+	Required          bool            `json:"required"`
+	Detail            string          `json:"detail,omitempty"`
+	RequestID         string          `json:"request_id,omitempty"`
+	ResponseRequestID string          `json:"response_request_id,omitempty"`
+	HTTPStatus        int             `json:"http_status,omitempty"`
+	RPCErrorCode      *int            `json:"rpc_error_code,omitempty"`
+	DurationMS        int64           `json:"duration_ms"`
+	ResourceURI       string          `json:"resource_uri,omitempty"`
+	ContentSHA256     string          `json:"content_sha256,omitempty"`
+	ContentBytes      int             `json:"content_bytes,omitempty"`
+	Pages             []DiscoveryPage `json:"pages,omitempty"`
+}
+
+type DiscoveryPage struct {
+	RequestID         string `json:"request_id"`
 	ResponseRequestID string `json:"response_request_id,omitempty"`
-	HTTPStatus        int    `json:"http_status,omitempty"`
-	RPCErrorCode      *int   `json:"rpc_error_code,omitempty"`
-	DurationMS        int64  `json:"duration_ms"`
+	HTTPStatus        int    `json:"http_status"`
+	ResultBytes       int    `json:"result_bytes"`
 }
 
 type Summary struct {
@@ -58,12 +71,16 @@ type Summary struct {
 }
 
 type Report struct {
-	Endpoint        string    `json:"endpoint"`
-	ProtocolVersion string    `json:"protocol_version"`
-	StartedAt       time.Time `json:"started_at"`
-	DurationMS      int64     `json:"duration_ms"`
-	Checks          []Check   `json:"checks"`
-	Summary         Summary   `json:"summary"`
+	ClientName      string      `json:"client_name,omitempty"`
+	ClientVersion   string      `json:"client_version,omitempty"`
+	EvidenceOrigin  string      `json:"evidence_origin,omitempty"`
+	Endpoint        string      `json:"endpoint"`
+	ProtocolVersion string      `json:"protocol_version"`
+	StartedAt       time.Time   `json:"started_at"`
+	DurationMS      int64       `json:"duration_ms"`
+	Checks          []Check     `json:"checks"`
+	Summary         Summary     `json:"summary"`
+	Task            *TaskReport `json:"task,omitempty"`
 }
 
 func (r *Report) Add(check Check) {

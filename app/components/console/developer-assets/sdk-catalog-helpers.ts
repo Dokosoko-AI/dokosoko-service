@@ -84,3 +84,17 @@ export function sdkExplorerRecordMatches(record: DeveloperAssetRecord, query: st
   const searchable = [fallback, ...sdkExplorerSearchKeys.map((key) => record[key]).filter((value): value is string => typeof value === "string")].join("\n").toLowerCase();
   return searchable.includes(query);
 }
+
+// An exact setup link must never silently open a different package or release.
+export function sdkSetupSelection(current: string, values: { id: string }[], requested: string) {
+  if (values.some((item) => item.id === current)) return current;
+  if (requested) return values.some((item) => item.id === requested) ? requested : "";
+  return values[0]?.id ?? "";
+}
+
+export type SDKReviewDraft = { files: SDKDecisionState; samples: SDKDecisionState };
+export function isSDKReviewDraft(value: unknown): value is SDKReviewDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return [record.files, record.samples].every((decisions) => decisions && typeof decisions === "object" && !Array.isArray(decisions) && Object.entries(decisions).length <= 1000 && Object.values(decisions).every((item) => item && typeof item === "object" && ["", "included", "approved", "excluded", "quarantined"].includes(item.decision) && typeof item.reason === "string" && typeof item.reviewEvidence === "string"));
+}

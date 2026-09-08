@@ -333,6 +333,25 @@ paths:
                 $ref: '#/components/schemas/IntegrationRevision'
         '422':
           $ref: '#/components/responses/Error'
+  /api/v1/integrations/{integration_id}/revisions/{revision_id}/activate:
+    parameters:
+      - $ref: '#/components/parameters/IntegrationID'
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: activateIntegrationRevision
+      tags: ["Integrations"]
+      description: Retries activation and indexing of an exact already-published API revision. Reuses its immutable snapshot and repairs a missing developer-asset publication without reading current draft selections or creating a new API revision. Current runtime authorization remains enforced during use.
+      responses:
+        '204':
+          description: The exact saved publication has an activated, ready delivery projection.
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /api/v1/integrations/{integration_id}/preflight:
     parameters:
       - name: integration_id
@@ -343,7 +362,7 @@ paths:
     post:
       tags: ["Catalog Administration"]
       operationId: preflightIntegration
-      description: Rebuilds and validates the exact API candidate. Required documentation, contracts, SDK references, identity, authorization, tool, and runtime-service gates fail closed.
+      description: Rebuilds and validates the same exact candidate used by publish status. Requires reviewed resources or tools, validates all selected asset, authorization, drift, and runtime bindings, and fails closed on their errors. Private identity controls delivery separately and does not require knowledge-only APIs to configure execution tools.
       responses:
         '200':
           description: Server-backed candidate preflight.
@@ -1342,6 +1361,8 @@ paths:
     post:
       tags: ["Sources"]
       operationId: createSource
+      parameters:
+        - $ref: '#/components/parameters/SourceCreationKey'
       description: >-
         Creates a private, unpublished website, OpenAPI, or Git source. A website URL is also its crawl boundary: only that exact path and descendants may be fetched as pages.
         The display name is derived from the source location when omitted. File uploads must use the reviewed multipart upload endpoint instead of supplying a client-selected
@@ -1361,12 +1382,16 @@ paths:
                 $ref: '#/components/schemas/Source'
         '400':
           $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/v1/products/{product_id}/sources/upload:
     parameters:
       - $ref: '#/components/parameters/ProductID'
     post:
       tags: ["Sources"]
       operationId: uploadSource
+      parameters:
+        - $ref: '#/components/parameters/SourceCreationKey'
       description: >-
         Creates a private, unpublished upload source from one non-empty, valid UTF-8 documentation file. Accepted filename extensions are .md, .mdx, .txt, .html, .htm, .json,
         .yaml, and .yml. The configured DOKOSOKO_UPLOAD_MAX_BYTES limit is enforced while streaming. The file is stored under an opaque server-selected name and is never
@@ -1402,6 +1427,8 @@ paths:
                 $ref: '#/components/schemas/Source'
         '400':
           $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '404':
@@ -1412,6 +1439,70 @@ paths:
           $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
+  /api/v1/products/{product_id}/sources/{source_id}/upload:
+    parameters:
+      - $ref: '#/components/parameters/ProductID'
+      - $ref: '#/components/parameters/SourceID'
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: {type: string, minLength: 16, maxLength: 200}
+        description: Visible ASCII request key scoped to the administrator, deployment and source. Retain it across retries.
+    post:
+      tags: [Sources]
+      operationId: replaceSourceUpload
+      description: >-
+        Atomically replaces the future file input of an uploaded source and queues one new import.
+        Requires the current source revision and no queued/running import, including expired worker leases.
+        Retains the source identity, name, audience, quarantine and all historical evidence/publications.
+        A clean import, required AI processing and renewed human review remain necessary before publication.
+        Files use the same bounded UTF-8/extension/containment checks as source creation; old files are retained.
+        Repeating the same key and input recovers the original import, including after a lost response.
+        Changed input or revision with that key conflicts. This operation does not publish or attach content.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [organisation_id, revision, file]
+              properties:
+                organisation_id: {type: string}
+                revision: {type: integer, format: int64, minimum: 1}
+                file: {type: string, format: binary}
+      responses:
+        '200':
+          description: Replacement and import saved, or the exact committed request recovered.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SourceInputReplacementResult'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '415': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [Sources]
+      operationId: recoverSourceUploadReplacement
+      description: >-
+        Read-only recovery of the exact import created by this administrator's replacement key.
+        Returns the current source metadata and the original import's current status, even if a newer import exists.
+        Does not require re-uploading the file or enabled upload storage. Unknown keys and foreign scope return 404.
+      responses:
+        '200':
+          description: The committed replacement request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SourceInputReplacementResult'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /api/v1/products/{product_id}/sources/{source_id}/crawl:
     parameters:
       - $ref: '#/components/parameters/ProductID'
@@ -1463,6 +1554,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SourceReview'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/products/{product_id}/sources/{source_id}/review/documents/{document_id}:
+    parameters:
+      - {$ref: '#/components/parameters/ProductID'}
+      - name: source_id
+        in: path
+        required: true
+        schema: {type: string}
+      - name: document_id
+        in: path
+        required: true
+        schema: {type: string}
+      - name: crawl_job_id
+        in: query
+        required: true
+        schema: {type: string}
+    get:
+      operationId: getSourceReviewContent
+      tags: ["Sources"]
+      description: Reads stored extracted text for one exact source/crawl/document membership. Includes the most recent publication from an older generation that included the same canonical URL, or the same uploaded source when both imports contain exactly one document. Counts all imported documents before using upload identity, including excluded documents. This never fetches the live URL, changes historical evidence, or compares a historical import to a later generation. Imported HTML and instructions remain untrusted text.
+      responses:
+        '200':
+          description: Exact review content and optional previous published content.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SourceReviewContent'}
+        '400':
+          $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
   /api/v1/products/{product_id}/sources/{source_id}/publications:
@@ -1696,7 +1816,7 @@ paths:
       tags: ["MCP"]
       operationId: getMCPPreview
       description: >-
-        Renders the exact JSON-RPC response produced by the live Stateless MCPv2 discovery path without executing a tool. Public previews are anonymous. Private previews use only
+        Renders the exact JSON-RPC response produced by the live Stateless MCPv2 discovery or exact resource-read path without executing a tool. Public previews are anonymous. Private previews use only
         the explicitly supplied simulated grant set; they never mint a customer token, impersonate a customer, contact an upstream tool, or perform tools/call.
       parameters:
         - name: audience
@@ -1716,7 +1836,15 @@ paths:
               - server/discover
               - tools/list
               - resources/list
+              - resources/read
               - resources/templates/list
+        - name: uri
+          in: query
+          description: Required only for resources/read. One exact resource URI; the runtime applies its normal publication and audience checks. Other methods reject this parameter.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
         - name: grant
           in: query
           description: Simulated private-customer grants. Repeating this parameter builds the exact private discovery context; public previews reject grants.
@@ -1729,6 +1857,20 @@ paths:
             items:
               type: string
               pattern: '^[a-z][a-z0-9_.:-]{0,127}$'
+        - name: cursor
+          in: query
+          description: Opaque nextCursor from resources/list or compact tools/list. Continue with the same method, audience and grants. Other methods reject this parameter. A changed catalog or authorization context returns JSON-RPC -32602; restart without a cursor.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+        - name: catalog_version
+          in: query
+          description: DokoSoko catalog contract version. The default 2 uses compact discovery and paginated tools; 1 explicitly retains legacy full deployment/product catalog extensions and unpaged tools. This does not change the MCP protocol version or publication content.
+          schema:
+            type: integer
+            enum: [1, 2]
+            default: 2
       responses:
         '200':
           description: Exact current MCP request and response plus its explicit preview context.
@@ -2372,6 +2514,22 @@ paths:
       responses:
         '410':
           $ref: '#/components/responses/Error'
+  /api/v1/ai/readiness:
+    get:
+      tags: ["AI Configuration"]
+      operationId: getAIProcessingReadiness
+      description: Read-only local prerequisites for required Analysis processing. Does not call a provider or reserve tokens. Requests still enforce exact context and concurrency-safe budget limits at execution time. Provider/model availability is not guaranteed by can_process.
+      responses:
+        '200':
+          description: Current deployment AI configuration, blockers and daily budget snapshot. No credentials or provider response bodies are returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIProcessingReadiness'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/v1/ai/connections:
     get:
       tags: ["AI Configuration"]
@@ -2638,7 +2796,7 @@ paths:
       operationId: generateRecipes
       description: >-
         Creates review-state Markdown recipes synchronously. Supply the same integration_id used to create a scoped analysis; cross-integration generation is rejected.
-        Blocking unknowns prevent generation.
+        Blocking unknowns prevent generation. AI authoring and review are required; provider errors never fall back to deterministic authoring. AI failures use distinct ai_* error codes for configuration, credentials, budgets, capacity, timeout, and invalid output.
       requestBody:
         required: false
         content:
@@ -2663,6 +2821,15 @@ paths:
           $ref: '#/components/responses/Error'
         '422':
           $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+        '504':
+          $ref: '#/components/responses/Error'
+
   /api/v1/products/{product_id}/recipes:
     parameters:
       - $ref: '#/components/parameters/ProductID'
@@ -2720,6 +2887,52 @@ paths:
           $ref: '#/components/responses/Error'
         '422':
           $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+        '504':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/products/{product_id}/recipes/{recipe_id}/references:
+    get:
+      tags: ["Recipes and Analysis"]
+      operationId: getRecipeReferenceOptions
+      description: Read-only named reference choices and retained excerpts from this recipe's exact dependency evidence. Does not run AI or change recipe state. Changed recipe revisions or grounding return a conflict; saving still revalidates current grounding.
+      parameters:
+        - $ref: '#/components/parameters/ProductID'
+        - name: recipe_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: revision
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: current_revision_id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Exact selectable references, including references previously removed from the recipe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeReferenceOptions'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+
   /api/v1/products/{product_id}/recipes/{recipe_id}:
     parameters:
       - $ref: '#/components/parameters/ProductID'
@@ -2829,6 +3042,15 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+        '504':
+          $ref: '#/components/responses/Error'
+
   /api/v1/products/{product_id}/recipes/{recipe_id}/approve:
     parameters:
       - $ref: '#/components/parameters/ProductID'
@@ -3139,8 +3361,7 @@ paths:
       operationId: publicDeploymentMCP
       description: >-
         Canonical authentication-free Stateless MCPv2 endpoint for the singleton Deployment. Available only while Public MCP is enabled. Published recipe resources are minimal
-        product-integration instructions for a coding agent that is already connected; they never contain DokoSoko MCP setup guidance. integration.recipes.list returns only compact
-        MCPRecipeSummary records, and integration.plan selects only one exact title, slug, or outcome instead of guessing.
+        product-integration instructions for a coding agent that is already connected; they never contain DokoSoko MCP setup guidance. integration.recipes.list returns bounded MCPRecipeCatalogSummary pages by default (legacy catalog version 1 retains the full MCPRecipeSummary list), and integration.plan selects only one exact title, slug, or outcome instead of guessing.
       requestBody:
         required: true
         content:
@@ -3170,7 +3391,7 @@ paths:
       operationId: privateDeploymentMCP
       description: >-
         Canonical authenticated Stateless MCPv2 endpoint for the singleton Deployment. Published recipe resources are minimal product-integration instructions for a coding agent
-        that is already connected; they never contain DokoSoko MCP setup guidance. integration.recipes.list returns only compact MCPRecipeSummary records, and integration.plan
+        that is already connected; they never contain DokoSoko MCP setup guidance. integration.recipes.list returns bounded MCPRecipeCatalogSummary pages by default (legacy catalog version 1 retains the full MCPRecipeSummary list), and integration.plan
         selects only one exact title, slug, or outcome instead of guessing.
       requestBody:
         required: true
@@ -3265,6 +3486,118 @@ paths:
                 $ref: '#/components/schemas/DeveloperAssetIngestionSummary'
         '404':
           $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/ingestion-runs/{run_id}/processing:
+    parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      operationId: getKnowledgeProcessing
+      tags: ["Developer Assets"]
+      description: Returns required AI processing progress and exact evidence assessments. Completed batches are validated against this immutable import. This is not human approval or test evidence.
+      responses:
+        '200':
+          description: Processing progress and completed assessments.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KnowledgeProcessingStatus'}
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: processKnowledgeBatch
+      tags: ["Developer Assets"]
+      description: Processes at most one bounded batch of exact imported content with the configured analysis provider. No request body is needed. Retry reuses completed batches. Provider credentials remain in the Go service. Processing must finish before a new source, contract, or SDK publication; historical publications remain immutable. AI failures return curated ai_* errors, without provider response bodies.
+      responses:
+        '200':
+          description: Updated progress; ready means all batches completed, not that content is approved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KnowledgeProcessingStatus'}
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: Another processing batch is running (knowledge_processing_busy).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+        '504':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation/library:
+    get:
+      operationId: listDocumentationLibrary
+      tags: ["Documentation"]
+      description: Lightweight file summaries. Current view selects the newest imported version per source and path before applying search. Reviewed view includes only the included documents of each source’s latest publication and compares with earlier included versions; unreviewed and removed files cannot replace or resurrect reviewed content. History retains older imports. Review decisions are approvals, not proof that an API currently serves this content. Open a document to load its exact body, sections, and provenance.
+      parameters:
+        - name: source_publication_id
+          in: query
+          description: Restrict to exact included document hashes from this reviewed source publication. Requires view=history.
+          schema: {type: string}
+        - name: view
+          in: query
+          schema: {type: string, enum: [current, history, reviewed], default: current}
+        - name: source_id
+          in: query
+          schema: {type: string}
+        - name: query
+          in: query
+          schema: {type: string, maxLength: 500}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+      responses:
+        '200':
+          description: Current file summaries or explicit import history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentationLibraryPage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation/attention:
+    get:
+      operationId: listDocumentationAttention
+      tags: ["Documentation"]
+      description: >-
+        Administrative, bounded summaries of website and uploaded documentation sources whose latest import needs attention.
+        Includes sources without documents, failed/cancelled imports, quarantine or incomplete coverage, unfinished review, and reviewed publications lacking a full typed documentation version.
+        Active contract-bound sources use contract setup and are excluded. Counts and workflow status do not prove AI readiness, publication, API attachment or delivery.
+        Returns no content, raw source location, diagnostics, credentials or provider data and does not mutate state or call AI.
+      parameters:
+        - name: source_id
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+      responses:
+        '200':
+          description: Unfinished documentation source workflows in the current deployment.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DocumentationAttentionPage'}
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/v1/developer-assets/documentation/documents:
     get:
       operationId: exploreNormalizedDocumentation
@@ -3348,6 +3681,8 @@ paths:
                 $ref: '#/components/schemas/DocumentationCollectionList'
     post:
       operationId: createDocumentationCollection
+      parameters:
+        - $ref: '#/components/parameters/DeveloperAssetCreationKey'
       tags: ["Documentation"]
       description: >-
         Creates a collection and its first immutable, reviewed revision. Every member cites exact reviewed evidence; acknowledge_reviewed must be true.
@@ -3373,7 +3708,7 @@ paths:
                   acknowledge_reviewed: true
       responses:
         '201':
-          description: Collection root with revision 1.
+          description: New collection root with revision 1, or the current root on a matching creation retry.
           content:
             application/json:
               schema:
@@ -3536,6 +3871,26 @@ paths:
                 $ref: '#/components/schemas/DeploymentDocumentationPublication'
         '404':
           $ref: '#/components/responses/Error'
+  /api/v1/developer-assets/documentation-publications/{publication_id}/activate:
+    parameters:
+      - name: publication_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: activateDeploymentDocumentationPublication
+      tags: ["Documentation"]
+      description: Retry activation and indexing of the exact immutable publication. Does not create or change a publication. Discovery continues to use the latest ready publication until activation succeeds.
+      responses:
+        '204':
+          description: Exact publication activated and indexed.
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /api/v1/developer-assets/api-contracts:
     get:
       operationId: listAPIContracts
@@ -3550,6 +3905,8 @@ paths:
                 $ref: '#/components/schemas/APIContractList'
     post:
       operationId: createAPIContract
+      parameters:
+        - $ref: '#/components/parameters/DeveloperAssetCreationKey'
       tags: ["API Contracts"]
       requestBody:
         required: true
@@ -4784,6 +5141,35 @@ components:
       scheme: bearer
       description: Opaque, short-lived DokoSoko OAuth access token bound to one exact Private MCP resource.
   parameters:
+    DeveloperAssetCreationKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        A 16–200 character visible-ASCII key for one logical creation, scoped to administrator, deployment and resource kind.
+        Retrying identical normalized metadata and exact reviewed members returns the same root with its current state;
+        it does not create another revision or audit event. A reused key with different input returns 409.
+        Creation and its audit commit together. Human review remains required for documentation creation on every retry.
+        Omission preserves ordinary creation and existing slug uniqueness checks. This header applies only to creation, not revision updates.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 200
+        pattern: '^[!-~]+$'
+    SourceCreationKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        A 16–200 character visible-ASCII key for one logical source creation, scoped to the administrator and product.
+        Retrying the same normalized name, kind and URL (or identical upload bytes and extension) returns the same source with its current state.
+        A reused key with different input returns 409. The source and its creation audit are committed together.
+        This key does not queue ingestion or publish content. Omission preserves creation of a new source on each request.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 200
+        pattern: '^[!-~]+$'
     ProductID:
       name: product_id
       in: path
@@ -6383,6 +6769,12 @@ components:
       type: object
       additionalProperties: false
       properties:
+        integration_id:
+          type: string
+        candidate_revision:
+          type: integer
+          format: int64
+          description: Exact optimistic API revision represented by current_snapshot, including the draft-to-active transition.
         ready:
           type: boolean
         has_changes:
@@ -6394,6 +6786,18 @@ components:
           additionalProperties: true
         latest_revision:
           $ref: '#/components/schemas/IntegrationRevision'
+        serving_revision_id:
+          type: string
+          description: Exact API revision currently selected by the MCP ready-publication resolver; absent when none is ready.
+        serving_revision:
+          type: integer
+          format: int64
+        serving_publication_id:
+          type: string
+          description: Exact activated API developer-asset publication whose current search index is ready.
+        latest_delivery_ready:
+          type: boolean
+          description: True only when the latest saved API revision is the one selected by the MCP ready-publication resolver. Independent of draft readiness and has_changes.
         changes:
           type: array
           items:
@@ -6403,7 +6807,10 @@ components:
           items:
             $ref: '#/components/schemas/IntegrationPublishValidation'
       required:
+        - integration_id
+        - candidate_revision
         - ready
+        - latest_delivery_ready
         - has_changes
         - current_manifest_hash
         - current_snapshot
@@ -6908,10 +7315,33 @@ components:
             $ref: '#/components/schemas/SourcePublication'
       required:
         - items
+    SourceReviewContent:
+      type: object
+      additionalProperties: false
+      required: [document, body]
+      properties:
+        document: {$ref: '#/components/schemas/CrawlReviewDocument'}
+        body:
+          type: string
+          description: Immutable extracted source text, not a fresh URL fetch.
+        previous:
+          type: object
+          additionalProperties: false
+          required: [publication_id, publication_revision, document_id, content_hash, body]
+          properties:
+            publication_id: {type: string}
+            publication_revision: {type: integer, format: int64}
+            document_id: {type: string}
+            content_hash: {type: string}
+            body: {type: string}
     SourceReview:
       type: object
       additionalProperties: false
       properties:
+        published_document_ids:
+          type: array
+          description: Exact included legacy document IDs for publication when present. Missing on unpublished generations.
+          items: {type: string}
         source:
           $ref: '#/components/schemas/Source'
         crawl_job:
@@ -8676,6 +9106,7 @@ components:
             - server/discover
             - tools/list
             - resources/list
+            - resources/read
             - resources/templates/list
         protocol_version:
           type: string
@@ -9175,6 +9606,36 @@ components:
         analysis:
           type: string
           maxLength: 160
+    AIProcessingReadiness:
+      type: object
+      additionalProperties: false
+      properties:
+        workload: {type: string, enum: [analysis]}
+        can_process: {type: boolean}
+        blockers:
+          type: array
+          items:
+            type: string
+            enum: [model_missing, workload_disabled, provider_missing, provider_disabled, invalid_configuration, credential_unavailable, budget_exhausted]
+        checked_at: {type: string, format: date-time}
+        provider_connection_id: {type: string}
+        provider: {type: string}
+        model: {type: string}
+        managed_by: {type: string, enum: [console, environment]}
+        last_tested_at: {type: string, format: date-time}
+        last_test_error_code: {type: string}
+        budget:
+          type: object
+          additionalProperties: false
+          properties:
+            limited: {type: boolean}
+            daily_limit: {type: integer, format: int64}
+            used: {type: integer, format: int64}
+            reserved: {type: integer, format: int64}
+            remaining: {type: integer, format: int64}
+            resets_at: {type: string, format: date-time}
+          required: [limited, daily_limit, used, reserved, resets_at]
+      required: [workload, can_process, blockers, checked_at]
     AIProviderConnection:
       type: object
       additionalProperties: false
@@ -9721,6 +10182,40 @@ components:
             $ref: '#/components/schemas/IntegrationAnalysis'
       required:
         - items
+    RecipeReferenceOptions:
+      type: object
+      additionalProperties: false
+      required: [product_id, recipe_id, recipe_revision, current_revision_id, items]
+      properties:
+        product_id: { type: string }
+        recipe_id: { type: string }
+        recipe_revision: { type: integer, format: int64 }
+        current_revision_id: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [reference, evidence]
+            properties:
+              reference:
+                $ref: '#/components/schemas/RecipeReference'
+              evidence:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [kind, resource_id, label, visibility, fingerprint]
+                  properties:
+                    kind: { type: string }
+                    resource_id: { type: string }
+                    label: { type: string }
+                    excerpt: { type: string }
+                    version: { type: string }
+                    visibility:
+                      $ref: '#/components/schemas/Visibility'
+                    fingerprint: { type: string }
+
     RecipeReference:
       type: object
       additionalProperties: false
@@ -10773,6 +11268,36 @@ components:
         - name
         - arguments
         - _meta
+      allOf:
+        - if:
+            properties:
+              name: {const: deployment.apis.list}
+          then:
+            properties:
+              arguments: {$ref: '#/components/schemas/MCPAPIListArguments'}
+        - if:
+            properties:
+              name: {const: deployment.apis.get}
+          then:
+            properties:
+              arguments: {$ref: '#/components/schemas/MCPAPIGetArguments'}
+        - if:
+            properties:
+              name: {const: integration.recipes.list}
+          then:
+            if:
+              properties:
+                _meta:
+                  properties:
+                    com.dokosoko/catalogVersion: {const: 1}
+                  required: [com.dokosoko/catalogVersion]
+              required: [_meta]
+            then:
+              properties:
+                arguments: {type: object, additionalProperties: false, properties: {}}
+            else:
+              properties:
+                arguments: {$ref: '#/components/schemas/MCPRecipeListArguments'}
     MCPRequestMeta:
       type: object
       additionalProperties: true
@@ -10780,8 +11305,99 @@ components:
         io.modelcontextprotocol/protocolVersion:
           type: string
           const: '2026-07-28'
+        com.dokosoko/catalogVersion:
+          type: integer
+          enum: [1, 2]
+          default: 2
+          description: Explicit DokoSoko catalog contract version. Version 2 is the compact default. Select 1 to retain full deployment/product extensions, original full-map discovery URIs, unpaged tools/list and the full zero-argument recipe list. Unknown or malformed versions fail with -32602; this is independent of the MCP wire protocol version.
       required:
         - io.modelcontextprotocol/protocolVersion
+    MCPCompactCatalog:
+      type: object
+      additionalProperties: false
+      description: Version 2 deployment identity and routing information, without embedded API manifests. Counts use the current audience projection; excerpts do not modify publication content.
+      properties:
+        deployment_id: {type: string}
+        deployment_slug: {type: string}
+        name: {type: string, maxLength: 201}
+        description_excerpt: {type: string, maxLength: 501}
+        catalog_revision: {type: integer}
+        api_count: {type: integer, minimum: 0}
+        apis_tool: {type: string, const: deployment.apis.list}
+        api_manifest_tool: {type: string, const: deployment.apis.get}
+      required: [deployment_id, deployment_slug, name, description_excerpt, catalog_revision, api_count, apis_tool, api_manifest_tool]
+    MCPAPIListArguments:
+      type: object
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          maxLength: 500
+          description: Optional words to match in published API names, family keys, exact version keys or descriptions. All words must match, ignoring case and repeated whitespace. An empty query lists the audience's catalog.
+        cursor: {type: string, minLength: 1, maxLength: 512}
+    MCPAPIGetArguments:
+      type: object
+      additionalProperties: false
+      properties:
+        api_id: {type: string, minLength: 1, maxLength: 100}
+        manifest_hash:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Exact hash from deployment.apis.list. A changed current publication returns -32009; a foreign or audience-inaccessible API returns -32004.
+      required: [api_id, manifest_hash]
+    MCPAPISummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        family_key: {type: string}
+        version_key: {type: string}
+        display_name: {type: string, maxLength: 201}
+        description_excerpt: {type: string, maxLength: 501}
+        visibility: {type: string, enum: [private, public]}
+        lifecycle: {type: string}
+        revision: {type: integer}
+        manifest_hash: {type: string}
+      required: [id, family_key, version_key, display_name, description_excerpt, visibility, lifecycle, revision, manifest_hash]
+    MCPAPIListStructuredContent:
+      type: object
+      additionalProperties: false
+      description: One compact API catalog page, at most 32 summaries and 65536 encoded JSON array bytes. Continue with next_cursor as the cursor argument and the same query and authorization context. A changed catalog or context fails with -32602 and requires a restart.
+      properties:
+        catalog_version: {type: integer, const: 2}
+        catalog_revision: {type: integer}
+        apis:
+          type: array
+          maxItems: 32
+          items: {$ref: '#/components/schemas/MCPAPISummary'}
+        next_cursor: {type: string, maxLength: 512}
+      required: [catalog_version, catalog_revision, apis]
+    MCPAPIGetStructuredContent:
+      type: object
+      additionalProperties: false
+      description: One exact selected current API manifest and its pinned compact developer-asset /map-v2 publication map, when the API uses developer assets. Legacy APIs retain their manifest references. A result over 256 KiB fails with -32010 and directs the caller to publication maps and scoped search. Publication references describe frozen inputs; execution still requires current runtime authorization. Historical evidence remains available through exact resource URIs.
+      properties:
+        catalog_version: {type: integer, const: 2}
+        catalog_revision: {type: integer}
+        api:
+          type: object
+          additionalProperties: true
+          properties:
+            id: {type: string}
+            manifest_hash: {type: string}
+            revision: {type: integer}
+          required: [id, manifest_hash, revision]
+        publication:
+          type: object
+          additionalProperties: false
+          properties:
+            id: {type: string}
+            api_revision_id: {type: string}
+            snapshot_hash: {type: string}
+            uri: {type: string}
+          required: [id, api_revision_id, snapshot_hash, uri]
+      required: [catalog_version, catalog_revision, api]
     MCPRecipeSummary:
       type: object
       additionalProperties: false
@@ -10820,10 +11436,67 @@ components:
         - contract_version
         - revision_id
         - published_at
+    MCPRecipeListArguments:
+      type: object
+      additionalProperties: false
+      description: Catalog version 2 arguments for integration.recipes.list. Optional query words match title, slug, outcome and the exact API names/families/versions pinned by the task, ignoring case, punctuation and repeated whitespace. All words must match. api_id selects tasks using that exact API. Preserve filters and current credentials while following next_cursor.
+      properties:
+        query: {type: string, maxLength: 500}
+        api_id: {type: string, minLength: 1, maxLength: 100}
+        cursor: {type: string, minLength: 1, maxLength: 512}
+    MCPRecipeAPIVersion:
+      type: object
+      additionalProperties: false
+      description: Exact API revision frozen into the recipe. Labels come from that published historical snapshot; a newer unrelated API publication does not replace them. Current audience and recipe availability checks still apply. SDK selections are resolved through the selected recipe and its exact evidence.
+      properties:
+        api_id: {type: string}
+        family_key: {type: string}
+        version_key: {type: string}
+        display_name: {type: string}
+        integration_revision_id: {type: string}
+        manifest_hash: {type: string}
+      required: [api_id, family_key, version_key, display_name, integration_revision_id, manifest_hash]
+    MCPRecipeCatalogSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        uri: {type: string, pattern: '^dokosoko://products/[^/]+/recipes/[^/]+$'}
+        slug: {type: string}
+        title: {type: string}
+        outcome: {type: string}
+        integration_ids:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items: {type: string}
+        contract_version: {type: string, enum: [product-integration-v2, deployment-recipe-v3]}
+        revision_id: {type: string}
+        published_at: {type: string, format: date-time}
+        api_versions:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: {$ref: '#/components/schemas/MCPRecipeAPIVersion'}
+      required: [uri, slug, title, outcome, integration_ids, contract_version, revision_id, published_at, api_versions]
+    MCPRecipePageStructuredContent:
+      type: object
+      additionalProperties: false
+      description: Default catalog version 2 recipe discovery. At most 32 summaries or 65536 encoded recipe-array bytes per page, sorted by case-insensitive title then URI. recipe_count counts matches in the currently available audience scope. A cursor binds that ordered result to the query, API filter, deployment/catalog and current authorization context; changed or malformed continuations return -32602. Read the selected recipe URI and compare its revision_id before implementation. No automatic task selection or Tested status is implied.
+      properties:
+        catalog_version: {const: 2}
+        catalog_revision: {type: integer}
+        recipe_count: {type: integer, minimum: 0}
+        recipes:
+          type: array
+          maxItems: 32
+          items: {$ref: '#/components/schemas/MCPRecipeCatalogSummary'}
+        next_cursor: {type: string}
+      required: [catalog_version, catalog_revision, recipe_count, recipes]
     MCPRecipeListStructuredContent:
       type: object
       additionalProperties: false
-      description: structuredContent returned by integration.recipes.list after MCP connection.
+      description: Legacy catalog version 1 structuredContent returned by integration.recipes.list with empty arguments. This compatibility path retains the full unpaged list. Catalog version 2 instead returns MCPRecipePageStructuredContent.
       properties:
         recipes:
           type: array
@@ -10918,6 +11591,66 @@ components:
       required:
         - code
         - message
+    MCPPublicationEvidenceResource:
+      type: object
+      additionalProperties: false
+      description: One immutable evidence unit in the exact publication's ready index. Returned in legacy full publication reads or bounded map-v2/index reads inside contents[0]._meta.evidence_resources. Compact indexes excerpt titles at 200 Unicode characters; source identities, content hashes and evidence URIs remain exact. The projection never widens publication selectors or audience.
+      properties:
+        uri:
+          type: string
+        title:
+          type: string
+        kind:
+          type: string
+          description: Evidence type, such as sdk_sample, sdk_section or contract_operation.
+        knowledge_unit_id:
+          type: string
+        source_publication_kind:
+          type: string
+        source_publication_id:
+          type: string
+        source_entity_id:
+          type: string
+        content_hash:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+      required:
+        - uri
+        - title
+        - kind
+        - knowledge_unit_id
+        - source_publication_kind
+        - source_publication_id
+        - source_entity_id
+        - content_hash
+    MCPPublicationIndexQuery:
+      type: object
+      additionalProperties: false
+      description: Query parameters for an exact publication's map-v2/index resource URI. Parameters occur at most once; empty values are invalid. All query words match title, evidence kind or source entity. Source filters match exact values and are combined with query words. A changed publication index, audience, principal or query invalidates the cursor with -32602. The returned next_uri includes the same normalized filters and opaque cursor.
+      properties:
+        query: {type: string, minLength: 1, maxLength: 500}
+        source_publication_kind: {type: string, minLength: 1, maxLength: 500}
+        source_publication_id: {type: string, minLength: 1, maxLength: 500}
+        source_entity_id: {type: string, minLength: 1, maxLength: 500}
+        content_hash: {type: string, minLength: 1, maxLength: 500}
+        cursor: {type: string, minLength: 1, maxLength: 512}
+    MCPCompactPublicationMapMetadata:
+      type: object
+      additionalProperties: true
+      description: Metadata on a versioned /map-v2 summary or /map-v2/index page, under either an exact API publication URI or exact global documentation publication URI. Existing publication pins and current audience checks apply. Summaries omit evidence_resources; index pages contain at most 32 entries and 65536 encoded evidence-array bytes. Each complete resource content object is limited to 131072 encoded JSON bytes; oversized results fail with -32010. Historical publication and evidence URIs keep their existing text and metadata.
+      properties:
+        map_version: {const: 2}
+        publication_uri: {type: string, description: Original immutable publication root URI, without the map-v2 suffix.}
+        index_uri: {type: string, description: First unfiltered index URI ending in /map-v2/index.}
+        evidence_count: {type: integer, minimum: 0}
+        search_index_generation_id: {type: string}
+        match_count: {type: integer, minimum: 0, description: Total matching entries, present only on index pages.}
+        next_uri: {type: string, description: Literal URI for the next page. Absent when complete.}
+        evidence_resources:
+          type: array
+          maxItems: 32
+          items: {$ref: '#/components/schemas/MCPPublicationEvidenceResource'}
+      required: [map_version, publication_uri, index_uri, evidence_count, search_index_generation_id]
     JSONRPCResponse:
       type: object
       additionalProperties: false
@@ -10928,8 +11661,11 @@ components:
           $ref: '#/components/schemas/JSONRPCID'
         result:
           description: >-
-            Method-specific MCP result. integration.recipes.list exposes MCPRecipeListStructuredContent, integration.plan exposes MCPRecipePlanStructuredContent, and integration.check
+            Method-specific MCP result. integration.recipes.list exposes MCPRecipePageStructuredContent by default, or legacy MCPRecipeListStructuredContent with explicit catalog version 1. integration.plan exposes MCPRecipePlanStructuredContent, and integration.check
             exposes MCPRecipeCheckStructuredContent inside the tool result structuredContent field.
+            DokoSoko catalog contract version 2 is the default: server/discover and tools/list return catalogVersion: 2 and a compact catalog matching MCPCompactCatalog, without full deployment/product aliases. Select params._meta.com.dokosoko/catalogVersion: 1 for legacy full catalog extensions and unpaged tools/list; that explicit compatibility projection remains unbounded. Compact tools/list places built-in task/API routing tools first, then currently authorized definitions by name, and pages at 32 entries or 983040 encoded tools-array bytes. Follow nextCursor with the same context; changed or malformed continuations return -32602. The explicit deployment.get_manifest/product.get_manifest tools retain their full result for existing consumers, but version 2 advertises targeted deployment.apis.list and deployment.apis.get instead. Their arguments and structuredContent match MCPAPIListArguments/MCPAPIListStructuredContent and MCPAPIGetArguments/MCPAPIGetStructuredContent.
+            resources/list advertises current available recipes and ready publication maps, ordered by URI. Catalog version 2 advertises compact /map-v2 resource URIs; explicit catalog version 1 retains original full-map URIs. Each page contains at most 32 descriptors and a resources array of at most 65536 encoded JSON bytes. Follow nextCursor using params.cursor and the same audience and credentials until nextCursor is absent. A stale, malformed or foreign-scope cursor returns -32602; restart without a cursor. catalogRevision identifies the current catalog. Individual evidence units are reached through exact publication maps and resource templates, not enumerated in resources/list.
+            Original developer-asset publication resources/read results retain their full text and contents[0]._meta.evidence_resources. Versioned /map-v2 summaries and /map-v2/index pages instead expose MCPCompactPublicationMapMetadata. Use query parameters matching MCPPublicationIndexQuery on the index URI, then follow next_uri for more matches. Select exact source publication/entity/content-hash filters to resolve recipe dependencies without loading the full index. These projections use the same historical publication and current audience checks as original reads. Evidence reads retain their exact URI, index generation, source identity and content hash in _meta. Invalid query or cursor returns -32602; a resource exceeding 128 KiB returns -32010. Full backend index validation remains necessary before projection.
         error:
           $ref: '#/components/schemas/JSONRPCError'
       required:
@@ -11172,6 +11908,17 @@ components:
       required:
         - items
         - has_more
+    SourceInputReplacementResult:
+      type: object
+      additionalProperties: false
+      required: [source, crawl_job]
+      properties:
+        source:
+          $ref: '#/components/schemas/Source'
+          description: Current source metadata, without resetting its state on recovery.
+        crawl_job:
+          $ref: '#/components/schemas/CrawlJob'
+          description: Exact import created by the replacement, with its current state.
     Source:
       type: object
       additionalProperties: false
@@ -11595,6 +12342,44 @@ components:
         - state
         - checkpoint
         - diagnostics
+    KnowledgeProcessingStatus:
+      type: object
+      additionalProperties: false
+      required: [ingestion_run_id, workflow_version, state, completed_batches, total_batches, stage_ids, assessments]
+      properties:
+        ingestion_run_id: {type: string}
+        workflow_version: {type: string}
+        state: {type: string, enum: [required, running, ready]}
+        completed_batches: {type: integer, minimum: 0}
+        total_batches: {type: integer, minimum: 1, maximum: 4096}
+        error_code: {type: string}
+        stage_ids:
+          type: array
+          items: {type: string}
+        assessments:
+          type: array
+          maxItems: 4096
+          items: {$ref: '#/components/schemas/KnowledgeAssessment'}
+    KnowledgeAssessment:
+      type: object
+      additionalProperties: false
+      required: [id, evidence_id, title, content_hash, part, part_count, summary, evidence_quote, findings]
+      properties:
+        id: {type: string}
+        evidence_id: {type: string}
+        title: {type: string}
+        content_hash: {type: string}
+        part: {type: integer, minimum: 1}
+        part_count: {type: integer, minimum: 1}
+        summary: {type: string, minLength: 1, maxLength: 600}
+        evidence_quote: {type: string, minLength: 1, maxLength: 400}
+        findings:
+          type: array
+          maxItems: 5
+          uniqueItems: true
+          items:
+            type: string
+            enum: [missing_context, version_ambiguity, inconsistent_guidance, embedded_instruction, credential_handling]
     DeveloperAssetIngestionSummary:
       type: object
       additionalProperties: false
@@ -11744,6 +12529,57 @@ components:
         - reviewed_by
         - reviewed_at
         - created_at
+    DocumentationLibraryItem:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        source_id: {type: string}
+        ingestion_run_id: {type: string}
+        source_path: {type: string}
+        title: {type: string}
+        content_hash: {type: string}
+        visibility: {$ref: '#/components/schemas/Visibility'}
+        decision: {type: string, enum: [unreviewed, included, excluded, quarantined]}
+        previous_document_id: {type: string, description: "Previous import of this exact source path, or empty. In reviewed view, this is an earlier included publication from an older import of that path, or the same uploaded source when both complete imports contain one document. Other views do not imply publication."}
+        queued_at: {type: string, format: date-time}
+      required: [id, source_id, ingestion_run_id, source_path, title, content_hash, visibility, decision, previous_document_id, queued_at]
+    DocumentationLibraryPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DocumentationLibraryItem'}
+        total: {type: integer}
+        has_more: {type: boolean}
+      required: [items, total, has_more]
+    DocumentationAttentionItem:
+      type: object
+      additionalProperties: false
+      properties:
+        source_id: {type: string}
+        name: {type: string}
+        kind: {type: string, enum: [website, upload]}
+        visibility: {$ref: '#/components/schemas/Visibility'}
+        crawl_job_id: {type: string, description: Exact latest import or empty when none has been queued.}
+        status: {type: string, enum: [not_imported, importing, import_failed, blocked, review, save_version]}
+        fetched_count: {type: integer, minimum: 0}
+        changed_count: {type: integer, minimum: 0}
+        failed_count: {type: integer, minimum: 0}
+        skipped_count: {type: integer, minimum: 0}
+        updated_at: {type: string, format: date-time}
+      required: [source_id, name, kind, visibility, crawl_job_id, status, fetched_count, changed_count, failed_count, skipped_count, updated_at]
+    DocumentationAttentionPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DocumentationAttentionItem'}
+        total: {type: integer, minimum: 0}
+        has_more: {type: boolean}
+      required: [items, total, has_more]
     DocumentationCandidateRecord:
       type: object
       additionalProperties: false
@@ -12272,6 +13108,9 @@ components:
       type: object
       additionalProperties: false
       properties:
+        serving_publication_id:
+          type: string
+          description: Exact publication currently resolved by MCP and search. Empty when no publication is ready.
         items:
           type: array
           items:
@@ -12440,6 +13279,11 @@ components:
       properties:
         id:
           type: string
+        deployment_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
         api_contract_id:
           type: string
         ingestion_run_id:
@@ -12465,6 +13309,8 @@ components:
           additionalProperties: true
       required:
         - id
+        - deployment_id
+        - created_at
         - api_contract_id
         - ingestion_run_id
         - normalized_contract

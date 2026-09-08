@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, GitBranch, LockKeyhole, PackageSearch, ShieldCheck } from "lucide-react";
+import { LockKeyhole, PackageSearch, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -9,6 +9,7 @@ import {
   type SDKPackageImportInput,
   type SDKPackageImportResult,
 } from "../../../lib/developer-assets-api";
+import { resolveSDKPackageLocation } from "../../../lib/sdk-package-locator";
 import { Button, Dialog } from "../../core/control";
 import { developerAssetError } from "./developer-asset-ui";
 
@@ -44,6 +45,8 @@ export function SDKPackageImportDialog({
   onMessage: (message: string) => void;
 }) {
   const { t } = useTranslation();
+  const [locator, setLocator] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const [ecosystem, setEcosystem] = useState<Ecosystem>("npm");
   const [sourceKind, setSourceKind] = useState<SourceKind>("registry");
   const [sourceURL, setSourceURL] = useState("");
@@ -59,6 +62,8 @@ export function SDKPackageImportDialog({
   const [problem, setProblem] = useState("");
 
   function resetForm() {
+    setLocator("");
+    setAdvanced(false);
     setEcosystem("npm");
     setSourceKind("registry");
     setSourceURL("");
@@ -76,6 +81,19 @@ export function SDKPackageImportDialog({
   function closeDialog() {
     resetForm();
     onClose(false);
+  }
+
+  function locate(value: string, selected = ecosystem) {
+    setLocator(value); setCredential("");
+    const resolved = resolveSDKPackageLocation(value, selected);
+    if (resolved) {
+      if (value.includes("://")) setAdvanced(false);
+      setEcosystem(resolved.ecosystem); setCoordinate(resolved.coordinate); setSourceURL(resolved.sourceURL); setSourceKind("registry");
+      if (resolved.exactVersion) setExactVersion(resolved.exactVersion);
+    } else {
+      setCoordinate(""); setSourceURL(value.includes("://") ? value.trim() : "");
+      if (value.trim()) setAdvanced(true);
+    }
   }
 
   const authentication: SDKPackageImportInput["authentication"] = privateSource
@@ -129,46 +147,15 @@ export function SDKPackageImportDialog({
     </>}
   >
     <div className="auth-form compact-form sdk-import-form">
-      <fieldset className="source-kind-selector">
-        <legend>{t("sdkImport.ecosystem")}</legend>
-        <div className="source-kind-options sdk-import-ecosystems">
-          {ecosystems.map((option) => <label className={ecosystem === option.id ? "selected" : ""} key={option.id}>
-            <input type="radio" name="sdk-import-ecosystem" value={option.id} checked={ecosystem === option.id} onChange={() => setEcosystem(option.id)} />
-            <span className="source-kind-icon sdk-import-ecosystem-mark" aria-hidden="true">{option.mark}</span>
-            <strong>{t(`sdkImport.ecosystems.${option.id}`)}</strong>
-            <Check className="source-kind-check" />
-          </label>)}
-        </div>
-      </fieldset>
-
-      <fieldset className="source-kind-selector">
-        <legend>{t("sdkImport.sourceType")}</legend>
-        <div className="source-kind-options sdk-import-source-types">
-          <label className={sourceKind === "registry" ? "selected" : ""}>
-            <input type="radio" name="sdk-import-source" value="registry" checked={sourceKind === "registry"} onChange={() => setSourceKind("registry")} />
-            <span className="source-kind-icon"><PackageSearch /></span>
-            <strong>{t("sdkImport.registry")}</strong>
-            <Check className="source-kind-check" />
-          </label>
-          <label className={sourceKind === "git" ? "selected" : ""}>
-            <input type="radio" name="sdk-import-source" value="git" checked={sourceKind === "git"} onChange={() => setSourceKind("git")} />
-            <span className="source-kind-icon"><GitBranch /></span>
-            <strong>{t("sdkImport.gitRepository")}</strong>
-            <Check className="source-kind-check" />
-          </label>
-        </div>
-      </fieldset>
-
-      <label className="auth-field">
-        <span>{sourceKind === "git" ? t("sdkImport.repositoryURL") : t("sdkImport.registryURL")}</span>
-        <input type="url" value={sourceURL} onChange={(event) => setSourceURL(event.target.value)} placeholder={sourceKind === "git" ? "https://github.com/owner/repository" : registryPlaceholder(ecosystem)} />
-        <small>{sourceKind === "git" ? t("sdkImport.gitURLHelp") : t("sdkImport.registryURLHelp")}</small>
-      </label>
-      <div className="two-fields">
-        <label className="auth-field"><span>{t("sdkImport.packageCoordinate")}</span><input value={coordinate} onChange={(event) => setCoordinate(event.target.value)} placeholder={ecosystem === "npm" ? "@scope/package" : ecosystem === "go" ? "github.com/owner/module" : "package-name"} /></label>
-        <label className="auth-field"><span>{t("sdkImport.exactVersion")}</span><input value={exactVersion} onChange={(event) => setExactVersion(event.target.value)} placeholder={ecosystem === "go" ? "v1.2.3" : "1.2.3"} /></label>
-      </div>
-      {sourceKind === "git" && <label className="auth-field"><span>{t("sdkImport.gitRef")}</span><input value={sourceRef} onChange={(event) => setSourceRef(event.target.value)} placeholder={exactVersion || t("sdkImport.exactVersionOrCommit")} /><small>{t("sdkImport.gitRefHelp")}</small></label>}
+      <label className="auth-field"><span>{t("sdkSetup.packageNameOrURL")}</span><input value={locator} onChange={(event) => locate(event.target.value)} placeholder="@scope/package or https://pypi.org/project/package" /><small>{t("sdkSetup.packageLocatorHelp")}</small></label>
+      <div className="two-fields"><label className="auth-field"><span>{t("sdkImport.ecosystem")}</span><select value={ecosystem} onChange={(event) => { const selected = event.target.value as Ecosystem; setEcosystem(selected); locate(locator, selected); }}>{ecosystems.map((option) => <option key={option.id} value={option.id}>{t(`sdkImport.ecosystems.${option.id}`)}</option>)}</select></label><label className="auth-field"><span>{t("sdkImport.exactVersion")}</span><input value={exactVersion} onChange={(event) => setExactVersion(event.target.value)} placeholder={ecosystem === "go" ? "v1.2.3" : "1.2.3"} /></label></div>
+      {coordinate && <p>{t("sdkSetup.resolvedPackage", { coordinate, ecosystem })}</p>}
+      <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}><summary>{t("sdkSetup.customPackageSource")}</summary><div className="auth-form compact-form">
+        <label className="auth-field"><span>{t("sdkImport.sourceType")}</span><select value={sourceKind} onChange={(event) => { setSourceKind(event.target.value as SourceKind); setCredential(""); }}><option value="registry">{t("sdkImport.registry")}</option><option value="git">{t("sdkImport.gitRepository")}</option></select></label>
+        <label className="auth-field"><span>{sourceKind === "git" ? t("sdkImport.repositoryURL") : t("sdkImport.registryURL")}</span><input type="url" value={sourceURL} onChange={(event) => { setSourceURL(event.target.value); setCredential(""); }} placeholder={sourceKind === "git" ? "https://github.com/owner/repository" : registryPlaceholder(ecosystem)} /><small>{sourceKind === "git" ? t("sdkImport.gitURLHelp") : t("sdkImport.registryURLHelp")}</small></label>
+        <label className="auth-field"><span>{t("sdkImport.packageCoordinate")}</span><input value={coordinate} onChange={(event) => setCoordinate(event.target.value)} /></label>
+        {sourceKind === "git" && <label className="auth-field"><span>{t("sdkImport.gitRef")}</span><input value={sourceRef} onChange={(event) => setSourceRef(event.target.value)} placeholder={exactVersion || t("sdkImport.exactVersionOrCommit")} /><small>{t("sdkImport.gitRefHelp")}</small></label>}
+      </div></details>
 
       <div className="two-fields">
         <label className="auth-field"><span>{t("sdkImport.sourceAccess")}</span><select value={privateSource ? "private" : "public"} onChange={(event) => setPrivateSource(event.target.value === "private")}><option value="public">{t("sdkImport.publicSource")}</option><option value="private">{t("sdkImport.privateSource")}</option></select></label>

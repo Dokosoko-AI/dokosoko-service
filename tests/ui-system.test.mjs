@@ -174,9 +174,9 @@ test("keeps API Resources attachment-only and pinned to reviewed exact versions"
   assert.match(source, /activeTab === "documentation"[\s\S]*<APIResourcesWorkspace/);
   assert.doesNotMatch(resources, /ExactVersionNotice|This page contains attachment records only/);
   assert.match(resources, /Open catalog/);
-  assert.match(resources, /panelKind === "contract" \? "Create in Catalog" : "Create & attach"/);
-  assert.match(resources, /kind === "contract" \? "Create in Catalog" : "Create & attach exact resource"/);
-  assert.match(resources, /Next steps happen in Catalog/);
+  assert.match(resources, /panelKind === "contract" \? "Create & set up" : "Create & attach"/);
+  assert.match(resources, /kind === "contract" \? "Create & set up" : "Create & attach exact resource"/);
+  assert.match(resources, /add an OpenAPI URL or file, complete AI processing/);
   assert.match(resources, /Attach existing/);
   assert.match(resources, /Change exact/);
   assert.match(resources, /Detach resource/);

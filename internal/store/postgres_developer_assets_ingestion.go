@@ -524,7 +524,7 @@ func (p *Postgres) SaveSourcePublicationDocumentationReview(ctx context.Context,
 	}
 	var runID, sourceID string
 	var runCount int
-	err = tx.QueryRow(ctx, `SELECT min(document.ingestion_run_id)::text,count(DISTINCT document.ingestion_run_id),publication.source_id::text
+	err = tx.QueryRow(ctx, `SELECT min(document.ingestion_run_id::text),count(DISTINCT document.ingestion_run_id),publication.source_id::text
 		FROM source_publication_document_selections selection
 		JOIN documentation_documents document ON document.id=selection.documentation_document_id
 		JOIN source_publications publication ON publication.id=selection.source_publication_id

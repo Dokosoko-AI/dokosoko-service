@@ -1,0 +1,8 @@
+{
+  "name": "@fixture/orders-retrieval",
+  "version": "1.2.3",
+  "private": true,
+  "type": "module",
+  "description": "Local integration evaluation fixture; not a vendor SDK or deployable application.",
+  "engines": { "node": ">=22.13.0" }
+}

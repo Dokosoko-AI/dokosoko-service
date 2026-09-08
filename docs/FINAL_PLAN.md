@@ -74,6 +74,29 @@ APIs, or both without duplicating content. A contract revision and SDK release
 can likewise serve several APIs, and different APIs may choose different exact
 releases of the same SDK package.
 
+Normal documentation setup uses the typed collection path. One stable
+source-derived collection slug identifies the source's reusable documentation
+history; each saved version selects one exact reviewed source publication.
+Setup reuses a matching immutable version after a lost response, and only creates
+a later version against the reviewed collection revision. It never overwrites
+unrelated members or an unexpected API binding. An exact attachment changes the
+API draft; publishing the API remains a separate acknowledgement. Custom sets
+can still combine named reviewed sources, documents and sections through their
+explicit set editor.
+
+Contract setup retains a primary-attachment choice against the exact immutable
+candidate/source evidence, originating API and audience in the current
+deployment/reviewer browser scope. Source/root revision increments caused by
+publication do not invalidate that choice; changed evidence or audience does.
+The choice is not an acknowledgement. Reload and changed review selections
+require renewed acknowledgement. Attachment writes use the reviewed binding
+revision and reject intervening changes. Setup completion requires a read-back
+of the same deployment/API/contract, exact pinned revision, primary setting and
+audience, with follow-latest disabled. A committed publication can be recovered
+independently from attachment, and no API publication is implied. Current API
+audience is rechecked before publishing and before attachment; public API
+attachments require the reviewed public audience.
+
 ## Ingestion, maps, and retrieval
 
 Ingestion is a staged, replayable pipeline: acquire, validate, parse,
@@ -82,6 +105,17 @@ Map, quality-check, review, publish, and build an index. Raw manifests,
 processor versions, hashes, diagnostics, partial coverage, skipped files,
 failures, and quarantine decisions are retained. Candidates are immutable and
 publication is an explicit human action.
+
+Source creation accepts an optional `Idempotency-Key`, scoped to the current
+administrator and deployment. One transaction records the private draft source,
+creation audit and digests identifying the request and normalized input. Repeated
+requests with the same input return the current source without resetting its
+audience, revision or publication state; changed input with the same key conflicts.
+Upload identity includes its validated bytes, name and extension, not the random
+storage path. A recovered upload retains the original file and removes the new
+temporary copy. An uncertain database commit preserves the possibly referenced
+file. Requests without a key retain the existing create-new-source behavior.
+This boundary does not queue ingestion or acknowledge AI processing/publication.
 
 Source text and code are inert, untrusted evidence. Website and upload limits,
 network controls, path containment, UTF-8 and size checks, secret detection,
@@ -118,6 +152,15 @@ Documentation collection member selectors are applied before member maps are
 merged, so an out-of-selector topic cannot reappear through the Table of
 Contents.
 
+SDK review renders samples as literal code and labels whole-source-file
+comparisons explicitly. Comparison evidence is limited to included files from a
+previous publication of the same release and deployment. Local draft recovery is
+scoped to the exact candidate; acknowledgement must be renewed. Pending writes
+cannot be presented as published decisions. Setup completion requires reading
+back the exact API attachment, including audience, selectors and compatibility
+claims. Changed SDK evidence clears claims tied to the previous publication;
+unchanged evidence preserves its reviewed claims without inventing test results.
+
 Only the ready index generation for the current builder and retrieval-profile
 versions is eligible for search. Older ready generations remain immutable
 history but cannot be mixed into current candidates. API MCP evidence is
@@ -126,6 +169,131 @@ publication-scoped URIs, including historical reads, so two APIs can expose
 different slices of one reusable asset without leakage or URI collisions.
 
 ## Trust boundaries
+
+Customer task checks must identify the selected task revision and exact published
+evidence. A successful MCP response alone does not establish correct retrieval.
+The standalone acceptance client supports a reviewed task plan with exact URI,
+UTF-8 response-text hash and revision/publication metadata expectations. Its
+reports identify the observing client/version and reviewed-plan fingerprint,
+preserve request correlation, and keep implementation/tests explicitly not run.
+These client observations are distinct from server attestations, simulated
+administrator previews and independently executed application tests.
+
+The API Connect workspace validates the selected task's canonical text and exact
+API publication maps through read-only runtime previews before generating its
+check plan. Preview reads preserve the requested literal URI and current audience
+authorization; private administrator previews explicitly use simulated grants.
+Imported reports must match the reviewed plan and required check structure.
+Application checks remain explicitly client-reported and require their own
+client/version, environment, performed check, expected result and actual evidence.
+Exports preserve these separate origins and do not change Tested/Verified claims.
+Changing the task or audience discards the open review and its reports.
+
+Original full publication reads expose a structured evidence index in
+`contents[0]._meta.evidence_resources`; discovery omits that duplicated index.
+`resources/list` advertises current available recipes and ready publication maps.
+Catalog version 2 uses compact `/map-v2` URIs; version 1 advertises original full maps.
+Individual evidence units remain available through those maps, resource templates
+and their exact historical URIs. Discovery sorts descriptors by URI and pages
+them at 32 entries or 64 KiB of encoded array JSON, whichever comes first.
+Continue with the opaque `nextCursor` in `params.cursor`. Every page resolves
+current publication and authorization state again; catalog, audience, principal,
+grant or policy changes invalidate the continuation with `-32602` and require a
+restart. Cursors confer no access. A descriptor larger than the page budget fails
+explicitly rather than being omitted. Connect and the acceptance client stop at
+64 pages or 4 MiB per list and reject duplicate entries or inconsistent pages.
+This follows the [MCP pagination contract](https://modelcontextprotocol.io/specification/draft/server/utilities/pagination).
+
+MCP catalog versioning is independent of the MCP protocol version. The explicit
+integer request metadata `com.dokosoko/catalogVersion` supports 1 and 2; absent
+metadata selects 2, and invalid explicit values fail with `-32602`. Version 2
+`server/discover` and `tools/list` contain a compact deployment catalog rather
+than embedded API manifests. Tool pages contain at most 32 descriptors or 960 KiB
+of encoded array JSON, with task/API routing tools first and other authorized
+tools ordered by name. Current authorization is applied before pagination;
+cursor scope uses the same current principal/catalog checks as resource lists.
+Custom tools cannot shadow built-in tool names.
+
+`deployment.apis.list` returns at most 32 audience-visible API summaries or 64 KiB
+of array JSON. All normalized query words must match published API name, family,
+version or description. Its `next_cursor` is bound to the query and authorization
+context. `deployment.apis.get` requires the selected API ID and manifest hash;
+changed publication returns `-32009`, and inaccessible APIs return `-32004`.
+Modern developer-asset APIs include the exact ready publication map URI and pins.
+The complete structured result is limited to 256 KiB; an oversized read returns
+`-32010` directing callers to publication maps and scoped search. Legacy APIs
+retain their manifest resource references. Published content is unchanged.
+
+Version 1 retains the full `deployment`/`product` extensions, unpaged tool
+catalog and zero-argument full recipe list for existing consumers; it rejects
+tool-list cursors and the version 2 recipe-list arguments. Explicit legacy
+`deployment.get_manifest` and `product.get_manifest` calls remain supported,
+although version 2 does not advertise them. These compatibility paths and original full-map
+reads are not covered by the compact response bounds. Full
+manifest/index resolution still precedes pagination; bounded response size does
+not imply bounded backend work.
+
+Catalog version 2 `integration.recipes.list` accepts query words, an optional
+exact API ID and an opaque cursor. All query words match the task's published
+title, slug or outcome, or the API names/families/versions frozen into its current
+recipe revision, ignoring case and punctuation. The API filter requires actual
+recipe membership. Results retain exact recipe URI/revision and API revision/
+manifest-hash pins; they do not infer SDK compatibility or testing status. SDK
+selections are resolved through the recipe and its selected evidence.
+
+Recipe labels come from their bound historical API snapshots, not a newer
+catalog entry. Current audience visibility and existing recipe drift checks still
+apply. Missing, invalid or unavailable revision context fails discovery with an
+actionable error. API history reads are reused across recipes within one request.
+Results sort by case-insensitive title then URI and stop at 32 summaries or 64 KiB
+of encoded array JSON per page. `recipe_count` counts the current matching scope.
+A changed query, API filter, catalog, availability or authorization context
+invalidates continuation with `-32602`. Explicit version 1 preserves the original
+full list. `integration.plan` continues to require an exact title, slug or outcome
+and never chooses an ambiguous match. Read the selected resource and compare its
+recipe revision before implementation.
+
+Upstream MCP inspection follows every tool page before exposing a catalog to
+import. One inspection has a 20-second deadline and limits of 64 pages, 4 MiB of
+result JSON and 4,096 tools. Duplicate or blank names, repeated/invalid cursors,
+inconsistent catalog revisions, connection revision changes and exceeded budgets
+fail the entire inspection before import changes local tools. Empty opaque
+cursors are forwarded; absent or null `nextCursor` ends the list. Inspection
+keeps the fixed upstream endpoint and credential, and uses the minimum page TTL.
+
+Versioned `/map-v2` reads contain publication pins, the ready generation ID,
+evidence count and a link to `/map-v2/index`. They omit the full evidence table.
+Index reads accept optional query words and exact source publication kind/ID,
+source entity ID and content hash filters. All filters apply together. Each page
+contains at most 32 entries or 64 KiB of evidence-array JSON; the complete resource
+content object is bounded to 128 KiB. Oversized entries fail with `-32010`, never
+silently disappear. Follow `next_uri` with unchanged credentials. Query, scope or
+generation changes invalidate continuations with `-32602`. Historical indexes
+use their exact publication generation, independent of newer publication heads.
+Both summaries and index pages enforce the original current audience and ready
+index checks before exposing titles, counts or other metadata.
+
+Connect reads compact maps and resolves each selected dependency with exact source
+filters. A lookup must identify exactly one unit, match the expected publication
+and generation, and have no continuation. Missing, ambiguous, inconsistent or
+partial matches stop review. Lookup pages locate references; the exported check
+plan pins the compact map and exact evidence reads, without requiring the client
+to repeat the browser's lookup. Original full-map/evidence URLs retain their
+contents, and explicit legacy catalog version 1 remains available.
+
+Both full and paged tables come from the same ready, selector-scoped generation
+as the publication map. Connect resolves developer-asset dependencies by API/global scope, immutable
+source publication and entity, and selected content hash. Contract operations use
+their immutable contract revision and operation identity because their dependency
+version is a canonical fact fingerprint rather than a content hash. Each selected
+read must match its URI, generation and source metadata before its response-text
+hash enters the plan. Unrelated entries are not read. Global facts resolve only
+through global publications pinned by the task's exact API publications. Inspect
+their immutable member metadata first and read only publications containing the
+selected collection revisions and hashes, with public audience checks when needed.
+Equivalent global publications use stable publication-ID order. Global map reads
+pin the publication ID, snapshot hash and revision. Missing, ambiguous or over-budget
+selections fail without exporting a partial plan.
 
 ### Documentation
 
@@ -196,7 +364,7 @@ must produce structured uncertainty instead of a guessed result. The runtime
 rejects any registered workflow invocation that omits a named, closed-object
 JSON output schema.
 
-Each developer-asset AI run is an explicit administrator action against one
+Each of these advisory AI runs is an explicit administrator action against one
 immutable publication scope. A successful run records the effective prompt
 version, exact allowed evidence IDs, input/evidence/result hashes, a closed
 structured result, actor, and timestamp. Invalid, unsafe, unavailable, or
@@ -204,6 +372,20 @@ schema-invalid runs persist no advisory result and never change the
 deterministic Map, review state, binding, index, or publication. The console
 labels these results as advisory and keeps deterministic evidence visible next
 to them.
+Knowledge processing is a separate required step before publishing a new source,
+contract candidate, or SDK content candidate. Its server-owned
+`knowledge-processing-v1` contract processes bounded parts of exact normalized
+input, without tools, execution, or backup-provider failover. The credential-free
+crawler queues this step; the Go service owns provider configuration and calls.
+Successful batch checkpoints bind the workflow version, exact input hash,
+structured result hash, processor identity, model, and evidence parts. The service
+validates every evidence ID and literal quotation; incomplete or invalid results
+cannot satisfy the publication gate. A crashed batch can be reclaimed after its
+lease expires; completed batches survive retries and reloads. Publication audit
+records identify the processing stages used. Human decisions, deterministic maps,
+compatibility assertions, and test evidence remain separate. Existing immutable
+publications are not rewritten or made dependent on another provider call.
+
 The deployment recipe contract and structured output schema are also
 immutable. Recipes are deployment-owned and may attach one or more APIs; every
 immutable recipe revision freezes the exact published revision and manifest
@@ -213,6 +395,15 @@ to the configured model, derives attachments from the selected capabilities,
 and fails closed when the request is unsupported or ambiguous.
 Editable prompt text may tune editorial guidance but cannot turn a recipe into
 an MCP setup guide or ungrounded prose.
+
+Reference selection is a read-only projection of the recipe's exact dependencies,
+scoped to deployment, recipe and current revision. Opening it never runs AI or
+marks the recipe outdated. Named choices expose retained evidence and provenance;
+they cannot widen selection to the live catalog. Reference edits use the same
+canonical choices, retain server ownership of instructions, require AI review,
+and create an unapproved immutable revision under existing concurrency and
+current-grounding checks. A failed or uncertain save retains local choices;
+refreshing the dialog explicitly loads the saved revision and resets them.
 
 MCP delivery exposes both immutable `deployment-recipe-v3` recipes and
 historical `product-integration-v2` recipes. Historical `legacy-mcp-v1` setup
@@ -279,14 +470,30 @@ weaken an earlier deterministic gate.
 - Give administrators a complete file/document explorer with search, paging,
   inclusion state, diagnostics, normalized content, lineage, and an exact
   Documentation, Contract, or SDK Map preview.
+- Require completed AI processing for the exact normalized import. Show progress,
+  saved assessments, and a resumable failure state before publication.
+- Expose required AI setup before processing and recipe generation. Local
+  readiness checks configuration and available daily capacity without a provider
+  call; an explicit connection test is separate historical evidence. Actual
+  processing must revalidate the exact evidence and reserve its own budget.
+  Changing configuration must not inherit a stale successful connection test.
 - Require explicit document/file/sample decisions and retain exclusion or
   quarantine reasons. A sample is publishable only with positive named machine
   evidence or non-empty structured human-review evidence.
 - Snapshot root display identity, selectors, visibility, content hashes, exact
   revisions/releases, and reviewed maps into immutable publications.
+- SDK attachments may advance after publication. Historical publication and
+  advisory rows reference stable attachment identity and immutable selected
+  assets, never mutable release/content/assertion columns through foreign keys.
+  A new SDK snapshot must validate and lock its exact current attachment
+  selection until its transaction completes. Historical evidence remains frozen.
 - Record the domain publication audit and activation marker before an index can
   become discoverable. A failed newest activation leaves the prior ready
-  publication live.
+  publication live. Console serving status must use the same resolver as MCP.
+  Retry delivery from the exact saved API revision, preserving its publisher,
+  content and scope even if the draft has since changed. Repairing its missing
+  delivery record or index must not create a new API revision or weaken current
+  runtime authorization. Unknown historical snapshot formats fail explicitly.
 - Gate: no draft, partial, quarantined, unreviewed, unactivated, or visibility-
   widened content can enter retrieval.
 
@@ -349,6 +556,16 @@ weaken an earlier deterministic gate.
   evidence. Include ambiguous, no-answer, cross-API, cross-version, prompt-
   injection, malformed, duplicate, stale-index, yanked-release, and secret-like
   cases.
+  The [published task retrieval baseline](retrieval-evaluations.md) now covers
+  five synthetic SDK guidance tasks, exact citations, selected unavailable
+  scopes and historical upgrades through Query Lab on memory and PostgreSQL.
+  Its 100% recall and 20–40% precision at five are fixture results; broader
+  no-answer cases, real application outcomes and documentation comparisons
+  remain separate acceptance work.
+  The separate [reference application fixture](../examples/integration-evaluation/README.md)
+  executes 17 checks across those tasks with the exact published SDK source and
+  records runtime/publication identities. It does not establish production
+  coding-client behavior or improvement over a vendor's documentation process.
 - Compare pipeline, normalizer, map, retrieval-profile, embedding, prompt, and
   model versions before promotion. Keep the previous ready index/publication
   available for rollback.
@@ -394,3 +611,63 @@ quality, not the number of files or model calls processed.
   ingestion.
 - Hiding uncertainty behind a synthesized answer when exact evidence is
   missing.
+
+### Knowledge preparation and reviewed library
+
+Contract and documentation collection creation accept an optional
+`Idempotency-Key`, scoped to the administrator, deployment and resource kind.
+The key and normalized input are stored as digests. The root, initial collection
+revision when applicable, request identity and creation audit commit atomically.
+Concurrent matching requests recover one current root; different input conflicts.
+Retries preserve later root changes and do not create another initial revision
+or audit event. Documentation creation still resolves its exact reviewed members
+and requires explicit human acknowledgement on each request.
+
+The console retains creation keys until setup's create/attach transition succeeds.
+Reload recovery contains only a digest and random key for seven days in the same
+administrator/deployment/API or catalog context. The user selects and reviews the
+same input again; approval is never restored. A recovered custom set attaches its
+exact first revision only after checking the existing attachment's API, revision,
+audience and selector. Recovery never overwrites a concurrent attachment change.
+
+The administrative Knowledge library defaults to included documents from each
+source’s latest immutable publication. A newer unreviewed or failed import does
+not replace them. Removed or excluded paths must not reappear from older
+publications through search. Comparisons resolve an earlier included document
+from the same source/path and an earlier import. For an uploaded source, two
+single-document imports identify the same logical file across storage-path
+changes. Count all imported documents, including excluded material, before using
+that fallback. Ambiguous imports require an exact path match. Comparison reads
+never rewrite historical paths, hashes, bodies or publication memberships, and
+never select excluded, unapproved or foreign-source content. Historical imports
+remain accessible separately.
+
+The bounded Needs attention projection includes website/upload sources without
+files, active or failed imports, quarantine/incomplete coverage, unfinished
+review and a reviewed source publication lacking a full typed documentation
+version of the same audience. Active contract source bindings use their contract
+workflow. This read-only administrator projection does not claim AI readiness,
+API attachment, delivery or test evidence. It returns names, exact resume
+identities, states, counts and timestamps; content and diagnostic payloads load
+only through their existing scoped review endpoints. Existing publication and
+runtime authorization boundaries continue to apply.
+
+### Source input replacement
+
+An uploaded source can replace its future file input without replacing the
+source identity or mutating historical evidence. The source input update,
+optimistic revision increment, one queued crawl, recovery record and audit
+commit in one transaction under the source lock used by ordinary crawl queueing.
+Any queued/running import, including expired leases, prevents a new replacement.
+The worker only sees a committed replacement input and job together. Replaying
+the same administrator/source request and input recovers its original crawl;
+changed input or expected revision conflicts. Read-only recovery requires the
+same administrator and source scope and does not require file bytes.
+
+The source name, audience, publication history and quarantine state remain
+unchanged by replacement. The original uploaded file is retained; cleanup of an
+uncertain commit must not discard a potentially referenced replacement file.
+New inputs retain the existing bounded multipart, extension, UTF-8 and upload
+containment rules. A clean crawler result, required AI processing and new human
+review are separate prerequisites. Replacement never publishes or attaches
+content. Storage and transaction failures return a redacted, actionable error.

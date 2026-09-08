@@ -204,6 +204,10 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 	}
 	switch params.Name {
+	case "deployment.apis.list":
+		s.listMCPAPIs(ctx, w, request, params.Arguments, productID, public, productManifest)
+	case "deployment.apis.get":
+		s.getMCPAPI(ctx, w, request, params.Arguments, productManifest)
 	case "developer_assets.search":
 		if manifestErr != nil {
 			writeRPCError(w, request.ID, -32603, "Developer-asset publication scope could not be resolved")
@@ -228,6 +232,15 @@ func (s *Server) callTool(ctx context.Context, w http.ResponseWriter, request rp
 		}
 		writeToolResult(w, request.ID, result)
 	case "integration.recipes.list":
+		catalogVersion, err := mcpRequestedCatalogVersion(request.Params)
+		if err != nil {
+			writeRPCError(w, request.ID, -32602, err.Error())
+			return
+		}
+		if catalogVersion == 2 {
+			s.listMCPRecipes(ctx, w, request, params.Arguments, productID, public, productManifest)
+			return
+		}
 		if len(params.Arguments) != 0 {
 			writeRPCError(w, request.ID, -32602, "Recipe list arguments must be empty")
 			return

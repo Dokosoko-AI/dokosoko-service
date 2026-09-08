@@ -153,7 +153,21 @@ func TestMCPPublishesExactDocumentationMapsAndScopedSearch(t *testing.T) {
 	listed := request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}`)
 	globalURI := "dokosoko://developer-assets/global-documentation/" + publication.ID
 	mapURI := globalURI + "/evidence/" + index.Units[0].ID
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), globalURI) || !strings.Contains(listed.Body.String(), mapURI) || !strings.Contains(listed.Body.String(), mapHash) {
+	assertMCPEvidenceIndex(t, handler, globalURI, mapURI, index.Units[0].SourcePublicationID, index.Units[0].SourceEntityID, index.Units[0].ContentHash)
+	for _, suffix := range []string{"/map-v2", "/map-v2/index"} {
+		response := request(t, handler, http.MethodPost, "/mcp/public", "", fmt.Sprintf(`{"jsonrpc":"2.0","id":45,"method":"resources/read","params":{"uri":%q}}`, globalURI+suffix))
+		var value compactMapRead
+		if json.Unmarshal(response.Body.Bytes(), &value) != nil || value.Error != nil || len(value.Result.Contents) != 1 || value.Result.Contents[0].Meta.Root != globalURI || value.Result.Contents[0].Meta.Count != len(index.Units) {
+			t.Fatal("compact global publication lost its scope")
+		}
+		if suffix == "/map-v2/index" && len(value.Result.Contents[0].Meta.Entries) != len(index.Units) {
+			t.Fatal("global evidence index is incomplete")
+		}
+	}
+	if strings.Contains(listed.Body.String(), "evidence_resources") {
+		t.Fatal("discovery duplicated publication evidence indexes")
+	}
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), globalURI) || strings.Contains(listed.Body.String(), mapURI) {
 		t.Fatalf("resources/list = %d: %s", listed.Code, listed.Body.String())
 	}
 	read := request(t, handler, http.MethodPost, "/mcp/public", "", fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":%q}}`, mapURI))
@@ -176,6 +190,7 @@ func TestMCPPublishesExactDocumentationMapsAndScopedSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	attachMCPTestContract(t, service, api.ID)
 	_, err = service.PublishIntegration(ctx, api.ID, platform.Actor{ID: "reviewer"})
 	if err != nil {
 		t.Fatal(err)
@@ -190,8 +205,29 @@ func TestMCPPublishesExactDocumentationMapsAndScopedSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.ActivateDeveloperAssetPublication(ctx, "global_documentation", privateGlobal.ID, platform.Actor{ID: "mcp-test"}); err != nil {
-		t.Fatal(err)
+	assertServing := func(expected string) {
+		t.Helper()
+		response := request(t, handler, http.MethodGet, "/api/v1/developer-assets/documentation-publications", "doko_admin_demo", "")
+		var state struct {
+			Items     []model.DeploymentDocumentationPublication `json:"items"`
+			ServingID string                                     `json:"serving_publication_id"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &state) != nil || state.ServingID != expected || len(state.Items) != 2 {
+			t.Fatalf("publication serving state = %d: %s", response.Code, response.Body.String())
+		}
+	}
+	assertServing(publication.ID)
+	activationPath := "/api/v1/developer-assets/documentation-publications/" + privateGlobal.ID + "/activate"
+	denied := request(t, handler, http.MethodPost, activationPath, "", "")
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous activation = %d", denied.Code)
+	}
+	for range 2 {
+		activated := request(t, handler, http.MethodPost, activationPath, "doko_admin_demo", "")
+		if activated.Code != http.StatusNoContent {
+			t.Fatalf("activation = %d: %s", activated.Code, activated.Body.String())
+		}
+		assertServing(privateGlobal.ID)
 	}
 	// Use a fresh server instance so this assertion exercises the newly bumped
 	// catalog revision rather than the earlier discovery cache entry.
@@ -231,6 +267,7 @@ func TestMCPAPIEvidenceHonorsDifferentSelectorsForSharedDocumentation(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	attachMCPTestContract(t, service, apiA.ID)
 	if _, err = service.PublishIntegration(ctx, apiA.ID, actor); err != nil {
 		t.Fatal(err)
 	}
@@ -245,6 +282,7 @@ func TestMCPAPIEvidenceHonorsDifferentSelectorsForSharedDocumentation(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	attachMCPTestContract(t, service, apiB.ID)
 	if _, err = service.PublishIntegration(ctx, apiB.ID, actor); err != nil {
 		t.Fatal(err)
 	}
@@ -266,9 +304,10 @@ func TestMCPAPIEvidenceHonorsDifferentSelectorsForSharedDocumentation(t *testing
 	prefixB := "dokosoko://developer-assets/apis/" + apiB.ID + "/publications/" + publicationB.ID
 	uriA := prefixA + "/evidence/" + unitA.id
 	uriB := prefixB + "/evidence/" + unitB.id
+	assertMCPEvidenceIndex(t, handler, prefixA, uriA, "shared-documentation-revision", unitA.id+"-source", mcpAssetHash(unitA.content))
 	listed := request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}`)
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), uriA) || !strings.Contains(listed.Body.String(), uriB) ||
-		!strings.Contains(listed.Body.String(), unitA.selectorHash) || !strings.Contains(listed.Body.String(), unitB.selectorHash) {
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), prefixA) || !strings.Contains(listed.Body.String(), prefixB) ||
+		strings.Contains(listed.Body.String(), uriA) || strings.Contains(listed.Body.String(), uriB) {
 		t.Fatalf("selector-scoped resources/list = %d: %s", listed.Code, listed.Body.String())
 	}
 	if strings.Contains(listed.Body.String(), "dokosoko://developer-assets/documentation/shared-documentation-revision/map") {
@@ -289,6 +328,32 @@ func TestMCPAPIEvidenceHonorsDifferentSelectorsForSharedDocumentation(t *testing
 	}
 }
 
+func assertMCPEvidenceIndex(t *testing.T, handler http.Handler, mapURI, evidenceURI, sourcePublication, entityID, hash string) {
+	t.Helper()
+	response := request(t, handler, http.MethodPost, "/mcp/public", "", fmt.Sprintf(`{"jsonrpc":"2.0","id":42,"method":"resources/read","params":{"uri":%q}}`, mapURI))
+	var body struct {
+		Result struct {
+			Contents []struct {
+				Metadata struct {
+					Evidence []struct {
+						URI         string `json:"uri"`
+						Publication string `json:"source_publication_id"`
+						Entity      string `json:"source_entity_id"`
+						Hash        string `json:"content_hash"`
+					} `json:"evidence_resources"`
+				} `json:"_meta"`
+			} `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Result.Contents) != 1 || len(body.Result.Contents[0].Metadata.Evidence) != 1 {
+		t.Fatalf("exact evidence index: %s", response.Body.String())
+	}
+	entry := body.Result.Contents[0].Metadata.Evidence[0]
+	if entry.URI != evidenceURI || entry.Publication != sourcePublication || entry.Entity != entityID || entry.Hash != hash {
+		t.Fatalf("wrong exact evidence index: %#v", entry)
+	}
+}
+
 func TestMCPHistoricalPublicationReadsOnlyItsExactReadyEvidence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -306,6 +371,7 @@ func TestMCPHistoricalPublicationReadsOnlyItsExactReadyEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	attachMCPTestContract(t, service, api.ID)
 	if _, err = service.PublishIntegration(ctx, api.ID, actor); err != nil {
 		t.Fatal(err)
 	}
@@ -345,13 +411,13 @@ func TestMCPHistoricalPublicationReadsOnlyItsExactReadyEvidence(t *testing.T) {
 	oldURI := oldPrefix + "/evidence/" + oldUnit.id
 	newURI := newPrefix + "/evidence/" + newUnit.id
 	listed := request(t, handler, http.MethodPost, "/mcp/public", "", `{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}`)
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), newURI) || strings.Contains(listed.Body.String(), oldURI) || strings.Contains(listed.Body.String(), oldPrefix) {
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), newPrefix) || strings.Contains(listed.Body.String(), newURI) || strings.Contains(listed.Body.String(), oldPrefix) {
 		t.Fatalf("current-only resources/list = %d: %s", listed.Code, listed.Body.String())
 	}
 	for index, readCase := range []struct {
 		uri    string
 		marker string
-	}{{oldPrefix, oldPublication.SnapshotHash}, {oldURI, oldUnit.content}} {
+	}{{oldPrefix, oldPublication.SnapshotHash}, {oldPrefix + "/map-v2", oldPublication.SnapshotHash}, {oldPrefix + "/map-v2/index", oldURI}, {oldURI, oldUnit.content}} {
 		response := request(t, handler, http.MethodPost, "/mcp/public", "", fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"resources/read","params":{"uri":%q}}`, index+2, readCase.uri))
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), readCase.marker) || strings.Contains(response.Body.String(), `"code":-32004`) {
 			t.Fatalf("historical resources/read %q = %d: %s", readCase.uri, response.Code, response.Body.String())
@@ -367,5 +433,17 @@ func TestMCPHistoricalPublicationReadsOnlyItsExactReadyEvidence(t *testing.T) {
 			strings.Contains(response.Body.String(), newUnit.content) {
 			t.Fatalf("historical forbidden resources/read %q = %d: %s", deniedURI, response.Code, response.Body.String())
 		}
+	}
+}
+
+func attachMCPTestContract(t *testing.T, service *platform.Service, integrationID string) {
+	t.Helper()
+	actor := platform.Actor{ID: "reviewer"}
+	contract, err := service.CreateResourceSet(t.Context(), platform.ResourceSetInput{Kind: "api", Name: "Readiness contract " + integrationID, State: "active", Manifest: json.RawMessage(`[{"name":"readiness","path":"/health/ready"}]`)}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.AttachResourceSet(t.Context(), integrationID, contract.ID, contract.Latest.ID, actor); err != nil {
+		t.Fatal(err)
 	}
 }

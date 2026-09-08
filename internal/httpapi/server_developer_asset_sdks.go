@@ -287,6 +287,7 @@ func (s *Server) sdkContentIngestions(w http.ResponseWriter, r *http.Request, re
 	if value.AlreadyIngested {
 		status = http.StatusOK
 	}
+	value.Candidate = sdkCandidateForResponse(value.Candidate)
 	writeJSON(w, status, value)
 }
 
@@ -309,7 +310,7 @@ func (s *Server) sdkContentCandidate(w http.ResponseWriter, r *http.Request, rel
 		s.storeError(w, store.ErrNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	writeJSON(w, http.StatusOK, sdkCandidateForResponse(value))
 }
 
 func (s *Server) publishSDKContentCandidate(w http.ResponseWriter, r *http.Request, releaseID, candidateID string) {
@@ -367,5 +368,32 @@ func (s *Server) sdkContentPublication(w http.ResponseWriter, r *http.Request, r
 		s.storeError(w, store.ErrNotFound)
 		return
 	}
+	if value.FileSelections == nil {
+		value.FileSelections = []model.SDKContentPublicationFileSelection{}
+	}
+	if value.SampleSelections == nil {
+		value.SampleSelections = []model.SDKContentPublicationSampleSelection{}
+	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+// A valid documentation-only SDK candidate can have no symbols or samples.
+// OpenAPI promises arrays, including on ingestion responses and historical reads.
+func sdkCandidateForResponse(value store.SDKContentCandidateRecord) store.SDKContentCandidateRecord {
+	if value.Files == nil {
+		value.Files = []model.SDKPublicationFile{}
+	}
+	if value.Sections == nil {
+		value.Sections = []model.SDKSection{}
+	}
+	if value.Symbols == nil {
+		value.Symbols = []model.SDKSymbol{}
+	}
+	if value.Samples == nil {
+		value.Samples = []model.SDKCodeSample{}
+	}
+	if value.SampleRefs == nil {
+		value.SampleRefs = []model.SDKSampleAPIReference{}
+	}
+	return value
 }

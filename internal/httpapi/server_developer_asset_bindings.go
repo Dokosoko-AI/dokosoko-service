@@ -78,7 +78,28 @@ func (s *Server) apiDeveloperAssetPublications(w http.ResponseWriter, r *http.Re
 		s.storeError(w, err)
 		return
 	}
+	if values == nil {
+		values = []model.APIDeveloperAssetPublication{}
+	}
+	for index := range values {
+		values[index] = apiDeveloperAssetPublicationWire(values[index])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
+// Empty asset categories are still arrays in the public contract. Keep wire
+// normalization outside persisted snapshots so immutable hashes do not change.
+func apiDeveloperAssetPublicationWire(value model.APIDeveloperAssetPublication) model.APIDeveloperAssetPublication {
+	if value.Documentation == nil {
+		value.Documentation = []model.APIPublicationDocumentationAsset{}
+	}
+	if value.Contracts == nil {
+		value.Contracts = []model.APIPublicationContractAsset{}
+	}
+	if value.SDKs == nil {
+		value.SDKs = []model.APIPublicationSDKAsset{}
+	}
+	return value
 }
 
 func (s *Server) apiDeveloperAssetPublication(w http.ResponseWriter, r *http.Request, apiID, publicationID string) {
@@ -99,7 +120,7 @@ func (s *Server) apiDeveloperAssetPublication(w http.ResponseWriter, r *http.Req
 		s.storeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	writeJSON(w, http.StatusOK, apiDeveloperAssetPublicationWire(value))
 }
 
 func (s *Server) apiDocumentationBindings(w http.ResponseWriter, r *http.Request, apiID string) {

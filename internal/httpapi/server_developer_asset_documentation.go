@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -38,6 +39,56 @@ func (s *Server) developerAssetDocuments(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) documentationLibrary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		developerAssetMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	limit, err := developerAssetQueryLimit(r, 50, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	offset, err := developerAssetQueryOffset(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	view := r.URL.Query().Get("view")
+	if view == "" {
+		view = "current"
+	}
+	value, err := s.service.DocumentationLibrary(r.Context(), r.URL.Query().Get("source_id"), r.URL.Query().Get("source_publication_id"), r.URL.Query().Get("query"), view, limit, offset)
+	if err != nil {
+		s.developerAssetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) documentationAttention(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		developerAssetMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	limit, err := developerAssetQueryLimit(r, 50, 100)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	offset, err := developerAssetQueryOffset(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	value, err := s.service.DocumentationAttention(r.Context(), r.URL.Query().Get("source_id"), limit, offset)
+	if err != nil {
+		s.developerAssetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) developerAssetDocument(w http.ResponseWriter, r *http.Request, documentID string) {
@@ -105,7 +156,9 @@ func (s *Server) documentationCollections(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.SaveDocumentationCollection(r.Context(), "", documentationCollectionInput(input), actor(r))
+		creation := documentationCollectionInput(input)
+		creation.RequestKey = r.Header.Get("Idempotency-Key")
+		value, err := s.service.SaveDocumentationCollection(r.Context(), "", creation, actor(r))
 		if err != nil {
 			s.developerAssetError(w, err)
 			return
@@ -188,6 +241,9 @@ func (s *Server) documentationCollectionRevision(w http.ResponseWriter, r *http.
 		s.storeError(w, store.ErrNotFound)
 		return
 	}
+	if value.Members == nil {
+		value.Members = []model.DocumentationCollectionMember{}
+	}
 	writeJSON(w, http.StatusOK, value)
 }
 
@@ -211,7 +267,15 @@ func (s *Server) deploymentDocumentationPublications(w http.ResponseWriter, r *h
 			s.storeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": values})
+		servingID := ""
+		serving, err := s.service.ReadyDeploymentDocumentationPublication(r.Context())
+		if err == nil {
+			servingID = serving.ID
+		} else if !errors.Is(err, store.ErrNotFound) {
+			s.storeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": values, "serving_publication_id": servingID})
 	case http.MethodPost:
 		var input deploymentDocumentationPublicationRequest
 		if err := decodeDeveloperAssetJSON(r.Body, &input); err != nil {
@@ -230,6 +294,18 @@ func (s *Server) deploymentDocumentationPublications(w http.ResponseWriter, r *h
 	default:
 		developerAssetMethodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
+}
+
+func (s *Server) activateDeploymentDocumentationPublication(w http.ResponseWriter, r *http.Request, publicationID string) {
+	if r.Method != http.MethodPost {
+		developerAssetMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if err := s.service.ActivateDeveloperAssetPublication(r.Context(), "global_documentation", publicationID, actor(r)); err != nil {
+		s.developerAssetError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) deploymentDocumentationPublication(w http.ResponseWriter, r *http.Request, publicationID string) {

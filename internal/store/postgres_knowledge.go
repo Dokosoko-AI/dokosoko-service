@@ -139,6 +139,21 @@ func (p *Postgres) SourceReview(ctx context.Context, productID, sourceID, crawlJ
 	publication, err := scanSourcePublication(p.pool.QueryRow(ctx, sourcePublicationSelect+` WHERE product_id = $1 AND source_id = $2 AND crawl_job_id = $3`, productID, sourceID, job.ID))
 	if err == nil {
 		review.Publication = &publication
+		selected, err := p.pool.Query(ctx, `SELECT member.knowledge_document_id::text FROM source_publication_documents member JOIN knowledge_documents document ON document.id=member.knowledge_document_id WHERE member.source_publication_id=$1 AND document.product_id=$2 AND document.source_id=$3 ORDER BY member.knowledge_document_id`, publication.ID, productID, sourceID)
+		if err != nil {
+			return model.SourceReview{}, databaseError(err)
+		}
+		defer selected.Close()
+		for selected.Next() {
+			var id string
+			if err := selected.Scan(&id); err != nil {
+				return model.SourceReview{}, err
+			}
+			review.PublishedDocumentIDs = append(review.PublishedDocumentIDs, id)
+		}
+		if err := selected.Err(); err != nil {
+			return model.SourceReview{}, err
+		}
 	} else if !errors.Is(err, ErrNotFound) {
 		return model.SourceReview{}, err
 	}

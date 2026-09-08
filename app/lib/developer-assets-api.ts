@@ -9,8 +9,11 @@ export type DeveloperAssetRecord = Record<string, unknown>;
 export type DeveloperAssetKind = Contract.DeveloperAssetKind;
 export type DeveloperAssetScope = NonNullable<Contract.DeveloperAssetQueryLabInput["scope"]>;
 export type DeveloperAssetProcessorVersions = Contract.DeveloperAssetProcessorVersions;
+export type KnowledgeProcessingStatus = Contract.KnowledgeProcessingStatus;
 export type DeveloperAssetIngestionRun = Contract.DeveloperAssetIngestionRun;
 export type DeveloperAssetIngestionSummary = Contract.DeveloperAssetIngestionSummary;
+export type DocumentationAttentionItem = Contract.DocumentationAttentionItem;
+export type DocumentationAttentionPage = Contract.DocumentationAttentionPage;
 export type DocumentationDocument = Contract.DocumentationDocument;
 export type DocumentationSection = Contract.DocumentationSection;
 export type SourcePublicationDocumentSelection = Contract.SourcePublicationDocumentSelection;
@@ -41,6 +44,7 @@ export type SDKIngestionFile = Contract.SdkIngestionFile & Required<Pick<Contrac
 export type SDKContentCandidate = Contract.SdkContentCandidate;
 export type SDKContentCandidateRecord = Contract.SdkContentCandidateRecord;
 export type SDKContentPublication = Contract.SdkContentPublication;
+export type SDKContentPublicationRecord = Contract.SdkContentPublicationRecord;
 export type ReviewDecision = Contract.DeveloperAssetReviewDecision;
 export type APIDocumentationBinding = Contract.ApiDocumentationBinding;
 export type APIContractBinding = Contract.ApiContractBinding;
@@ -106,22 +110,33 @@ export const developerAssetsApi = {
     return items(request<Contract.DeveloperAssetIngestionRunList>(`${developerAssetsPath}/ingestion-runs${query.size ? `?${query}` : ""}`));
   },
   ingestionRun: (runID: string) => request<DeveloperAssetIngestionSummary>(`${developerAssetsPath}/ingestion-runs/${encode(runID)}`),
+  knowledgeProcessing: (runID: string) => request<KnowledgeProcessingStatus>(`${developerAssetsPath}/ingestion-runs/${encode(runID)}/processing`),
+  processKnowledgeBatch: (runID: string) => request<KnowledgeProcessingStatus>(`${developerAssetsPath}/ingestion-runs/${encode(runID)}/processing`, { method: "POST" }),
   documentationDocuments: (filters: { ingestion_run_id?: string; source_id?: string; source_publication_id?: string; query?: string; limit?: number; offset?: number } = {}) => {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
     return request<Contract.DocumentationCandidateList>(`${developerAssetsPath}/documentation/documents${query.size ? `?${query}` : ""}`);
   },
+  documentationLibrary: (filters: { source_publication_id?: string; source_id?: string; query?: string; view?: "current" | "history" | "reviewed"; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+    return request<Contract.DocumentationLibraryPage>(`${developerAssetsPath}/documentation/library?${query}`);
+  },
+  documentationAttention: (sourceID = "", limit = 50, offset = 0) => request<Contract.DocumentationAttentionPage>(`${developerAssetsPath}/documentation/attention?${new URLSearchParams({ source_id: sourceID, limit: String(limit), offset: String(offset) })}`),
   documentationDocument: (documentID: string) => request<DocumentationCandidateRecord>(`${developerAssetsPath}/documentation/documents/${encode(documentID)}`),
   documentationCollections: () => items(request<Contract.DocumentationCollectionList>(`${developerAssetsPath}/documentation-collections`)),
-  createDocumentationCollection: (input: DocumentationCollectionInput) => request<DocumentationCollection>(`${developerAssetsPath}/documentation-collections`, { method: "POST", body: JSON.stringify(input) }),
+  createDocumentationCollection: (input: DocumentationCollectionInput, requestKey?: string) => request<DocumentationCollection>(`${developerAssetsPath}/documentation-collections`, { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify(input) }),
   reviseDocumentationCollection: (collectionID: string, input: DocumentationCollectionInput) => request<DocumentationCollection>(`${developerAssetsPath}/documentation-collections/${encode(collectionID)}`, { method: "PATCH", body: JSON.stringify(input) }),
   documentationCollectionRevisions: (collectionID: string) => items(request<Contract.DocumentationCollectionRevisionList>(`${developerAssetsPath}/documentation-collections/${encode(collectionID)}/revisions`)),
   documentationCollectionRevision: (collectionID: string, revisionID: string) => request<DocumentationCollectionRevisionRecord>(`${developerAssetsPath}/documentation-collections/${encode(collectionID)}/revisions/${encode(revisionID)}`),
   documentationPublications: () => items(request<Contract.DeploymentDocumentationPublicationList>(`${developerAssetsPath}/documentation-publications`)),
+  documentationPublicationState: () => request<Contract.DeploymentDocumentationPublicationList>(`${developerAssetsPath}/documentation-publications`),
+  activateDocumentationPublication: (publicationID: string) => request<void>(`${developerAssetsPath}/documentation-publications/${encode(publicationID)}/activate`, { method: "POST" }),
   publishDocumentation: (collectionRevisionIDs: string[], visibility: APIVisibility, expectedHeadRevision: number) => request<DeploymentDocumentationPublication>(`${developerAssetsPath}/documentation-publications`, { method: "POST", body: JSON.stringify({ collection_revision_ids: collectionRevisionIDs, visibility, expected_head_revision: expectedHeadRevision, acknowledge_reviewed: true }) }),
   documentationPublication: (publicationID: string) => request<DeploymentDocumentationPublication>(`${developerAssetsPath}/documentation-publications/${encode(publicationID)}`),
   apiContracts: () => items(request<Contract.ApiContractList>(`${developerAssetsPath}/api-contracts`)),
-  createAPIContract: (input: APIContractInput) => request<APIContract>(`${developerAssetsPath}/api-contracts`, { method: "POST", body: JSON.stringify(input) }),
+  apiContract: (contractID: string) => request<APIContract>(`${developerAssetsPath}/api-contracts/${encode(contractID)}`),
+  createAPIContract: (input: APIContractInput, requestKey?: string) => request<APIContract>(`${developerAssetsPath}/api-contracts`, { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify(input) }),
   updateAPIContract: (contractID: string, input: APIContractInput) => request<APIContract>(`${developerAssetsPath}/api-contracts/${encode(contractID)}`, { method: "PATCH", body: JSON.stringify(input) }),
   archiveAPIContract: (contractID: string, revision: number) => request<APIContract>(`${developerAssetsPath}/api-contracts/${encode(contractID)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   apiContractSources: (contractID: string) => items(request<Contract.ApiContractSourceList>(`${developerAssetsPath}/api-contracts/${encode(contractID)}/sources`)),
@@ -130,11 +145,14 @@ export const developerAssetsApi = {
   apiContractCandidate: (contractID: string, candidateID: string) => request<APIContractCandidateRecord>(`${developerAssetsPath}/api-contracts/${encode(contractID)}/candidates/${encode(candidateID)}`),
   publishAPIContractCandidate: (contractID: string, candidateID: string, contractRevision: number) => request<Contract.ApiContractCandidatePublicationResult>(`${developerAssetsPath}/api-contracts/${encode(contractID)}/candidates/${encode(candidateID)}/publish`, { method: "POST", body: JSON.stringify({ contract_revision: contractRevision, acknowledge_reviewed: true }) }),
   apiContractRevisions: (contractID: string) => items(request<Contract.ApiContractRevisionList>(`${developerAssetsPath}/api-contracts/${encode(contractID)}/revisions`)),
+  apiContractRevision: (contractID: string, revisionID: string) => request<APIContractRevision>(`${developerAssetsPath}/api-contracts/${encode(contractID)}/revisions/${encode(revisionID)}`),
   sdkPackages: () => items(request<Contract.SdkPackageList>(`${developerAssetsPath}/sdk-packages`)),
   importSDKPackage: (input: SDKPackageImportInput) => request<SDKPackageImportResult>(`${developerAssetsPath}/sdk-package-imports`, { method: "POST", body: JSON.stringify(input) }),
   createSDKPackage: (input: SDKPackageInput) => request<SDKPackage>(`${developerAssetsPath}/sdk-packages`, { method: "POST", body: JSON.stringify(input) }),
+  sdkPackage: (packageID: string) => request<SDKPackage>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}`),
   updateSDKPackage: (packageID: string, input: SDKPackageInput) => request<SDKPackage>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}`, { method: "PATCH", body: JSON.stringify(input) }),
   sdkReleases: (packageID: string) => items(request<Contract.SdkReleaseList>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}/releases`)),
+  sdkRelease: (packageID: string, releaseID: string) => request<SDKRelease>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}/releases/${encode(releaseID)}`),
   createSDKRelease: (packageID: string, input: SDKReleaseInput) => request<SDKRelease>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}/releases`, { method: "POST", body: JSON.stringify(input) }),
   sdkReleaseLifecycle: (packageID: string, releaseID: string) => request<SDKReleaseLifecycleState>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}/releases/${encode(releaseID)}/lifecycle-events`),
   appendSDKReleaseLifecycleEvent: (packageID: string, releaseID: string, input: SDKReleaseLifecycleEventInput) => request<SDKReleaseLifecycleState>(`${developerAssetsPath}/sdk-packages/${encode(packageID)}/releases/${encode(releaseID)}/lifecycle-events`, { method: "POST", body: JSON.stringify(input) }),
@@ -143,6 +161,7 @@ export const developerAssetsApi = {
   ingestSDKContent: (releaseID: string, input: Contract.SdkContentIngestionInput) => request<Contract.SdkContentIngestionResult>(`${developerAssetsPath}/sdk-releases/${encode(releaseID)}/ingestions`, { method: "POST", body: JSON.stringify(input) }),
   publishSDKContentCandidate: (releaseID: string, candidateID: string, files: ReviewDecision[], samples: ReviewDecision[]) => request<SDKContentPublication>(`${developerAssetsPath}/sdk-releases/${encode(releaseID)}/content-candidates/${encode(candidateID)}/publish`, { method: "POST", body: JSON.stringify({ files, samples, acknowledge_reviewed: true }) }),
   sdkContentPublications: (releaseID: string) => items(request<Contract.SdkContentPublicationList>(`${developerAssetsPath}/sdk-releases/${encode(releaseID)}/content-publications`)),
+  sdkContentPublication: (releaseID: string, publicationID: string) => request<SDKContentPublicationRecord>(`${developerAssetsPath}/sdk-releases/${encode(releaseID)}/content-publications/${encode(publicationID)}`),
   apiResources: (apiID: string) => request<APIResourceBindings>(`/api/v1/integrations/${encode(apiID)}/resources`),
   apiResourcePublications: (apiID: string) => items(request<Contract.ApiDeveloperAssetPublicationList>(`/api/v1/integrations/${encode(apiID)}/resources/publications`)),
   apiResourcePublication: (apiID: string, publicationID: string) => request<APIDeveloperAssetPublication>(`/api/v1/integrations/${encode(apiID)}/resources/publications/${encode(publicationID)}`),
@@ -164,3 +183,5 @@ export const developerAssetsApi = {
   runAIAdvisory: (input: DeveloperAssetAIAdvisoryInput) => request<DeveloperAssetAIAdvisoryRun>(`${developerAssetsPath}/ai-advisories`, { method: "POST", body: JSON.stringify(input) }),
   queryLab: (input: QueryLabInput) => request<QueryLabResponse>(`${developerAssetsPath}/query-lab`, { method: "POST", body: JSON.stringify(input) }),
 };
+
+export type DocumentationLibraryItem = Contract.DocumentationLibraryItem;

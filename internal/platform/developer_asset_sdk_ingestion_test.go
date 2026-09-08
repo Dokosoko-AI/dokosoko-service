@@ -10,6 +10,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/testutil"
 )
 
 type sdkFinalizationFaultStore struct {
@@ -256,6 +257,7 @@ func TestSDKSampleApprovalRequiresMachineOrStructuredReviewEvidence(t *testing.T
 		t.Fatalf("approval without evidence error = %v", err)
 	}
 	input.Samples[0].ReviewEvidence = json.RawMessage(`{"summary":"Reviewer parsed the exact sample with the pinned internal Rust parser and inspected its diagnostics.","method":"manual_parse_review"}`)
+	testutil.ProcessKnowledge(t, service.Store(), result.Run.ID)
 	publication, err := service.PublishSDKContentCandidate(t.Context(), release.ID, result.Candidate.Candidate.ID, input, actor)
 	if err != nil {
 		t.Fatal(err)

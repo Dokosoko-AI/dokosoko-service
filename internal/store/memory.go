@@ -35,6 +35,9 @@ type Memory struct {
 	products                         map[string]model.Product
 	envs                             map[string]map[string]model.Environment
 	sources                          map[string]map[string]model.Source
+	sourceCreationRequests           map[string]sourceCreationResult
+	developerAssetCreationRequests   map[string]developerAssetCreationResult
+	sourceInputReplacements          map[string]sourceInputReplacementRecord
 	sourcePublications               map[string]map[string]model.SourcePublication
 	publicationDocuments             map[string]map[string]bool
 	crawlReviewDocuments             map[string][]model.CrawlReviewDocument

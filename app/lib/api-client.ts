@@ -1,4 +1,5 @@
 import type {
+  APIAIProcessingReadiness,
   APIAIProviderConnection,
   APIAIProviderUsage,
   APIAIWorkflowPrompt,
@@ -7,6 +8,7 @@ import type {
   APIAuditEvent,
   APIAuthorizationPoint,
   APICrawlJob,
+  APISourceInputReplacementResult,
   APICustomerAccount,
   APICustomerAccountPage,
   APIDeployment,
@@ -29,6 +31,7 @@ import type {
   APIOrganisation,
   APIProduct,
   APIRecipe,
+  APIRecipeReferenceOptions,
   APIRecipeRevision,
   APIResourceSet,
   APIRuntimeCredentialSet,
@@ -39,6 +42,7 @@ import type {
   APISourcePublication,
   APISourcePublishResult,
   APISourceReview,
+  APISourceReviewContent,
   APISystemConfiguration,
   APISupportSubmission,
   APITool,
@@ -174,6 +178,7 @@ export const api = {
   createIntegration: (input: { family_key: string; version_key: string; display_name: string; description: string; visibility?: APIVisibility; acknowledge_public?: boolean; lifecycle?: APIIntegration["lifecycle"] }) => request<APIIntegration>("/api/v1/integrations", { method: "POST", body: JSON.stringify(input) }),
   updateIntegration: (integrationID: string, input: Pick<APIIntegration, "family_key" | "version_key" | "display_name" | "description" | "visibility" | "lifecycle" | "revision"> & { acknowledge_public?: boolean; replacement_integration_id?: string; sunset_at?: string }) => request<APIIntegration>(`/api/v1/integrations/${encodeURIComponent(integrationID)}`, { method: "PUT", body: JSON.stringify(input) }),
   preflightIntegration: (integrationID: string) => request<APIIntegrationPreflight>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/preflight`, { method: "POST", body: JSON.stringify({}) }),
+  activateIntegrationRevision: (integrationID: string, revisionID: string) => request<void>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/revisions/${encodeURIComponent(revisionID)}/activate`, { method: "POST" }),
   publishIntegration: (integrationID: string, candidateRevision: number, candidateManifestHash: string) => request<APIIntegrationRevision>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/publish`, { method: "POST", body: JSON.stringify({ candidate_revision: candidateRevision, candidate_manifest_hash: candidateManifestHash }) }),
   integrationToolBindings: async (integrationID: string) => (await request<{ items: APIIntegrationToolBinding[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/tools`)).items,
   setIntegrationToolBindings: (integrationID: string, tools: Array<{ tool_id: string; revision: number; authorization_point_id: string; authorization_point_revision: number }>) => request<{ items: APIIntegrationToolBinding[] }>(`/api/v1/integrations/${encodeURIComponent(integrationID)}/tools`, { method: "PUT", body: JSON.stringify({ tools }) }),
@@ -208,6 +213,7 @@ export const api = {
   supportSubmissions: async () => (await request<{ items: APISupportSubmission[]; has_more: boolean }>("/api/v1/support-submissions?limit=200")).items,
   supportSubmission: (submissionID: string) => request<APISupportSubmission>(`/api/v1/support-submissions/${encodeURIComponent(submissionID)}`),
   auditEvents: async (organisationID: string) => (await request<{ items: APIAuditEvent[] }>(`/api/v1/organisations/${encodeURIComponent(organisationID)}/audit`)).items,
+  aiReadiness: () => request<APIAIProcessingReadiness>("/api/v1/ai/readiness"),
   aiConnections: async () => (await request<{ items: APIAIProviderConnection[] }>("/api/v1/ai/connections")).items,
   saveAIConnection: (input: { organisation_id: string; provider: APIAIProviderConnection["provider"]; endpoint: string; credential: string; enabled: boolean; is_backup: boolean; backup_models: Partial<Record<APIAIWorkloadProfile["workload"], string>>; revision: number }) => request<APIAIProviderConnection>("/api/v1/ai/connections", { method: "POST", body: JSON.stringify(input) }),
   testAIConnection: (connectionID: string) => request<APIAIProviderConnection>(`/api/v1/ai/connections/${encodeURIComponent(connectionID)}/test`, { method: "POST", body: JSON.stringify({}) }),
@@ -222,6 +228,7 @@ export const api = {
   recipes: async (productID: string) => (await request<{ items: APIRecipe[] }>(`${productPath(productID)}/recipes`)).items,
   createRecipe: (productID: string, prompt: string, integrationIDs: string[] = []) => request<APIRecipe>(`${productPath(productID)}/recipes`, { method: "POST", body: JSON.stringify(integrationIDs.length > 0 ? { prompt, integration_ids: integrationIDs } : { prompt }) }),
   recipe: (productID: string, recipeID: string) => request<{ recipe: APIRecipe; revisions: APIRecipeRevision[] }>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`),
+  recipeReferenceOptions: (productID: string, recipeID: string, revision: number, currentRevisionID: string) => request<APIRecipeReferenceOptions>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/references?${new URLSearchParams({ revision: String(revision), current_revision_id: currentRevisionID })}`),
   updateRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string, referenceIDs: string[], visibility: APIVisibility) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`, { method: "PATCH", body: JSON.stringify({ revision, current_revision_id: currentRevisionID, reference_ids: referenceIDs, visibility }) }),
   deleteRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string) => request<void>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}`, { method: "DELETE", body: JSON.stringify({ revision, current_revision_id: currentRevisionID }) }),
   reworkRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string, instruction: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/rework`, { method: "POST", body: JSON.stringify({ revision, current_revision_id: currentRevisionID, instruction }) }),
@@ -229,17 +236,23 @@ export const api = {
   publishRecipe: (productID: string, recipeID: string, revision: number, currentRevisionID: string) => request<APIRecipe>(`${productPath(productID)}/recipes/${encodeURIComponent(recipeID)}/publish`, { method: "POST", body: JSON.stringify({ revision, current_revision_id: currentRevisionID }) }),
   aiUsage: (productID: string, days = 30) => request<{ workloads: APIAIWorkloadUsage[]; providers: APIAIProviderUsage[] }>(`${productPath(productID)}/ai-usage?days=${days}`),
   sources: async (productID: string) => (await request<{ items: APISource[] }>(`${productPath(productID)}/sources`)).items,
-  createSource: (productID: string, organisationID: string, kind: string, location: string, name?: string) => request<APISource>(`${productPath(productID)}/sources`, { method: "POST", body: JSON.stringify({ organisation_id: organisationID, ...(name?.trim() ? { name: name.trim() } : {}), kind, location }) }),
-  uploadSource: (productID: string, organisationID: string, file: File, name?: string) => {
+  createSource: (productID: string, organisationID: string, kind: string, location: string, name?: string, requestKey?: string) => request<APISource>(`${productPath(productID)}/sources`, { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ organisation_id: organisationID, ...(name?.trim() ? { name: name.trim() } : {}), kind, location }) }),
+  uploadSource: (productID: string, organisationID: string, file: File, name?: string, requestKey?: string) => {
     const body = new FormData();
     body.append("organisation_id", organisationID);
     if (name?.trim()) body.append("name", name.trim());
     body.append("file", file, file.name);
-    return request<APISource>(`${productPath(productID)}/sources/upload`, { method: "POST", body });
+    return request<APISource>(`${productPath(productID)}/sources/upload`, { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body });
   },
+  replaceSourceUpload: (productID: string, sourceID: string, organisationID: string, revision: number, file: File, requestKey: string) => {
+    const body = new FormData(); body.append("organisation_id", organisationID); body.append("revision", String(revision)); body.append("file", file, file.name);
+    return request<APISourceInputReplacementResult>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/upload`, { method: "POST", headers: { "Idempotency-Key": requestKey }, body });
+  },
+  sourceUploadReplacement: (productID: string, sourceID: string, requestKey: string) => request<APISourceInputReplacementResult>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/upload`, { headers: { "Idempotency-Key": requestKey } }),
   queueCrawl: (productID: string, sourceID: string) => request<APICrawlJob>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/crawl`, { method: "POST" }),
   crawlJobs: async (productID: string, sourceID: string) => (await request<{ items: APICrawlJob[] }>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/crawls`)).items,
   sourceReview: (productID: string, sourceID: string, crawlJobID = "") => request<APISourceReview>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/review${crawlJobID ? `?crawl_job_id=${encodeURIComponent(crawlJobID)}` : ""}`),
+  sourceReviewContent: (productID: string, sourceID: string, crawlID: string, documentID: string) => request<APISourceReviewContent>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/review/documents/${encodeURIComponent(documentID)}?crawl_job_id=${encodeURIComponent(crawlID)}`),
   sourcePublications: async (productID: string, sourceID: string) => (await request<{ items: APISourcePublication[] }>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/publications`)).items,
   publishSource: (productID: string, sourceID: string, input: { revision: number; crawl_job_id: string; document_ids: string[]; acknowledge_reviewed: boolean }) => request<APISourcePublishResult>(`${productPath(productID)}/sources/${encodeURIComponent(sourceID)}/publish`, { method: "POST", body: JSON.stringify(input) }),
   tools: async (productID: string) => (await request<{ items: APITool[] }>(`${productPath(productID)}/tools`)).items,
@@ -263,9 +276,11 @@ export const api = {
   createMCPConnection: (productID: string, input: { organisation_id: string; name: string; namespace: string; endpoint: string; access_token: string; forward_user_identity: boolean }) => request<APIMCPConnection>(`${productPath(productID)}/mcp-connections`, { method: "POST", body: JSON.stringify(input) }),
   inspectMCPConnection: (productID: string, connectionID: string) => request<APIMCPCatalog>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/inspect`, { method: "POST" }),
   importMCPTools: (productID: string, connectionID: string, input: { tool_names: string[]; required_grants: string[]; confirmation_required: boolean; timeout_ms: number }) => request<APIMCPImportResult>(`${productPath(productID)}/mcp-connections/${encodeURIComponent(connectionID)}/import`, { method: "POST", body: JSON.stringify(input) }),
-  mcpPreview: (productID: string, audience: APIMCPPreview["audience"], method: APIMCPPreview["method"], grants: string[] = []) => {
+  mcpPreview: (productID: string, audience: APIMCPPreview["audience"], method: APIMCPPreview["method"], grants: string[] = [], uri?: string, cursor?: string) => {
     const query = new URLSearchParams({ audience, method });
     for (const grant of grants) query.append("grant", grant);
+    if (uri !== undefined) query.set("uri", uri);
+    if (cursor !== undefined) query.set("cursor", cursor);
     return request<APIMCPPreview>(`${productPath(productID)}/mcp-preview?${query.toString()}`);
   },
   setPublicMCP: (productID: string, enabled: boolean, revision: number, acknowledgePublic: boolean) => request<APIProduct>(`${productPath(productID)}/distribution`, {

@@ -166,6 +166,10 @@ func TestFailedNewestDeveloperAssetProjectionDoesNotMoveDiscovery(t *testing.T) 
 	if current.ID != readyPublication.ID {
 		t.Fatalf("failed publication moved the ready head: got %s want %s", current.ID, readyPublication.ID)
 	}
+	status, err := service.IntegrationPublishStatus(ctx, api.ID)
+	if err != nil || status.LatestDeliveryReady || status.ServingRevisionID != readyRevision.ID || status.ServingPublicationID != readyPublication.ID || status.ServingRevision != 1 || status.LatestRevision == nil || status.LatestRevision.ID != failedRevision.ID {
+		t.Fatalf("console readiness disagrees with MCP: %#v, %v", status, err)
+	}
 	manifest, err := service.ProductManifestFor(ctx, api.DeploymentID, model.CatalogScope{})
 	if err != nil {
 		t.Fatal(err)

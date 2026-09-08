@@ -29,16 +29,23 @@ type LoadProblemReporter = (area: string, error: unknown) => void;
 export function useAIWorkspaceState({
   product,
   fixturePreview,
+  loadConfiguration,
+  loadContent,
   onLoadProblem,
   showToast,
 }: {
   product: APIProduct;
   fixturePreview: boolean;
+  loadConfiguration: boolean;
+  loadContent: boolean;
   onLoadProblem: LoadProblemReporter;
   showToast: (message: string) => void;
 }) {
   const { t } = useTranslation();
   const productID = product.id;
+  const loadKey = `${productID}:${loadConfiguration}:${loadContent}`;
+  const [loadedKey, setLoadedKey] = useState("");
+  const loading = !fixturePreview && (loadConfiguration || loadContent) && loadedKey !== loadKey;
   const [aiConnections, setAIConnections] = useState<APIAIProviderConnection[]>([]);
   const [aiProfiles, setAIProfiles] = useState<APIAIWorkloadProfile[]>([]);
   const [aiPrompts, setAIPrompts] = useState<APIAIWorkflowPrompt[]>([]);
@@ -72,34 +79,26 @@ export function useAIWorkspaceState({
   useEffect(() => {
     if (fixturePreview) return;
     let cancelled = false;
-
-    Promise.all([api.aiConnections(), api.aiProfiles(productID)])
-      .then(([connections, profiles]) => {
-        if (!cancelled) {
-          setAIConnections(connections);
-          setAIProfiles(profiles);
-        }
-      })
-      .catch((error) => onLoadProblem(t("aiWorkflow.aiConfiguration"), error));
-
-    api.aiPrompts(productID)
-      .then((prompts) => {
-        if (!cancelled) setAIPrompts(prompts);
-      })
-      .catch((error) => onLoadProblem(t("aiWorkflow.aiWorkflowPrompts"), error));
-
-    Promise.all([api.analyses(productID), api.recipes(productID), api.aiUsage(productID)])
-      .then(([analysisValues, recipeValues, usageValues]) => {
-        if (!cancelled) {
-          setAnalyses(analysisValues);
-          setRecipes(recipeValues);
-          setAIProviderUsage(usageValues.providers);
-        }
-      })
-      .catch((error) => onLoadProblem(t("aiWorkflow.aiContent"), error));
-
+    if (!loadConfiguration && !loadContent) {
+      queueMicrotask(() => { if (!cancelled) setLoadedKey(""); });
+      return () => { cancelled = true; };
+    }
+    const reads: Promise<unknown>[] = [];
+    if (loadConfiguration) {
+      reads.push(Promise.all([api.aiConnections(), api.aiProfiles(productID), api.aiPrompts(productID), api.aiUsage(productID)])
+        .then(([connections, profiles, prompts, usage]) => {
+          if (!cancelled) { setAIConnections(connections); setAIProfiles(profiles); setAIPrompts(prompts); setAIProviderUsage(usage.providers); }
+        }).catch((error) => { if (!cancelled) onLoadProblem(t("aiWorkflow.aiConfiguration"), error); }));
+    }
+    if (loadContent) {
+      reads.push(Promise.all([api.analyses(productID), api.recipes(productID)])
+        .then(([analysisValues, recipeValues]) => {
+          if (!cancelled) { setAnalyses(analysisValues); setRecipes(recipeValues); }
+        }).catch((error) => { if (!cancelled) onLoadProblem(t("aiWorkflow.aiContent"), error); }));
+    }
+    void Promise.allSettled(reads).then(() => { if (!cancelled) setLoadedKey(loadKey); });
     return () => { cancelled = true; };
-  }, [fixturePreview, onLoadProblem, productID, t]);
+  }, [fixturePreview, loadConfiguration, loadContent, loadKey, onLoadProblem, productID, t]);
 
 	  function openAIConnection(provider: APIAIProviderConnection["provider"]) {
 	    const connection = aiConnections.find((item) => item.provider === provider);
@@ -334,16 +333,13 @@ export function useAIWorkspaceState({
     }
   }
 
-  async function editRecipe(recipe: APIRecipe, referenceIDs: string[], visibility: APIRecipe["visibility"]): Promise<APIRecipe | null> {
+  async function editRecipe(recipe: APIRecipe, referenceIDs: string[], visibility: APIRecipe["visibility"]): Promise<APIRecipe> {
     setRecipeBusy(true);
     try {
       const value = await api.updateRecipe(product.id, recipe.id, recipe.revision, recipe.current_revision_id, referenceIDs, visibility);
       setRecipes((items) => items.map((item) => item.id === value.id ? value : item));
       showToast(t("aiWorkflow.recipeReferencesAndVisibilitySavedForReview"));
       return value;
-    } catch (error) {
-      await handleRecipeMutationError(error, t("aiWorkflow.couldNotSaveRecipeRevision"));
-      return null;
     } finally {
       setRecipeBusy(false);
     }
@@ -400,6 +396,7 @@ export function useAIWorkspaceState({
   }
 
   return {
+    loading,
     aiConnections, setAIConnections,
     aiProfiles, setAIProfiles,
     aiPrompts, setAIPrompts,

@@ -218,7 +218,7 @@ test("API workspaces expose the task-oriented setup tabs with stable, round-trip
     { id: "documentation", label: "routes.resources" },
     { id: "authorization", label: "routes.keysAccess" },
     { id: "tools", label: "routes.tools" },
-    { id: "test", label: "routes.test" },
+    { id: "test", label: "taskConnection.tab" },
     { id: "history", label: "routes.history" },
   ]);
   assert.deepEqual(INTEGRATION_PRIMARY_TABS, [
@@ -226,7 +226,7 @@ test("API workspaces expose the task-oriented setup tabs with stable, round-trip
     { id: "documentation", label: "routes.resources" },
     { id: "authorization", label: "routes.keysAccess" },
     { id: "tools", label: "routes.tools" },
-    { id: "test", label: "routes.test" },
+    { id: "test", label: "taskConnection.tab" },
   ], "History remains routable but lives behind the API More menu");
   const uid = "voice api/v3";
   for (const tab of INTEGRATION_TABS) {
@@ -265,7 +265,7 @@ test("API validation findings open the matching local setup area", () => {
   const uid = "voice-api";
   assert.equal(integrationValidationPath(uid, "resources"), `/integration/${uid}/documentation`);
   assert.equal(integrationValidationPath(uid, "authorization"), `/integration/${uid}/authorization`);
-  assert.equal(integrationValidationPath(uid, "access"), `/integration/${uid}`);
+  assert.equal(integrationValidationPath(uid, "access"), `/integration/${uid}/authorization`);
   assert.equal(integrationValidationPath(uid, "tools"), `/integration/${uid}/tools`);
   assert.equal(integrationValidationPath(uid, "recipes"), "/recipes");
   assert.equal(integrationValidationPath(uid, "delivery"), "/agent-access");

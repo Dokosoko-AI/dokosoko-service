@@ -142,3 +142,22 @@
 .tool-editor-page :is(input, textarea):read-only { color: var(--text-strong); background: var(--surface-subtle); cursor: default; }
 .tool-editor-page :is(input, select, textarea):focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-line); }
 .tool-editor-page > .auth-field textarea { min-height: 120px; }
+
+/* Read-only imported evidence: no active HTML, scripts, images or embeds. */
+.core-evidence-content { min-width: 0; color: var(--text); font-size: var(--text-body); line-height: var(--leading-control); overflow-wrap: anywhere; }
+.core-evidence-content > * + * { margin-top: var(--space-section); }
+.core-evidence-content h2, .core-evidence-content h3, .core-evidence-content h4, .core-evidence-content h5, .core-evidence-content h6 { color: var(--text-strong); font-weight: var(--weight-semibold); line-height: 1.4; }
+.core-evidence-content h2 { font-size: var(--text-heading); }
+.core-evidence-content h3, .core-evidence-content h4, .core-evidence-content h5, .core-evidence-content h6 { font-size: var(--text-body); }
+.core-evidence-content p { white-space: pre-wrap; }
+.core-evidence-content ul, .core-evidence-content ol { padding-inline-start: 1.5em; }
+.core-evidence-content ul { list-style: disc; }
+.core-evidence-content ol { list-style: decimal; }
+.core-evidence-content li + li { margin-top: .5em; }
+.core-evidence-content a { color: var(--accent-strong); text-decoration: underline; }
+.core-evidence-content pre, .core-evidence-diff pre { max-width: 100%; overflow: auto; padding: var(--space-section); border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-subtle); font-size: var(--text-label); white-space: pre-wrap; overflow-wrap: anywhere; }
+.core-evidence-content code, .core-evidence-diff code { font-family: var(--font-mono); }
+.core-evidence-diff { display: grid; gap: var(--space-section); min-width: 0; }
+.core-evidence-diff h3 { font-size: var(--text-label); font-weight: var(--weight-semibold); margin-bottom: .5em; }
+.core-evidence-diff section:first-child pre { border-inline-start: 3px solid var(--danger); }
+.core-evidence-diff section:last-child pre { border-inline-start: 3px solid var(--success); }

@@ -13,6 +13,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/platform"
 	"github.com/dokosoko/dokosoko-service/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/testutil"
 )
 
 type recipeV2Fixture struct {
@@ -60,7 +61,7 @@ func configureRecipeV2Fixture(t *testing.T, memory *store.Memory, service *platf
 func newRecipeV2Fixture(t *testing.T) recipeV2Fixture {
 	t.Helper()
 	memory := store.NewMemory()
-	return configureRecipeV2Fixture(t, memory, platform.New(memory))
+	return configureRecipeV2Fixture(t, memory, testutil.NewRecipeService(t, memory, testutil.RecipeAI{}))
 }
 
 func analyseAndGenerateRecipeV2(t *testing.T, fixture recipeV2Fixture) (model.IntegrationAnalysis, model.Recipe) {
@@ -405,7 +406,7 @@ func TestAIRecipeGeneratorDetectsAndBindsMultipleAPIs(t *testing.T) {
 	}
 }
 
-func TestRecipeV2RejectsPlatformAIOutputAndUsesProductOnlyFallback(t *testing.T) {
+func TestRecipeRejectsInvalidAIOutputWithoutFallback(t *testing.T) {
 	doer := &adversarialRecipeV2Doer{}
 	memory := store.NewMemory()
 	service := platform.NewWithVaultAndProductBuilderDoer(memory, nil, doer)
@@ -424,44 +425,17 @@ func TestRecipeV2RejectsPlatformAIOutputAndUsesProductOnlyFallback(t *testing.T)
 		t.Fatal(err)
 	}
 	fixture := configureRecipeV2Fixture(t, memory, service)
-	analysis, recipe := analyseAndGenerateRecipeV2(t, fixture)
-	if analysis.GeneratedBy != "deterministic" || analysis.ErrorCode != "invalid_structured_output" {
-		t.Fatalf("adversarial analysis replaced deterministic product planning: %#v", analysis)
+	analysis, err := service.AnalyseIntegrationFor(t.Context(), fixture.integration.DeploymentID, fixture.integration.ID, actor)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if recipe.CurrentRevision.GeneratedBy != "deterministic" {
-		t.Fatalf("adversarial authoring did not fall back deterministically: %#v", recipe.CurrentRevision)
+	recipes, err := service.GenerateRecipesForIntegration(t.Context(), fixture.integration.DeploymentID, analysis.ID, fixture.integration.ID, actor)
+	if ai.Code(err) != ai.ErrorInvalidStructuredOutput || len(recipes) != 0 {
+		t.Fatalf("invalid authoring returned recipes=%#v err=%v", recipes, err)
 	}
-	lower := strings.ToLower(recipe.CurrentRevision.Markdown)
-	if strings.Contains(lower, "dokosoko") || strings.Contains(lower, "mcp discovery") || strings.Contains(lower, "platform-mcp") {
-		t.Fatalf("platform delivery output survived validation:\n%s", recipe.CurrentRevision.Markdown)
-	}
-	foundAnalysisPrompt := false
-	foundReviewPrompt := false
-	for _, body := range doer.bodies {
-		if strings.Contains(body, "Recipe review contract:") {
-			foundReviewPrompt = true
-			if !strings.Contains(body, "allowed_evidence_ids") || !strings.Contains(body, fixture.tool.ID) {
-				t.Errorf("recipe review omitted its exact allowed evidence identifiers: %s", body)
-			}
-		}
-		if !strings.Contains(body, "Integration analysis contract:") {
-			continue
-		}
-		foundAnalysisPrompt = true
-		for _, forbidden := range []string{"platform_contract", "allowed_endpoint_ids", "identity_provider", "authorization_point", "mcp_oauth", "automatic_tool"} {
-			if strings.Contains(body, forbidden) {
-				t.Errorf("analysis AI received platform-only field %q: %s", forbidden, body)
-			}
-		}
-		if !strings.Contains(body, "allowed_capability_ids") || !strings.Contains(body, fixture.tool.ID) {
-			t.Errorf("analysis AI omitted exact product capability evidence: %s", body)
-		}
-	}
-	if !foundAnalysisPrompt {
-		t.Fatalf("analysis AI was not invoked: %#v", doer.bodies)
-	}
-	if !foundReviewPrompt {
-		t.Fatalf("recipe review AI was not invoked: %#v", doer.bodies)
+	saved, err := memory.Recipes(t.Context(), fixture.integration.DeploymentID)
+	if err != nil || len(saved) != 0 {
+		t.Fatalf("invalid output was persisted: %#v, %v", saved, err)
 	}
 }
 
@@ -506,5 +480,33 @@ func TestRetiredIntegrationCannotProduceOrKeepCurrentRecipes(t *testing.T) {
 	reconciled, err := fixture.service.ReconcileRecipeDrift(t.Context(), fixture.integration.DeploymentID)
 	if err != nil || len(reconciled) != 1 || reconciled[0].ID != recipe.ID || reconciled[0].State != "outdated" || !reconciled[0].NeedsAttention {
 		t.Fatalf("retired Integration recipe reconciliation = %#v, err=%v", reconciled, err)
+	}
+}
+
+func TestRecipeProcessingRequiresAuthoringAndReviewAI(t *testing.T) {
+	for _, stage := range []string{"unconfigured", "Recipe authoring contract:", "Recipe review contract:"} {
+		t.Run(stage, func(t *testing.T) {
+			memory := store.NewMemory()
+			service := platform.New(memory)
+			if stage != "unconfigured" {
+				service = testutil.NewRecipeService(t, memory, testutil.RecipeAI{FailStage: stage, Failure: errors.New("provider unavailable")})
+			}
+			fixture := configureRecipeV2Fixture(t, memory, service)
+			analysis, err := service.AnalyseIntegrationFor(t.Context(), fixture.integration.DeploymentID, fixture.integration.ID, fixture.actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generated, err := service.GenerateRecipesForIntegration(t.Context(), fixture.integration.DeploymentID, analysis.ID, fixture.integration.ID, fixture.actor)
+			if err == nil || len(generated) != 0 {
+				t.Fatalf("failed processing returned recipes=%#v err=%v", generated, err)
+			}
+			if stage == "unconfigured" && !errors.Is(err, platform.ErrAIUnavailable) {
+				t.Fatalf("unconfigured failure=%v", err)
+			}
+			saved, err := memory.Recipes(t.Context(), fixture.integration.DeploymentID)
+			if err != nil || len(saved) != 0 {
+				t.Fatalf("failed processing persisted recipe=%#v err=%v", saved, err)
+			}
+		})
 	}
 }

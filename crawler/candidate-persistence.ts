@@ -131,7 +131,7 @@ type ExistingRun = {
 
 type StageRow = {
   name: "acquire" | "validate" | "parse" | "normalize" | "segment" | "extract" | "map" | "ai_enrich" | "quality_check" | "build_index" | "review";
-  state: "succeeded" | "skipped";
+  state: "queued" | "succeeded" | "skipped";
   inputHash: string;
   outputHash: string;
   checkpoint: Readonly<Record<string, unknown>>;
@@ -475,7 +475,9 @@ async function insertStages(client: pg.PoolClient, job: Job, stages: readonly St
         id, ingestion_run_id, stage_name, attempt, state, input_hash, output_hash,
         checkpoint, diagnostics, started_at, finished_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,now(),now())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,
+        CASE WHEN $5='queued' THEN NULL ELSE now() END,
+        CASE WHEN $5='queued' THEN NULL ELSE now() END)
       ON CONFLICT (ingestion_run_id, stage_name, attempt) DO UPDATE
       SET state = EXCLUDED.state, input_hash = EXCLUDED.input_hash,
           output_hash = EXCLUDED.output_hash, checkpoint = EXCLUDED.checkpoint,
@@ -591,7 +593,7 @@ function documentationStages(
     { name: "segment", state: "succeeded", inputHash: normalizedHash, outputHash: sectionsHash, checkpoint: { section_logical_ids: corpus.sections.map((item) => item.id) }, diagnostics: {} },
     skip("extract", "Documentation extraction is represented by the normalized document and section records.", sectionsHash),
     { name: "map", state: "succeeded", inputHash: sectionsHash, outputHash: mapHash, checkpoint: { map_logical_id: corpus.map.id }, diagnostics: {} },
-    skip("ai_enrich", "Deterministic output is reviewable without optional AI enrichment.", mapHash),
+    { name: "ai_enrich", state: "queued", inputHash: mapHash, outputHash: "", checkpoint: { reason: "AI processing is required before publication" }, diagnostics: {} },
     { name: "quality_check", state: "succeeded", inputHash: sectionsHash, outputHash: qualityHash, checkpoint: { diagnostic_count: corpus.diagnostics.length }, diagnostics: { items: corpus.diagnostics } },
     skip("build_index", "Published retrieval indexes are built from an approved Go-side publication.", mapHash),
     { name: "review", state: "succeeded", inputHash: mapHash, outputHash: mapHash, checkpoint: { state: "review_ready" }, diagnostics: {} },
@@ -845,7 +847,7 @@ function contractStages(job: Job, manifestHash: string, candidate: OpenAPICandid
     skip("segment", "OpenAPI candidates are segmented into typed operations, schemas, and examples during extraction.", normalizedHash),
     { name: "extract", state: "succeeded", inputHash: normalizedHash, outputHash: extractedHash, checkpoint: { operation_count: candidate.operations.length, schema_count: candidate.schemas.length, example_count: candidate.examples.length }, diagnostics: {} },
     { name: "map", state: "succeeded", inputHash: extractedHash, outputHash: mapHash, checkpoint: { map_version: API_CONTRACT_MAP_VERSION }, diagnostics: {} },
-    skip("ai_enrich", "Deterministic contract output is reviewable without optional AI enrichment.", mapHash),
+    { name: "ai_enrich", state: "queued", inputHash: mapHash, outputHash: "", checkpoint: { reason: "AI processing is required before publication" }, diagnostics: {} },
     { name: "quality_check", state: "succeeded", inputHash: extractedHash, outputHash: hashJSON(candidate.diagnostics), checkpoint: { diagnostic_count: candidate.diagnostics.length }, diagnostics: { items: candidate.diagnostics } },
     skip("build_index", "Published retrieval indexes are built from an approved Go-side publication.", mapHash),
     { name: "review", state: "succeeded", inputHash: mapHash, outputHash: mapHash, checkpoint: { state: "review_ready" }, diagnostics: {} },

@@ -19,11 +19,11 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/store"
 )
 
-func sourceUploadRequest(t *testing.T, handler http.Handler, productID, filename string, content []byte, fields map[string]string) *httptest.ResponseRecorder {
+func sourceUploadRequest(t *testing.T, handler http.Handler, productID, filename string, content []byte, fields map[string]string, keys ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	for _, name := range []string{"organisation_id", "name"} {
+	for _, name := range []string{"organisation_id", "name", "revision"} {
 		if value, ok := fields[name]; ok {
 			if err := writer.WriteField(name, value); err != nil {
 				t.Fatal(err)
@@ -45,6 +45,9 @@ func sourceUploadRequest(t *testing.T, handler http.Handler, productID, filename
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/products/"+productID+"/sources/upload", &body)
 	request.Header.Set("Authorization", "Bearer doko_admin_demo")
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if len(keys) > 0 {
+		request.Header.Set("Idempotency-Key", keys[0])
+	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response

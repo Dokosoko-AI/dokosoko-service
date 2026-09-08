@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dokosoko/dokosoko-service/internal/ai/aitest"
 	"github.com/dokosoko/dokosoko-service/internal/docreview"
 	"github.com/dokosoko/dokosoko-service/internal/model"
 	"github.com/dokosoko/dokosoko-service/internal/store"
@@ -84,7 +85,11 @@ func newSourcePublicationCaptureStore(t *testing.T) (*sourcePublicationCaptureSt
 func TestServicePublishSourceCarriesExactReviewerEvidenceIntoAtomicStoreCall(t *testing.T) {
 	t.Parallel()
 	capture, now := newSourcePublicationCaptureStore(t)
-	service := New(capture)
+	seedKnowledgeDocuments(t, capture, capture.review.CrawlJob.ID, []string{"Selected source evidence.", "Excluded source evidence."})
+	service := configuredKnowledgeService(t, capture, &aitest.Knowledge{})
+	if _, err := service.ProcessKnowledgeBatch(t.Context(), capture.review.CrawlJob.ID, Actor{}); err != nil {
+		t.Fatal(err)
+	}
 	service.now = func() time.Time { return now }
 	updated, publication, err := service.PublishSource(context.Background(), capture.source.ProductID, capture.source.ID, SourcePublicationInput{
 		Revision: capture.source.Revision, CrawlJobID: capture.review.CrawlJob.ID,
@@ -108,7 +113,11 @@ func TestServicePublishSourceDoesNotAuditFailedAtomicStoreBridge(t *testing.T) {
 	t.Parallel()
 	capture, now := newSourcePublicationCaptureStore(t)
 	capture.publishErr = store.ErrConflict
-	service := New(capture)
+	seedKnowledgeDocuments(t, capture, capture.review.CrawlJob.ID, []string{"Selected source evidence.", "Excluded source evidence."})
+	service := configuredKnowledgeService(t, capture, &aitest.Knowledge{})
+	if _, err := service.ProcessKnowledgeBatch(t.Context(), capture.review.CrawlJob.ID, Actor{}); err != nil {
+		t.Fatal(err)
+	}
 	service.now = func() time.Time { return now }
 	_, _, err := service.PublishSource(context.Background(), capture.source.ProductID, capture.source.ID, SourcePublicationInput{
 		Revision: capture.source.Revision, CrawlJobID: capture.review.CrawlJob.ID,

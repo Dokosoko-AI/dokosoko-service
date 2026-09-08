@@ -11,6 +11,16 @@ func WriteHuman(w io.Writer, report Report) error {
 	if _, err := fmt.Fprintf(w, "MCP acceptance report\nEndpoint: %s\nProtocol: %s\n\n", report.Endpoint, report.ProtocolVersion); err != nil {
 		return err
 	}
+	if report.ClientName != "" {
+		if _, err := fmt.Fprintf(w, "Client: %s %s\nEvidence: observations by this acceptance client, not a server attestation or another coding client's result.\n\n", report.ClientName, report.ClientVersion); err != nil {
+			return err
+		}
+	}
+	if report.Task != nil {
+		if _, err := fmt.Fprintf(w, "Task: %s\nExpected outcome: %s\nReviewed plan: %s\nRetrieval: %s\nImplementation/tests: not run by this client.\n\n", report.Task.Selection.Title, report.Task.Selection.Outcome, report.Task.PlanSHA256, report.Task.RetrievalStatus); err != nil {
+			return err
+		}
+	}
 	for _, check := range report.Checks {
 		marker := map[Status]string{Pass: "PASS", Fail: "FAIL", Skip: "SKIP"}[check.Status]
 		if check.Status == Skip && check.Required {

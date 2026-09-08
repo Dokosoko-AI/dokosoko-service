@@ -24,7 +24,7 @@ export type RouteLabelKey =
   | "routes.resources"
   | "routes.keysAccess"
   | "routes.tools"
-  | "routes.test"
+  | "taskConnection.tab"
   | "routes.history"
   | "routes.documentation"
   | "routes.apiContracts"
@@ -45,19 +45,19 @@ export type EntityKind =
   | "audit-event"
   | "root-user";
 
-export type ConsoleRoute =
+export type ConsoleRoute = (
   | { kind: "section"; section: Section; path: string; settingsTab?: SettingsTab; identityTab?: IdentityTab }
   | { kind: "tool-builder"; section: "tools"; uid?: string; integrationID?: string; path: string }
   | { kind: "entity"; section: "product"; entity: "integration"; uid: string; integrationTab: IntegrationTab; integrationResourceTab?: IntegrationResourceTab; path: string }
   | { kind: "entity"; section: Section; entity: Exclude<EntityKind, "integration">; uid: string; path: string }
-  | { kind: "not-found"; section: "product"; path: string };
+  | { kind: "not-found"; section: "product"; path: string }) & { search?: string };
 
 export const INTEGRATION_TABS: Array<{ id: IntegrationTab; label: RouteLabelKey }> = [
   { id: "overview", label: "routes.quickStart" },
   { id: "documentation", label: "routes.resources" },
   { id: "authorization", label: "routes.keysAccess" },
   { id: "tools", label: "routes.tools" },
-  { id: "test", label: "routes.test" },
+  { id: "test", label: "taskConnection.tab" },
   { id: "history", label: "routes.history" },
 ];
 
@@ -154,6 +154,7 @@ export function integrationPath(uid: string, tab: IntegrationTab = "overview", r
 export function integrationValidationPath(uid: string, tab: string): string {
   switch (tab) {
     case "resources": return integrationPath(uid, "documentation");
+    case "access":
     case "authorization": return integrationPath(uid, "authorization");
     case "tools": return integrationPath(uid, "tools");
     case "recipes": return sectionPath("recipes");

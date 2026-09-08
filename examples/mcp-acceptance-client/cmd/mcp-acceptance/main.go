@@ -31,6 +31,10 @@ func main() {
 }
 
 func execute(args []string, stdout, stderr io.Writer) (int, error) {
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
+		_, err := fmt.Fprintln(stdout, "DokoSoko MCP acceptance client "+acceptance.ClientVersion)
+		return 0, err
+	}
 	if len(args) == 0 || args[0] == "run" {
 		if len(args) > 0 {
 			args = args[1:]
@@ -74,6 +78,7 @@ func runSuite(args []string, stdout, stderr io.Writer) (int, error) {
 	var expectedResources stringList
 	flags.Var(&expectedTools, "expect-tool", "tool name expected in tools/list; repeatable")
 	flags.Var(&expectedResources, "expect-resource", "resource URI expected in resources/list; repeatable")
+	taskPlanFile := flags.String("task-plan", "", "reviewed JSON task plan with exact resource text hashes and revision/publication metadata")
 	callTool := flags.String("call-tool", "", "tool to invoke for a positive tools/call check")
 	callArgsFile := flags.String("call-args-file", "", "JSON object containing positive tool arguments")
 	callConfirmed := flags.Bool("call-confirmed", false, "complete the positive tool call's server-issued confirmation challenge when required")
@@ -92,6 +97,14 @@ func runSuite(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 	if *endpoint == "" {
 		return 2, errors.New("--endpoint is required")
+	}
+	var taskPlan *acceptance.TaskPlan
+	if *taskPlanFile != "" {
+		var err error
+		taskPlan, err = acceptance.LoadTaskPlan(*taskPlanFile)
+		if err != nil {
+			return 2, fmt.Errorf("load task plan: %w", err)
+		}
 	}
 	token, err := acceptance.LoadToken(*tokenFile, *tokenEnv)
 	if err != nil {
@@ -117,6 +130,7 @@ func runSuite(args []string, stdout, stderr io.Writer) (int, error) {
 		Endpoint: *endpoint, AllowedLoopbackHTTP: allowedLoopbackHTTP,
 		Origin: *origin, Token: token, RestrictedToken: restrictedToken,
 		ExpectedTools: expectedTools, ExpectedResources: expectedResources,
+		TaskPlan: taskPlan,
 		CallTool: *callTool, CallArguments: callArguments, CallConfirmed: *callConfirmed,
 		GrantTool: *grantTool, GrantArguments: grantArguments, VerifyRestrictedCallDenied: *verifyRestrictedCall,
 		ConfirmationTool: *confirmationTool, ConfirmationArguments: confirmationArguments, VerifyConfirmedCall: *verifyConfirmedCall,

@@ -117,3 +117,27 @@ func TestMCPPreviewIsAdminOnlyReadOnlyAndContextExplicit(t *testing.T) {
 		t.Fatalf("tools/call preview = %d: %s", toolCall.Code, toolCall.Body.String())
 	}
 }
+
+func TestMCPResourcePreviewRequiresOneExactURI(t *testing.T) {
+	t.Parallel()
+	handler := newCatalogServer(t)
+	for _, query := range []string{
+		"method=resources%2Fread", "method=resources%2Fread&uri=",
+		"method=resources%2Fread&uri=a&uri=b", "method=resources%2Fread&uri=%20a",
+		"method=resources%2Fread&uri=" + strings.Repeat("a", 2049),
+		"method=resources%2Flist&uri=", "method=tools%2Fcall&uri=dokosoko%3A%2F%2Fa",
+	} {
+		response := request(t, handler, http.MethodGet, "/api/v1/products/prod_acme/mcp-preview?audience=private&"+query, "doko_admin_demo", "")
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid read preview accepted: status=%d", response.Code)
+		}
+	}
+	path := "/api/v1/products/prod_acme/mcp-preview?audience=private&method=resources%2Fread&uri=" + url.QueryEscape("dokosoko://products/foreign/recipes/private")
+	if response := request(t, handler, http.MethodGet, path, "", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous preview status=%d", response.Code)
+	}
+	response := request(t, handler, http.MethodGet, path, "doko_admin_demo", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"code":-32004`) {
+		t.Fatalf("foreign URI preview=%d: %s", response.Code, response.Body.String())
+	}
+}

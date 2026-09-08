@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -88,30 +89,93 @@ func (m *Manager) Inspect(ctx context.Context, productID, connectionID string) (
 	if err != nil {
 		return Catalog{}, err
 	}
-	raw, err := m.invoke(ctx, connection, "tools/list", "", nil, bearer, nil, 20*time.Second)
+	// Inspect is one bounded read. Import only sees a catalog after every page
+	// succeeds, so a failed continuation cannot retire or import a partial set.
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	catalog := Catalog{Connection: connection, Tools: []CatalogTool{}}
+	params := map[string]any{}
+	cursors, names := map[string]bool{}, map[string]bool{}
+	var revision json.RawMessage
+	totalBytes, complete := 0, false
+	for page := 0; page < 64; page++ {
+		if err := ctx.Err(); err != nil {
+			return Catalog{}, err
+		}
+		current, lookupErr := m.store.MCPConnection(ctx, productID, connectionID)
+		if lookupErr != nil {
+			return Catalog{}, lookupErr
+		}
+		if current.State != "active" || current.Revision != connection.Revision {
+			return Catalog{}, ErrInvalidConnection
+		}
+		raw, invokeErr := m.invoke(ctx, connection, "tools/list", "", params, bearer, nil, 20*time.Second)
+		if invokeErr != nil {
+			return Catalog{}, invokeErr
+		}
+		totalBytes += len(raw)
+		if totalBytes > 4<<20 {
+			return Catalog{}, fmt.Errorf("%w: catalog exceeds the 4 MiB inspection budget", ErrUpstreamProtocol)
+		}
+		var result struct {
+			ResultType string `json:"resultType"`
+			Tools      []struct {
+				Name         string          `json:"name"`
+				Title        string          `json:"title"`
+				Description  string          `json:"description"`
+				InputSchema  json.RawMessage `json:"inputSchema"`
+				OutputSchema json.RawMessage `json:"outputSchema"`
+				Annotations  json.RawMessage `json:"annotations"`
+			} `json:"tools"`
+			TTLMS           int64           `json:"ttlMs"`
+			NextCursor      *string         `json:"nextCursor"`
+			CatalogRevision json.RawMessage `json:"catalogRevision"`
+		}
+		if json.Unmarshal(raw, &result) != nil || result.ResultType != "complete" || result.Tools == nil || result.TTLMS < 0 {
+			return Catalog{}, ErrUpstreamProtocol
+		}
+		if page == 0 {
+			revision, catalog.TTLMS = result.CatalogRevision, result.TTLMS
+		} else {
+			if string(revision) != string(result.CatalogRevision) {
+				return Catalog{}, fmt.Errorf("%w: catalog changed between pages; restart inspection", ErrUpstreamProtocol)
+			}
+			if result.TTLMS < catalog.TTLMS {
+				catalog.TTLMS = result.TTLMS
+			}
+		}
+		for _, upstream := range result.Tools {
+			if strings.TrimSpace(upstream.Name) == "" || names[upstream.Name] {
+				return Catalog{}, fmt.Errorf("%w: catalog contains an empty or duplicate tool name", ErrUpstreamProtocol)
+			}
+			names[upstream.Name] = true
+			if len(names) > 4096 {
+				return Catalog{}, fmt.Errorf("%w: catalog exceeds the 4096 tool inspection budget", ErrUpstreamProtocol)
+			}
+			tool := CatalogTool{Name: upstream.Name, Title: upstream.Title, Description: upstream.Description, InputSchema: upstream.InputSchema, OutputSchema: upstream.OutputSchema, Annotations: upstream.Annotations}
+			tool.SchemaHash = catalogToolHash(tool)
+			catalog.Tools = append(catalog.Tools, tool)
+		}
+		if result.NextCursor == nil {
+			complete = true
+			break
+		}
+		cursor := *result.NextCursor
+		if len(cursor) > 4096 || cursors[cursor] {
+			return Catalog{}, fmt.Errorf("%w: catalog returned an invalid or repeated cursor", ErrUpstreamProtocol)
+		}
+		// Empty cursors are opaque values, not an end-of-list marker.
+		cursors[cursor], params["cursor"] = true, cursor
+	}
+	if !complete {
+		return Catalog{}, fmt.Errorf("%w: catalog exceeds the 64 page inspection budget", ErrUpstreamProtocol)
+	}
+	current, err := m.store.MCPConnection(ctx, productID, connectionID)
 	if err != nil {
 		return Catalog{}, err
 	}
-	var result struct {
-		ResultType string `json:"resultType"`
-		Tools      []struct {
-			Name         string          `json:"name"`
-			Title        string          `json:"title"`
-			Description  string          `json:"description"`
-			InputSchema  json.RawMessage `json:"inputSchema"`
-			OutputSchema json.RawMessage `json:"outputSchema"`
-			Annotations  json.RawMessage `json:"annotations"`
-		} `json:"tools"`
-		TTLMS int64 `json:"ttlMs"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil || result.ResultType != "complete" {
-		return Catalog{}, ErrUpstreamProtocol
-	}
-	catalog := Catalog{Connection: connection, Tools: make([]CatalogTool, 0, len(result.Tools)), TTLMS: result.TTLMS}
-	for _, upstream := range result.Tools {
-		tool := CatalogTool{Name: upstream.Name, Title: upstream.Title, Description: upstream.Description, InputSchema: upstream.InputSchema, OutputSchema: upstream.OutputSchema, Annotations: upstream.Annotations}
-		tool.SchemaHash = catalogToolHash(tool)
-		catalog.Tools = append(catalog.Tools, tool)
+	if current.State != "active" || current.Revision != connection.Revision {
+		return Catalog{}, ErrInvalidConnection
 	}
 	sort.Slice(catalog.Tools, func(i, j int) bool { return catalog.Tools[i].Name < catalog.Tools[j].Name })
 	encoded, _ := json.Marshal(catalog.Tools)

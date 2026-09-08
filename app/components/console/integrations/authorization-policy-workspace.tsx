@@ -16,7 +16,7 @@ import { Badge, Button, Dialog } from "../../core/control";
 import { PanelHeader, SectionHeader } from "../../core/layout";
 import { unavailableConsoleCapability } from "../shared";
 
-export function AuthorizationPolicyWorkspace({ integration, onMessage }: { integration: APIIntegration; onMessage: (message: string) => void }) {
+export function AuthorizationPolicyWorkspace({ integration, onMessage, onChanged }: { integration: APIIntegration; onMessage: (message: string) => void; onChanged: () => void | Promise<void> }) {
   const { t } = useTranslation();
   const [definitions, setDefinitions] = useState<APIGrantDefinition[]>([]);
   const [points, setPoints] = useState<APIAuthorizationPoint[]>([]);
@@ -67,7 +67,7 @@ export function AuthorizationPolicyWorkspace({ integration, onMessage }: { integ
     try {
       const input = { key: grantKey.trim(), display_name: grantName.trim(), description: grantDescription.trim(), risk: grantRisk, state: grantState };
       if (editingGrant) await api.updateGrantDefinition(editingGrant.id, { ...input, revision: editingGrant.revision }); else await api.createGrantDefinition(input);
-      await loadAuthorization(); setGrantOpen(false); onMessage(editingGrant ? t("authorization.grantDefinitionUpdated") : t("authorization.grantRegisteredForPolicyUse"));
+      await loadAuthorization(); await onChanged(); setGrantOpen(false); onMessage(editingGrant ? t("authorization.grantDefinitionUpdated") : t("authorization.grantRegisteredForPolicyUse"));
     } catch (error) { onMessage(error instanceof APIError ? error.message : t("authorization.grantDefinitionCouldNotBeSaved")); } finally { setBusy(false); }
   }
 
@@ -80,7 +80,7 @@ export function AuthorizationPolicyWorkspace({ integration, onMessage }: { integ
     try {
       const input = { key: pointKey.trim(), name: pointName.trim(), description: pointDescription.trim(), action_type: pointAction, required_grants: pointGrants, confirmation_required: pointAction === "destructive" ? true : pointConfirmation, decision_ttl_seconds: Number(pointTTL), state: pointState };
       if (editingPoint) await api.updateAuthorizationPoint(integration.id, editingPoint.id, { ...input, revision: editingPoint.revision }); else await api.createAuthorizationPoint(integration.id, input);
-      await loadAuthorization(); setPointOpen(false); onMessage(editingPoint ? t("authorization.actionPolicyUpdated") : t("authorization.actionPolicyCreated"));
+      await loadAuthorization(); await onChanged(); setPointOpen(false); onMessage(editingPoint ? t("authorization.actionPolicyUpdated") : t("authorization.actionPolicyCreated"));
     } catch (error) { onMessage(error instanceof APIError ? error.message : t("authorization.actionPolicyCouldNotBeSaved")); } finally { setBusy(false); }
   }
 

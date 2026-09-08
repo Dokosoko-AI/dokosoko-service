@@ -80,10 +80,27 @@ type SourcePublication struct {
 }
 
 type SourceReview struct {
-	Source      Source                `json:"source"`
-	CrawlJob    CrawlJob              `json:"crawl_job"`
-	Documents   []CrawlReviewDocument `json:"documents"`
-	Publication *SourcePublication    `json:"publication,omitempty"`
+	Source               Source                `json:"source"`
+	CrawlJob             CrawlJob              `json:"crawl_job"`
+	Documents            []CrawlReviewDocument `json:"documents"`
+	Publication          *SourcePublication    `json:"publication,omitempty"`
+	PublishedDocumentIDs []string              `json:"published_document_ids,omitempty"`
+}
+
+// SourceReviewContent is read on demand for one exact generation membership.
+// Body is the stored extracted text, never a fresh fetch of the source URL.
+type SourceReviewContent struct {
+	Document CrawlReviewDocument          `json:"document"`
+	Body     string                       `json:"body"`
+	Previous *SourceReviewPreviousContent `json:"previous,omitempty"`
+}
+
+type SourceReviewPreviousContent struct {
+	PublicationID       string `json:"publication_id"`
+	PublicationRevision int64  `json:"publication_revision"`
+	DocumentID          string `json:"document_id"`
+	ContentHash         string `json:"content_hash"`
+	Body                string `json:"body"`
 }
 
 type Secret struct {

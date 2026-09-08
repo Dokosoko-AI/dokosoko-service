@@ -96,3 +96,18 @@ func (s *Server) aiWorkloadProfile(w http.ResponseWriter, r *http.Request, produ
 	}
 	writeJSON(w, http.StatusOK, value)
 }
+
+func (s *Server) aiProcessingReadiness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+		return
+	}
+	value, err := s.service.AIProcessingReadiness(r.Context())
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, value)
+}

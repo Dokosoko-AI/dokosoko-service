@@ -14,13 +14,32 @@ import (
 )
 
 type mcpDeveloperAssetResource struct {
-	URI         string
-	Name        string
-	Title       string
-	Description string
-	MIMEType    string
-	Text        string
-	Meta        map[string]any
+	URI          string
+	Name         string
+	Title        string
+	Description  string
+	MIMEType     string
+	Text         string
+	Meta         map[string]any
+	EvidenceKind string
+	// Read metadata is deliberately excluded from resources/list. The exact
+	// publication read supplies its structured evidence index on demand.
+	ReadMeta map[string]any
+}
+
+func mcpDeveloperAssetEvidenceIndex(resources []mcpDeveloperAssetResource) []map[string]any {
+	values := make([]map[string]any, 0, len(resources))
+	for _, resource := range resources {
+		values = append(values, map[string]any{
+			"uri": resource.URI, "title": resource.Title, "kind": resource.EvidenceKind,
+			"knowledge_unit_id":       resource.Meta["knowledge_unit_id"],
+			"source_publication_kind": resource.Meta["source_publication_kind"],
+			"source_publication_id":   resource.Meta["source_publication_id"],
+			"source_entity_id":        resource.Meta["source_entity_id"],
+			"content_hash":            resource.Meta["content_hash"],
+		})
+	}
+	return values
 }
 
 func developerAssetResourceURI(parts ...string) string {
@@ -247,7 +266,7 @@ func publicationScopedDeveloperAssetEvidence(record store.SearchIndexGenerationR
 		}
 		title := firstNonEmptyMCPDeveloperAsset(unit.Title, unit.SourceEntityID, unit.ID)
 		resources = append(resources, mcpDeveloperAssetResource{
-			URI: uri, Name: "developer-asset-evidence-" + unit.ID, Title: title,
+			URI: uri, Name: "developer-asset-evidence-" + unit.ID, Title: title, EvidenceKind: unit.Kind,
 			Description: "Immutable " + assetKind + " evidence selected for one exact published scope.",
 			MIMEType:    "text/markdown", Text: text, Meta: metadata,
 		})
@@ -281,7 +300,8 @@ func (s *Server) exactGlobalDocumentationPublicationResources(ctx context.Contex
 	fmt.Fprintf(&text, "# Global Documentation Publication\n\n- Exact publication: `%s`\n- Revision: `%d`\n- Snapshot hash: `%s`\n- Exact index generation: `%s`\n\n%s", publication.ID, publication.Revision, publication.SnapshotHash, record.Generation.ID, toc)
 	root := mcpDeveloperAssetResource{
 		URI: developerAssetResourceURI("global-documentation", publication.ID), Name: "global-documentation-" + publication.ID,
-		Title: "Global documentation publication", Description: "The exact deployment-wide documentation snapshot and its publication-scoped evidence.",
+		ReadMeta: map[string]any{"evidence_resources": mcpDeveloperAssetEvidenceIndex(evidence)},
+		Title:    "Global documentation publication", Description: "The exact deployment-wide documentation snapshot and its publication-scoped evidence.",
 		MIMEType: "text/markdown", Text: text.String(), Meta: map[string]any{
 			"asset_kind": "documentation", "global_documentation_publication_id": publication.ID,
 			"revision": publication.Revision, "snapshot_hash": publication.SnapshotHash,
@@ -326,7 +346,8 @@ func (s *Server) exactAPIDeveloperAssetPublicationResources(ctx context.Context,
 	}
 	root := mcpDeveloperAssetResource{
 		URI: developerAssetResourceURI("apis", publication.APIID, "publications", publication.ID), Name: "api-assets-" + publication.ID,
-		Title: displayName + " developer assets", Description: "Exact API-scoped documentation, contracts, and SDK evidence selected by this publication.",
+		ReadMeta: map[string]any{"evidence_resources": mcpDeveloperAssetEvidenceIndex(evidence)},
+		Title:    displayName + " developer assets", Description: "Exact API-scoped documentation, contracts, and SDK evidence selected by this publication.",
 		MIMEType: "text/markdown", Text: text.String(), Meta: meta,
 	}
 	return append(evidence, root), nil
@@ -345,6 +366,10 @@ func (s *Server) exactAPIDeveloperAssetPublicationResource(ctx context.Context, 
 // that a client retained continues to resolve against its historical
 // publication's activated, ready index generation.
 func (s *Server) exactPublishedDeveloperAssetResource(ctx context.Context, deploymentID, uri string, public bool) (mcpDeveloperAssetResource, error) {
+	path := strings.SplitN(uri, "?", 2)[0]
+	if strings.HasSuffix(path, mcpPublicationMapSuffix) || strings.HasSuffix(path, mcpPublicationMapSuffix+"/index") {
+		return s.exactCompactDeveloperAssetMap(ctx, deploymentID, uri, public)
+	}
 	parts, ok := parseDeveloperAssetResourceURI(uri)
 	if !ok {
 		return mcpDeveloperAssetResource{}, store.ErrNotFound
@@ -401,7 +426,9 @@ func (s *Server) publishedDeveloperAssetResources(ctx context.Context, productID
 				return nil, lookupErr
 			}
 			for _, value := range values {
-				appendMCPDeveloperAssetResource(&resources, seen, value)
+				if value.EvidenceKind == "" {
+					appendMCPDeveloperAssetResource(&resources, seen, value)
+				}
 			}
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -424,7 +451,9 @@ func (s *Server) publishedDeveloperAssetResources(ctx context.Context, productID
 			return nil, lookupErr
 		}
 		for _, value := range values {
-			appendMCPDeveloperAssetResource(&resources, seen, value)
+			if value.EvidenceKind == "" {
+				appendMCPDeveloperAssetResource(&resources, seen, value)
+			}
 		}
 	}
 	sort.Slice(resources, func(i, j int) bool { return resources[i].URI < resources[j].URI })

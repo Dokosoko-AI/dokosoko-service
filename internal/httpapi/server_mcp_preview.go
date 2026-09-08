@@ -26,6 +26,7 @@ var mcpPreviewMethods = map[string]bool{
 	"server/discover":          true,
 	"tools/list":               true,
 	"resources/list":           true,
+	"resources/read":           true,
 	"resources/templates/list": true,
 }
 
@@ -76,7 +77,7 @@ func mcpPreviewGrants(values []string) ([]string, error) {
 }
 
 // mcpPreview renders the exact JSON-RPC response produced by handleMCP for a
-// read-only discovery method. Private previews use an explicit simulated grant
+// read-only discovery or resource-read method. Private previews use an explicit simulated grant
 // context; they never mint a customer token or execute a tool.
 func (s *Server) mcpPreview(w http.ResponseWriter, r *http.Request, productID string) {
 	if r.Method != http.MethodGet {
@@ -102,7 +103,27 @@ func (s *Server) mcpPreview(w http.ResponseWriter, r *http.Request, productID st
 		method = "tools/list"
 	}
 	if !mcpPreviewMethods[method] {
-		writeError(w, http.StatusBadRequest, "invalid_request", "method must be server/discover, tools/list, resources/list, or resources/templates/list.", nil)
+		writeError(w, http.StatusBadRequest, "invalid_request", "method must be server/discover, tools/list, resources/list, resources/read, or resources/templates/list.", nil)
+		return
+	}
+	resourceURIs, hasURI := r.URL.Query()["uri"]
+	if method == "resources/read" {
+		if len(resourceURIs) != 1 || resourceURIs[0] == "" || len(resourceURIs[0]) > 2048 || strings.TrimSpace(resourceURIs[0]) != resourceURIs[0] {
+			writeError(w, http.StatusBadRequest, "invalid_request", "resources/read requires one exact resource URI, at most 2048 bytes.", nil)
+			return
+		}
+	} else if hasURI {
+		writeError(w, http.StatusBadRequest, "invalid_request", "uri is only accepted for resources/read.", nil)
+		return
+	}
+	cursors, hasCursor := r.URL.Query()["cursor"]
+	if hasCursor && ((method != "resources/list" && method != "tools/list") || len(cursors) != 1 || len(cursors[0]) == 0 || len(cursors[0]) > mcpCursorMaxBytes) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "cursor requires resources/list or tools/list and one opaque value of at most 512 bytes.", nil)
+		return
+	}
+	versions, hasVersion := r.URL.Query()["catalog_version"]
+	if hasVersion && (len(versions) != 1 || (versions[0] != "1" && versions[0] != "2")) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "catalog_version must be 1 (legacy full catalog) or 2 (compact catalog).", nil)
 		return
 	}
 	grants, err := mcpPreviewGrants(r.URL.Query()["grant"])
@@ -116,6 +137,19 @@ func (s *Server) mcpPreview(w http.ResponseWriter, r *http.Request, productID st
 	}
 
 	params := map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": model.StatelessMCPv2Protocol}}
+	if hasVersion {
+		version := 2
+		if versions[0] == "1" {
+			version = 1
+		}
+		params["_meta"].(map[string]any)[mcpCatalogVersionKey] = version
+	}
+	if method == "resources/read" {
+		params["uri"] = resourceURIs[0]
+	}
+	if hasCursor {
+		params["cursor"] = cursors[0]
+	}
 	rpc := map[string]any{"jsonrpc": "2.0", "id": "preview", "method": method, "params": params}
 	body, err := json.Marshal(rpc)
 	if err != nil {

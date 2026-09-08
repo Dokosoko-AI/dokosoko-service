@@ -41,7 +41,9 @@ func (s *Server) apiContracts(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 			return
 		}
-		value, err := s.service.SaveAPIContract(r.Context(), "", apiContractInput(input), actor(r))
+		creation := apiContractInput(input)
+		creation.RequestKey = r.Header.Get("Idempotency-Key")
+		value, err := s.service.SaveAPIContract(r.Context(), "", creation, actor(r))
 		if err != nil {
 			s.developerAssetError(w, err)
 			return
@@ -251,6 +253,15 @@ func (s *Server) apiContractCandidate(w http.ResponseWriter, r *http.Request, co
 	if value.Candidate.APIContractID != contractID {
 		s.storeError(w, store.ErrNotFound)
 		return
+	}
+	if value.Operations == nil {
+		value.Operations = []model.APIContractOperation{}
+	}
+	if value.Schemas == nil {
+		value.Schemas = []model.APIContractSchema{}
+	}
+	if value.Examples == nil {
+		value.Examples = []model.APIContractExample{}
 	}
 	writeJSON(w, http.StatusOK, value)
 }

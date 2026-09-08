@@ -1,8 +1,12 @@
 "use client";
 
 
+import { documentationReviewFingerprint as sourceReviewFingerprint } from "../../lib/documentation-setup";
+import { mergeSourceMetadata } from "../../lib/console-domain";
+import { browserReviewStorage, clearReviewDraft, readReviewDraft, reviewDraftKey, writeReviewDraft } from "../../lib/review-draft";
+import { finishSourceCreationAttempt, sourceCreationAttempt, sourceCreationFingerprint, type SourceCreationAttempt } from "../../lib/source-creation-request";
 import { useTranslation } from "react-i18next";
-import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import {
   APIError,
@@ -31,8 +35,9 @@ function sourceUploadValidationError(file: File) {
   return "";
 }
 
-export function useSourceWorkflow({ product, apiConnected, sources, setSources, refreshCatalog, showToast }: {
+export function useSourceWorkflow({ product, reviewerID = "", apiConnected, sources, setSources, refreshCatalog, showToast }: {
   product: APIProduct;
+  reviewerID?: string;
   apiConnected: boolean;
   sources: Source[];
   setSources: Dispatch<SetStateAction<Source[]>>;
@@ -47,11 +52,21 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   const [sourceFileError, setSourceFileError] = useState("");
   const sourceFileInput = useRef<HTMLInputElement>(null);
   const [sourceBusy, setSourceBusy] = useState(false);
+  const sourceCreation = useRef<SourceCreationAttempt | null>(null);
+  const [sourceCreateProblem, setSourceCreateProblem] = useState("");
+  const [sourceRecoveryUnavailable, setSourceRecoveryUnavailable] = useState(false);
   const [sourceReview, setSourceReview] = useState<APISourceReview | null>(null);
   const [sourceReviewSelection, setSourceReviewSelection] = useState<string[]>([]);
   const [sourceReviewAcknowledged, setSourceReviewAcknowledged] = useState(false);
+  const [sourceReviewProblem, setSourceReviewProblem] = useState("");
   const [sourceReviewBusy, setSourceReviewBusy] = useState(false);
   const [sourceReviewAttachIntegrationID, setSourceReviewAttachIntegrationID] = useState("");
+
+  useEffect(() => {
+    if (!sourceReview || sourceReview.publication) return;
+    const key = reviewDraftKey(product.id, reviewerID, "source", sourceReview.crawl_job.id);
+    if (!writeReviewDraft(browserReviewStorage, key, sourceReviewFingerprint(sourceReview), sourceReviewSelection)) showToast(t("sdkCatalog.reviewDraftNotSaved"));
+  }, [product.id, reviewerID, showToast, sourceReview, sourceReviewSelection, t]);
   const uploadValidationMessage = (file: File) => {
     const code = sourceUploadValidationError(file);
     return code === "extension" ? t("sourceWorkflow.invalidUploadExtension")
@@ -65,6 +80,9 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
     setSourceLocation("");
     setSourceFile(null);
     setSourceFileError("");
+    setSourceCreateProblem("");
+    setSourceRecoveryUnavailable(false);
+    sourceCreation.current = null;
     if (sourceFileInput.current) sourceFileInput.current.value = "";
   }
 
@@ -94,6 +112,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
       return;
     }
     setSourceBusy(true);
+    setSourceCreateProblem("");
     try {
       if (sourceKind === "upload" && sourceFile) {
         const validationError = uploadValidationMessage(sourceFile);
@@ -108,17 +127,25 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
           return;
         }
       }
+      const requestScope = reviewDraftKey(product.id, reviewerID, "source-creation", "source-dialog");
+      if (apiConnected) {
+        const fingerprint = await sourceCreationFingerprint({ kind: sourceKind, location: sourceLocation, file: sourceKind === "upload" ? sourceFile ?? undefined : undefined });
+        const { attempt, persisted } = sourceCreationAttempt(browserReviewStorage, requestScope, fingerprint, sourceCreation.current);
+        sourceCreation.current = attempt;
+        setSourceRecoveryUnavailable(!persisted);
+      }
       const created = apiConnected
         ? sourceKind === "upload" && sourceFile
-          ? await api.uploadSource(product.id, product.organisation_id, sourceFile)
-          : await api.createSource(product.id, product.organisation_id, sourceKind, sourceLocation.trim())
+          ? await api.uploadSource(product.id, product.organisation_id, sourceFile, undefined, sourceCreation.current?.key)
+          : await api.createSource(product.id, product.organisation_id, sourceKind, sourceLocation.trim(), undefined, sourceCreation.current?.key)
         : { id: `src_${Date.now()}`, name: sourceKind === "upload" ? sourceFile?.name ?? t("sourceWorkflow.uploadedFile") : sourceLocation.trim(), kind: sourceKind, location: sourceKind === "upload" ? sourceFile?.name ?? t("sourceWorkflow.uploadedFile") : sourceLocation.trim(), visibility: "private" as const, published: false, quarantined: false, revision: 1 };
-      setSources((items) => [...items, { id: created.id, name: created.name, kind: created.kind, location: created.location, visibility: created.visibility, published: created.published, quarantined: created.quarantined, crawlState: "draft", pages: 0, lastCrawl: "not-crawled", revision: created.revision }]);
+      setSources((items) => mergeSourceMetadata(items, created));
+      finishSourceCreationAttempt(browserReviewStorage, requestScope);
       setAddSourceOpen(false);
       resetSourceForm();
-      showToast(t("sourceWorkflow.wasAddedPrivately", { name: String(created.name) }));
+      showToast(t("sourceCreation.saved", { name: created.name, audience: t(`common.${created.visibility}`) }));
     } catch (error) {
-      showToast(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotAddSource"));
+      setSourceCreateProblem(`${error instanceof APIError ? error.message : t("sourceWorkflow.couldNotAddSource")} ${t("sourceCreation.retryHint")}`);
     } finally {
       setSourceBusy(false);
     }
@@ -183,6 +210,7 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   }
 
   function closeSourceReview() {
+    setSourceReviewProblem("");
 	setSourceReview(null);
 	setSourceReviewSelection([]);
 	setSourceReviewAcknowledged(false);
@@ -198,8 +226,11 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 	try {
 	  const review = await api.sourceReview(product.id, source.id);
 	  const safe = review.documents.filter((document) => (document.state === "validated" || document.state === "published") && document.injection_indicators.length === 0).map((document) => document.id);
+      const key = reviewDraftKey(product.id, reviewerID, "source", review.crawl_job.id);
+      const saved = readReviewDraft(browserReviewStorage, key, sourceReviewFingerprint(review), (value): value is string[] => Array.isArray(value) && value.length <= 10000 && value.every((id) => typeof id === "string"));
+      setSourceReviewProblem("");
 	  setSourceReview(review);
-	  setSourceReviewSelection(safe);
+	  setSourceReviewSelection(saved?.filter((id) => safe.includes(id)) ?? []);
 	  setSourceReviewAcknowledged(false);
 	  setSourceReviewAttachIntegrationID(attachIntegrationID);
 	} catch (error) {
@@ -211,10 +242,12 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
   }
 
   async function confirmSourcePublication() {
-	if (!sourceReview || !sourceReviewAcknowledged || sourceReviewSelection.length === 0) return;
+	if (!sourceReview || (!sourceReview.publication && (!sourceReviewAcknowledged || sourceReviewSelection.length === 0))) return;
 	setSourceReviewBusy(true);
 	try {
-	  const result = await api.publishSource(product.id, sourceReview.source.id, { revision: sourceReview.source.revision, crawl_job_id: sourceReview.crawl_job.id, document_ids: sourceReviewSelection, acknowledge_reviewed: true });
+      setSourceReviewProblem("");
+	  const result = sourceReview.publication ? { source: sourceReview.source, publication: sourceReview.publication } : await api.publishSource(product.id, sourceReview.source.id, { revision: sourceReview.source.revision, crawl_job_id: sourceReview.crawl_job.id, document_ids: sourceReviewSelection, acknowledge_reviewed: true });
+      clearReviewDraft(browserReviewStorage, reviewDraftKey(product.id, reviewerID, "source", sourceReview.crawl_job.id));
 	  const source = sources.find((item) => item.id === result.source.id) ?? {
 		id: result.source.id,
 		name: result.source.name,
@@ -238,12 +271,16 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
 			: t("sourceWorkflow.generationPublishedAlreadyAttached", { name: result.source.name, revision: result.publication.revision });
 		} catch (error) {
 		  message = t("sourceWorkflow.generationPublishedAttachmentNeedsAttention", { name: result.source.name, revision: result.publication.revision, error: error instanceof APIError || error instanceof Error ? error.message : t("sourceWorkflow.reviewedSetCouldNotBeAttached") });
+          setSourceReview({ ...sourceReview, source: result.source, publication: result.publication });
+          setSourceReviewProblem(message);
+          setSourceReviewAcknowledged(false);
+          return;
 		}
 	  }
 	  closeSourceReview();
 	  showToast(message);
 	} catch (error) {
-	  showToast(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotPublishThisReviewedGeneration"));
+      setSourceReviewProblem(error instanceof APIError ? error.message : t("sourceWorkflow.couldNotPublishThisReviewedGeneration"));
 	} finally {
 	  setSourceReviewBusy(false);
 	}
@@ -257,10 +294,11 @@ export function useSourceWorkflow({ product, apiConnected, sources, setSources, 
     sourceFileError,
     sourceFileInput,
     sourceBusy,
+    sourceCreateProblem, sourceRecoveryUnavailable,
     sourceReview,
     sourceReviewSelection, setSourceReviewSelection,
     sourceReviewAcknowledged, setSourceReviewAcknowledged,
-    sourceReviewBusy,
+    sourceReviewBusy, sourceReviewProblem,
     sourceReviewAttachIntegrationID,
     closeSourceDialog,
     selectSourceKind,

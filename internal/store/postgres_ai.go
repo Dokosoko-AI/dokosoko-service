@@ -186,3 +186,12 @@ func (p *Postgres) AIUsageEvents(ctx context.Context, productID string, since ti
 	}
 	return result, rows.Err()
 }
+
+func (p *Postgres) AIBudgetStatus(ctx context.Context, productID, workload string, day time.Time) (model.AIBudgetStatus, error) {
+	var value model.AIBudgetStatus
+	err := p.pool.QueryRow(ctx, `SELECT
+ coalesce((SELECT used_tokens FROM ai_budget_days WHERE product_id=$1 AND workload=$2 AND day=$3),0),
+ coalesce((SELECT sum(reserved_tokens) FROM ai_budget_reservations WHERE product_id=$1 AND workload=$2 AND day=$3 AND expires_at>now()),0)
+ FROM products WHERE id=$1`, productID, workload, day).Scan(&value.Used, &value.Reserved)
+	return value, databaseError(err)
+}

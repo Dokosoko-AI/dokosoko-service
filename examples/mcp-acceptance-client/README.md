@@ -5,10 +5,19 @@ Stateless MCPv2 revision `2026-07-28`. It is deliberately outside the DokoSoko
 runtime and imports only the Go standard library.
 
 Every run requires `server/discover`, `resources/list`, and `tools/list` to pass.
+Client 0.3.0 follows resource and tool list cursors, including restricted-token
+tool discovery, up to 64 pages and 4 MiB of result JSON per list. Duplicate
+identifiers, repeated or invalid cursors, changed catalog revisions, failed
+continuations and exceeded budgets fail the check. Reports preserve each page's
+request IDs and result byte count; expected-resource observations point to the
+page that advertised them. An absent or null nextCursor ends a list; an empty
+string is forwarded as an opaque cursor.
+
 Additional checks become required when their corresponding flags are supplied:
 
 - `resources/read` for each configured resource, or for the first advertised
-  resource when one is available;
+  resource when one is available, requiring one non-empty content item with the
+  requested URI;
 - an explicitly configured `tools/call`;
 - expected tools and resource URIs;
 - grant filtering with separate full-access and restricted bearer tokens;
@@ -58,6 +67,62 @@ resource contract with a repeatable flag:
   --expect-resource 'dokosoko://products/example/recipes/getting-started'
 ```
 
+This flag checks discovery and a well-formed matching read. It does not pin the
+content version. For exact task verification, use `--task-plan reviewed-task.json`.
+A task plan selects a named outcome, task resource URI and revision, plus up to
+32 exact resource expectations. Its endpoint must match `--endpoint`; it cannot
+redirect the connection or supply credentials.
+
+```json
+{
+  "schema_version": "mcp-task-check-v1",
+  "endpoint": "https://vendor.example/mcp",
+  "task": {
+    "title": "Receive payment status",
+    "outcome": "One payment status is received and checked.",
+    "resource_uri": "dokosoko://products/example/recipes/payment-status",
+    "revision_id": "exact-recipe-revision"
+  },
+  "resources": [
+    {
+      "uri": "dokosoko://products/example/recipes/payment-status",
+      "discover": true,
+      "text_sha256": "sha256:<64 lowercase hexadecimal digits>",
+      "mime_type": "text/markdown",
+      "metadata": { "revision_id": "exact-recipe-revision" }
+    }
+  ]
+}
+```
+
+The hash placeholder must be replaced with the SHA-256 of the exact UTF-8
+`contents[0].text` from the reviewed publication. It is not the source-content
+hash declared inside that text. Include the task's exact API publication maps
+and relevant evidence URIs as additional expectations, pinning their publication,
+scope and version metadata. `discover: false` allows a targeted historical or
+map-linked evidence read without requiring it in initial discovery. The task
+itself must be discoverable and must pin `revision_id` to its selected revision.
+Missing, duplicated, changed or mismatched evidence fails the run. Plans are
+limited to 64 KiB and unknown fields are rejected.
+
+```sh
+./mcp-acceptance --version
+./mcp-acceptance run \
+  --endpoint https://vendor.example/mcp \
+  --token-file ./mcp-token.json \
+  --task-plan reviewed-task.json \
+  --format json \
+  --report-file acceptance-report.json
+```
+
+Reports identify this client and version, the reviewed plan fingerprint, each
+read's content hash and byte count, and request correlation IDs. They contain
+client observations, not server attestations or results from another coding
+client. `task.retrieval_status` covers discovery and exact retrieval;
+`task.implementation_status` remains `not_run`. The CLI does not compile or run
+the customer's application. A passing connection check is not implementation
+or integration-test evidence.
+
 Localhost subdomains are supported with the same exact-authority opt-in:
 
 ```sh
@@ -76,8 +141,8 @@ export MCP_ACCESS_TOKEN='...'
 ./mcp-acceptance run \
   --endpoint http://localhost:8080/mcp \
   --allow-loopback-http localhost:8080 \
-  --expect-tool deployment.get_manifest \
-  --call-tool deployment.get_manifest \
+  --expect-tool deployment.apis.list \
+  --call-tool deployment.apis.list \
   --check-unauthenticated
 ```
 
@@ -225,3 +290,21 @@ with that challenge, then proves the consumed challenge is rejected on replay:
 
 Argument files are capped at 1 MiB and their contents are never included in the
 report.
+
+
+### Published task discovery
+
+With catalog version 2 (the server default), `integration.recipes.list` accepts
+`query`, `api_id` and `cursor` arguments. Use `--call-args-file` with a JSON object
+to check a filtered call, for example:
+
+```json
+{"query":"webhook v1","api_id":"the-api-id-from-deployment.apis.list"}
+```
+
+The server returns a bounded page with `next_cursor` and exact recipe/API version
+pins. Keep the query and API filter when continuing. The acceptance client's
+positive tool check performs the single call configured by the argument file;
+it does not automatically traverse an arbitrary tool's `next_cursor`. Its
+built-in MCP resource/tool discovery still follows standard `nextCursor` pages.
+Select the recipe and inspect its exact guidance before preparing a task plan.

@@ -15,12 +15,9 @@ import {
 import { type NavigationGroup, navigation } from "./workspace-navigation";
 
 function browserRouteURL(path: string) {
-  const preview =
-    process.env.NODE_ENV === "development" &&
-    new URLSearchParams(window.location.search).get("preview") === "fixtures"
-      ? window.location.search
-      : "";
-  return `${path}${preview}`;
+  const target = new URL(path, window.location.origin);
+  if (process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("preview") === "fixtures") target.searchParams.set("preview", "fixtures");
+  return `${target.pathname}${target.search}${target.hash}`;
 }
 
 export function useConsoleNavigation({
@@ -29,7 +26,9 @@ export function useConsoleNavigation({
   onLeaveToolBuilder: () => void;
 }) {
   const { t } = useTranslation();
-  const [consoleRoute, setConsoleRoute] = useState<ConsoleRoute>(() => routeForSection("product"));
+  const [consoleRoute, setConsoleRoute] = useState<ConsoleRoute>(() => typeof window === "undefined"
+    ? routeForSection("product")
+    : { ...parseConsolePath(window.location.pathname), search: window.location.search });
   const consoleRouteRef = useRef(consoleRoute);
   const toolBuilderDirtyRef = useRef(false);
 
@@ -46,14 +45,15 @@ export function useConsoleNavigation({
   }, [t]);
 
   const navigateToPath = useCallback((path: string, replace = false) => {
-    const next = parseConsolePath(path);
+    const target = new URL(path, window.location.origin);
+    const next = { ...parseConsolePath(target.pathname), search: target.search };
     const current = consoleRouteRef.current;
     if (!confirmToolBuilderNavigation(next.path)) return;
     if (current.path !== next.path) toolBuilderDirtyRef.current = false;
     if (next.kind !== "tool-builder") onLeaveToolBuilder();
     const method = replace ? "replaceState" : "pushState";
-    if (window.location.pathname !== next.path || replace) {
-      window.history[method](null, "", browserRouteURL(next.path));
+    if (window.location.pathname !== next.path || window.location.search !== next.search || replace) {
+      window.history[method](null, "", browserRouteURL(`${next.path}${target.search}${target.hash}`));
     }
     window.scrollTo({ top: 0, behavior: "auto" });
     consoleRouteRef.current = next;
@@ -81,9 +81,9 @@ export function useConsoleNavigation({
   useEffect(() => {
     const syncRoute = () => {
       const current = consoleRouteRef.current;
-      const next = parseConsolePath(window.location.pathname);
+      const next = { ...parseConsolePath(window.location.pathname), search: window.location.search };
       if (!confirmToolBuilderNavigation(next.path)) {
-        window.history.pushState(null, "", browserRouteURL(current.path));
+        window.history.pushState(null, "", browserRouteURL(`${current.path}${current.search ?? ""}`));
         return;
       }
       if (current.path !== next.path) toolBuilderDirtyRef.current = false;

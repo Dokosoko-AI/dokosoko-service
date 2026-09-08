@@ -75,6 +75,10 @@ func (s *Service) PublishSource(ctx context.Context, productID, sourceID string,
 	if len(selected) == 0 {
 		return model.Source{}, model.SourcePublication{}, ErrSourceReviewRequired
 	}
+	processing, err := s.requireKnowledgeProcessing(ctx, input.CrawlJobID)
+	if err != nil {
+		return model.Source{}, model.SourcePublication{}, err
+	}
 	publicationHash, err := docreview.PublicationContentHash(selected)
 	if err != nil {
 		return model.Source{}, model.SourcePublication{}, err
@@ -89,6 +93,6 @@ func (s *Service) PublishSource(ctx context.Context, productID, sourceID string,
 	if err != nil {
 		return model.Source{}, model.SourcePublication{}, err
 	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "source.publication.created", TargetType: "source_publication", TargetID: publication.ID, Prior: map[string]any{"source_revision": current.Revision}, Current: map[string]any{"source_id": sourceID, "source_revision": updated.Revision, "crawl_job_id": publication.CrawlJobID, "publication_revision": publication.Revision, "content_hash": publication.ContentHash, "document_count": publication.DocumentCount, "visibility": updated.Visibility}, RequestID: actor.RequestID, CreatedAt: now})
+	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: updated.OrganisationID, ProductID: productID, ActorID: actor.ID, Action: "source.publication.created", TargetType: "source_publication", TargetID: publication.ID, Prior: map[string]any{"source_revision": current.Revision}, Current: map[string]any{"source_id": sourceID, "source_revision": updated.Revision, "crawl_job_id": publication.CrawlJobID, "publication_revision": publication.Revision, "content_hash": publication.ContentHash, "document_count": publication.DocumentCount, "visibility": updated.Visibility, "knowledge_processing_stage_ids": processing.StageIDs}, RequestID: actor.RequestID, CreatedAt: now})
 	return updated, publication, err
 }

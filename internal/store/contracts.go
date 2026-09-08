@@ -84,9 +84,13 @@ type ProductCatalogStore interface {
 type KnowledgeStore interface {
 	Sources(context.Context, string) ([]model.Source, error)
 	CreateSource(context.Context, model.Source) (model.Source, error)
+	CreateSourceOnce(context.Context, SourceCreation) (model.Source, error)
+	ReplaceSourceInput(context.Context, SourceInputReplacement) (SourceInputReplacementResult, error)
+	SourceInputReplacement(context.Context, string, string, string) (SourceInputReplacementResult, error)
 	Source(context.Context, string, string) (model.Source, error)
 	UpdateSource(context.Context, model.Source, int64) (model.Source, error)
 	SourceReview(context.Context, string, string, string) (model.SourceReview, error)
+	SourceReviewContent(context.Context, string, string, string, string) (model.SourceReviewContent, error)
 	SourcePublications(context.Context, string, string) ([]model.SourcePublication, error)
 	SourcePublication(context.Context, string, string) (model.SourcePublication, error)
 	PublishSource(context.Context, string, string, int64, model.SourcePublication, []string) (model.Source, model.SourcePublication, error)
@@ -152,6 +156,7 @@ type AIRecipeStore interface {
 	AIPromptStates(context.Context, string) ([]model.AIPromptState, error)
 	AIPromptState(context.Context, string, string) (model.AIPromptState, error)
 	SaveAIPromptStateAndAudit(context.Context, model.AIPromptState, int64, model.AuditEvent) (model.AIPromptState, error)
+	AIBudgetStatus(context.Context, string, string, time.Time) (model.AIBudgetStatus, error)
 	ReserveAIBudget(context.Context, model.AIBudgetReservation, int64) (bool, error)
 	FinishAIUsage(context.Context, string, model.AIUsageEvent) error
 	AIUsageEvents(context.Context, string, time.Time) ([]model.AIUsageEvent, error)

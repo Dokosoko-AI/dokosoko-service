@@ -2,14 +2,18 @@ package httpapi
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/dokosoko/dokosoko-service/internal/platform"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 	"io"
 	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -46,6 +50,45 @@ func uploadError(status int, code, message string) *sourceUploadError {
 }
 
 func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID string) {
+	s.receiveSourceUpload(w, r, productID, "")
+}
+
+func (s *Server) replaceSourceUpload(w http.ResponseWriter, r *http.Request, productID, sourceID string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
+		return
+	}
+	if r.Method == http.MethodGet {
+		value, err := s.service.SourceInputReplacement(r.Context(), productID, sourceID, r.Header.Get("Idempotency-Key"), actor(r))
+		if err != nil {
+			s.sourceInputReplacementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+		return
+	}
+	s.receiveSourceUpload(w, r, productID, sourceID)
+}
+
+func (s *Server) sourceInputReplacementError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrSourceInputChanged):
+		writeError(w, http.StatusConflict, "source_input_changed", "This source or replacement request changed. Open the current source before replacing it again.", nil)
+	case errors.Is(err, store.ErrSourceImportActive):
+		writeError(w, http.StatusConflict, "source_import_active", "Wait for the queued or running import to finish before replacing this file.", nil)
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "source_input_changed", "The source changed or the replacement could not commit. Reload the current source before retrying.", nil)
+	case errors.Is(err, store.ErrNotFound):
+		s.storeError(w, err)
+	case errors.Is(err, platform.ErrInvalidSourceReplacementInput):
+		writeError(w, http.StatusBadRequest, "invalid_source_upload", err.Error(), nil)
+	default:
+		writeError(w, http.StatusServiceUnavailable, "source_replacement_unavailable", "The replacement could not be confirmed. Reload to recover a saved import, or retry with the same file.", nil)
+	}
+}
+
+func (s *Server) receiveSourceUpload(w http.ResponseWriter, r *http.Request, productID, replacementSourceID string) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.", nil)
@@ -72,7 +115,7 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 		return
 	}
 
-	var organisationID, name, location, uploadFilename string
+	var organisationID, name, location, uploadFilename, contentDigest, revisionText string
 	seen := make(map[string]bool)
 	keepFile := false
 	defer func() {
@@ -99,10 +142,15 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 		seen[field] = true
 
 		switch field {
-		case "organisation_id", "name":
+		case "organisation_id", "name", "revision":
+			if field == "revision" && replacementSourceID == "" || field == "name" && replacementSourceID != "" {
+				_ = part.Close()
+				writeError(w, http.StatusBadRequest, "invalid_source_upload", "Creation accepts an optional name; replacement requires a revision and retains the source name.", nil)
+				return
+			}
 			if part.FileName() != "" {
 				_ = part.Close()
-				writeError(w, http.StatusBadRequest, "invalid_source_upload", "organisation_id and name must be text fields.", nil)
+				writeError(w, http.StatusBadRequest, "invalid_source_upload", "Upload metadata must be text fields.", nil)
 				return
 			}
 			value, readErr := readSourceUploadField(part)
@@ -113,6 +161,8 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 			}
 			if field == "organisation_id" {
 				organisationID = strings.TrimSpace(value)
+			} else if field == "revision" {
+				revisionText = strings.TrimSpace(value)
 			} else {
 				name = strings.TrimSpace(value)
 			}
@@ -123,7 +173,7 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 				return
 			}
 			uploadFilename = sourceUploadDisplayName(part.FileName())
-			location, err = s.storeSourceUpload(part)
+			location, contentDigest, err = s.storeSourceUpload(part)
 			_ = part.Close()
 			if err != nil {
 				s.writeSourceUploadError(w, err)
@@ -131,7 +181,7 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 			}
 		default:
 			_ = part.Close()
-			writeError(w, http.StatusBadRequest, "invalid_source_upload", "Only organisation_id, optional name, and file fields are accepted.", nil)
+			writeError(w, http.StatusBadRequest, "invalid_source_upload", "Use organisation_id and file, plus optional name for creation or revision for replacement.", nil)
 			return
 		}
 	}
@@ -148,15 +198,30 @@ func (s *Server) uploadSource(w http.ResponseWriter, r *http.Request, productID 
 		return
 	}
 
-	value, err := s.service.CreateSource(r.Context(), organisationID, productID, name, "upload", location, actor(r))
+	if replacementSourceID != "" {
+		revision, parseErr := strconv.ParseInt(revisionText, 10, 64)
+		if parseErr != nil || revision < 1 {
+			writeError(w, http.StatusBadRequest, "invalid_source_upload", "Replacement requires the positive revision of the source being replaced.", nil)
+			return
+		}
+		value, err := s.service.ReplaceSourceInput(r.Context(), platform.SourceInputReplacementInput{ProductID: productID, SourceID: replacementSourceID, Revision: revision, Location: location, Filename: uploadFilename, ContentDigest: contentDigest, RequestKey: r.Header.Get("Idempotency-Key")}, actor(r))
+		keepFile = value.Source.ID != "" && value.Source.Location == location
+		if err != nil {
+			s.sourceInputReplacementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+		return
+	}
+	value, err := s.service.CreateSourceWithRequest(r.Context(), platform.SourceCreationInput{OrganisationID: organisationID, ProductID: productID, Name: name, Kind: "upload", Location: location, RequestKey: r.Header.Get("Idempotency-Key"), ContentDigest: contentDigest}, actor(r))
 	if err != nil {
 		// CreateSource returns the created value if only its audit append failed.
 		// Preserve the file whenever a durable source now references it.
-		keepFile = value.ID != ""
-		s.creationError(w, err)
+		keepFile = value.ID != "" && value.Location == location
+		s.sourceCreationError(w, err)
 		return
 	}
-	keepFile = true
+	keepFile = value.Location == location
 	writeJSON(w, http.StatusCreated, value)
 }
 
@@ -204,14 +269,14 @@ func readSourceUploadField(part *multipart.Part) (string, error) {
 	return string(value), nil
 }
 
-func (s *Server) storeSourceUpload(part *multipart.Part) (string, error) {
+func (s *Server) storeSourceUpload(part *multipart.Part) (string, string, error) {
 	extension := strings.ToLower(filepath.Ext(part.FileName()))
 	if !sourceUploadExtensions[extension] {
-		return "", uploadError(http.StatusUnsupportedMediaType, "source_upload_type_unsupported", "Upload a UTF-8 Markdown, text, HTML, JSON, or YAML source file.")
+		return "", "", uploadError(http.StatusUnsupportedMediaType, "source_upload_type_unsupported", "Upload a UTF-8 Markdown, text, HTML, JSON, or YAML source file.")
 	}
 	info, err := os.Lstat(s.uploadDirectory)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", uploadError(http.StatusServiceUnavailable, "source_upload_storage_unavailable", "The deployment upload volume is unavailable.")
+		return "", "", uploadError(http.StatusServiceUnavailable, "source_upload_storage_unavailable", "The deployment upload volume is unavailable.")
 	}
 
 	var location string
@@ -219,7 +284,7 @@ func (s *Server) storeSourceUpload(part *multipart.Part) (string, error) {
 	for attempt := 0; attempt < 8; attempt++ {
 		name, randomErr := opaqueSourceUploadName(extension)
 		if randomErr != nil {
-			return "", randomErr
+			return "", "", randomErr
 		}
 		candidate := filepath.Join(s.uploadDirectory, name)
 		file, err = os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -227,13 +292,13 @@ func (s *Server) storeSourceUpload(part *multipart.Part) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		location = name
 		break
 	}
 	if file == nil {
-		return "", errors.New("could not allocate an opaque upload filename")
+		return "", "", errors.New("could not allocate an opaque upload filename")
 	}
 	storedPath := filepath.Join(s.uploadDirectory, location)
 	succeeded := false
@@ -244,43 +309,44 @@ func (s *Server) storeSourceUpload(part *multipart.Part) (string, error) {
 		}
 	}()
 	if err := file.Chmod(0o600); err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	validator := &utf8StreamWriter{destination: file}
+	digest := sha256.New()
+	validator := &utf8StreamWriter{destination: io.MultiWriter(file, digest)}
 	limited := &io.LimitedReader{R: part, N: s.uploadMaxBytes + 1}
 	written, err := io.CopyBuffer(validator, limited, make([]byte, 32<<10))
 	if errors.Is(err, errSourceUploadInvalidUTF8) {
-		return "", uploadError(http.StatusBadRequest, "source_upload_invalid_utf8", "Source uploads must use valid UTF-8.")
+		return "", "", uploadError(http.StatusBadRequest, "source_upload_invalid_utf8", "Source uploads must use valid UTF-8.")
 	}
 	if err != nil {
 		var storageError *sourceUploadStorageError
 		if errors.As(err, &storageError) {
-			return "", storageError
+			return "", "", storageError
 		}
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			return "", uploadError(http.StatusRequestEntityTooLarge, "source_upload_too_large", "The upload exceeds the configured size limit.")
+			return "", "", uploadError(http.StatusRequestEntityTooLarge, "source_upload_too_large", "The upload exceeds the configured size limit.")
 		}
-		return "", classifySourceUploadReadError(err)
+		return "", "", classifySourceUploadReadError(err)
 	}
 	if written > s.uploadMaxBytes {
-		return "", uploadError(http.StatusRequestEntityTooLarge, "source_upload_too_large", "The upload exceeds the configured size limit.")
+		return "", "", uploadError(http.StatusRequestEntityTooLarge, "source_upload_too_large", "The upload exceeds the configured size limit.")
 	}
 	if written == 0 {
-		return "", uploadError(http.StatusBadRequest, "source_upload_empty", "The source upload must not be empty.")
+		return "", "", uploadError(http.StatusBadRequest, "source_upload_empty", "The source upload must not be empty.")
 	}
 	if err := validator.Finish(); err != nil {
-		return "", uploadError(http.StatusBadRequest, "source_upload_invalid_utf8", "Source uploads must use valid UTF-8.")
+		return "", "", uploadError(http.StatusBadRequest, "source_upload_invalid_utf8", "Source uploads must use valid UTF-8.")
 	}
 	if err := file.Sync(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := file.Close(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	succeeded = true
-	return location, nil
+	return location, hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func opaqueSourceUploadName(extension string) (string, error) {

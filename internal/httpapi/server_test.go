@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/dokosoko/dokosoko-service/internal/reporting"
 	"github.com/dokosoko/dokosoko-service/internal/secrets"
 	"github.com/dokosoko/dokosoko-service/internal/store"
+	"github.com/dokosoko/dokosoko-service/internal/testutil"
 )
 
 func newServer() http.Handler {
@@ -495,7 +497,7 @@ func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	memory := store.NewMemory()
-	service := platform.New(memory)
+	service := testutil.NewRecipeService(t, memory, testutil.RecipeAI{})
 	actor := platform.Actor{ID: "root-test", RequestID: "req-recipe-resource"}
 	handler := httpapi.NewWithOptions(service, httpapi.Options{BaseURL: "https://dokosoko.example", AllowDemoTokens: true})
 	integration, err := service.CreateIntegration(ctx, platform.IntegrationInput{FamilyKey: "orders-api", VersionKey: "v1", DisplayName: "Orders API", Description: "Read order status.", Visibility: model.VisibilityPrivate, Lifecycle: "active"}, actor)
@@ -541,6 +543,22 @@ func TestPublishedRecipesAreStableMCPResourcesWithUsageAnalytics(t *testing.T) {
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(readBody))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), recipe.StableURI) || !strings.Contains(w.Body.String(), `"contract_version":"deployment-recipe-v3"`) || !strings.Contains(w.Body.String(), `"integration_ids":["`+integrationID+`"]`) {
 		t.Fatalf("recipe resource read status=%d body=%s", w.Code, w.Body.String())
+	}
+	previewPath := "/api/v1/products/prod_acme/mcp-preview?method=resources%2Fread&uri=" + url.QueryEscape(recipe.StableURI)
+	preview := request(t, handler, http.MethodGet, previewPath+"&audience=private", "doko_admin_demo", "")
+	var envelope mcpPreviewEnvelope
+	if preview.Code != http.StatusOK || json.Unmarshal(preview.Body.Bytes(), &envelope) != nil {
+		t.Fatalf("private resource preview=%d: %s", preview.Code, preview.Body.String())
+	}
+	var previewResult, liveResult struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(envelope.Response, &previewResult) != nil || json.Unmarshal(w.Body.Bytes(), &liveResult) != nil || string(previewResult.Result) != string(liveResult.Result) {
+		t.Fatal("resource preview did not preserve exact recipe contents and metadata")
+	}
+	publicPreview := request(t, handler, http.MethodGet, previewPath+"&audience=public", "doko_admin_demo", "")
+	if publicPreview.Code != http.StatusOK || !strings.Contains(publicPreview.Body.String(), `"code":-32004`) || strings.Contains(publicPreview.Body.String(), recipe.CurrentRevision.Markdown) {
+		t.Fatalf("private recipe public preview=%d: %s", publicPreview.Code, publicPreview.Body.String())
 	}
 	checkBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": map[string]any{"name": "integration.check", "arguments": map[string]any{"recipe_uri": recipe.StableURI}}})
 	w = request(t, handler, http.MethodPost, "/mcp", "doko_private_demo", string(checkBody))

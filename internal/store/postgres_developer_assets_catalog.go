@@ -72,12 +72,23 @@ func insertDocumentationCollectionRevisionTx(ctx context.Context, tx pgx.Tx, rec
 	return nil
 }
 
-func (p *Postgres) CreateDocumentationCollection(ctx context.Context, value model.DocumentationCollection, record DocumentationCollectionRevisionRecord) (model.DocumentationCollection, error) {
+func (p *Postgres) CreateDocumentationCollection(ctx context.Context, value model.DocumentationCollection, record DocumentationCollectionRevisionRecord, requests ...DeveloperAssetCreation) (model.DocumentationCollection, error) {
+	request, err := validateDeveloperAssetCreation(requests, value.DeploymentID, value.OrganisationID, "documentation_collection", value.ID, 0)
+	if err != nil {
+		return model.DocumentationCollection{}, err
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return model.DocumentationCollection{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	recovered, err := developerAssetCreationTx(ctx, tx, request)
+	if err != nil {
+		return model.DocumentationCollection{}, err
+	}
+	if recovered != "" {
+		return scanDocumentationCollection(tx.QueryRow(ctx, documentationCollectionSelect+` WHERE deployment_id=$1 AND id=$2`, value.DeploymentID, recovered))
+	}
 	created, err := scanDocumentationCollection(tx.QueryRow(ctx, `INSERT INTO documentation_collections(id,deployment_id,organisation_id,name,slug,description,visibility,lifecycle)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text,deployment_id::text,organisation_id::text,name,slug,description,visibility,lifecycle,revision,created_at,updated_at`,
 		value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.Slug, value.Description, value.Visibility, value.Lifecycle))
@@ -92,6 +103,9 @@ func (p *Postgres) CreateDocumentationCollection(ctx context.Context, value mode
 		return model.DocumentationCollection{}, err
 	}
 	if err := bumpDeploymentCatalog(ctx, tx, value.DeploymentID); err != nil {
+		return model.DocumentationCollection{}, err
+	}
+	if err := saveDeveloperAssetCreationTx(ctx, tx, request); err != nil {
 		return model.DocumentationCollection{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -333,11 +347,34 @@ func (p *Postgres) APIContract(ctx context.Context, deploymentID, id string) (mo
 	return scanAPIContract(p.pool.QueryRow(ctx, apiContractSelect+` WHERE deployment_id=$1 AND id=$2`, deploymentID, id))
 }
 
-func (p *Postgres) SaveAPIContract(ctx context.Context, value model.APIContract, expected int64) (model.APIContract, error) {
+func (p *Postgres) SaveAPIContract(ctx context.Context, value model.APIContract, expected int64, requests ...DeveloperAssetCreation) (model.APIContract, error) {
+	request, err := validateDeveloperAssetCreation(requests, value.DeploymentID, value.OrganisationID, "api_contract", value.ID, expected)
+	if err != nil {
+		return model.APIContract{}, err
+	}
 	if expected == 0 {
-		return scanAPIContract(p.pool.QueryRow(ctx, `INSERT INTO api_contracts(id,deployment_id,organisation_id,name,slug,description,contract_kind,visibility,lifecycle)
+		tx, err := p.pool.Begin(ctx)
+		if err != nil {
+			return model.APIContract{}, err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		recovered, err := developerAssetCreationTx(ctx, tx, request)
+		if err != nil {
+			return model.APIContract{}, err
+		}
+		if recovered != "" {
+			return scanAPIContract(tx.QueryRow(ctx, apiContractSelect+` WHERE deployment_id=$1 AND id=$2`, value.DeploymentID, recovered))
+		}
+		created, err := scanAPIContract(tx.QueryRow(ctx, `INSERT INTO api_contracts(id,deployment_id,organisation_id,name,slug,description,contract_kind,visibility,lifecycle)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text,deployment_id::text,organisation_id::text,name,slug,description,contract_kind,visibility,lifecycle,revision,created_at,updated_at`,
 			value.ID, value.DeploymentID, value.OrganisationID, value.Name, value.Slug, value.Description, value.Kind, value.Visibility, value.Lifecycle))
+		if err != nil {
+			return model.APIContract{}, err
+		}
+		if err := saveDeveloperAssetCreationTx(ctx, tx, request); err != nil {
+			return model.APIContract{}, err
+		}
+		return created, tx.Commit(ctx)
 	}
 	updated, err := scanAPIContract(p.pool.QueryRow(ctx, `UPDATE api_contracts SET name=$3,slug=$4,description=$5,visibility=$6,lifecycle=$7,revision=revision+1,updated_at=now()
 		WHERE deployment_id=$1 AND id=$2 AND revision=$8 RETURNING id::text,deployment_id::text,organisation_id::text,name,slug,description,contract_kind,visibility,lifecycle,revision,created_at,updated_at`,

@@ -33,7 +33,7 @@ test("renders the promoted developer-asset destinations as accessible primary li
   assert.match(html, /<nav aria-label="Main navigation">/);
   for (const [label, path] of [
     ["APIs", "/integrations"],
-    ["Docs", "/integrations/documentation"],
+    ["Docs", "/developer-assets/documentation/documents"],
     ["SDKs and packages", "/developer-assets/sdk-packages"],
     ["Identity", "/identity"],
     ["Tools", "/tools"],

@@ -1,5 +1,8 @@
 "use client";
 
+import { documentationSetupPath } from "../lib/documentation-setup";
+import { mergeSourceMetadata } from "../lib/console-domain";
+
 
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Check, Eye, RefreshCw, Search, TriangleAlert } from "lucide-react";
@@ -13,6 +16,7 @@ import {
   type APIToolTestAnalysisProposal, type APIUser,
 } from "../lib/api";
 import { sectionPath, toolBuilderPath } from "../lib/console-routes";
+import { consoleDataNeeds } from "../lib/console-data-needs";
 import { Button } from "./core/control";
 import { ViewStack } from "./core/layout";
 import { IntegrationToolBuilderRoute } from "./integrations/IntegrationToolBuilderRoute";
@@ -43,7 +47,6 @@ import { AIConfigurationDialogs } from "./console/dialogs/ai-configuration-dialo
 import { MCPDialogs } from "./console/dialogs/mcp-dialogs";
 import { PublicationDialogs } from "./console/dialogs/publication-dialogs";
 import { RecipeDialogs, type RecipeDialogState } from "./console/dialogs/recipe-dialogs";
-import { parseRecipeSpecEditor, recipeEditableSpec, recipeSpecEditorValue } from "./console/dialogs/recipe-spec-editor";
 import { SourceDialogs } from "./console/dialogs/source-dialogs";
 import { IntegrationsView } from "./console/integration-views";
 import { ConsoleLink, type Source, agentSetupButtonScriptURL, buildAgentSetupEmbedCode, buildAgentSetupEmbedHTML } from "./console/shared";
@@ -94,8 +97,8 @@ export function ConsoleApp({ mode, fixtures, currentUser, currentDeployment, onL
 function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeployment, onLogout }: { fixturePreview: boolean; fixtures?: ConsoleFixtures; currentUser?: APIUser | null; currentDeployment: APIDeployment; onLogout?: () => void | Promise<void> }) {
   const { t } = useTranslation();
   const [product, setProduct] = useState<APIProduct>(deploymentAsProduct(currentDeployment));
-  const [workspaceLoading, setWorkspaceLoading] = useState(!fixturePreview);
-  const [workspaceLoadProblems, setWorkspaceLoadProblems] = useState<string[]>([]);
+  const [loadedRouteKey, setLoadedRouteKey] = useState("");
+  const [loadProblems, setLoadProblems] = useState<{ key: string; messages: string[] }>({ key: "", messages: [] });
   const [integrations, setIntegrations] = useState<APIIntegration[]>([]);
   const [resourceSets, setResourceSets] = useState<APIResourceSet[]>([]);
   const [sources, setSources] = useState<Source[]>(fixtures?.sources ?? []);
@@ -120,12 +123,16 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     setToast(message);
     window.setTimeout(() => setToast(null), 2200);
   }, []);
-  const recordWorkspaceLoadProblem = useCallback((area: string, error?: unknown) => {
-    const detail = error instanceof APIError ? error.message : error instanceof Error ? error.message : t("console.requestFailed");
-    setWorkspaceLoadProblems((current) => current.includes(`${area}: ${detail}`) ? current : [...current, `${area}: ${detail}`]);
-  }, [t]);
   const clearToolBuilderSeed = useCallback(() => setToolBuilderSeed(null), []);
   const { consoleRoute, section, settingsTab, identityTab, navigateToPath, navigateToSection, navigateToGroup, onToolBuilderDirtyChange } = useConsoleNavigation({ onLeaveToolBuilder: clearToolBuilderSeed });
+  const routeKey = `${product.id}:${consoleRoute.path}`;
+  const dataNeeds = useMemo(() => consoleDataNeeds(consoleRoute), [consoleRoute]);
+  const workspaceLoadProblems = loadProblems.key === routeKey ? loadProblems.messages : [];
+  const recordWorkspaceLoadProblem = useCallback((area: string, error?: unknown) => {
+    const detail = error instanceof APIError ? error.message : error instanceof Error ? error.message : t("console.requestFailed");
+    const message = `${area}: ${detail}`;
+    setLoadProblems((current) => ({ key: routeKey, messages: current.key === routeKey ? [...new Set([...current.messages, message])] : [message] }));
+  }, [routeKey, t]);
   const apiConnected = !fixturePreview;
 
   const mcpWorkspace = useMCPWorkspaceState({ fixtures, product, apiConnected, setTools, showToast });
@@ -134,10 +141,12 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   const { setProductRevision, requestVisibility, requestMCPChange } = publicationWorkspace;
   const adminWorkspace = useAdminActivityWorkspace({ currentUser, apiConnected, showToast });
   const { reportSubmissions, setReportSubmissions, rootUsers, setRootUsers, setRootOpen, setRootRecoveryCodes, auditEvents, setAuditEvents, openSupportSubmission, revokeRootUser } = adminWorkspace;
-  const aiWorkspace = useAIWorkspaceState({ product, fixturePreview, onLoadProblem: recordWorkspaceLoadProblem, showToast });
+  const aiWorkspace = useAIWorkspaceState({ product, fixturePreview, loadConfiguration: dataNeeds.aiConfiguration, loadContent: dataNeeds.aiContent, onLoadProblem: recordWorkspaceLoadProblem, showToast });
   const { aiConnections, aiProfiles, aiPrompts, analyses, recipes, aiProviderUsage, recipeBusy, workloadBusy, setProviderPickerOpen, openAIConnection, openAIWorkload, openAIPrompt, testAIConnection, saveAIWorkloadSelection, createRecipe, generateRecipesFromEvidence, generateIntegrationSetupGuide, reworkRecipe, editRecipe, deleteRecipe, approveRecipe, publishRecipe, runSystemDoctor } = aiWorkspace;
-  const sourceWorkspace = useSourceWorkflow({ product, apiConnected, sources, setSources, refreshCatalog, showToast });
+  const workspaceLoading = !fixturePreview && (loadedRouteKey !== routeKey || aiWorkspace.loading);
+  const sourceWorkspace = useSourceWorkflow({ product, reviewerID: currentUser?.id, apiConnected, sources, setSources, refreshCatalog, showToast });
   const { setAddSourceOpen, crawlSource, attachReviewedSourcePublication, publishSource } = sourceWorkspace;
+  const refreshSourceMetadata = useCallback((source: Parameters<typeof mergeSourceMetadata>[1]) => setSources((items) => mergeSourceMetadata(items, source)), []);
   const toolBuilderUID = consoleRoute.kind === "tool-builder" ? consoleRoute.uid : undefined;
 
   useEffect(() => {
@@ -178,25 +187,37 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     if (fixturePreview) return;
     let cancelled = false;
     const load = async () => {
+      if (cancelled) return;
+      setLoadProblems({ key: routeKey, messages: [] });
       const settled = await Promise.allSettled([
-        api.distribution(product.id), api.sources(product.id), api.tools(product.id), api.mcpConnections(product.id),
-        api.nativePlugins(), api.integrations(), api.resourceSets(), api.identity(), api.supportSubmissions(),
-        api.rootUsers(), api.auditEvents(product.organisation_id), api.customerAccounts(product.id),
+        dataNeeds.distribution ? api.distribution(product.id) : null,
+        dataNeeds.sources ? api.sources(product.id) : null,
+        dataNeeds.tools ? api.tools(product.id) : null,
+        dataNeeds.connections ? api.mcpConnections(product.id) : null,
+        dataNeeds.nativePlugins ? api.nativePlugins() : null,
+        dataNeeds.integrations ? api.integrations() : null,
+        dataNeeds.resourceSets ? api.resourceSets() : null,
+        dataNeeds.identity ? api.identity() : null,
+        dataNeeds.reports ? api.supportSubmissions() : null,
+        dataNeeds.roots ? api.rootUsers() : null,
+        dataNeeds.audit ? api.auditEvents(product.organisation_id) : null,
+        dataNeeds.accounts ? api.customerAccounts(product.id) : null,
       ]);
       if (cancelled) return;
       const [distributionResult, sourcesResult, toolsResult, mcpResult, nativeResult, integrationsResult, resourcesResult, identityResult, reportsResult, rootsResult, auditResult, accountsResult] = settled;
-      if (distributionResult.status === "fulfilled") {
+      if (distributionResult.status === "fulfilled" && distributionResult.value !== null) {
         setDistribution(distributionResult.value);
         setProduct(distributionResult.value.product);
         setPublicMCPEnabled(distributionResult.value.product.public_mcp_enabled);
         setProductRevision(distributionResult.value.product.revision);
-      } else recordWorkspaceLoadProblem(t("console.distribution"), distributionResult.reason);
-      if (sourcesResult.status === "fulfilled") {
+      } else if (distributionResult.status === "rejected") recordWorkspaceLoadProblem(t("console.distribution"), distributionResult.reason);
+      if (sourcesResult.status === "fulfilled" && sourcesResult.value !== null) {
         const remoteSources = sourcesResult.value;
-        const [crawlHistories, publicationHistories] = await Promise.all([
+        const [crawlHistories, publicationHistories] = dataNeeds.sourceHistory ? await Promise.all([
           Promise.all(remoteSources.map((source) => api.crawlJobs(product.id, source.id).catch(() => []))),
           Promise.all(remoteSources.map((source) => api.sourcePublications(product.id, source.id).catch(() => []))),
-        ]);
+        ]) : [[], []];
+        if (cancelled) return;
         if (!cancelled) setSources((current) => remoteSources.map((source, index) => {
           const local = current.find((item) => item.id === source.id);
           const latest = crawlHistories[index]?.[0];
@@ -204,35 +225,38 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
           const crawlState: Source["crawlState"] = latest ? latest.state === "failed" ? "failed" : latest.state === "cancelled" ? "cancelled" : latest.state === "review" || latest.state === "succeeded" ? "review" : latest.state === "running" ? "running" : "queued" : source.published ? "synced" : local?.crawlState ?? "draft";
           return { id: source.id, name: source.name, kind: source.kind, location: source.location, visibility: source.visibility, published: source.published, quarantined: source.quarantined, crawlState: latest && latestPublication?.crawl_job_id === latest.id && crawlState === "review" ? "synced" : crawlState, pages: latest?.fetched_count ?? local?.pages ?? 0, lastCrawl: latest ? latest.finished_at ? t("format.dateTime", { value: new Date(latest.finished_at) }) : latest.state : local?.lastCrawl ?? "not-crawled", revision: source.revision, latestPublication };
         }));
-      } else recordWorkspaceLoadProblem(t("console.documentation"), sourcesResult.reason);
-      if (toolsResult.status === "fulfilled") setTools(toolsResult.value); else recordWorkspaceLoadProblem(t("navigation.tools"), toolsResult.reason);
-      if (mcpResult.status === "fulfilled") setMCPConnections(mcpResult.value); else recordWorkspaceLoadProblem(t("console.mcpConnections"), mcpResult.reason);
-      if (nativeResult.status === "fulfilled") setNativePlugins(nativeResult.value); else recordWorkspaceLoadProblem(t("console.nativeTools"), nativeResult.reason);
-      if (integrationsResult.status === "fulfilled") setIntegrations(integrationsResult.value); else recordWorkspaceLoadProblem(t("navigation.apis"), integrationsResult.reason);
-      if (resourcesResult.status === "fulfilled") setResourceSets(resourcesResult.value); else recordWorkspaceLoadProblem(t("console.resources"), resourcesResult.reason);
-      if (identityResult.status === "fulfilled") { setIdentityConfig(identityResult.value); setIdentityLoadError(""); } else setIdentityLoadError(identityResult.reason instanceof APIError ? identityResult.reason.message : t("console.identitySettingsLoadFailed"));
+      } else if (sourcesResult.status === "rejected") recordWorkspaceLoadProblem(t("console.documentation"), sourcesResult.reason);
+      if (toolsResult.status === "fulfilled" && toolsResult.value !== null) setTools(toolsResult.value); else if (toolsResult.status === "rejected") recordWorkspaceLoadProblem(t("navigation.tools"), toolsResult.reason);
+      if (mcpResult.status === "fulfilled" && mcpResult.value !== null) setMCPConnections(mcpResult.value); else if (mcpResult.status === "rejected") recordWorkspaceLoadProblem(t("console.mcpConnections"), mcpResult.reason);
+      if (nativeResult.status === "fulfilled" && nativeResult.value !== null) setNativePlugins(nativeResult.value); else if (nativeResult.status === "rejected") recordWorkspaceLoadProblem(t("console.nativeTools"), nativeResult.reason);
+      if (integrationsResult.status === "fulfilled" && integrationsResult.value !== null) setIntegrations(integrationsResult.value); else if (integrationsResult.status === "rejected") recordWorkspaceLoadProblem(t("navigation.apis"), integrationsResult.reason);
+      if (resourcesResult.status === "fulfilled" && resourcesResult.value !== null) setResourceSets(resourcesResult.value); else if (resourcesResult.status === "rejected") recordWorkspaceLoadProblem(t("console.resources"), resourcesResult.reason);
+      if (identityResult.status === "fulfilled" && identityResult.value !== null) { setIdentityConfig(identityResult.value); setIdentityLoadError(""); } else if (identityResult.status === "rejected") setIdentityLoadError(identityResult.reason instanceof APIError ? identityResult.reason.message : t("console.identitySettingsLoadFailed"));
       setIdentityLoading(false);
-      if (reportsResult.status === "fulfilled") setReportSubmissions(reportsResult.value); else recordWorkspaceLoadProblem(t("navigation.supportOutbox"), reportsResult.reason);
-      if (rootsResult.status === "fulfilled") setRootUsers(rootsResult.value); else recordWorkspaceLoadProblem(t("console.rootUsers"), rootsResult.reason);
-      if (auditResult.status === "fulfilled") setAuditEvents(auditResult.value); else recordWorkspaceLoadProblem(t("console.audit"), auditResult.reason);
-      if (accountsResult.status === "fulfilled") { setCustomerAccounts(accountsResult.value.items); setCustomerAccountsHaveMore(accountsResult.value.has_more); setCustomerAccountsStatus("ready"); } else setCustomerAccountsStatus("unavailable");
-      setWorkspaceLoading(false);
+      if (reportsResult.status === "fulfilled" && reportsResult.value !== null) setReportSubmissions(reportsResult.value); else if (reportsResult.status === "rejected") recordWorkspaceLoadProblem(t("navigation.supportOutbox"), reportsResult.reason);
+      if (rootsResult.status === "fulfilled" && rootsResult.value !== null) setRootUsers(rootsResult.value); else if (rootsResult.status === "rejected") recordWorkspaceLoadProblem(t("console.rootUsers"), rootsResult.reason);
+      if (auditResult.status === "fulfilled" && auditResult.value !== null) setAuditEvents(auditResult.value); else if (auditResult.status === "rejected") recordWorkspaceLoadProblem(t("console.audit"), auditResult.reason);
+      if (accountsResult.status === "fulfilled" && accountsResult.value !== null) { setCustomerAccounts(accountsResult.value.items); setCustomerAccountsHaveMore(accountsResult.value.has_more); setCustomerAccountsStatus("ready"); } else if (accountsResult.status === "rejected") setCustomerAccountsStatus("unavailable");
+      if (!cancelled) setLoadedRouteKey(routeKey);
     };
-    void load();
+    queueMicrotask(() => { void load(); });
     return () => { cancelled = true; };
-  }, [fixturePreview, product.id, product.organisation_id, recordWorkspaceLoadProblem, setAuditEvents, setDistribution, setMCPConnections, setProductRevision, setPublicMCPEnabled, setReportSubmissions, setRootUsers, t]);
+  }, [dataNeeds, routeKey, fixturePreview, product.id, product.organisation_id, recordWorkspaceLoadProblem, setAuditEvents, setDistribution, setMCPConnections, setProductRevision, setPublicMCPEnabled, setReportSubmissions, setRootUsers, t]);
 
   async function refreshCatalog() {
-    const [integrationValues, setValues, toolValues, eventValues] = await Promise.all([api.integrations(), api.resourceSets(), api.tools(product.id), api.auditEvents(product.organisation_id).catch(() => null)]);
-    setIntegrations(integrationValues);
-    setResourceSets(setValues);
-    setTools(toolValues);
-    if (eventValues) setAuditEvents(eventValues);
+    const [integrationValues, setValues, toolValues] = await Promise.all([
+      dataNeeds.integrations ? api.integrations() : null,
+      dataNeeds.resourceSets ? api.resourceSets() : null,
+      dataNeeds.tools ? api.tools(product.id) : null,
+    ]);
+    if (integrationValues) setIntegrations(integrationValues);
+    if (setValues) setResourceSets(setValues);
+    if (toolValues) setTools(toolValues);
   }
 
   async function refreshTools() {
     setTools(await api.tools(product.id));
-    const events = await api.auditEvents(product.organisation_id).catch(() => null);
+    const events = dataNeeds.audit ? await api.auditEvents(product.organisation_id).catch(() => null) : null;
     if (events) setAuditEvents(events);
   }
 
@@ -305,7 +329,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   }
 
   function beginRecipeEdit(recipe: APIRecipe) {
-    setRecipeDialog({ kind: "edit", recipe, value: recipeSpecEditorValue(recipe), visibility: recipe.visibility });
+    setRecipeDialog({ kind: "edit", recipe });
   }
 
   function beginRecipeRework(recipe: APIRecipe) {
@@ -313,16 +337,12 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
   }
 
   async function submitRecipeDialog() {
-    if (!recipeDialog || recipeBusy) return;
+    if (!recipeDialog || recipeDialog.kind === "edit" || recipeBusy) return;
     const value = recipeDialog.value.trim();
     if (!value) return;
     let saved: APIRecipe | null;
     if (recipeDialog.kind === "create") {
       saved = await createRecipe(value);
-    } else if (recipeDialog.kind === "edit") {
-      const parsed = parseRecipeSpecEditor(value, recipeEditableSpec(recipeDialog.recipe));
-      if (!parsed.ok) return;
-      saved = await editRecipe(recipeDialog.recipe, parsed.referenceIDs, recipeDialog.visibility);
     } else {
       saved = await reworkRecipe(recipeDialog.recipe, value);
     }
@@ -357,7 +377,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     : <ToolBuilderView key={`${consoleRoute.path}:${selectedToolBuilderTool?.revision ?? 0}`} product={product} grants={grantDefinitions} tool={selectedToolBuilderTool} initialProposal={activeToolBuilderSeed} aiAvailable={aiProfiles.some((profile) => profile.workload === "analysis" && profile.enabled)} onSaved={async (saved) => { setTools((items) => [...items.filter((item) => item.id !== saved.id), saved]); await refreshTools().catch(() => {}); }} onDirtyChange={onToolBuilderDirtyChange} onMessage={showToast} onNavigate={navigateToPath} />;
   const entityDetail = useEntityDetail({ consoleRoute, integrations, resourceSets, sources, tools, mcpConnections, reportSubmissions, auditEvents, rootUsers });
   const workspaceClass = consoleRoute.kind === "tool-builder" ? "workspace-wide" : section === "settings" ? "workspace-compact" : "workspace-default";
-  const integrationViewProps = { live: apiConnected, product, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
+  const integrationViewProps = { reviewerID: currentUser?.id, live: apiConnected, product, integrations, analyses, tools, resourceSets, sources, identity: identityConfig, distribution, onAddSource: () => setAddSourceOpen(true), onCrawlSource: crawlSource, onPublishSource: publishSource, onAttachPublishedSource: attachReviewedSourcePublication, onGenerateSetupGuide: generateIntegrationSetupGuide, onChanged: refreshCatalog, onMessage: showToast, onNavigate: navigateToPath };
 
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">{t("console.skipToContent")}</a>
@@ -369,7 +389,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
         {workspaceLoading && <div className="workspace-notice loading"><RefreshCw className="spin" /><span><strong>{t("console.loadingDeploymentData")}</strong></span></div>}
         {workspaceLoadProblems.length > 0 && <div className="workspace-notice error"><TriangleAlert /><span><strong>{t("console.someDataCouldNotBeLoaded")}</strong><small>{workspaceLoadProblems.join(" · ")}</small></span><Button outline onClick={() => window.location.reload()}>{t("common.reload")}</Button></div>}
         <ViewStack>
-          {consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} />
+          {workspaceLoading ? null : consoleRoute.kind === "not-found" ? <ConsoleNotFoundView path={consoleRoute.path} onNavigate={navigateToPath} />
             : consoleRoute.kind === "tool-builder" ? toolBuilderContent
             : consoleRoute.kind === "entity" && consoleRoute.entity === "integration" ? <IntegrationsView {...integrationViewProps} selectedIntegrationID={consoleRoute.uid} activeTab={consoleRoute.integrationTab} activeResourceTab={consoleRoute.integrationResourceTab ?? "documentation"} />
             : consoleRoute.kind === "entity" && consoleRoute.entity === "resource-set" ? <ResourceSetDetailView resource={resourceSets.find((item) => item.id === consoleRoute.uid) ?? null} integrations={integrations} onNavigate={navigateToPath} />
@@ -377,14 +397,14 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
             : consoleRoute.kind === "entity" ? <EntityDetailView route={consoleRoute} detail={entityDetail} onNavigate={navigateToPath} />
             : <>
               {section === "product" && <IntegrationsView {...integrationViewProps} />}
-              {section === "documents" && <DocumentationExplorerView live={apiConnected} sources={sources} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
-              {section === "contracts" && <APIContractsView live={apiConnected} integrations={integrations} sources={sources} onMessage={showToast} onNavigate={navigateToPath} />}
-              {section === "sdks" && <SDKCatalogView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
+              {section === "documents" && <DocumentationExplorerView live={apiConnected} sources={sources} integrations={integrations} setupSearch={consoleRoute.search} reviewerID={currentUser?.id} onSourceChanged={refreshSourceMetadata} onMessage={showToast} onNavigate={navigateToPath} onAddSource={() => setAddSourceOpen(true)} onReviewSource={publishSource} />}
+              {section === "contracts" && <APIContractsView setupSearch={consoleRoute.search} reviewerID={currentUser?.id} live={apiConnected} integrations={integrations} sources={sources} onMessage={showToast} onNavigate={navigateToPath} />}
+              {section === "sdks" && <SDKCatalogView key={`${consoleRoute.path}${consoleRoute.search ?? ""}`} setupSearch={consoleRoute.search} reviewerID={currentUser?.id} live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "query-lab" && <QueryLabView live={apiConnected} integrations={integrations} onMessage={showToast} onNavigate={navigateToPath} />}
               {section === "identity" && identityTab === "sign-in" && <OIDCIdentitySetup key={identityLoading ? "loading" : identityConfig?.id || "identity"} identity={identityConfig} loading={identityLoading} loadError={identityLoadError} navigation={<IdentityNavigation active="sign-in" onNavigate={navigateToPath} />} onChanged={setIdentityConfig} onMessage={showToast} />}
               {section === "identity" && identityTab === "customer-accounts" && <CustomerAccountsView accounts={customerAccounts} status={customerAccountsStatus} hasMore={customerAccountsHaveMore} onUpdate={updateCustomerAccountState} onLoadMore={loadMoreCustomerAccounts} onNavigate={navigateToPath} />}
               {section === "recipes" && <RecipesView integrations={integrations} analyses={analyses} recipes={recipes} busy={recipeBusy} onCreate={beginRecipeCreation} onGenerate={generateRecipesFromEvidence} onEdit={beginRecipeEdit} onRework={beginRecipeRework} onDelete={deleteRecipe} onApprove={approveRecipe} onPublish={publishRecipe} />}
-              {section === "sources" && <SourcesView sources={sources} navigation={<DocumentationNavigation active="sources" onNavigate={navigateToPath} />} onAdd={() => setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={publishSource} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
+              {section === "sources" && <SourcesView sources={sources} navigation={<DocumentationNavigation active="sources" onNavigate={navigateToPath} />} onAdd={() => apiConnected ? navigateToPath(documentationSetupPath({ setup: "new" })) : setAddSourceOpen(true)} onCrawl={crawlSource} onPublish={(source) => apiConnected && ["website", "upload"].includes(source.kind) ? navigateToPath(documentationSetupPath({ source: source.id })) : publishSource(source)} onVisibilityChange={(id) => requestVisibility("source", id)} onNavigate={navigateToPath} />}
               {section === "connections" && <MCPConnectionsView connections={mcpConnections} tools={tools} busy={mcpBusy} onAdd={() => setMCPConnectionOpen(true)} onInspect={inspectMCPConnection} onNavigate={navigateToPath} />}
               {section === "tools" && <ToolsView tools={tools} integrations={integrations} connections={mcpConnections} nativePlugins={nativePlugins} onSetNativePluginEnabled={setNativePluginEnabled} onNavigate={navigateToPath} />}
               {section === "mcp-preview" && <MCPPreviewView product={product} grants={grantDefinitions} grantStatus={grantDefinitionsStatus} available={apiConnected} privateEndpointEnabled={identityConfig?.configured === true && identityConfig.state === "active"} onMessage={showToast} onNavigate={navigateToPath} />}
@@ -393,7 +413,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
               {section === "settings" && settingsTab === "overview" && <SettingsView aiProfiles={aiProfiles} rootUsers={rootUsers} onDoctor={runSystemDoctor} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "tenant" && <TenantSettingsView key={product.revision} product={product} onSave={updateTenantSettings} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "configuration" && <ConfigurationSettingsView available={apiConnected} onNavigate={navigateToPath} />}
-              {section === "settings" && settingsTab === "ai" && <AISettingsView profiles={aiProfiles} prompts={aiPrompts} connections={aiConnections} usage={aiProviderUsage} saving={workloadBusy} onSave={saveAIWorkloadSelection} onConfigure={openAIWorkload} onEditPrompt={openAIPrompt} onAddProvider={() => setProviderPickerOpen(true)} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
+              {section === "settings" && settingsTab === "ai" && <AISettingsView setupSearch={consoleRoute.search} profiles={aiProfiles} prompts={aiPrompts} connections={aiConnections} usage={aiProviderUsage} saving={workloadBusy} onSave={saveAIWorkloadSelection} onConfigure={openAIWorkload} onEditPrompt={openAIPrompt} onAddProvider={() => setProviderPickerOpen(true)} onConnect={openAIConnection} onTest={testAIConnection} onNavigate={navigateToPath} />}
               {section === "settings" && settingsTab === "root" && <RootAccessSettingsView rootUsers={rootUsers} currentUser={currentUser ?? null} onAddRoot={() => { setRootRecoveryCodes([]); setRootOpen(true); }} onRevokeRoot={revokeRootUser} onNavigate={navigateToPath} />}
             </>}
         </ViewStack>
@@ -404,7 +424,7 @@ function ConsoleWorkspace({ fixturePreview, fixtures, currentUser, currentDeploy
     <MCPDialogs workspace={mcpWorkspace} connectionReady={mcpConnectionReady} />
     <AdminActivityDialogs workspace={adminWorkspace} />
     <AIConfigurationDialogs workspace={aiWorkspace} ProviderLogo={AIProviderLogo} />
-    <RecipeDialogs state={recipeDialog} busy={recipeBusy} onChange={(value) => setRecipeDialog((current) => current ? { ...current, value } : null)} onVisibilityChange={(visibility) => setRecipeDialog((current) => current?.kind === "edit" ? { ...current, visibility } : current)} onClose={() => setRecipeDialog(null)} onSubmit={() => void submitRecipeDialog()} />
+    <RecipeDialogs state={recipeDialog} busy={recipeBusy} onChange={(value) => setRecipeDialog((current) => current && current.kind !== "edit" ? { ...current, value } : current)} onClose={() => setRecipeDialog(null)} onSubmit={() => void submitRecipeDialog()} onSaveReferences={editRecipe} onReload={(recipe) => aiWorkspace.setRecipes((items) => items.map((item) => item.id === recipe.id ? recipe : item))} />
     {toast && <div className="toast" role="status"><Check />{toast}</div>}
   </div>;
 }

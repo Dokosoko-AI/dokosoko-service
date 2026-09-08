@@ -3,10 +3,13 @@ package platform
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/dokosoko/dokosoko-service/internal/model"
+	"github.com/dokosoko/dokosoko-service/internal/store"
 	"net/url"
 	"strings"
 	"time"
@@ -92,6 +95,36 @@ func (s *Service) CreateEnvironment(ctx context.Context, organisationID, product
 }
 
 func (s *Service) CreateSource(ctx context.Context, organisationID, productID, name, kind, location string, actor Actor) (model.Source, error) {
+	return s.CreateSourceWithRequest(ctx, SourceCreationInput{OrganisationID: organisationID, ProductID: productID, Name: name, Kind: kind, Location: location}, actor)
+}
+
+type SourceCreationInput struct {
+	OrganisationID, ProductID, Name, Kind, Location string
+	RequestKey                                      string
+	// ContentDigest is computed from validated upload bytes by the HTTP server.
+	// It replaces the random storage filename when identifying an upload retry.
+	ContentDigest string
+}
+
+func (s *Service) CreateSourceWithRequest(ctx context.Context, input SourceCreationInput, actor Actor) (model.Source, error) {
+	organisationID, productID, name, kind, location := input.OrganisationID, input.ProductID, input.Name, input.Kind, input.Location
+	if input.RequestKey != "" {
+		if len(input.RequestKey) < 16 || len(input.RequestKey) > 200 {
+			return model.Source{}, errors.New("Idempotency-Key must contain 16 to 200 visible ASCII characters")
+		}
+		for _, char := range input.RequestKey {
+			if char < 33 || char > 126 {
+				return model.Source{}, errors.New("Idempotency-Key must contain 16 to 200 visible ASCII characters")
+			}
+		}
+	}
+	product, err := s.store.Product(ctx, productID)
+	if err != nil {
+		return model.Source{}, err
+	}
+	if product.OrganisationID != organisationID {
+		return model.Source{}, store.ErrNotFound
+	}
 	name, kind, location = strings.TrimSpace(name), strings.ToLower(strings.TrimSpace(kind)), strings.TrimSpace(location)
 	if location == "" || len(location) > 2048 {
 		return model.Source{}, errors.New("source location is required and must not exceed 2048 bytes")
@@ -116,11 +149,27 @@ func (s *Service) CreateSource(ctx context.Context, organisationID, productID, n
 	if err != nil {
 		return model.Source{}, err
 	}
-	value, err := s.store.CreateSource(ctx, model.Source{ID: id, OrganisationID: organisationID, ProductID: productID, Name: name, Kind: kind, Location: location, Visibility: model.VisibilityPrivate})
+	value := model.Source{ID: id, OrganisationID: organisationID, ProductID: productID, Name: name, Kind: kind, Location: location, Visibility: model.VisibilityPrivate}
+	event := model.AuditEvent{ID: randomID("audit"), OrganisationID: organisationID, ProductID: productID, ActorID: actor.ID, Action: "source.created", TargetType: "source", TargetID: id, Current: map[string]any{"name": name, "kind": kind, "visibility": model.VisibilityPrivate}, RequestID: actor.RequestID, CreatedAt: s.now()}
+	if input.RequestKey != "" {
+		identity := location
+		if kind == "upload" {
+			digest, decodeErr := hex.DecodeString(input.ContentDigest)
+			if decodeErr != nil || len(digest) != sha256.Size {
+				return model.Source{}, errors.New("source upload content digest is required for a retryable creation")
+			}
+			identity = input.ContentDigest + ":" + location[strings.LastIndex(location, ".")+1:]
+		}
+		payload, _ := json.Marshal([]string{organisationID, productID, name, kind, identity})
+		inputDigest := sha256.Sum256(payload)
+		requestDigest := sha256.Sum256([]byte(actor.ID + "\x00" + input.RequestKey))
+		return s.store.CreateSourceOnce(ctx, store.SourceCreation{Source: value, RequestDigest: hex.EncodeToString(requestDigest[:]), InputDigest: hex.EncodeToString(inputDigest[:]), Audit: event})
+	}
+	value, err = s.store.CreateSource(ctx, value)
 	if err != nil {
 		return model.Source{}, err
 	}
-	err = s.store.AppendAudit(ctx, model.AuditEvent{ID: randomID("audit"), OrganisationID: organisationID, ProductID: productID, ActorID: actor.ID, Action: "source.created", TargetType: "source", TargetID: value.ID, Current: map[string]any{"name": value.Name, "kind": value.Kind, "visibility": model.VisibilityPrivate}, RequestID: actor.RequestID, CreatedAt: s.now()})
+	err = s.store.AppendAudit(ctx, event)
 	return value, err
 }
 

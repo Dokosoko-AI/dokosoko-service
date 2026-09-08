@@ -1,5 +1,9 @@
 import type * as Contract from "./control-plane.generated";
 
+export type APISourceInputReplacementResult = Contract.SourceInputReplacementResult;
+
+export type APIAIProcessingReadiness = Contract.AiProcessingReadiness;
+
 export type APIVisibility = Contract.Visibility;
 
 export type APIProduct = Omit<Contract.Product, "created_at" | "updated_at"> & {
@@ -213,6 +217,7 @@ export type APISource = Contract.Source;
 export type APICrawlJob = Contract.CrawlJob;
 
 export type APICrawlReviewDocument = Contract.CrawlReviewDocument;
+export type APISourceReviewContent = Contract.SourceReviewContent;
 
 export type APISourcePublication = Contract.SourcePublication;
 
@@ -899,6 +904,7 @@ export type APIIntegrationAnalysis = {
 };
 
 export type APIRecipeReference = Contract.RecipeReference;
+export type APIRecipeReferenceOptions = Contract.RecipeReferenceOptions;
 export type APIRecipeFinding = Contract.RecipeValidationFinding;
 export type APIRecipeEvidenceRef = Contract.RecipeEvidenceRef;
 export type APIRecipeInstruction = Contract.RecipeInstruction;

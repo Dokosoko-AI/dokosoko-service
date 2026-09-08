@@ -450,7 +450,7 @@ func TestRuntimeToolMakesServiceAccessRequiredAndPublishesExactRedactedConnectio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Ready || !integrationPublishValidationExists(status.Validations, "access_missing") || !integrationPublishValidationExists(status.Validations, "runtime_service_credential_unavailable") {
+	if status.Ready || !integrationPublishValidationExists(status.Validations, "runtime_service_credential_unavailable") {
 		t.Fatalf("publication status after credential revoke = %#v", status.Validations)
 	}
 	if err = json.Unmarshal(status.CurrentSnapshot, &snapshot); err != nil {

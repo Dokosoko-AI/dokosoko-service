@@ -27,13 +27,19 @@ type IntegrationPublishValidation struct {
 }
 
 type IntegrationPublishStatus struct {
-	Ready               bool                           `json:"ready"`
-	HasChanges          bool                           `json:"has_changes"`
-	CurrentManifestHash string                         `json:"current_manifest_hash"`
-	CurrentSnapshot     json.RawMessage                `json:"current_snapshot"`
-	LatestRevision      *model.IntegrationRevision     `json:"latest_revision,omitempty"`
-	Changes             []IntegrationPublishChange     `json:"changes"`
-	Validations         []IntegrationPublishValidation `json:"validations"`
+	IntegrationID        string                         `json:"integration_id"`
+	CandidateRevision    int64                          `json:"candidate_revision"`
+	Ready                bool                           `json:"ready"`
+	HasChanges           bool                           `json:"has_changes"`
+	CurrentManifestHash  string                         `json:"current_manifest_hash"`
+	CurrentSnapshot      json.RawMessage                `json:"current_snapshot"`
+	LatestRevision       *model.IntegrationRevision     `json:"latest_revision,omitempty"`
+	ServingRevisionID    string                         `json:"serving_revision_id,omitempty"`
+	ServingRevision      int64                          `json:"serving_revision,omitempty"`
+	ServingPublicationID string                         `json:"serving_publication_id,omitempty"`
+	LatestDeliveryReady  bool                           `json:"latest_delivery_ready"`
+	Changes              []IntegrationPublishChange     `json:"changes"`
+	Validations          []IntegrationPublishValidation `json:"validations"`
 }
 
 type integrationResourceSnapshot struct {
@@ -206,9 +212,6 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		}
 		return resources[i].Kind < resources[j].Kind
 	})
-	if len(integration.Resources) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "resources_missing", Message: "No documentation or API set is attached.", Tab: "resources"})
-	}
 	// Typed SDK assets are the canonical publication evidence. The deprecated
 	// SDK-reference list is only a compatibility projection of those bindings,
 	// so omit matching IDs instead of publishing the same release twice.
@@ -221,7 +224,7 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		if typedSDKBindingIDs[reference.ID] {
 			continue
 		}
-		if reference.ID == "" || reference.Revision < 1 || reference.IntegrationID != integration.ID || reference.DeploymentID != integration.DeploymentID {
+		if reference.ID == "" || reference.Revision < 1 || reference.IntegrationID != integration.ID || reference.DeploymentID != integration.DeploymentID || reference.ExactVersion == "" || reference.InstallCommand == "" {
 			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "sdk_reference_unresolved", Message: "An SDK reference does not resolve to this API.", Tab: "resources"})
 			continue
 		}
@@ -257,9 +260,6 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		authorization = append(authorization, integrationAuthorizationSnapshot{ID: point.ID, Key: point.Key, Name: point.Name, ActionType: point.ActionType, RequiredGrants: append([]string(nil), point.RequiredGrants...), ConfirmationRequired: point.ConfirmationRequired, DecisionTTLSeconds: point.DecisionTTLSeconds, Revision: point.Revision})
 	}
 	sort.Slice(authorization, func(i, j int) bool { return authorization[i].Key < authorization[j].Key })
-	if integration.Visibility == model.VisibilityPrivate && len(authorization) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "authorization_missing", Message: "No active authorization point is configured for this private API.", Tab: "authorization"})
-	}
 	boundTools := make([]integrationToolSnapshot, 0, len(toolBindings))
 	for _, binding := range toolBindings {
 		if binding.Tool == nil || binding.Tool.ID != binding.ToolID || binding.Tool.State != "published" || binding.Tool.Revision != binding.ToolRevision {
@@ -271,6 +271,10 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 			continue
 		}
 		tool := binding.Tool
+		if tool.UpstreamDrifted {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "tool_upstream_drifted", Message: "A selected tool changed upstream. Review and publish its new definition before publishing this API.", Tab: "tools"})
+			continue
+		}
 		if err := validateToolBindingOwnership(*tool, integration); err != nil {
 			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "tool_ownership_invalid", Message: err.Error(), Tab: "tools"})
 			continue
@@ -287,13 +291,9 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		}
 		return boundTools[i].Namespace < boundTools[j].Namespace
 	})
-	if len(boundTools) == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "tools_missing", Message: "No reviewed tool revision is bound to this API.", Tab: "tools"})
-	}
 	credentialSets := runtimeCredentialSetIndex(inputs.RuntimeCredentialSets)
 	serviceConnections := make([]integrationServiceConnectionSnapshot, 0, len(inputs.RuntimeServiceConnections))
 	seenServiceConnections := make(map[string]bool, len(inputs.RuntimeServiceConnections))
-	readyServiceConnections := 0
 	for _, connection := range inputs.RuntimeServiceConnections {
 		readiness := runtimeServiceConnectionReadinessFrom(connection, credentialSets)
 		configurationReady, credentialsReady := true, true
@@ -351,9 +351,6 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 			State:              connection.State,
 			CurrentRevisions:   currentRevisions,
 		})
-		if configurationReady && credentialsReady && readiness.Ready {
-			readyServiceConnections++
-		}
 		if !configurationReady {
 			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "runtime_service_connection_unresolved", Message: fmt.Sprintf("%s does not resolve to exact active API-owned runtime connection revisions.", connection.Name), Tab: "access"})
 		}
@@ -362,8 +359,13 @@ func buildIntegrationSnapshot(integration model.Integration, inputs integrationP
 		}
 	}
 	sort.Slice(serviceConnections, func(i, j int) bool { return serviceConnections[i].ConnectionID < serviceConnections[j].ConnectionID })
-	if readyServiceConnections == 0 {
-		validations = append(validations, IntegrationPublishValidation{Level: "warning", Code: "access_missing", Message: "No publish-ready API-owned runtime service connection is configured.", Tab: "access"})
+	for _, tool := range boundTools {
+		if tool.RuntimeServiceConnectionID != "" && !seenServiceConnections[tool.RuntimeServiceConnectionID] {
+			validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "runtime_service_connection_missing", Message: "A selected tool requires a runtime connection that is no longer attached to this API.", Tab: "access"})
+		}
+	}
+	if len(resources)+len(sdks)+len(inputs.DeveloperAssets.Documentation)+len(inputs.DeveloperAssets.Contracts)+len(inputs.DeveloperAssets.SDKs)+len(boundTools) == 0 {
+		validations = append(validations, IntegrationPublishValidation{Level: "error", Code: "resources_missing", Message: "Add reviewed documentation, an API contract, SDK guidance, or a reviewed tool before publishing.", Tab: "resources"})
 	}
 
 	snapshot, err := json.Marshal(integrationSnapshot{FamilyKey: integration.FamilyKey, VersionKey: integration.VersionKey, DisplayName: integration.DisplayName, Description: integration.Description, Visibility: integration.Visibility, Lifecycle: integration.Lifecycle, ReplacementIntegrationID: integration.ReplacementIntegrationID, SunsetAt: integration.SunsetAt, Resources: resources, SDKs: sdks, AuthorizationPoints: authorization, Tools: boundTools, ServiceConnections: serviceConnections, DeveloperAssets: inputs.DeveloperAssets})
@@ -429,8 +431,10 @@ func (s *Service) IntegrationPublishStatus(ctx context.Context, integrationID st
 	if err != nil {
 		return IntegrationPublishStatus{}, err
 	}
+	candidateRevision := integration.Revision
 	if integration.Lifecycle == "draft" {
 		integration.Lifecycle = "active"
+		candidateRevision++
 	}
 	inputs, err := s.integrationPublicationInputs(ctx, integration)
 	if err != nil {
@@ -464,7 +468,70 @@ func (s *Service) IntegrationPublishStatus(ctx context.Context, integrationID st
 			break
 		}
 	}
-	return IntegrationPublishStatus{Ready: ready, HasChanges: latest == nil || latest.ManifestHash != hash, CurrentManifestHash: hash, CurrentSnapshot: snapshot, LatestRevision: latest, Changes: changes, Validations: validations}, nil
+	status := IntegrationPublishStatus{IntegrationID: integration.ID, CandidateRevision: candidateRevision, Ready: ready, HasChanges: latest == nil || latest.ManifestHash != hash, CurrentManifestHash: hash, CurrentSnapshot: snapshot, LatestRevision: latest, Changes: changes, Validations: validations}
+	// Use the same activated, current-index resolver as MCP. A saved revision
+	// whose activation or indexing failed must not appear as serving content.
+	if latest != nil {
+		serving, servingErr := s.readyAPIDeveloperAssetPublication(ctx, deployment.ID, integration.ID)
+		if servingErr != nil && !errors.Is(servingErr, store.ErrNotFound) {
+			return IntegrationPublishStatus{}, servingErr
+		}
+		if servingErr == nil {
+			status.ServingPublicationID, status.ServingRevisionID = serving.ID, serving.APIRevisionID
+			status.LatestDeliveryReady = serving.APIRevisionID == latest.ID
+			for _, revision := range revisions {
+				if revision.ID == serving.APIRevisionID {
+					status.ServingRevision = revision.Revision
+					break
+				}
+			}
+			if status.ServingRevision == 0 {
+				return IntegrationPublishStatus{}, errors.New("serving publication has no matching API revision")
+			}
+		}
+	}
+	return status, nil
+}
+
+// ActivateIntegrationRevision retries delivery of an already approved immutable
+// publication, including a failure before its developer-asset record was saved.
+// It never resolves the current draft's attachments or publishes a new revision.
+// Live permissions, credentials and tool drift are still enforced during use.
+func (s *Service) ActivateIntegrationRevision(ctx context.Context, integrationID, revisionID string, actor Actor) error {
+	deployment, err := s.store.Deployment(ctx)
+	if err != nil {
+		return err
+	}
+	integration, err := s.store.Integration(ctx, deployment.ID, integrationID)
+	if err != nil {
+		return err
+	}
+	revisions, err := s.store.IntegrationRevisions(ctx, integration.ID)
+	if err != nil {
+		return err
+	}
+	for _, revision := range revisions {
+		if revision.ID != revisionID {
+			continue
+		}
+		if revision.IntegrationID != integration.ID || revision.State != "published" || revision.PublishedAt == nil || revision.ManifestHash == "" {
+			return errors.New("the exact published API revision is unavailable")
+		}
+		var snapshot integrationSnapshot
+		if err := json.Unmarshal(revision.Snapshot, &snapshot); err != nil || snapshot.DeveloperAssets.SchemaVersion != developerAssetSnapshotSchemaVersion {
+			return errors.New("the published API revision does not contain a supported exact developer-asset snapshot")
+		}
+		publicationActor := actor
+		if revision.PublishedBy != "" {
+			publicationActor.ID = revision.PublishedBy
+		}
+		publication, err := s.ensureAPIDeveloperAssetPublication(ctx, integration, revision, snapshot.DeveloperAssets, publicationActor)
+		if err != nil {
+			return err
+		}
+		return s.activateIntegrationPublication(ctx, deployment, integration, revision, publication, actor)
+	}
+	return store.ErrNotFound
 }
 
 func (s *Service) activateIntegrationPublication(
@@ -483,9 +550,13 @@ func (s *Service) activateIntegrationPublication(
 		"integration_id": integration.ID, "revision": revision.Revision, "manifest_hash": revision.ManifestHash,
 		"developer_asset_publication_id": assetPublication.ID, "developer_asset_snapshot_hash": assetPublication.SnapshotHash,
 	}
+	publishedBy := revision.PublishedBy
+	if publishedBy == "" {
+		publishedBy = actor.ID
+	}
 	if err := s.store.AppendAudit(ctx, model.AuditEvent{
 		ID: "integration-publication:" + revision.ID, OrganisationID: deployment.OrganisationID,
-		ProductID: deployment.ID, ActorID: actor.ID, Action: "integration.published",
+		ProductID: deployment.ID, ActorID: publishedBy, Action: "integration.published",
 		TargetType: "integration_revision", TargetID: revision.ID, Current: current,
 		RequestID: actor.RequestID, Outcome: "success", CreatedAt: createdAt,
 	}); err != nil {

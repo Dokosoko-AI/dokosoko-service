@@ -485,6 +485,13 @@ func TestPublicManifestContainsOnlyAcknowledgedPublicIntegrations(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	contract, err := service.CreateResourceSet(ctx, platform.ResourceSetInput{Kind: "api", Name: "Public contract", State: "active", Manifest: json.RawMessage(`[{"name":"readiness","path":"/health/ready"}]`)}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.AttachResourceSet(ctx, publicIntegration.ID, contract.ID, contract.Latest.ID, actor); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.PublishIntegration(ctx, publicIntegration.ID, actor); err != nil {
 		t.Fatal(err)
 	}

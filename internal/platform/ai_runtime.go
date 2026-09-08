@@ -160,12 +160,27 @@ func aiInvocationTargetMatches(invocation aiInvocation, profile model.AIWorkload
 
 func (s *Service) aiWorkloadTarget(ctx context.Context, product model.Product, workload airuntime.Workload) (model.AIWorkloadProfile, model.AIProviderConnection, error) {
 	profile, err := s.store.AIWorkloadProfile(ctx, product.ID, string(workload))
-	if err != nil || !profile.Enabled {
-		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, ErrAIUnavailable
+	if errors.Is(err, store.ErrNotFound) {
+		return profile, model.AIProviderConnection{}, &AISetupError{Code: "model_missing"}
+	}
+	if err != nil {
+		return profile, model.AIProviderConnection{}, err
+	}
+	if !profile.Enabled {
+		return profile, model.AIProviderConnection{}, &AISetupError{Code: "workload_disabled"}
 	}
 	connection, err := s.store.AIProviderConnection(ctx, product.ID, profile.ProviderConnectionID)
-	if err != nil || !connection.Enabled {
-		return model.AIWorkloadProfile{}, model.AIProviderConnection{}, ErrAIUnavailable
+	if errors.Is(err, store.ErrNotFound) {
+		return profile, connection, &AISetupError{Code: "provider_missing"}
+	}
+	if err != nil {
+		return profile, connection, err
+	}
+	if !connection.Enabled {
+		return profile, connection, &AISetupError{Code: "provider_disabled"}
+	}
+	if profile.ProductID != product.ID || profile.OrganisationID != product.OrganisationID || connection.DeploymentID != product.ID || connection.OrganisationID != product.OrganisationID || !validAIWorkloadTarget(profile, connection) {
+		return profile, connection, &AISetupError{Code: "invalid_configuration"}
 	}
 	return profile, connection, nil
 }
@@ -215,14 +230,14 @@ func (s *Service) aiConnectionCredential(ctx context.Context, product model.Prod
 		if credential := strings.TrimSpace(s.aiEnvironmentCredentials[connection.Provider]); credential != "" {
 			return []byte(credential), nil
 		}
-		return nil, ErrAIUnavailable
+		return nil, &AISetupError{Code: "credential_unavailable"}
 	}
 	if s.vault == nil || connection.CredentialID == "" {
-		return nil, ErrAIUnavailable
+		return nil, &AISetupError{Code: "credential_unavailable"}
 	}
 	secret, err := s.store.Secret(ctx, product.OrganisationID, connection.CredentialID)
 	if err != nil {
-		return nil, ErrAIUnavailable
+		return nil, &AISetupError{Code: "credential_unavailable"}
 	}
 	credential, err := s.vault.Decrypt(secretvault.Encrypted{Ciphertext: secret.Ciphertext, Nonce: secret.Nonce, Fingerprint: secret.Fingerprint, KeyVersion: secret.KeyVersion}, product.OrganisationID+":ai:"+connection.CredentialID)
 	if err != nil {
@@ -231,7 +246,7 @@ func (s *Service) aiConnectionCredential(ctx context.Context, product model.Prod
 		credential, err = s.vault.Decrypt(secretvault.Encrypted{Ciphertext: secret.Ciphertext, Nonce: secret.Nonce, Fingerprint: secret.Fingerprint, KeyVersion: secret.KeyVersion}, product.OrganisationID+":llm:"+connection.CredentialID)
 	}
 	if err != nil {
-		return nil, ErrAIUnavailable
+		return nil, &AISetupError{Code: "credential_unavailable"}
 	}
 	return credential, nil
 }
