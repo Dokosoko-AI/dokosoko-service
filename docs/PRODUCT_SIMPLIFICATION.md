@@ -1344,3 +1344,20 @@ fresh disposable PostgreSQL database for the root Go suite: 190 console tests,
 57 crawler tests, typecheck, lint, production build and all root Go packages.
 The standalone-client fixture scenarios and reference-application evaluation
 were enabled in that run.
+
+## Required AI setup localization — 8 September 2026
+
+The complete AI readiness, Knowledge processing and asset-save recovery sections
+now have German, Spanish, French, Japanese, Brazilian Portuguese and Ukrainian
+translations: 57 messages per locale. This includes required-AI guidance, provider
+and budget blockers, connection-test states, resumable processing, source-review
+findings and save recovery. Interpolation fields remain unchanged. Japanese
+workload instructions use the same “解析” label as AI settings.
+
+All 342 localized runtime lookups resolved with their expected interpolation.
+The existing locale contract checks cover key parity and placeholder parity;
+other setup and review sections still contain English copy and remain follow-up
+work. No AI policy, processing behavior, persistence or public contract changed.
+Final repository verification passed: typecheck, lint, production build,
+190 console tests, 57 crawler tests and the root Go suite. Environment-dependent
+PostgreSQL and external-client checks were not enabled for this copy-only change.
