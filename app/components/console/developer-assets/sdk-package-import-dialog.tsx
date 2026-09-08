@@ -84,12 +84,12 @@ export function SDKPackageImportDialog({
   }
 
   function locate(value: string, selected = ecosystem) {
-    setLocator(value); setCredential("");
+    setLocator(value); setCredential(""); setSourceRef("");
     const resolved = resolveSDKPackageLocation(value, selected);
+    setExactVersion(resolved?.exactVersion ?? "");
     if (resolved) {
       if (value.includes("://")) setAdvanced(false);
       setEcosystem(resolved.ecosystem); setCoordinate(resolved.coordinate); setSourceURL(resolved.sourceURL); setSourceKind("registry");
-      if (resolved.exactVersion) setExactVersion(resolved.exactVersion);
     } else {
       setCoordinate(""); setSourceURL(value.includes("://") ? value.trim() : "");
       if (value.trim()) setAdvanced(true);

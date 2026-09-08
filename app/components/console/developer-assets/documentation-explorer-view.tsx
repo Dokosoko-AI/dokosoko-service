@@ -183,6 +183,7 @@ function DocumentationLibraryView({ live, sources, integrations, reviewerID, onM
   }
   const change = record && previous && previous.document.id === selected?.previous_document_id ? evidenceChange(previous.document.normalized_markdown, record.document.normalized_markdown) : null;
   const active: Section = "documents";
+  const filtered = Boolean(sourceID || submittedQuery);
 
   return <>
     <PageHeader eyebrow={t("navigation.docs")} title={t("documentationExplorer.library")} description={t("documentationExplorer.libraryDescription")} action={<Button onClick={onAddSource}><Plus data-slot="icon" />{t("documentationExplorer.addContent")}</Button>} />
@@ -215,14 +216,21 @@ function DocumentationLibraryView({ live, sources, integrations, reviewerID, onM
         {submittedQuery && <Button type="button" outline onClick={() => { setQuery(""); setSubmittedQuery(""); }}>{t("documentationExplorer.clear")}</Button>}
         {selectedDocumentIDs.length > 0 && <Button type="button" outline onClick={createSetFromSelection}>{t("documentationExplorer.saveSelectionAsSet")}</Button>}
       </form>
-      {loading ? <LoadingPanel label={t("documentationExplorer.loadingLibrary")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
+      {loading ? <LoadingPanel label={t("documentationExplorer.loadingLibrary")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : documents.length === 0 ? <section className="panel developer-asset-inspector-empty">
+        <FileText />
+        <strong>{t(filtered ? "documentationExplorer.noMatchingDocuments" : view === "reviewed" ? "documentationExplorer.noReviewedFiles" : "documentationExplorer.noFiles")}</strong>
+        <small>{t(filtered ? "documentationExplorer.noMatchingDocumentsHelp" : view === "reviewed" ? "documentationExplorer.reviewedEmptyHelp" : "documentationExplorer.addContentHelp")}</small>
+        {filtered ? <Button outline onClick={() => { setQuery(""); setSubmittedQuery(""); setSourceID(""); }}>{t("documentationExplorer.clearFilters")}</Button> : <div className="heading-actions">
+          {!attentionProblem && !attentionLoading && Boolean(attention?.total) && <Button onClick={() => { setView("attention"); setAttention(null); setAttentionLoading(live); }}>{t("documentationExplorer.needsAttention")}</Button>}
+          <Button outline onClick={onAddSource}>{t("documentationExplorer.addContent")}</Button>
+        </div>}
+      </section> : <div className="developer-asset-explorer">
         <aside className="panel documentation-file-navigator" aria-label={t("documentationExplorer.fileNavigator")}>
           <header className="documentation-file-navigator-heading"><strong>{view === "history" ? t("documentationExplorer.importHistory") : t("documentationExplorer.reviewedContent")}</strong><small>{t("documentationExplorer.documentsShown", { shown: documents.length, count: total })}</small></header>
           <div className="documentation-file-tree">{documents.map((item) => <div className={`documentation-file-row ${item.id === selectedID ? "active" : ""}`} key={item.id}>
             <input type="checkbox" aria-label={t("documentationExplorer.selectDocument", { title: item.title })} checked={selectedDocumentIDs.includes(item.id)} onChange={(event) => setSelectedDocumentIDs((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />
             <button type="button" onClick={() => selectDocument(item.id)}><FileText /><span><strong>{item.title || item.source_path}</strong><small>{sources.find((value) => value.id === item.source_id)?.name}{sources.find((value) => value.id === item.source_id)?.kind !== "upload" && <> · {item.source_path}</>}</small>{view === "history" && <small>{t("format.dateTime", { value: new Date(item.queued_at) })}</small>}</span><DocumentationDecisionBadge decision={item.decision} /></button>
           </div>)}</div>
-          {documents.length === 0 && <div className="developer-asset-inspector-empty"><FileText /><strong>{t(view === "reviewed" ? "documentationExplorer.noReviewedFiles" : "documentationExplorer.noFiles")}</strong><small>{t(view === "reviewed" ? "documentationExplorer.reviewedEmptyHelp" : "documentationExplorer.addContentHelp")}</small><Button outline onClick={onAddSource}>{t("documentationExplorer.addContent")}</Button></div>}
           {hasMore && <Button outline disabled={loadingMore} onClick={() => void load(documents.length, true)}>{loadingMore ? t("common.loading") : t("documentationExplorer.loadMore")}</Button>}
         </aside>
         <section className="panel developer-asset-inspector">

@@ -1281,3 +1281,23 @@ Production coding-client/OAuth evidence, real vendor/customer tasks compared
 with existing documentation, broader retrieval cases, backend catalog/index
 work, translations and backup restoration remain open. The broad acceptance
 gates above stay unchecked.
+
+## Product walkthrough follow-up — 8 September 2026
+
+Browser inspection found and corrected a stale version when changing packages,
+an empty-library reader asking users to select a nonexistent file, and a published
+SDK screen that put completed processing ahead of its guidance. Package changes
+now clear the previous version/ref; empty searches have a distinct message and
+Clear filters action; published SDK processing is available in the existing
+details section. Required AI remains visible for unpublished guidance. The new
+copy is translated in all seven UI locales.
+
+Repository verification passed again (190 console tests, 57 crawler tests,
+typecheck, lint, production build and root Go). Actual browser interactions
+verified version reset/readiness, published processing disclosure, pending-content
+navigation and keyboard search/source-filter recovery. Desktop/light and
+390px/dark screenshots were inspected without overflow or JavaScript errors.
+Populated-library reading used explicit normalized-document UI fixtures; the
+remaining screens used the local Go service with test authentication and AI.
+No persistence, public API or runtime authorization changed. These checks do not
+close the production client, customer-outcome or operational acceptance gates.

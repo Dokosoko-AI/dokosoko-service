@@ -351,3 +351,24 @@ Desktop/light and 390px/dark screenshots were inspected without overflow or
 JavaScript errors. These were local fixtures with synthetic extra evidence and
 demo identities; the results do not establish production OAuth or application
 implementation success.
+
+### Setup and Knowledge reading states
+
+Changing the package locator clears the prior exact version and Git ref; an
+explicit version in the new locator is filled in. Import remains disabled until
+a version is selected. Published SDK guidance opens on the exact content and
+decisions, with the completed AI report inside processing details. Unpublished
+guidance retains its required AI processing panel before publication.
+
+The Knowledge library uses one empty-state panel when no documents are listed.
+An unfiltered empty library offers content creation and access to pending imports;
+a filtered empty result offers Clear filters. The document navigator and reader
+appear when documents exist. New copy is translated in all seven UI locales.
+
+Production-build browser checks passed for package version reset, import readiness,
+published AI-report disclosure, pending-import navigation, search/source-filter
+recovery and keyboard actions. Desktop/light and 390px/dark captures had no page
+overflow or JavaScript errors. The populated-reader check used explicit normalized
+document response fixtures; the other screens used the local Go service with test
+authentication and AI. These checks do not establish source acquisition or
+production identity compatibility. The full repository verification also passed.
