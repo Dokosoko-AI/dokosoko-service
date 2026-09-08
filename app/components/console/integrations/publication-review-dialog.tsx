@@ -9,7 +9,7 @@ import { integrationPublicationRows, publicationRecord, publicationRecords, publ
 import { sdkSetupPath } from "../../../lib/sdk-setup";
 import { Badge, Button, Dialog } from "../../core/control";
 import { ConsoleLink } from "../console-link";
-import { developerAssetError, LoadingPanel, PrettyJSON } from "../developer-assets/developer-asset-ui";
+import { developerAssetError, enumLabel, LoadingPanel, PrettyJSON } from "../developer-assets/developer-asset-ui";
 
 const groups = ["documentation", "contracts", "sdks", "global", "tools", "authorization", "connections"] as const;
 const metadataFields = ["display_name", "family_key", "version_key", "description", "visibility", "lifecycle", "replacement_integration_id", "sunset_at"] as const;
@@ -66,6 +66,7 @@ export function IntegrationPublicationReviewDialog({ integrationID, onClose, onP
   function navigate(path: string) { onClose(); onNavigate(path); }
   function metadataValue(record: PublicationRecord, key: typeof metadataFields[number]) {
     if (!text(record[key])) return t("publicationReview.removedValue");
+    if (key === "visibility" || key === "lifecycle") return enumLabel(t, text(record[key]));
     return key === "replacement_integration_id" ? <ConsoleLink path={integrationPath(text(record[key]))} onNavigate={navigate}>{t("publicationReview.openReplacement")}</ConsoleLink> : text(record[key]);
   }
   return <Dialog open onClose={() => { if (!busy) onClose(); }} title={t("publicationReview.title", { name: text(snapshot.display_name) || t("publicationReview.api") })} description={t("publicationReview.description")} actions={<>
@@ -73,7 +74,7 @@ export function IntegrationPublicationReviewDialog({ integrationID, onClose, onP
     {!published && <><Button outline disabled={busy || loading} onClick={() => { setProblem(""); setAttempt((value) => value + 1); }}>{t("publicationReview.refresh")}</Button><Button disabled={loading || busy || !status?.ready || !status.has_changes || !acknowledged} onClick={() => void publish()}>{t(busy ? "integrations.publishing" : "integrations.publish")}</Button></>}
   </>}>
     {loading ? <LoadingPanel label={t("publicationReview.loading")} /> : review && <div className="integration-publication-review">
-      <div className="sdk-release-facts"><strong>{text(snapshot.display_name)} · {text(snapshot.version_key)}</strong><Badge>{text(snapshot.visibility)}</Badge><Badge color={status?.ready ? "green" : "amber"}>{t(status?.ready ? "publicationReview.ready" : "publicationReview.blocked")}</Badge></div>
+      <div className="sdk-release-facts"><strong>{text(snapshot.display_name)} · {text(snapshot.version_key)}</strong><Badge>{enumLabel(t, text(snapshot.visibility))}</Badge><Badge color={status?.ready ? "green" : "amber"}>{t(status?.ready ? "publicationReview.ready" : "publicationReview.blocked")}</Badge></div>
       <p>{t(snapshot.visibility === "public" ? "publicationReview.publicAudience" : "publicationReview.privateAudience")}</p>
       {status?.validations.map((validation, index) => <div key={`${validation.code}:${index}`} className="publication-review-validation"><p>{validation.message}</p><ConsoleLink path={integrationValidationPath(integrationID, validation.tab)} onNavigate={navigate}>{t("publicationReview.resolve")}</ConsoleLink></div>)}
       {status?.latest_revision ? <p>{t("publicationReview.previous", { revision: status.latest_revision.revision })}</p> : <p>{t("publicationReview.first")}</p>}
@@ -96,6 +97,7 @@ export function IntegrationPublicationReviewDialog({ integrationID, onClose, onP
 function PublicationRow({ row, integrationID, onNavigate }: { row: ResolvedPublicationReviewRow; integrationID: string; onNavigate: (path: string) => void }) {
   const { t } = useTranslation();
   const value = row.value;
+  const audienceLabel = (value: unknown) => text(value) ? enumLabel(t, text(value)) : t("publicationReview.removedValue");
   const packageID = text(value.sdk_package_id), releaseID = text(value.sdk_release_id);
   function selectionLabel(selection: PublicationSelection) {
     return [selection.version, selection.revision !== undefined ? t("publicationReview.revision", { revision: selection.revision }) : "", selection.guidanceRevision !== undefined ? t("publicationReview.guidanceRevision", { revision: selection.guidanceRevision }) : ""].filter(Boolean).join(" · ");
@@ -103,7 +105,7 @@ function PublicationRow({ row, integrationID, onNavigate }: { row: ResolvedPubli
   function details(record: PublicationRecord) {
     const effect = text(record.effect) || text(record.action_type);
     return <div className="sdk-release-facts">
-      {text(record.visibility) && <Badge>{text(record.visibility)}</Badge>}
+      {text(record.visibility) && <Badge>{audienceLabel(record.visibility)}</Badge>}
       {record.primary === true && <span>{t("publicationReview.primaryContract")}</span>}
       {effect && <span>{t("publicationReview.effect", { effect })}</span>}
       {Array.isArray(record.required_grants) && <span>{t("publicationReview.grants", { grants: record.required_grants.map(text).join(", ") || t("publicationReview.noGrants") })}</span>}
@@ -115,7 +117,7 @@ function PublicationRow({ row, integrationID, onNavigate }: { row: ResolvedPubli
   return <article className="publication-review-row">
     <div className="sdk-release-facts"><strong>{row.kind === "global" ? t("publicationReview.global") : row.title || t(`publicationReview.groups.${row.kind}`)}</strong><Badge color={row.state === "removed" ? "amber" : row.state === "unchanged" ? "zinc" : "blue"}>{t(`publicationReview.states.${row.state}`)}</Badge></div>
     <p>{row.state === "changed" && previousLabel && previousLabel !== currentLabel && <>{previousLabel} → </>}{currentLabel}</p>
-    {row.state === "changed" && row.previous && text(row.previous.visibility) !== text(value.visibility) && <p>{t("publicationReview.audienceChanged", { before: text(row.previous.visibility), after: text(value.visibility) })}</p>}
+    {row.state === "changed" && row.previous && text(row.previous.visibility) !== text(value.visibility) && <p>{t("publicationReview.audienceChanged", { before: audienceLabel(row.previous.visibility), after: audienceLabel(value.visibility) })}</p>}
     {details(value)}
     {row.state === "removed" && <p>{t("publicationReview.removalHelp")}</p>}
     {row.state === "changed" && row.previous && <details><summary>{t("publicationReview.previousSelection")}</summary>{details(row.previous)}<p>{t("publicationReview.exactSelectionChanged")}</p></details>}

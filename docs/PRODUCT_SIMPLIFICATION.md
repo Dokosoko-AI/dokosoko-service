@@ -19,17 +19,27 @@ library and task-specific connection evidence. The checkpoints below retain the
 scope and limitations of each validation run; they are historical records, not
 additional product requirements.
 
-Final pre-commit verification passed: `pnpm run verify` (190 console tests,
+The main implementation's pre-commit verification passed: `pnpm run verify` (190 console tests,
 57 crawler tests, typecheck, lint, production build and root Go tests), the
 standalone MCP acceptance-client module, and the full Go suite against a fresh
 disposable PostgreSQL 17/pgvector database. The repository verification enabled
 the 20 standalone-client scenarios and the reference-application evaluation.
 
+Subsequent commits consolidated Knowledge navigation, fixed stale package/version
+selection, added a PostgreSQL backup/restore drill, and translated required AI,
+package/document/contract setup and publication review into all six non-English
+locales. The latest interface-only verification passed the same repository suite
+and 30 production-build browser captures across six locales. Its PostgreSQL checks
+were not enabled because it changed no persistence or public contracts.
+
 This is not a production-release sign-off. Production coding-client/OAuth
 validation, customer outcomes compared with existing documentation, backup
 restoration of deployed images, remaining translations and backend catalog/index
-scaling are still open. The broad acceptance gates remain unchecked. Product review of the actual
-setup and Knowledge journeys takes priority over expanding validation scope.
+scaling are still open. The broad acceptance gates remain unchecked. Product review
+of the actual setup and Knowledge journeys takes priority over expanding validation
+scope. External acceptance needs a named coding client/version, the test identity
+provider and a staging deployment target. Further interface cleanup cannot establish
+those external results.
 
 ## Acceptance and implementation evidence
 
@@ -1407,3 +1417,29 @@ Final verification passed: typecheck, lint, production build, 190 console tests,
 history used the local service; source review/comparison used explicit UI fixtures,
 with test authentication and AI. No persistence or public contract changed, and
 environment-dependent PostgreSQL checks were not enabled for this increment.
+
+## Contract setup and publication review localization — 8 September 2026
+
+Contract setup and API publication review now use translated interface text in
+German, Spanish, French, Japanese, Brazilian Portuguese and Ukrainian. Audience,
+import state and publication metadata use existing localized labels; exact source
+content, identifiers and server-authored diagnostics retain their original values.
+Attachment instructions explicitly preserve existing API publications and require
+a new publication to deliver changed selections.
+
+Shared contract-creation labels were also corrected: private/public, name,
+description, URL identifier and Create API contract now describe the actual fields.
+This removes misleading translations such as Japanese private visibility described
+as a promotion and Ukrainian contract creation described as creating an account.
+Publishing, human review and tested evidence remain separate concepts.
+
+Verification passed: all 810 contract/publication interpolation lookups, typecheck,
+lint, production build, 190 console tests, 57 crawler tests and root Go tests.
+The browser walkthrough created disposable private contracts and continued into
+URL/file setup, then inspected and refreshed an existing exact API publication.
+All six locales passed with 30 desktop/mobile captures, no page overflow and no
+JavaScript errors. Representative Japanese setup and Ukrainian publication screens
+were visually inspected. The local service used memory storage, fixture AI and
+test authentication; it did not perform external imports or production-client
+acceptance. Persistence and public contracts were unchanged, so this increment
+ran without environment-dependent PostgreSQL checks.

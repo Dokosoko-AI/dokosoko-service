@@ -318,7 +318,7 @@ export const enUI = {
   "sourceBlocked": "This source has failed, skipped, or quarantined content. Inspect the source findings, correct the input, and import again before publication.",
   "audienceBlocked": "The import audience does not match the source or public API. Choose the intended audience and import again before publication.",
   "publishScope": "Publish the reviewed source evidence and this exact contract revision for the {{audience}} audience. Each keeps its own publication record.",
-  "attachScope": "Attach this exact revision to {{name}} with the {{audience}} audience, replacing this contract's existing draft pin if present. Existing API publications stay pinned until you publish a new API revision.",
+  "attachScope": "Attach this exact revision to {{name}} with the {{audience}} audience, replacing this contract's existing draft pin if present. Existing API publications keep their selections; publish a new API revision to deliver this change.",
   "acknowledge": "I reviewed the contract, source evidence, AI findings, audience, and attachment change shown here.",
   "publishedScope": "This exact contract revision is already published for the {{audience}} audience. Continue to finish its API attachment.",
   "attachExact": "Attach exact revision",

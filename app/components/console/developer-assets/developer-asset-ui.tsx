@@ -67,6 +67,8 @@ const enumTranslationKeys = {
   included: "enumLabels.included",
   needs_review: "enumLabels.needsReview",
   partial: "enumLabels.partial",
+  private: "common.private",
+  public: "common.public",
   published: "enumLabels.published",
   quarantined: "enumLabels.quarantined",
   queued: "enumLabels.queued",
