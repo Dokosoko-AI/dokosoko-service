@@ -21,7 +21,7 @@ import {
 } from "../../../lib/developer-assets-api";
 import { Badge, Button, Dialog } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
-import { DocumentationNavigation } from "./developer-asset-navigation";
+import { KnowledgeNavigation } from "./developer-asset-navigation";
 import { developerAssetError, enumLabel, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, ReviewStateBadge } from "./developer-asset-ui";
 import { documentationUsages, type DocumentationUsage } from "./developer-asset-usage";
 
@@ -289,8 +289,8 @@ export function DocumentationCollectionsView({
   const awaitingPublication = publications[0]?.id !== servingPublicationID ? publications[0] : null;
   const active: Section = "documents";
   return <div className={embedded ? "documentation-sets-pane" : "documentation-collections-workspace"}>
-    {!embedded && <PageHeader eyebrow={t("navigation.docs")} title={t("documentationExplorer.documentationSets")} action={<Button onClick={() => openEditor()}><Plus data-slot="icon" />{t("documentationCollections.createCollection")}</Button>} />}
-    {!embedded && <DocumentationNavigation active={active} onNavigate={onNavigate} />}
+    {!embedded && <PageHeader eyebrow={t("navigation.knowledge")} title={t("documentationExplorer.documentationSets")} action={<Button onClick={() => openEditor()}><Plus data-slot="icon" />{t("documentationCollections.createCollection")}</Button>} />}
+    {!embedded && <KnowledgeNavigation active={active} onNavigate={onNavigate} />}
     <section className="panel developer-global-publication">
       <PanelHeader title={t("documentationCollections.globalDocumentationPublication")} description={t("documentationCollections.queryLabGlobalScopeResolvesThisImmutableDeploymentSnapshot")} action={<span className="heading-actions">{embedded && <Button outline onClick={() => openEditor()}><Plus data-slot="icon" />{t("documentationCollections.createCollection")}</Button>}<Button disabled={loading || !!problem || busy} onClick={() => void openPublication()}><Radio data-slot="icon" />{t("documentationCollections.publishSnapshot")}</Button></span>} />
       {!loading && !problem && <>

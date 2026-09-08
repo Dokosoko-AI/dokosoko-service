@@ -89,6 +89,10 @@ input recover the current source; changed input with the same key returns a
 conflict. Creation alone does not ingest, process or publish content. See the
 [setup guide](docs/INTEGRATION_SETUP.md) for the remaining review steps.
 
+**Knowledge** is the shared home for documents, API contracts and SDK guidance,
+with Sources and Query Lab available in the same area. Existing asset URLs and
+saved package/setup links remain valid.
+
 **Add content** in Knowledge or API Resources opens one documentation setup page:
 website/file/existing source, import, required AI processing, readable review,
 and a saved documentation version. Starting from an API retains that API and

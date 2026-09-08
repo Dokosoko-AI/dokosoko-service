@@ -10,7 +10,7 @@ import type { Section } from "../../../lib/console-routes";
 import { developerAssetsApi, type DeveloperAssetKind, type DeveloperAssetScope, type QueryLabResponse } from "../../../lib/developer-assets-api";
 import { Badge, Button } from "../../core/control";
 import { PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
-import { DocumentationNavigation } from "./developer-asset-navigation";
+import { KnowledgeNavigation } from "./developer-asset-navigation";
 import { developerAssetError, PrettyJSON } from "./developer-asset-ui";
 
 function splitFilter(value: string) {
@@ -85,8 +85,8 @@ export function QueryLabView({ live, integrations, initialResult = null, onMessa
   const active: Section = "query-lab";
   const apiRequired = scope === "api" || scope === "combined";
   return <>
-    <PageHeader eyebrow={t("navigation.docs")} title={t("navigation.queryLab")} />
-    <DocumentationNavigation active={active} onNavigate={onNavigate} />
+    <PageHeader eyebrow={t("navigation.knowledge")} title={t("navigation.queryLab")} />
+    <KnowledgeNavigation active={active} onNavigate={onNavigate} />
     <form className="developer-query-layout" onSubmit={run}>
       <section className="panel developer-query-form">
         <PanelHeader title={t("queryLab.queryPublishedKnowledge")} description={t("queryLab.chooseTheScopeFirstThenNarrowRetrievalWithExact")} />

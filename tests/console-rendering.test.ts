@@ -17,7 +17,7 @@ function render(element: ReactElement) {
   return renderToStaticMarkup(createElement(I18nextProvider, { i18n: testI18n }, element));
 }
 
-test("renders the promoted developer-asset destinations as accessible primary links", () => {
+test("renders one Knowledge destination alongside APIs and Recipes", () => {
   const html = render(createElement(ConsoleSidebar, {
     section: "tools",
     activeNavigationID: "tools",
@@ -33,8 +33,7 @@ test("renders the promoted developer-asset destinations as accessible primary li
   assert.match(html, /<nav aria-label="Main navigation">/);
   for (const [label, path] of [
     ["APIs", "/integrations"],
-    ["Docs", "/developer-assets/documentation/documents"],
-    ["SDKs and packages", "/developer-assets/sdk-packages"],
+    ["Knowledge", "/developer-assets/documentation/documents"],
     ["Identity", "/identity"],
     ["Tools", "/tools"],
     ["Recipes", "/recipes"],
@@ -51,15 +50,16 @@ test("renders the promoted developer-asset destinations as accessible primary li
 test("renders the same destination model in the mobile console selector", () => {
   const html = render(createElement(ConsoleTopbar, {
     productName: "Developer Platform",
-    section: "recipes",
-    activeNavigationID: "recipes",
+    section: "sdks",
+    activeNavigationID: "knowledge",
     onGroupChange: noop,
   }));
 
   assert.match(html, /<select class="mobile-navigation" aria-label="Console section">/);
-  assert.match(html, /<option value="recipes" selected="">Recipes<\/option>/);
-  for (const label of ["APIs", "Docs", "SDKs and packages", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
+  assert.match(html, /<option value="knowledge" selected="">Knowledge<\/option>/);
+  for (const label of ["APIs", "Knowledge", "Identity", "Tools", "Recipes", "Agent access", "Support outbox", "Settings"]) {
     assert.match(html, new RegExp(`>${label}</option>`));
   }
+  assert.doesNotMatch(html, /<option value="sdk-packages"|>Docs<\/option>/);
   assert.match(html, /<strong>Developer Platform<\/strong>/);
 });

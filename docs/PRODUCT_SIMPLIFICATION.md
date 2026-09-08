@@ -1301,3 +1301,21 @@ Populated-library reading used explicit normalized-document UI fixtures; the
 remaining screens used the local Go service with test authentication and AI.
 No persistence, public API or runtime authorization changed. These checks do not
 close the production client, customer-outcome or operational acceptance gates.
+
+## Knowledge navigation consolidation — 8 September 2026
+
+An audit against the original approved review found that Docs and SDKs still
+occupied separate primary navigation entries. They now share Knowledge, which
+opens the reviewed-document library and offers Documents, API contracts, SDKs and
+packages, Sources and Query Lab. API and Recipe workspaces remain prominent.
+Asset IDs, URLs, publication semantics and resumable setup parameters are unchanged.
+The Knowledge label is translated in all seven UI locales.
+
+Repository verification passed with 190 console tests, 57 crawler tests,
+typecheck, lint, production build and root Go tests. Updated rendering checks
+cover grouping and the one current tab for each destination. Production-build
+browser checks passed for all five destinations, keyboard navigation, browser
+Back/Forward, direct SDK links, the mobile group selector and the existing setup
+walkthrough. Desktop/light and narrow/dark captures had no page overflow or
+JavaScript errors. The walkthrough's normalized document responses and test
+authentication retain their previously stated fixture limitations.

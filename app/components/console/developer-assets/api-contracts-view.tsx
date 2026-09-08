@@ -24,7 +24,7 @@ import {
 import { Badge, Button, Dialog } from "../../core/control";
 import { DataTable, DataTableEmpty, DataTableHeader, DataTableRow, PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
 import type { Source } from "../shared";
-import { DocumentationNavigation } from "./developer-asset-navigation";
+import { KnowledgeNavigation } from "./developer-asset-navigation";
 import { developerAssetError, LoadingPanel, MarkdownEvidence, PrettyJSON, ProblemPanel, recordTitle, ReviewStateBadge } from "./developer-asset-ui";
 import { contractUsages, type ContractUsage } from "./developer-asset-usage";
 
@@ -184,8 +184,8 @@ function APIContractCatalogView({ live, integrations, reviewerID = "", onMessage
   const active: Section = "contracts";
 
   return <>
-    <PageHeader eyebrow={t("navigation.docs")} title={t("navigation.apiContracts")} action={<Button onClick={() => openRootEditor()}><Plus data-slot="icon" />{t("apiContracts.createContract")}</Button>} />
-    <DocumentationNavigation active={active} onNavigate={onNavigate} />
+    <PageHeader eyebrow={t("navigation.knowledge")} title={t("navigation.apiContracts")} action={<Button onClick={() => openRootEditor()}><Plus data-slot="icon" />{t("apiContracts.createContract")}</Button>} />
+    <KnowledgeNavigation active={active} onNavigate={onNavigate} />
     {loading ? <LoadingPanel label={t("apiContracts.loadingAPIContracts")} /> : problem ? <ProblemPanel message={problem} onRetry={() => void load()} /> : <div className="developer-asset-explorer">
       <DataTable label={t("apiContracts.apiContractCatalog")} className="developer-asset-directory">
         <DataTableHeader className="developer-contract-columns"><span>{t("apiContracts.contract")}</span><span>{t("apiContracts.candidates")}</span><span>{t("apiContracts.published")}</span></DataTableHeader>

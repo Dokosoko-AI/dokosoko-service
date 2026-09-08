@@ -6,9 +6,9 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider, initReactI18next } from "react-i18next";
 
-import { DocumentationNavigation } from "../app/components/console/developer-assets/developer-asset-navigation";
+import { KnowledgeNavigation } from "../app/components/console/developer-assets/developer-asset-navigation";
 import { decisionPayload, decisionsComplete, sampleValidated, sdkBufferLooksText, sdkNormalizedLocalPath } from "../app/components/console/developer-assets/sdk-catalog-helpers";
-import { ConsoleSidebar } from "../app/components/console/workspace-navigation";
+import { ConsoleSidebar, navigation } from "../app/components/console/workspace-navigation";
 import { INTEGRATION_TABS, SECTION_PATHS, integrationPath, parseConsolePath } from "../app/lib/console-routes";
 import type { DeveloperAssetRecord } from "../app/lib/developer-assets-api";
 import { i18nOptions } from "../app/i18n/options";
@@ -21,7 +21,7 @@ function render(element: ReactElement) {
   return renderToStaticMarkup(createElement(I18nextProvider, { i18n: testI18n }, element));
 }
 
-test("promotes APIs, Docs, and SDKs and packages to the primary navigation", () => {
+test("groups documentation, contracts and SDKs in Knowledge with stable routes", () => {
   assert.equal(SECTION_PATHS.product, "/integrations");
   assert.equal(SECTION_PATHS.sources, "/integrations/documentation");
   assert.equal(SECTION_PATHS.documents, "/developer-assets/documentation/documents");
@@ -35,16 +35,22 @@ test("promotes APIs, Docs, and SDKs and packages to the primary navigation", () 
   }
   assert.equal(parseConsolePath("/developer-assets/documentation/collections").kind, "not-found");
 
-  const documentation = render(createElement(DocumentationNavigation, { active: "contracts", onNavigate: noop }));
-  for (const label of ["Sources", "Documents", "API contracts", "Query Lab"]) assert.match(documentation, new RegExp(`>${label}</a>`));
+  const documentation = render(createElement(KnowledgeNavigation, { active: "contracts", onNavigate: noop }));
+  for (const label of ["Sources", "Documents", "API contracts", "SDKs and packages", "Query Lab"]) assert.match(documentation, new RegExp(`>${label}</a>`));
   assert.doesNotMatch(documentation, />Collections<|>All files</);
   assert.match(documentation, /href="\/developer-assets\/query-lab" class="page-tab docs-query-lab-tab">Query Lab<\/a>/);
 
-  const sidebar = render(createElement(ConsoleSidebar, { section: "contracts", activeNavigationID: "docs", onNavigate: noop }));
-  for (const [label, path] of [["APIs", "/integrations"], ["Docs", "/developer-assets/documentation/documents"], ["SDKs and packages", "/developer-assets/sdk-packages"]]) {
+  const sidebar = render(createElement(ConsoleSidebar, { section: "contracts", activeNavigationID: "knowledge", onNavigate: noop }));
+  for (const [label, path] of [["APIs", "/integrations"], ["Knowledge", "/developer-assets/documentation/documents"]]) {
     assert.match(sidebar, new RegExp(`href="${path}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
-  assert.doesNotMatch(sidebar, /Catalog sections|Docs sections|nav-subsections/);
+  assert.doesNotMatch(sidebar, /Catalog sections|Knowledge sections|nav-subsections|>SDKs and packages<|>Docs</);
+  for (const section of ["documents", "contracts", "sdks", "sources", "query-lab"] as const) {
+    assert.equal(navigation.find(group => group.sections.some(item => item.id === section))?.id, "knowledge");
+    const tabs = render(createElement(KnowledgeNavigation, { active: section, onNavigate: noop }));
+    assert.equal((tabs.match(/aria-current="page"/g) ?? []).length, 1);
+    assert.match(tabs, new RegExp(`href="${SECTION_PATHS[section]}"[^>]*aria-current="page"`));
+  }
 });
 
 test("SDK review helpers require evidence and reject unsafe local files", () => {

@@ -372,3 +372,15 @@ overflow or JavaScript errors. The populated-reader check used explicit normaliz
 document response fixtures; the other screens used the local Go service with test
 authentication and AI. These checks do not establish source acquisition or
 production identity compatibility. The full repository verification also passed.
+
+### Unified Knowledge navigation
+
+Knowledge replaces the separate Docs and SDK primary entries. The shared
+Knowledge navigation includes Documents, API contracts, SDKs and packages,
+Sources and Query Lab and appears in the SDK directory as well as documentation
+views. Each keeps its canonical URL; package setup retains its saved parameters.
+The mobile group selector identifies all five areas as Knowledge. Published
+asset detail and in-progress setup retain their existing return controls.
+Rendering and production-build browser checks cover the five active states,
+keyboard actions, direct links, Back/Forward and mobile switching. The shared
+horizontal tab overflow stays contained within the tab bar on narrow screens.

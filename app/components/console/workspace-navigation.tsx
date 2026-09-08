@@ -5,7 +5,6 @@ import {
   GitBranch,
   LayoutDashboard,
   LogOut,
-  Package,
   Radio,
   Settings,
   Users,
@@ -19,11 +18,11 @@ import { LanguageSwitcher } from "../LanguageSwitcher";
 import { ThemeToggle } from "../ThemeToggle";
 import { ConsoleLink } from "./console-link";
 
-export type NavigationGroup = "apis" | "docs" | "sdk-packages" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
+export type NavigationGroup = "apis" | "knowledge" | "identity" | "tools" | "recipes" | "agent-access" | "outbox";
 
 type NavigationLabelKey =
   | "navigation.apis"
-  | "navigation.docs"
+  | "navigation.knowledge"
   | "navigation.sdksAndPackages"
   | "navigation.identity"
   | "navigation.tools"
@@ -56,24 +55,18 @@ export const navigation: Array<{
     sections: [{ id: "product", labelKey: "navigation.apis" }],
   },
   {
-    id: "docs",
-    labelKey: "navigation.docs",
+    id: "knowledge",
+    labelKey: "navigation.knowledge",
     icon: BookOpen,
     defaultSection: "documents",
     sections: [
       { id: "documents", labelKey: "navigation.documents" },
       { id: "contracts", labelKey: "navigation.apiContracts" },
+      { id: "sdks", labelKey: "navigation.sdksAndPackages" },
       { id: "sources", labelKey: "navigation.sources" },
       { id: "query-lab", labelKey: "navigation.queryLab" },
     ],
     showSubsections: false,
-  },
-  {
-    id: "sdk-packages",
-    labelKey: "navigation.sdksAndPackages",
-    icon: Package,
-    defaultSection: "sdks",
-    sections: [{ id: "sdks", labelKey: "navigation.packages" }],
   },
   { id: "identity", labelKey: "navigation.identity", icon: Users, defaultSection: "identity", sections: [{ id: "identity", labelKey: "navigation.customerSignIn" }] },
   { id: "tools", labelKey: "navigation.tools", icon: Wrench, defaultSection: "tools", sections: [{ id: "tools", labelKey: "navigation.catalog" }, { id: "connections", labelKey: "navigation.connections" }, { id: "mcp-preview", labelKey: "navigation.mcpPreview" }] },

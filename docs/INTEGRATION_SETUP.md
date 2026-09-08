@@ -24,6 +24,10 @@ visibility always requires explicit acknowledgement.
 
 ### 2. Ingest and review evidence
 
+Open **Knowledge** for Documents, API contracts, SDKs and packages, Sources, or
+Query Lab. These are views of the same deployment-owned assets; consolidating
+navigation does not copy them or change their existing URLs.
+
 For documentation, choose **Add content** in Knowledge or API Resources. The
 setup page accepts a website, an uploaded text file, or a supported existing
 source. It retains the source and exact import in the URL, shows processing and

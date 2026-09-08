@@ -19,7 +19,7 @@ import {
 } from "../../../lib/developer-assets-api";
 import { Badge, Button } from "../../core/control";
 import { PageHeader, PanelHeader, SegmentedControl } from "../../core/layout";
-import { DocumentationNavigation } from "./developer-asset-navigation";
+import { KnowledgeNavigation } from "./developer-asset-navigation";
 import { DocumentationCollectionsView } from "./documentation-collections-view";
 import { DeveloperAssetAIAdvisoryButton } from "./developer-asset-ai-advisory";
 import { evidenceChange } from "../../core/evidence-content";
@@ -186,8 +186,8 @@ function DocumentationLibraryView({ live, sources, integrations, reviewerID, onM
   const filtered = Boolean(sourceID || submittedQuery);
 
   return <>
-    <PageHeader eyebrow={t("navigation.docs")} title={t("documentationExplorer.library")} description={t("documentationExplorer.libraryDescription")} action={<Button onClick={onAddSource}><Plus data-slot="icon" />{t("documentationExplorer.addContent")}</Button>} />
-    <DocumentationNavigation active={active} onNavigate={onNavigate} />
+    <PageHeader eyebrow={t("navigation.knowledge")} title={t("documentationExplorer.library")} description={t("documentationExplorer.libraryDescription")} action={<Button onClick={onAddSource}><Plus data-slot="icon" />{t("documentationExplorer.addContent")}</Button>} />
+    <KnowledgeNavigation active={active} onNavigate={onNavigate} />
     <SegmentedControl label={t("documentationExplorer.libraryView")} value={view} onChange={(value) => { setView(value); setAttention(null); setAttentionLoading(live); setCompare(false); setDetailProblem(""); }} items={[
       { id: "reviewed", label: t("documentationExplorer.reviewedContent") }, { id: "attention", label: t("documentationExplorer.needsAttention"), count: attentionProblem || attentionLoading ? undefined : attention?.total },
     ]} />

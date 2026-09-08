@@ -72,7 +72,7 @@ export function SourceDialogs({ workspace }: {
     <Dialog
       open={Boolean(sourceReview)}
       onClose={(open) => { if (!open && !sourceReviewBusy) closeSourceReview(); }}
-      title={t("sourceDialogs.review", { value1: String(sourceReview?.source.name ?? t("navigation.docs")) })}
+      title={t("sourceDialogs.review", { value1: String(sourceReview?.source.name ?? t("navigation.knowledge")) })}
       description={sourceReviewAttachIntegrationID ? t("sourceDialogs.approveTheExactCrawlGenerationDokoSokoWillPublishThe") : t("sourceDialogs.approveTheExactCompletedCrawlGenerationAndOnlyThe")}
       actions={<><Button outline disabled={sourceReviewBusy} onClick={closeSourceReview}>{t(sourceReview?.publication ? "common.close" : "common.cancel")}</Button>{(!sourceReview?.publication || sourceReviewAttachIntegrationID) && <Button color="indigo" disabled={sourceReviewBusy || Boolean(sourceReview?.source.quarantined) || (!sourceReview?.publication && (!sourceReviewAcknowledged || sourceReviewSelection.length === 0 || processingReadyRunID !== sourceReview?.crawl_job.id))} onClick={confirmSourcePublication}>{sourceReviewBusy ? t("sourceDialogs.publishing") : sourceReview?.publication && sourceReviewAttachIntegrationID ? t("sourceDialogs.retryAttachment") : sourceReviewAttachIntegrationID ? t("sourceDialogs.publishAttach") : t("sourceDialogs.publishReviewedGeneration")}</Button>}</>}
     >

@@ -62,11 +62,14 @@ automatic dependency upgrades.
 
 ## Catalog and API workflows
 
-The root Catalog has APIs, Documentation, API contracts, and SDKs. Root
-workspaces own creation, ingestion, review, revision history, visibility,
+The primary console navigation keeps APIs and Recipes prominent and groups
+Documents, API contracts, SDKs, Sources, and Query Lab under **Knowledge**.
+Knowledge opens the reviewed-document library. Existing asset URLs remain
+stable, including direct package/release links and resumable setup context.
+These deployment-owned workspaces own creation, ingestion, review, revision history, visibility,
 archival, and the reverse “Used by APIs” relationship. The API workspace calls
 its attachment-only tab **Resources** and supports attach existing, create and
-attach, open in Catalog, change exact revision/version, and detach.
+attach, open in Knowledge, change exact revision/version, and detach.
 
 Documentation collections may select exact reviewed source publications,
 documents, or sections. They can be deployment-global, attached to several
@@ -527,10 +530,11 @@ weaken an earlier deterministic gate.
 
 ### Phase 5: Catalog and attachment UX
 
-- Root Catalog owns APIs, Documentation, API contracts, and SDKs. Detail pages
+- APIs remain a primary workspace; Knowledge groups deployment-owned
+  documentation, API contracts, and SDKs. Detail pages
   show ingestion/review state, maps, publication history, and “Used by APIs.”
 - The API Resources workspace stays attachment-only and offers attach existing,
-  create and attach, open in Catalog, change exact revision/version, detach,
+  create and attach, open in Knowledge, change exact revision/version, detach,
   and immutable publication history.
 - Query Lab shows the resolved scope and evidence, not only a synthesized
   answer, so an administrator can diagnose poor retrieval directly.

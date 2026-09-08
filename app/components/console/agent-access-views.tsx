@@ -102,7 +102,7 @@ function AgentSetupCard({ kind, tenantName, endpoint, setup, enabled = false, on
 export function SourcesView({ sources, navigation, onAdd, onCrawl, onPublish, onVisibilityChange, onNavigate }: { sources: Source[]; navigation?: React.ReactNode; onAdd: () => void; onCrawl: (id: string) => void; onPublish: (source: Source) => void; onVisibilityChange: (id: string) => void; onNavigate: (path: string) => void }) {
   const { t } = useTranslation();
   return <>
-    <PageHeading eyebrow={t("navigation.docs")} title={t("navigation.sources")} action={<Button onClick={onAdd}><Plus data-slot="icon" />{t("agentAccess.addSource")}</Button>} />
+    <PageHeading eyebrow={t("navigation.knowledge")} title={t("navigation.sources")} action={<Button onClick={onAdd}><Plus data-slot="icon" />{t("agentAccess.addSource")}</Button>} />
     {navigation}
     <div className="summary-strip"><SummaryItem label={t("agentAccess.pagesIndexed")} value={String(sources.reduce((total, source) => total + source.pages, 0))} icon={<Database />} /><SummaryItem label={t("agentAccess.healthySources")} value={String(sources.filter((source) => source.crawlState === "synced").length)} icon={<CheckCircle2 />} /><SummaryItem label={t("agentAccess.needsAttention")} value={String(sources.filter((source) => source.crawlState === "review" || source.crawlState === "failed").length)} icon={<AlertCircle />} /></div>
     <div className="toolbar"><Button outline onClick={() => sources.forEach((source) => onCrawl(source.id))}><RefreshCw data-slot="icon" />{t("agentAccess.crawlAll")}</Button></div>

@@ -34,6 +34,7 @@ export const en = {
     consoleSection: "Console section",
     deployment: "Deployment",
     apis: "APIs",
+    knowledge: "Knowledge",
     docs: "Docs",
     sdksAndPackages: "SDKs and packages",
     identity: "Identity",
