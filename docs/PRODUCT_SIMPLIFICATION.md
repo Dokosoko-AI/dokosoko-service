@@ -1361,3 +1361,28 @@ work. No AI policy, processing behavior, persistence or public contract changed.
 Final repository verification passed: typecheck, lint, production build,
 190 console tests, 57 crawler tests and the root Go suite. Environment-dependent
 PostgreSQL and external-client checks were not enabled for this copy-only change.
+
+## Package setup localization — 8 September 2026
+
+The SDK setup section is localized throughout German, Spanish, French, Japanese,
+Brazilian Portuguese and Ukrainian. This includes package selection, import
+limits, review decisions, comparisons, publication, explicit public audience,
+attachment and retry. Existing published-content help was preserved, and Ukrainian
+removed-file counts now include the required few/many forms.
+
+Browser inspection also found that catalog, release and API-usage rows bypassed
+translation for visibility, lifecycle, attachment state and assurance. They now
+use the existing localized labels. Coverage and evidence-level translations were
+corrected, including Japanese labels that previously meant “participation
+requirements,” “particle” and “furigana,” and incorrect Ukrainian coverage labels.
+Related, reviewed, tested and verified remain separate levels; the attachment
+explanation uses the same Related label as the evidence selector.
+
+Final repository verification passed with 190 console tests, 57 crawler tests,
+typecheck, lint, production build and root Go tests. Persistence and public
+contracts were unchanged; environment-dependent PostgreSQL checks were not enabled.
+Production-build browser checks passed in all six locales, including localized
+package/release visibility, lifecycle, attachment state and assurance, exact-version
+autofill, readable guidance and desktop/mobile layouts. All 18 captures had no
+page overflow or JavaScript errors. The local service used fixture AI and test
+authentication; no external package import or production client claim follows.

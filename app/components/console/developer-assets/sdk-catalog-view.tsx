@@ -8,7 +8,7 @@ import { parseSDKSetupSelection, sdkSetupPath } from "../../../lib/sdk-setup";
 import { Badge, Button } from "../../core/control";
 import { PageHeader } from "../../core/layout";
 import { ConsoleLink } from "../console-link";
-import { developerAssetError, LoadingPanel, ProblemPanel } from "./developer-asset-ui";
+import { developerAssetError, enumLabel, LoadingPanel, ProblemPanel } from "./developer-asset-ui";
 import { KnowledgeNavigation } from "./developer-asset-navigation";
 import { SDKPackageImportDialog } from "./sdk-package-import-dialog";
 import { SDKSetupWorkspace } from "./sdk-setup-workspace";
@@ -42,7 +42,7 @@ function SDKPackageDirectory({ live, onNavigate, onMessage }: Props) {
     <KnowledgeNavigation active="sdks" onNavigate={onNavigate} />
     {loading ? <LoadingPanel label={t("sdkCatalog.loadingSDKPackages")} /> : problem ? <ProblemPanel message={problem} onRetry={() => setAttempt((value) => value + 1)} /> : <section className="panel sdk-setup-panel">
       <label className="auth-field"><span>{t("sdkSetup.findPackage")}</span><input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-      {visible.map((pkg) => <div className="sdk-package-row" key={pkg.id}><span><strong>{pkg.name}</strong><small>{pkg.display_coordinate} · {pkg.ecosystem}</small></span><Badge>{pkg.visibility}</Badge><Badge>{pkg.lifecycle}</Badge><ConsoleLink path={sdkSetupPath({ package: pkg.id })} onNavigate={onNavigate}>{t("sdkSetup.openPackage")}</ConsoleLink></div>)}
+      {visible.map((pkg) => <div className="sdk-package-row" key={pkg.id}><span><strong>{pkg.name}</strong><small>{pkg.display_coordinate} · {pkg.ecosystem}</small></span><Badge>{t(`common.${pkg.visibility}`)}</Badge><Badge>{enumLabel(t, pkg.lifecycle)}</Badge><ConsoleLink path={sdkSetupPath({ package: pkg.id })} onNavigate={onNavigate}>{t("sdkSetup.openPackage")}</ConsoleLink></div>)}
       {visible.length === 0 && <p>{t(packages.length ? "sdkSetup.noMatchingPackages" : "sdkSetup.emptyCatalog")}</p>}
     </section>}
     <SDKPackageImportDialog open={importOpen} onClose={setImportOpen} onMessage={onMessage} onImported={(result) => onNavigate(sdkSetupPath({ package: result.package.id, release: result.release.id }))} />
